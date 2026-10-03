@@ -360,4 +360,111 @@ class FederatedLoginServiceTest {
 
         assertThat(response.getToken()).isEqualTo("access");
     }
+
+    // ------------------------------------------------------------------
+    // Transaction boundaries: loyalty is told AFTER the sign-in commits
+    // ------------------------------------------------------------------
+
+    private FederatedLoginService transactional(com.innbucks.userservice.testsupport.RecordingTransactionManager tm) {
+        FederatedLoginService service = service(true);
+        service.setTransactionManager(tm);
+        return service;
+    }
+
+    @Test
+    @DisplayName("the account work and the mint run in one transaction; loyalty is told after it commits, with none open")
+    void loyaltyIsToldAfterTheSignInCommits() {
+        var tm = new com.innbucks.userservice.testsupport.RecordingTransactionManager();
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(customer(true)));
+        when(profileRepository.findByUserId(7L)).thenReturn(Optional.of(CustomerProfile.builder().build()));
+        java.util.List<Boolean> mintedInTransaction = new java.util.ArrayList<>();
+        when(authService.issuePhoneProofToken(any(User.class), any())).thenAnswer(inv -> {
+            mintedInTransaction.add(com.innbucks.userservice.testsupport.RecordingTransactionManager.inTransaction());
+            return AuthResponseDTO.builder().token("access").refreshToken("refresh").build();
+        });
+        java.util.List<Boolean> promotedInTransaction = new java.util.ArrayList<>();
+        when(loyalty.promoteUserByPhone(PHONE)).thenAnswer(inv -> {
+            promotedInTransaction.add(com.innbucks.userservice.testsupport.RecordingTransactionManager.inTransaction());
+            assertThat(tm.outcomes()).containsExactly(
+                    com.innbucks.userservice.testsupport.RecordingTransactionManager.Outcome.COMMITTED);
+            return true;
+        });
+
+        AuthResponseDTO response = transactional(tm).exchange(assertion(PHONE, "j-tx", 60), null, CTX);
+
+        assertThat(response.getToken()).isEqualTo("access");
+        assertThat(mintedInTransaction).containsExactly(true);
+        assertThat(promotedInTransaction).containsExactly(false);
+    }
+
+    @Test
+    @DisplayName("a sign-in whose database phase fails rolls back and tells loyalty nothing")
+    void failedSignInPromotesNobody() {
+        var tm = new com.innbucks.userservice.testsupport.RecordingTransactionManager();
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(customer(true)));
+        when(profileRepository.findByUserId(7L)).thenReturn(Optional.of(CustomerProfile.builder().build()));
+        when(authService.issuePhoneProofToken(any(User.class), any()))
+                .thenThrow(new IllegalStateException("refresh token insert failed"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> transactional(tm).exchange(assertion(PHONE, "j-fail", 60), null, CTX))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(loyalty, never()).promoteUserByPhone(anyString());
+        assertThat(tm.outcomes()).containsExactly(
+                com.innbucks.userservice.testsupport.RecordingTransactionManager.Outcome.ROLLED_BACK);
+    }
+
+    @Test
+    @DisplayName("a refused sign-in (inactive account) tells loyalty nothing and keeps its opaque 401")
+    void refusedSignInPromotesNobody() {
+        var tm = new com.innbucks.userservice.testsupport.RecordingTransactionManager();
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(customer(false)));
+
+        ResponseStatusException ex = statusOf(() -> transactional(tm).exchange(assertion(PHONE, "j-off", 60), null, CTX));
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(ex.getReason()).isEqualTo(FederatedLoginService.REJECTED_REASON);
+        verify(loyalty, never()).promoteUserByPhone(anyString());
+        assertThat(tm.outcomes()).containsExactly(
+                com.innbucks.userservice.testsupport.RecordingTransactionManager.Outcome.ROLLED_BACK);
+    }
+
+    @Test
+    @DisplayName("a lost create race rolls its transaction back and signs in from a FRESH one that finds the winner")
+    void createRace_retriesInAFreshTransaction() {
+        var tm = new com.innbucks.userservice.testsupport.RecordingTransactionManager();
+        User winner = customer(true);
+        when(userRepository.findByPhoneNumber(PHONE))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(winner));
+        when(userRepository.save(any(User.class))).thenThrow(new DataIntegrityViolationException("uk_users_phone_country"));
+
+        AuthResponseDTO response = transactional(tm).exchange(assertion(PHONE, "j-race", 60), "device-1", CTX);
+
+        assertThat(response.getToken()).isEqualTo("access");
+        assertThat(tm.outcomes()).containsExactly(
+                com.innbucks.userservice.testsupport.RecordingTransactionManager.Outcome.ROLLED_BACK,
+                com.innbucks.userservice.testsupport.RecordingTransactionManager.Outcome.COMMITTED);
+        verify(authService).issuePhoneProofToken(winner, "device-1");
+        verify(auditService).recordSuccess(eq(AuditEventType.AUTH_FEDERATED_LOGIN_SUCCESS), eq(PHONE), any(),
+                eq(PHONE), any(), eq(Map.of("newAccount", false)), eq(CTX));
+        verify(loyalty).promoteUserByPhone(PHONE);
+        // The jti is burned once — the retry is not a second claim (which would read as a replay).
+        verify(values).setIfAbsent(anyString(), eq("1"), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("losing the race twice surfaces the original constraint violation, never the internal marker")
+    void createRaceTwice_surfacesTheViolation() {
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.empty());
+        DataIntegrityViolationException violation = new DataIntegrityViolationException("uk_users_phone_country");
+        when(userRepository.save(any(User.class))).thenThrow(violation);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service(true).exchange(assertion(PHONE, "j-race2", 60), null, CTX))
+                .isSameAs(violation);
+        verify(loyalty, never()).promoteUserByPhone(anyString());
+        verify(authService, never()).issuePhoneProofToken(any(), any());
+    }
 }

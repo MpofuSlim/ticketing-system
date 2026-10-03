@@ -19,10 +19,13 @@ import com.innbucks.userservice.util.MsisdnCountryResolver;
 import com.innbucks.userservice.util.MsisdnValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -30,6 +33,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.EnumSet;
+import java.util.function.Consumer;
 
 @Service
 @RequiredArgsConstructor
@@ -64,20 +68,34 @@ public class OtpService {
     private String deploymentCountry = "ZW";
 
     /**
+     * The phases of a send and of a verify each get a transaction of their own,
+     * and the network call that follows (SMS, WhatsApp, email, the loyalty
+     * webhook) runs after it has COMMITTED — see {@link TransactionPhases}. A
+     * setter so the many plain-{@code new} unit tests keep their construction;
+     * Spring always calls it, and with none set the phases run inline.
+     */
+    private TransactionTemplate tx;
+
+    @Autowired
+    void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.tx = new TransactionTemplate(transactionManager);
+    }
+
+    /**
      * Send an OTP with rate-limit enforcement. Used by the public /auth/otp/request endpoint
      * and by the initial tier-1 registration flow.
+     *
+     * <p>Deliberately NOT {@code @Transactional}: the quota count and the new
+     * code are committed first, the message is sent with no transaction (and so
+     * no row lock on {@code otps} / {@code otp_retry_attempts}) held, and a
+     * failed delivery puts both back ({@link #issueAndDeliver}).
      */
-    @Transactional
     public void sendOtp(String phoneNumber) {
         // Key the OTP + retry rows by the canonical E.164 form so verifyOtp
         // (and the registration/materialisation that follows) resolve the same
         // row no matter how the caller spelled the number.
-        phoneNumber = normalize(phoneNumber);
-        Instant now = Instant.now();
-        enforceRetryQuota(phoneNumber, now);
-        String code = generateCode();
-        replaceOtp(phoneNumber, now, code);
-        dispatch(phoneNumber, code);
+        String phone = normalize(phoneNumber);
+        issueAndDeliver(phone, code -> dispatch(phone, code));
     }
 
     /**
@@ -85,16 +103,25 @@ public class OtpService {
      * On a correct OTP: the row is deleted atomically, the retry counter is cleared,
      * and — if the phone belongs to a customer — phoneVerified is flipped to true.
      * On an incorrect OTP: increments failedAttempts and deletes the OTP once that reaches MAX_FAILED_VERIFICATIONS.
+     *
+     * <p>The consume and the local-account work commit in one transaction; loyalty
+     * is told AFTER it has committed, still before this returns (the app's next
+     * call is loyalty). So the loyalty round trip never holds the OTP and account
+     * rows locked, and a verification that failed to commit promotes nobody.
      */
-    @Transactional
     public boolean verifyOtp(String phoneNumber, String code) {
-        phoneNumber = normalize(phoneNumber);
-        if (consumeOtp(phoneNumber, code)) {
-            finalizeVerification(phoneNumber);
-            log.info("OTP verified phone={}", MsisdnMasking.mask(phoneNumber));
+        String phone = normalize(phoneNumber);
+        boolean verified = Boolean.TRUE.equals(TransactionPhases.inTransaction(tx, () -> {
+            if (!consumeOtp(phone, code)) return false;
+            materializeOrRefreshLocalAccount(phone);
+            return true;
+        }));
+        if (verified) {
+            finalizeVerification(phone);
+            log.info("OTP verified phone={}", MsisdnMasking.mask(phone));
             return true;
         }
-        log.warn("OTP verification failed phone={}", MsisdnMasking.mask(phoneNumber));
+        log.warn("OTP verification failed phone={}", MsisdnMasking.mask(phone));
         return false;
     }
 
@@ -117,13 +144,8 @@ public class OtpService {
      * (which resolves the user first), so this just mints + dispatches. Same
      * rate-limit + single-active-OTP semantics as {@link #sendOtp}.
      */
-    @Transactional
     public void sendPasswordResetOtpToPhone(String phoneNumber) {
-        Instant now = Instant.now();
-        enforceRetryQuota(phoneNumber, now);
-        String code = generateCode();
-        replaceOtp(phoneNumber, now, code);
-        dispatchResetCode(phoneNumber, code);
+        issueAndDeliver(phoneNumber, code -> dispatchResetCode(phoneNumber, code));
     }
 
     /**
@@ -133,13 +155,8 @@ public class OtpService {
      * are email-first and may have no phone. Plain-text email via the InnBucks
      * notification API.
      */
-    @Transactional
     public void sendPasswordResetOtpToEmail(String email) {
-        Instant now = Instant.now();
-        enforceRetryQuota(email, now);
-        String code = generateCode();
-        replaceOtp(email, now, code);
-        sendResetEmail(email, code);
+        issueAndDeliver(email, code -> sendResetEmail(email, code));
     }
 
     static final String RESET_EMAIL_SUBJECT = "Your InnBucks password reset code";
@@ -185,7 +202,7 @@ public class OtpService {
         Instant now = Instant.now();
         enforceRetryQuota(email, now);
         String code = generateCode();
-        replaceOtp(email, now, code);
+        replaceOtp(email, now, otpHasher.hash(code));
         org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
                 new org.springframework.transaction.support.TransactionSynchronization() {
                     @Override
@@ -279,7 +296,7 @@ public class OtpService {
         }
     }
 
-    private void enforceRetryQuota(String phoneNumber, Instant now) {
+    private OtpRetryAttempt enforceRetryQuota(String phoneNumber, Instant now) {
         OtpRetryAttempt attempt = retryRepository.findByPhoneNumber(phoneNumber)
                 .orElseGet(() -> OtpRetryAttempt.builder()
                         .phoneNumber(phoneNumber)
@@ -308,20 +325,145 @@ public class OtpService {
                     "Too many OTP requests. Try again in " + LOCKOUT_DURATION.toMinutes() + " minute(s).");
         }
         retryRepository.save(attempt);
+        return attempt;
     }
 
-    private void replaceOtp(String phoneNumber, Instant now, String code) {
+    private void replaceOtp(String phoneNumber, Instant now, String codeHash) {
         otpRepository.deleteByPhoneNumber(phoneNumber);
         otpRepository.flush();
         Otp otp = Otp.builder()
                 .phoneNumber(phoneNumber)
                 // A02: never persist the raw code — store its keyed HMAC.
-                .code(otpHasher.hash(code))
+                .code(codeHash)
                 .expiresAt(now.plus(OTP_TTL))
                 .createdAt(now)
                 .failedAttempts(0)
                 .build();
         otpRepository.save(otp);
+    }
+
+    // ---- issue, deliver, and put back on a failed delivery ------------------------
+
+    /** One field set of an {@link Otp} row, kept so a failed send can put it back. */
+    private record OtpSnapshot(String codeHash, Instant expiresAt, int failedAttempts, Instant createdAt) {
+        static OtpSnapshot of(Otp otp) {
+            return new OtpSnapshot(otp.getCode(), otp.getExpiresAt(), otp.getFailedAttempts(), otp.getCreatedAt());
+        }
+
+        Otp restore(String key) {
+            return Otp.builder().phoneNumber(key).code(codeHash).expiresAt(expiresAt)
+                    .failedAttempts(failedAttempts).createdAt(createdAt).build();
+        }
+    }
+
+    /** The counter fields of an {@link OtpRetryAttempt} row. */
+    private record RetrySnapshot(int attemptCount, Instant windowStartsAt, Instant lockedUntil) {
+        static RetrySnapshot of(OtpRetryAttempt attempt) {
+            return new RetrySnapshot(attempt.getAttemptCount(), attempt.getWindowStartsAt(), attempt.getLockedUntil());
+        }
+
+        boolean matches(OtpRetryAttempt attempt) {
+            return attempt.getAttemptCount() == attemptCount
+                    && java.util.Objects.equals(attempt.getWindowStartsAt(), windowStartsAt)
+                    && java.util.Objects.equals(attempt.getLockedUntil(), lockedUntil);
+        }
+
+        void applyTo(OtpRetryAttempt attempt) {
+            attempt.setAttemptCount(attemptCount);
+            attempt.setWindowStartsAt(windowStartsAt);
+            attempt.setLockedUntil(lockedUntil);
+        }
+    }
+
+    /**
+     * What one send changed: the code it issued (raw, for the message only — it
+     * never leaves this class otherwise), the state it replaced, and the counter
+     * it wrote. {@code previousOtp} / {@code previousRetry} null = there was no
+     * row before.
+     */
+    private record Issued(String key, String code, String codeHash, OtpSnapshot previousOtp,
+                          RetrySnapshot previousRetry, RetrySnapshot writtenRetry) {
+        /** Never the key or the code, whoever prints this. */
+        @Override
+        public String toString() {
+            return "Issued[previousOtp=" + (previousOtp != null) + ", previousRetry=" + (previousRetry != null) + "]";
+        }
+    }
+
+    /**
+     * Commit the quota count and the new code, THEN deliver with no transaction
+     * open, and on a failed delivery put the previous state back and rethrow.
+     *
+     * <p>This used to be one {@code @Transactional} method, whose rollback on a
+     * failed send gave the customer a clean retry — but it held the
+     * {@code otps} and {@code otp_retry_attempts} rows locked (and a pooled
+     * connection) for the whole SMS attempt and its WhatsApp fallback, which can
+     * run past a minute, on a public endpoint. The compensation below gives the
+     * same outcome without the lock: the previous code works again, its failed
+     * attempts are what they were, and the counter is back where it was. Any
+     * RuntimeException out of the send compensates, not just
+     * {@link NotificationDeliveryException}, because any of them used to roll
+     * back.
+     */
+    private void issueAndDeliver(String key, Consumer<String> deliver) {
+        Issued issued = TransactionPhases.inTransaction(tx, () -> issue(key));
+        try {
+            deliver.accept(issued.code());
+        } catch (RuntimeException deliveryFailure) {
+            try {
+                TransactionPhases.runInTransaction(tx, () -> revert(issued));
+            } catch (RuntimeException revertFailure) {
+                // Never the key (a phone or an address) or the code.
+                log.error("OTP delivery failed and the issued code could not be withdrawn: {}",
+                        revertFailure.getClass().getSimpleName());
+                deliveryFailure.addSuppressed(revertFailure);
+            }
+            throw deliveryFailure;
+        }
+    }
+
+    /** Phase 1, in its own transaction: count the request and replace the code. */
+    private Issued issue(String key) {
+        // Microseconds: what Postgres stores. The revert recognises "the counter
+        // this send wrote" by comparing values, and a nanosecond Instant would
+        // never equal the one read back.
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        // Snapshot BEFORE the quota check mutates the (same, managed) retry row.
+        RetrySnapshot previousRetry = retryRepository.findByPhoneNumber(key).map(RetrySnapshot::of).orElse(null);
+        OtpSnapshot previousOtp = otpRepository.findByPhoneNumber(key).map(OtpSnapshot::of).orElse(null);
+        OtpRetryAttempt written = enforceRetryQuota(key, now);
+        String code = generateCode();
+        String codeHash = otpHasher.hash(code);
+        replaceOtp(key, now, codeHash);
+        return new Issued(key, code, codeHash, previousOtp, previousRetry, RetrySnapshot.of(written));
+    }
+
+    /**
+     * The compensation, in its own transaction. Each half only undoes what THIS
+     * send wrote: if a newer request replaced the code, or moved the counter,
+     * since — or the code was already used — that newer state stands.
+     */
+    private void revert(Issued issued) {
+        String key = issued.key();
+        otpRepository.findByPhoneNumber(key)
+                .filter(current -> issued.codeHash().equals(current.getCode()))
+                .ifPresent(ours -> {
+                    otpRepository.delete(ours);
+                    otpRepository.flush();
+                    if (issued.previousOtp() != null) {
+                        otpRepository.save(issued.previousOtp().restore(key));
+                    }
+                });
+        retryRepository.findByPhoneNumber(key)
+                .filter(issued.writtenRetry()::matches)
+                .ifPresent(attempt -> {
+                    if (issued.previousRetry() == null) {
+                        retryRepository.delete(attempt);
+                    } else {
+                        issued.previousRetry().applyTo(attempt);
+                        retryRepository.save(attempt);
+                    }
+                });
     }
 
     private static String generateCode() {
@@ -342,8 +484,8 @@ public class OtpService {
     }
 
     private void dispatchMessage(String phoneNumber, String message) {
-        // Runs inside the @Transactional send boundary: if delivery fails,
-        // the persisted OTP and retry-counter roll back for a clean retry.
+        // Runs with NO transaction open (issueAndDeliver): if delivery fails,
+        // the persisted OTP and retry-counter are put back for a clean retry.
         // Never log the code itself.
 
         // Country-aware channel routing. The InnBucks SMS gateway is currently
@@ -399,15 +541,20 @@ public class OtpService {
     }
 
     /**
-     * Runs after a successful OTP consume.
+     * Runs after a successful OTP consume has committed, and tells loyalty.
      *
-     * <p>If a pending_registrations row exists for the phone (the common path, set up by tier 1
-     * customer registration), materialise the {@link User} + {@link CustomerProfile} from it and
-     * drop the pending row. If the phone already belongs to a customer, just flip
-     * {@code phoneVerified = true}.
+     * <p>The local-account half already ran inside the verify transaction
+     * ({@link #materializeOrRefreshLocalAccount}): if a pending_registrations row exists for the
+     * phone (the common path, set up by tier 1 customer registration), the {@link User} +
+     * {@link CustomerProfile} were materialised from it and the pending row dropped; if the phone
+     * already belonged to a customer, {@code phoneVerified} was flipped to true.
      */
     private void finalizeVerification(String phoneNumber) {
-        materializeOrRefreshLocalAccount(phoneNumber);
+        // Runs AFTER the consume + materialisation committed (verifyOtp), with no
+        // transaction open: the loyalty round trip must not hold the OTP or
+        // account rows locked, and only a verification that really committed
+        // is announced.
+        //
         // Tell loyalty on EVERY successful verify, unconditionally.
         //
         // This used to fire only from inside the two branches below — the
