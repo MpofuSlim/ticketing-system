@@ -82,7 +82,11 @@ public class DeviceSecurityProperties {
         private int readTimeoutMs = 15000;
         /** How long to reuse a token whose lifetime staging does not state. */
         private Duration fallbackTokenTtl = Duration.ofMinutes(10);
-        /** Refresh this long before a cached token expires, so no caller is handed one about to die. */
+        /**
+         * No caller is handed a token with less than this much life left. The
+         * refresh starts one further margin earlier, so sign-ins that arrive
+         * while it runs keep the current token instead of waiting for staging.
+         */
         private Duration refreshMargin = Duration.ofSeconds(60);
     }
 

@@ -311,6 +311,38 @@ Shape to follow:
   — pulls a self-contained shaded jar so the test deps don't fight with the
   project's Jetty/Jackson versions.
 
+## Upstream token caches are single-flight, never synchronized
+
+**A client that caches an upstream access token refreshes it through its
+module's `SingleFlightTokenCache` — never inside a `synchronized` method or
+block.** The InnBucks notification API's `/auth/third-party` login was measured
+at about 19 s; under `private synchronized String currentToken(boolean)` that
+held the client's monitor for the whole login, so EVERY email/SMS sender in the
+service waited behind it, including the ones holding a perfectly good token (and
+it would pin a carrier thread if virtual threads were ever enabled).
+
+- **The shape** (identical in InnRewards, market-place and innbucks-loans): a
+  token before its `refreshAt` comes back from an `AtomicReference` with no
+  lock; at most one login is in flight, as a `CompletableFuture` that a short
+  `ReentrantLock` only STARTS or JOINS (the starter runs the login on its own
+  thread); past `refreshAt` but before `expiresAt`, everyone except the starter
+  keeps the current token; a caller with no usable token waits at most connect
+  + read timeout + 2 s (`waitBound`) and then gets the client's own transient
+  exception; a failed login reaches every waiter with the starter's exception
+  type, caches nothing, and the next caller retries.
+- **After a 401, call `refreshAfterRejection(theRefusedToken)`, never a bare
+  force.** It logs in again only if the cached token is still the refused one,
+  so N concurrent 401s cost ONE login; the refused token is dropped at once so
+  nobody else is handed it.
+- Sites: `EmailNotificationClient` (booking, user, payment), payment's
+  `InnbucksApiClient`, and user-service's DTX `StagingClientServiceClient`.
+  Staging's token is handed to the app, so its cache refreshes at TWO
+  `refresh-margin`s before expiry and stops handing a token out at ONE — no
+  caller ever gets one with less than the margin left. The `synchronized`
+  blocks left in the `JwtUtil`s are one-time local key parsing, not network.
+- Services share no code, so each module keeps its own copy of the class and
+  its `SingleFlightTokenCacheTest`; change them together.
+
 ## Swagger response examples
 
 **Every endpoint you add or modify MUST have meaningful `@ApiResponses` with

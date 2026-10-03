@@ -13,6 +13,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -54,8 +55,12 @@ public class EmailNotificationClient {
      */
     private final SmtpEmailSender smtpEmailSender;
 
-    private String accessToken;
-    private Instant tokenExpiry = Instant.EPOCH;
+    /**
+     * The notification API bearer token. Single-flight, never {@code synchronized}:
+     * a slow login must not block senders that hold a usable token (CLAUDE.md,
+     * "Upstream token caches are single-flight, never synchronized").
+     */
+    private final SingleFlightTokenCache<String> tokens;
 
     @org.springframework.beans.factory.annotation.Autowired
     public EmailNotificationClient(@Qualifier("innbucksNotifyRestClient") RestClient restClient,
@@ -66,6 +71,9 @@ public class EmailNotificationClient {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.smtpEmailSender = smtpEmailSender;
+        this.tokens = new SingleFlightTokenCache<>("Notification API", this::login,
+                SingleFlightTokenCache.waitBound(properties.getConnectTimeoutMs(), properties.getReadTimeoutMs()),
+                NotificationDeliveryException::new, Clock.systemUTC());
     }
 
     /**
@@ -252,12 +260,13 @@ public class EmailNotificationClient {
 
     /** Run an authed call; on 401, force one token refresh and replay once. */
     private <T> T withAuthRetryOn401(Function<String, T> call) {
+        String token = tokens.get();
         try {
-            return call.apply(currentToken(false));
+            return call.apply(token);
         } catch (UnauthorizedException first) {
             log.info("Notification API returned 401 — refreshing token and replaying once");
             try {
-                return call.apply(currentToken(true));
+                return call.apply(tokens.refreshAfterRejection(token));
             } catch (UnauthorizedException second) {
                 throw new NotificationDeliveryException(
                         "Notification API rejected our credentials twice (401) — check BANK_API_USERNAME/PASSWORD/KEY");
@@ -265,10 +274,13 @@ public class EmailNotificationClient {
         }
     }
 
-    private synchronized String currentToken(boolean force) {
-        if (!force && accessToken != null && Instant.now().isBefore(tokenExpiry)) {
-            return accessToken;
-        }
+    /**
+     * One {@code POST /auth/third-party} login. Run only by
+     * {@link SingleFlightTokenCache}, which shares it between concurrent callers.
+     * Refreshes 30s before the token's {@code exp}; a caller that arrives in
+     * those 30s while another refreshes keeps using the current token.
+     */
+    private SingleFlightTokenCache.CachedToken<String> login() {
         try {
             String raw = restClient.post()
                     .uri(LOGIN_PATH)
@@ -284,10 +296,11 @@ public class EmailNotificationClient {
             if (token == null || token.toString().isBlank()) {
                 throw new NotificationDeliveryException("Notification API login returned no accessToken");
             }
-            accessToken = token.toString();
-            tokenExpiry = deriveExpiry(accessToken).minusSeconds(30);
-            log.info("Notification API login succeeded; token cached until {}", tokenExpiry);
-            return accessToken;
+            String accessToken = token.toString();
+            Instant expiresAt = deriveExpiry(accessToken);
+            Instant refreshAt = expiresAt.minusSeconds(30);
+            log.info("Notification API login succeeded; token cached until {}", refreshAt);
+            return new SingleFlightTokenCache.CachedToken<>(accessToken, refreshAt, expiresAt);
         } catch (RestClientResponseException e) {
             // Surface the upstream body — the previous "HTTP 4xx" message hid
             // the real reason (e.g. {"errors":["Invalid username"]} from this
