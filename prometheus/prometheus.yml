@@ -103,7 +103,21 @@ scrape_configs:
     static_configs:
       - targets: [ "marketplace-service:8087" ]
 
-  # loans-service (MpofuSlim/innbucks-loans, staging-only today) has NO job yet:
-  # it exposes /actuator/health and nothing else — no /actuator/prometheus, no
-  # X-Metrics-Token filter — so a target here would read DOWN forever. Add one
-  # in the same change that gives loans a metrics endpoint.
+  # loans-service lives in the MpofuSlim/innbucks-loans repo and serves
+  # /actuator/prometheus on 8088 behind the same X-Metrics-Token filter. Its pod
+  # gets METRICS_SCRAPE_TOKEN through an explicit env entry (the loans
+  # Deployment has no envFrom of cell-zw-secrets — see its header).
+  #
+  # STAGING ONLY. deploy/k8s is applied to both ZW hosts, so the Service exists
+  # on production too but has no endpoints there: this job reads up=0 on
+  # production BY DESIGN, until loans goes live. That is why loans-service is
+  # deliberately NOT in alerts.yaml's ServiceDown regex (production would page
+  # forever) and why no other rule may key on up{job="loans-service"}. Read
+  # its health on the staging /targets page instead.
+  - job_name: loans-service
+    metrics_path: /actuator/prometheus
+    http_headers:
+      X-Metrics-Token:
+        files: [ /etc/prometheus/secrets/metrics-scrape-token ]
+    static_configs:
+      - targets: [ "loans-service:8088" ]
