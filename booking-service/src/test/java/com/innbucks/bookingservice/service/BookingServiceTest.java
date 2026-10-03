@@ -750,6 +750,38 @@ class BookingServiceTest {
     }
 
     @Test
+    void confirmBooking_eventCarriesWhatTheAvailabilityDecrementNeeds_andReplayPublishesNothing() {
+        // The event-service availableTickets decrement runs after commit from
+        // EventAvailabilityConsumeListener, driven ONLY by this event — so the
+        // event must carry the event id + ticket count, and the idempotent
+        // replay must publish nothing (or a payment-service retry would
+        // decrement twice).
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class), publisher);
+
+        UUID id = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).eventId(eventId).userEmail("u@example.com")
+                .confirmationNumber("INN-X").status(Booking.BookingStatus.PENDING)
+                .totalAmount(BigDecimal.TEN)
+                .items(new ArrayList<>(List.of(new BookingItem(), new BookingItem(), new BookingItem())))
+                .build();
+        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+
+        service.confirmBooking(id);
+        service.confirmBooking(id); // replay — now CONFIRMED
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(publisher).publishEvent(captor.capture()); // exactly once
+        BookingDomainEvent.BookingConfirmed confirmed =
+                (BookingDomainEvent.BookingConfirmed) captor.getValue();
+        assertEquals(eventId, confirmed.eventId());
+        assertEquals(3, confirmed.ticketCount());
+    }
+
+    @Test
     void createBooking_setsExpiresAtToHoldWindowFromNow() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);

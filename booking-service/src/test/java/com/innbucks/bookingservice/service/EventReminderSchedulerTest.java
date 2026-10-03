@@ -12,6 +12,7 @@ import com.innbucks.bookingservice.repository.BookingRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -25,6 +26,7 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -58,7 +60,7 @@ class EventReminderSchedulerTest {
         sms = mock(SmsNotificationClient.class);
         email = mock(EmailNotificationClient.class);
         scheduler = new EventReminderScheduler(bookings, events, whatsApp, sms, email,
-                new MarketTimeZone("ZW"), 24, 48);
+                new MarketTimeZone("ZW"), mock(PlatformTransactionManager.class), 24, 48);
         // Default: neither stage has anything to scan; tests override per stage.
         lenient().when(bookings.findEventIdsWithUnremindedConfirmed()).thenReturn(List.of());
         lenient().when(bookings.findEventIdsWithUn2dRemindedConfirmed()).thenReturn(List.of());
@@ -295,5 +297,43 @@ class EventReminderSchedulerTest {
                     .doesNotContainIgnoringCase("tomorrow")
                     .doesNotContainIgnoringCase("in 2 days");
         }
+    }
+
+    @Test
+    void markerIsClaimedBeforeAnythingIsSent() {
+        // Claim-before-send is what makes "at most once" strict: the stamp is
+        // saved (and, in production, committed) before the first channel call.
+        Booking b = confirmed("+263771234567", "guest@example.com");
+        dayOfScanReturns(b);
+        eventStartsInHours(5);
+
+        scheduler.remind();
+
+        var order = inOrder(bookings, sms, email, whatsApp);
+        order.verify(bookings).saveAll(List.of(b));
+        order.verify(sms).sendSms(anyString(), anyString(), anyString());
+        order.verify(email).sendEmail(anyString(), anyString(), anyString(), anyString());
+        order.verify(whatsApp).sendCustomNotification(anyString(), anyString());
+    }
+
+    @Test
+    void oneEventsFailedClaim_doesNotStopTheNext() {
+        UUID other = UUID.randomUUID();
+        Booking b = confirmed("+263771234567", null);
+        b.setEventId(other);
+        when(bookings.findEventIdsWithUnremindedConfirmed()).thenReturn(List.of(eventId, other));
+        eventStartsInHours(5);
+        when(events.getEvent(other)).thenReturn(ApiResult.<EventLookupDTO>builder().code("200")
+                .data(EventLookupDTO.builder().eventId(other).title("Other Fest")
+                        .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusHours(5)).build())
+                .build());
+        when(bookings.findByEventIdAndStatusAndReminderSentAtIsNull(eventId, Booking.BookingStatus.CONFIRMED))
+                .thenThrow(new RuntimeException("claim failed"));
+        when(bookings.findByEventIdAndStatusAndReminderSentAtIsNull(other, Booking.BookingStatus.CONFIRMED))
+                .thenReturn(List.of(b));
+
+        scheduler.remind();
+
+        verify(sms).sendSms(eq("+263771234567"), contains("Other Fest"), anyString());
     }
 }

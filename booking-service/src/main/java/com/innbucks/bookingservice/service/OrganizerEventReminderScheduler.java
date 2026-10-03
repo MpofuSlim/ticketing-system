@@ -8,7 +8,6 @@ import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.TenantContactDTO;
 import com.innbucks.bookingservice.dto.TenantLookupRequest;
 import com.innbucks.bookingservice.entity.Booking;
-import com.innbucks.bookingservice.entity.OrganizerEventReminder;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import com.innbucks.bookingservice.repository.OrganizerEventReminderRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +15,8 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -44,6 +44,17 @@ import java.util.UUID;
  * business email from user-service's tenant-contact lookup — both existing
  * S2S contracts. Lookup failures defer the event to the next tick without
  * consuming the marker.
+ *
+ * <p><b>Look up, claim, commit, THEN send.</b> The whole hourly run used to be
+ * one {@code @Transactional}, holding a pooled connection across both S2S
+ * lookups and the email of every event in the pass. Now every remote read
+ * (event, then organizer contact) happens first with no transaction open, so a
+ * lookup failure still defers without consuming anything; then a short
+ * transaction claims the event — writes its marker row, unless one is already
+ * there — and reads the headline counts; the email goes out only after that
+ * commits. Claiming before sending makes "at most once" strict (a crash
+ * mid-send loses the email rather than repeating it), and each event's claim
+ * is its own transaction, so one event's failure never touches another's.
  */
 @Service
 @Slf4j
@@ -57,6 +68,7 @@ public class OrganizerEventReminderScheduler {
     private final EventServiceClient eventServiceClient;
     private final UserServiceClient userServiceClient;
     private final EmailNotificationClient email;
+    private final TransactionTemplate txTemplate;
     private final String internalToken;
     private final Duration window;
 
@@ -66,6 +78,7 @@ public class OrganizerEventReminderScheduler {
             EventServiceClient eventServiceClient,
             UserServiceClient userServiceClient,
             EmailNotificationClient email,
+            PlatformTransactionManager transactionManager,
             @Value("${innbucks.internal-api-token:}") String internalToken,
             @Value("${app.booking.organizer-reminder-window-hours:24}") long windowHours) {
         this.bookingRepository = bookingRepository;
@@ -73,13 +86,14 @@ public class OrganizerEventReminderScheduler {
         this.eventServiceClient = eventServiceClient;
         this.userServiceClient = userServiceClient;
         this.email = email;
+        this.txTemplate = new TransactionTemplate(transactionManager);
         this.internalToken = internalToken;
         this.window = Duration.ofHours(windowHours);
     }
 
     @Scheduled(cron = "${app.booking.organizer-reminder-cron:0 20 * * * *}", zone = "UTC")
     @SchedulerLock(name = "OrganizerEventReminderScheduler.remind", lockAtMostFor = "PT30M", lockAtLeastFor = "PT30S")
-    @Transactional
+    // Deliberately NOT @Transactional — see the class doc.
     public void remind() {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         for (UUID eventId : bookingRepository.findEventIdsForOrganizerReminder()) {
@@ -103,7 +117,7 @@ public class OrganizerEventReminderScheduler {
         if (start.isBefore(now)) {
             // Already started — consume the marker silently so this event
             // stops being rescanned every hour forever.
-            markers.save(new OrganizerEventReminder(eventId, now));
+            txTemplate.executeWithoutResult(status -> claim(eventId, now));
             return;
         }
         if (start.isAfter(now.plus(window))) {
@@ -113,20 +127,33 @@ public class OrganizerEventReminderScheduler {
     }
 
     private void sendAndMark(UUID eventId, EventLookupDTO event, LocalDateTime start, LocalDateTime now) {
-        long confirmedBookings = bookingRepository.countByEventIdAndStatus(
-                eventId, Booking.BookingStatus.CONFIRMED);
-        long ticketsSold = bookingRepository.countConfirmedTickets(eventId);
+        // Remote read first, outside any transaction: a user-service failure
+        // throws out of here and defers the event with its marker unwritten.
         String to = resolveOrganizerEmail(event.getTenantUserUuid());
+
+        // Claim + headline counts in one short transaction. Not claimed means
+        // the marker row already exists — this event's reminder is spoken for.
+        Headline headline = txTemplate.execute(status -> claim(eventId, now)
+                ? new Headline(
+                        bookingRepository.countByEventIdAndStatus(eventId, Booking.BookingStatus.CONFIRMED),
+                        bookingRepository.countConfirmedTickets(eventId))
+                : null);
+        if (headline == null) {
+            log.debug("Organizer reminder: eventId={} already marked — not sending again", eventId);
+            return;
+        }
+
+        // Send — committed claim, no transaction open.
         if (to != null && !to.isBlank()) {
             String title = event.getTitle() == null || event.getTitle().isBlank()
                     ? "Your event" : event.getTitle();
             try {
                 email.sendEmail(to,
-                        "Tomorrow: " + title + " - " + ticketsSold + " tickets sold",
-                        body(title, start, confirmedBookings, ticketsSold),
+                        "Tomorrow: " + title + " - " + headline.ticketsSold() + " tickets sold",
+                        body(title, start, headline.confirmedBookings(), headline.ticketsSold()),
                         "ORG-RMD-" + shortId(eventId));
                 log.info("Organizer reminder sent eventId={} title=\"{}\" bookings={} tickets={}",
-                        eventId, event.getTitle(), confirmedBookings, ticketsSold);
+                        eventId, event.getTitle(), headline.confirmedBookings(), headline.ticketsSold());
             } catch (RuntimeException e) {
                 log.warn("Organizer reminder email failed eventId={} (marker still stamped): {}",
                         eventId, e.getMessage());
@@ -135,8 +162,14 @@ public class OrganizerEventReminderScheduler {
             log.info("Organizer reminder: no business email for organizer={} eventId={} — marked without send",
                     event.getTenantUserUuid(), eventId);
         }
-        markers.save(new OrganizerEventReminder(eventId, now));
     }
+
+    /** True when THIS call wrote the event's marker row. Runs inside the caller's transaction. */
+    private boolean claim(UUID eventId, LocalDateTime now) {
+        return markers.claim(eventId, now) == 1;
+    }
+
+    private record Headline(long confirmedBookings, long ticketsSold) {}
 
     private static String body(String title, LocalDateTime start, long bookings, long tickets) {
         return "Hi,\n\n"

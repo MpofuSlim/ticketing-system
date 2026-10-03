@@ -79,8 +79,9 @@ public class BookingService {
     private long holdTtlMinutes = 5;
 
     // Shared secret passed to event-service on the internal
-    // PATCH /events/{id}/availability/consume call. Same value as
-    // INTERNAL_API_TOKEN on the event-service end of the wire.
+    // PATCH /events/{id}/availability/release call and the internal event
+    // lookup. Same value as INTERNAL_API_TOKEN on the event-service end of
+    // the wire.
     @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
     private String eventInternalToken;
 
@@ -978,6 +979,12 @@ public class BookingService {
         return toDTO(booking);
     }
 
+    // @Transactional here too: the call below is a SELF-invocation, which
+    // bypasses the proxy, so without it this overload ran with no transaction
+    // at all — and a BookingConfirmed published outside a transaction is
+    // silently dropped by every AFTER_COMMIT listener (no tickets, no
+    // availability decrement). The controller calls the two-arg form.
+    @Transactional
     public BookingResponseDTO confirmBooking(UUID bookingId) {
         return confirmBooking(bookingId, null);
     }
@@ -1057,12 +1064,12 @@ public class BookingService {
         booking.setExpiresAt(null); // paid — hold no longer applicable
         bookingRepository.save(booking);
 
-        // Decrement the event's stored availableTickets in event-service so its
-        // DB column actually drops as tickets are bought. Best-effort: if the
-        // gateway is degraded the booking still confirms and the event-service
-        // read-time enrichment keeps the response in sync until next call.
-        consumeEventAvailability(booking);
-
+        // The event-service availableTickets decrement used to be a Feign call
+        // made here, inside this transaction — a pooled connection held across
+        // a remote call for a best-effort mirror. It now runs AFTER COMMIT,
+        // off this thread, from EventAvailabilityConsumeListener on the event
+        // below; publishing only here (never on the replay branch above) is
+        // what keeps it to one decrement per real confirmation.
         eventPublisher.publishEvent(BookingDomainEvent.BookingConfirmed.of(booking));
 
         log.info("Booking confirmed bookingId={} userEmail={} pointsUsed={} cashAmount={}",
@@ -1085,38 +1092,6 @@ public class BookingService {
             throw new BadRequestException("Paying for tickets with loyalty points isn't available.");
         }
         // Cash-only: no loyalty earn on ticket purchases. Nothing to do.
-    }
-
-    private void consumeEventAvailability(Booking booking) {
-        EventServiceClient client = eventClientProvider == null
-                ? null : eventClientProvider.getIfAvailable();
-        if (client == null) {
-            log.debug("event client unavailable; skipping availability decrement bookingId={}",
-                    booking.getId());
-            return;
-        }
-        int count = booking.getItems() == null ? 0 : booking.getItems().size();
-        if (count <= 0) {
-            return;
-        }
-        try {
-            ApiResult<AvailabilityResponseDTO> envelope =
-                    client.consumeAvailability(booking.getEventId(), count, eventInternalToken);
-            AvailabilityResponseDTO data = envelope == null ? null : envelope.getData();
-            if (data != null) {
-                log.info("Decremented event availability eventId={} consumed={} remaining={}",
-                        booking.getEventId(), count, data.getAvailableTickets());
-            } else {
-                log.warn("Availability decrement returned no data eventId={} consumed={}",
-                        booking.getEventId(), count);
-            }
-        } catch (Exception ex) {
-            // Don't block confirmation on event-service trouble. The read-time
-            // enrichment in event-service still subtracts confirmed booking
-            // items so the API response stays correct.
-            log.warn("Failed to decrement event availability eventId={} count={} reason={}",
-                    booking.getEventId(), count, ex.getMessage());
-        }
     }
 
     /**

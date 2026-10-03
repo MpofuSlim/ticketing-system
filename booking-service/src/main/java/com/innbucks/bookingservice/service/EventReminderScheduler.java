@@ -14,13 +14,15 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -40,6 +42,20 @@ import java.util.UUID;
  * only entered the scan once the day-of window was already reached (a
  * customer who books the night before gets ONE reminder, not two
  * back-to-back). Scans are bounded by the V18/V19 partial indexes.
+ *
+ * <p><b>Claim, commit, THEN send — never a send inside a transaction.</b> The
+ * whole hourly run used to be one {@code @Transactional}, so a pooled
+ * connection was held across every event-service lookup and every SMS, email
+ * and WhatsApp call of every event in the pass. Now each event is two phases:
+ * (1) a short transaction re-reads the event's still-unstamped CONFIRMED
+ * bookings, stamps the stage marker on them and commits; (2) the reminders go
+ * to exactly those bookings, with no transaction open. Marking BEFORE sending
+ * makes "at most once" strict: a crash mid-send loses a reminder rather than
+ * repeating one, and a booking someone else stamped in between is never
+ * re-sent — the stamp carries the {@code @Version} check, so a booking that
+ * changed under the claim fails the commit and that event simply retries next
+ * tick, with nothing sent. A failure in one event never affects another: each
+ * event's claim is its own transaction.
  *
  * <p>Channels are independent best-effort per booking: a failed SMS never
  * blocks the email, and vice versa. The event's start time is resolved per
@@ -72,6 +88,7 @@ public class EventReminderScheduler {
     private final SmsNotificationClient sms;
     private final EmailNotificationClient email;
     private final MarketTimeZone market;
+    private final TransactionTemplate txTemplate;
     private final Duration dayOfWindow;
     private final Duration twoDayWindow;
 
@@ -81,6 +98,7 @@ public class EventReminderScheduler {
                                   SmsNotificationClient sms,
                                   EmailNotificationClient email,
                                   MarketTimeZone market,
+                                  PlatformTransactionManager transactionManager,
                                   @Value("${app.booking.reminder-window-hours:24}") long dayOfWindowHours,
                                   @Value("${app.booking.reminder-2d-window-hours:48}") long twoDayWindowHours) {
         this.bookingRepository = bookingRepository;
@@ -89,13 +107,15 @@ public class EventReminderScheduler {
         this.sms = sms;
         this.email = email;
         this.market = market;
+        this.txTemplate = new TransactionTemplate(transactionManager);
         this.dayOfWindow = Duration.ofHours(dayOfWindowHours);
         this.twoDayWindow = Duration.ofHours(twoDayWindowHours);
     }
 
     @Scheduled(cron = "${app.booking.reminder-cron:0 10 * * * *}", zone = "UTC")
     @SchedulerLock(name = "EventReminderScheduler.remind", lockAtMostFor = "PT30M", lockAtLeastFor = "PT30S")
-    @Transactional
+    // Deliberately NOT @Transactional — see the class doc: each event claims in
+    // its own short transaction and sends after it commits.
     public void remind() {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         // 2-day stage first: a booking already inside the day-of window gets
@@ -130,27 +150,39 @@ public class EventReminderScheduler {
             return; // not yet in the window — nothing to do this tick.
         }
         boolean sendable = start.isAfter(now.plus(dayOfWindow));
-        List<Booking> bookings = bookingRepository.findByEventIdAndStatusAndReminder2dSentAtIsNull(
-                eventId, Booking.BookingStatus.CONFIRMED);
-        int sent = 0;
-        for (Booking booking : bookings) {
-            if (sendable) {
-                boolean any = deliver(booking, event, start,
-                        "RMD-2D-" + booking.getConfirmationNumber());
-                if (any) sent++;
-            }
-            booking.setReminder2dSentAt(now);
-        }
-        bookingRepository.saveAll(bookings);
-        if (sendable) {
-            log.info("2-day event reminders sent eventId={} title=\"{}\" sent={}/{}",
-                    eventId, event.getTitle(), sent, bookings.size());
-        } else {
+        // Phase 1 — claim (commits before any send).
+        List<Booking> bookings = claimTwoDay(eventId, now);
+        if (!sendable) {
             // Started, or already inside the day-of window (late bookings):
-            // consume silently so the day-of stage is the one reminder.
+            // consumed silently so the day-of stage is the one reminder.
             log.debug("2-day reminder: eventId={} inside day-of window/started — {} booking(s) marked without sending",
                     eventId, bookings.size());
+            return;
         }
+        // Phase 2 — send to exactly the claimed bookings, no transaction open.
+        int sent = 0;
+        for (Booking booking : bookings) {
+            boolean any = deliver(booking, event, start,
+                    "RMD-2D-" + booking.getConfirmationNumber());
+            if (any) sent++;
+        }
+        log.info("2-day event reminders sent eventId={} title=\"{}\" sent={}/{}",
+                eventId, event.getTitle(), sent, bookings.size());
+    }
+
+    /**
+     * Stamps {@code reminder2dSentAt} on the event's still-unstamped CONFIRMED
+     * bookings and commits; returns exactly the bookings stamped (detached —
+     * only their plain columns are read afterwards).
+     */
+    private List<Booking> claimTwoDay(UUID eventId, LocalDateTime now) {
+        return Objects.requireNonNullElse(txTemplate.execute(status -> {
+            List<Booking> bookings = bookingRepository.findByEventIdAndStatusAndReminder2dSentAtIsNull(
+                    eventId, Booking.BookingStatus.CONFIRMED);
+            bookings.forEach(b -> b.setReminder2dSentAt(now));
+            bookingRepository.saveAll(bookings);
+            return bookings;
+        }), List.of());
     }
 
     // ---- day-of stage (WhatsApp + SMS + email) -----------------------------
@@ -170,8 +202,9 @@ public class EventReminderScheduler {
         if (start.isAfter(now.plus(dayOfWindow))) {
             return;
         }
-        List<Booking> bookings = bookingRepository.findByEventIdAndStatusAndReminderSentAtIsNull(
-                eventId, Booking.BookingStatus.CONFIRMED);
+        // Phase 1 — claim (commits before any send); phase 2 — send, no
+        // transaction open.
+        List<Booking> bookings = claimDayOf(eventId, now);
         int sent = 0;
         for (Booking booking : bookings) {
             boolean any = deliver(booking, event, start,
@@ -187,20 +220,26 @@ public class EventReminderScheduler {
                 }
             }
             if (any) sent++;
-            booking.setReminderSentAt(now);
         }
-        bookingRepository.saveAll(bookings);
         log.info("Day-of event reminders sent eventId={} title=\"{}\" sent={}/{}",
                 eventId, event.getTitle(), sent, bookings.size());
     }
 
     private void consumeDayOfSilently(UUID eventId, LocalDateTime now) {
-        List<Booking> bookings = bookingRepository.findByEventIdAndStatusAndReminderSentAtIsNull(
-                eventId, Booking.BookingStatus.CONFIRMED);
-        bookings.forEach(b -> b.setReminderSentAt(now));
-        bookingRepository.saveAll(bookings);
+        List<Booking> bookings = claimDayOf(eventId, now);
         log.debug("Day-of reminder: eventId={} already started — {} booking(s) marked without sending",
                 eventId, bookings.size());
+    }
+
+    /** Day-of twin of {@link #claimTwoDay}, on {@code reminderSentAt}. */
+    private List<Booking> claimDayOf(UUID eventId, LocalDateTime now) {
+        return Objects.requireNonNullElse(txTemplate.execute(status -> {
+            List<Booking> bookings = bookingRepository.findByEventIdAndStatusAndReminderSentAtIsNull(
+                    eventId, Booking.BookingStatus.CONFIRMED);
+            bookings.forEach(b -> b.setReminderSentAt(now));
+            bookingRepository.saveAll(bookings);
+            return bookings;
+        }), List.of());
     }
 
     // ---- shared delivery ----------------------------------------------------

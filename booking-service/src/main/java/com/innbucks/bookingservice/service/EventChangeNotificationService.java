@@ -8,7 +8,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.UUID;
@@ -27,6 +26,14 @@ import java.util.UUID;
  * caller (or event-service's request) open for the whole fan-out. Best-effort
  * per recipient: one customer's gateway failure is logged and the loop
  * continues, so a single bad number never blocks the rest of the broadcast.
+ *
+ * <p><b>No {@code @Transactional}, on purpose.</b> It used to carry a
+ * read-only transaction around the whole method, which held a pooled
+ * connection for the entire fan-out — hundreds of sequential SMS/WhatsApp
+ * round trips. The attendee read is a single repository call (Spring Data's
+ * own read-only transaction, released when it returns), and only plain
+ * columns of the returned bookings are read afterwards, so nothing needs a
+ * session while sending.
  */
 @Service
 @RequiredArgsConstructor
@@ -38,7 +45,6 @@ public class EventChangeNotificationService {
     private final WhatsAppNotificationClient whatsAppNotificationClient;
 
     @Async
-    @Transactional(readOnly = true)
     public void broadcast(UUID eventId, String changeType, String eventTitle,
                           String newStartDateTime, String newVenue) {
         List<Booking> attendees =

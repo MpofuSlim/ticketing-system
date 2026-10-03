@@ -41,18 +41,34 @@ public sealed interface BookingDomainEvent
         }
     }
 
+    /**
+     * {@code eventId} + {@code ticketCount} let the post-commit availability
+     * decrement ({@code EventAvailabilityConsumeListener}) run without reading
+     * the booking back. Published ONLY on a real PENDING -> CONFIRMED flip,
+     * never on an idempotent replay.
+     */
     record BookingConfirmed(
             UUID bookingId,
             String userEmail,
             String confirmationNumber,
-            Instant occurredAt
+            Instant occurredAt,
+            UUID eventId,
+            int ticketCount
     ) implements BookingDomainEvent {
+        /** Pre-availability shape — no event id, nothing to decrement. */
+        public BookingConfirmed(UUID bookingId, String userEmail, String confirmationNumber,
+                                Instant occurredAt) {
+            this(bookingId, userEmail, confirmationNumber, occurredAt, null, 0);
+        }
+
         public static BookingConfirmed of(Booking b) {
             return new BookingConfirmed(
                     b.getId(),
                     b.getUserEmail(),
                     b.getConfirmationNumber(),
-                    Instant.now());
+                    Instant.now(),
+                    b.getEventId(),
+                    b.getItems() == null ? 0 : b.getItems().size());
         }
     }
 
