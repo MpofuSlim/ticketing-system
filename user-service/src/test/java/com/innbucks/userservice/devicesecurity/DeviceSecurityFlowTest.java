@@ -287,6 +287,50 @@ class DeviceSecurityFlowTest {
     }
 
     @Test
+    @DisplayName("on production the fixed code works only with TEST_OTP_PRODUCTION_ALLOWED (the app-review account)")
+    void testNumbers_onProduction_needTheExplicitOptIn() throws Exception {
+        String msisdn = number();
+        properties.setProduction(true);
+        properties.getTestOtp().setEnabled(true);
+        properties.getTestOtp().setCode("111111");
+        properties.getTestOtp().setNumbers(List.of(msisdn));
+        try {
+            // Without the opt-in the list is refused: a real code goes out, and 111111 is just a wrong code.
+            String install = UUID.randomUUID().toString();
+            String challenge = JsonPath.read(clientService(msisdn, install, "SIGN_IN", "{}"), "$.data.challengeId");
+            mvc.perform(broker(post("/auth/client-service/otp/send"), install)
+                    .content("{\"challengeId\":\"" + challenge + "\",\"channel\":\"WHATSAPP\"}")).andExpect(status().isOk());
+            verify(whatsApp, timeout(5000)).sendCustomNotification(eq(msisdn), anyString());
+            mvc.perform(broker(post("/auth/client-service/otp/verify"), install)
+                    .content("{\"challengeId\":\"" + challenge + "\",\"otp\":\"111111\"}"))
+                    .andExpect(jsonPath("$.data.errorCode").value("otp_incorrect"));
+
+            // With it, the review number gets the fixed code and nothing is sent.
+            properties.getTestOtp().setProductionAllowed(true);
+            org.mockito.Mockito.clearInvocations(whatsApp, sms);
+            String install2 = UUID.randomUUID().toString();
+            String challenge2 = JsonPath.read(clientService(msisdn, install2, "SIGN_IN", "{}"), "$.data.challengeId");
+            mvc.perform(broker(post("/auth/client-service/otp/send"), install2)
+                    .content("{\"challengeId\":\"" + challenge2 + "\",\"channel\":\"WHATSAPP\"}")).andExpect(status().isOk());
+            org.mockito.Mockito.verifyNoInteractions(whatsApp, sms);
+            assertThat((String) JsonPath.read(verifyOtp(challenge2, "111111", install2), "$.data.decision")).isEqualTo("TOKEN");
+
+            // ...and only for the listed number: any other number still gets a real code.
+            String other = number();
+            String install3 = UUID.randomUUID().toString();
+            String challenge3 = JsonPath.read(clientService(other, install3, "SIGN_IN", "{}"), "$.data.challengeId");
+            mvc.perform(broker(post("/auth/client-service/otp/send"), install3)
+                    .content("{\"challengeId\":\"" + challenge3 + "\",\"channel\":\"WHATSAPP\"}")).andExpect(status().isOk());
+            verify(whatsApp, timeout(5000)).sendCustomNotification(eq(other), anyString());
+        } finally {
+            properties.setProduction(false);
+            properties.getTestOtp().setEnabled(false);
+            properties.getTestOtp().setProductionAllowed(false);
+            properties.getTestOtp().setNumbers(new java.util.ArrayList<>());
+        }
+    }
+
+    @Test
     @DisplayName("the number check (LOOKUP) never asks for a code, binds nothing, and is tightly limited")
     void lookup_isTokenWithoutBinding_andLimited() throws Exception {
         String msisdn = number();

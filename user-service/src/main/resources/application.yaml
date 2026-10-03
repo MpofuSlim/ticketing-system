@@ -195,6 +195,8 @@ device-security:
     enabled: ${DEVICE_SECURITY_TEST_OTP_ENABLED:false}
     code: ${DEVICE_SECURITY_TEST_OTP_CODE:}
     numbers: ${DEVICE_SECURITY_TEST_OTP_NUMBERS:}
+    # Also allow the list on a production cell. App-store review accounts only.
+    production-allowed: ${DEVICE_SECURITY_TEST_OTP_PRODUCTION_ALLOWED:false}
   trust:
     days: ${DEVICE_SECURITY_TRUST_DAYS:90}
     fraud-flag-days: ${DEVICE_SECURITY_TRUST_FRAUD_FLAG_DAYS:30}

@@ -123,12 +123,23 @@ public class DeviceSecurityProperties {
         private Duration channelDownFor = Duration.ofMinutes(2);
     }
 
-    /** Fixed code for allow-listed test numbers (§11, §14.1). Never on production. */
+    /**
+     * Fixed code for allow-listed test numbers (§11, §14.1): no message is sent and only
+     * {@link #code} verifies. Refused on a production cell unless {@link #productionAllowed}
+     * is also set — the one sanctioned use there is the Apple / Google app-review account,
+     * whose reviewers sit outside Zimbabwe and can never receive our SMS or WhatsApp.
+     */
     @Data
     public static class TestOtp {
         private boolean enabled = false;
         private String code = "";
         private List<String> numbers = new ArrayList<>();
+        /**
+         * Lets the allow-list work on a cell marked production. Off by default; set it per
+         * host, only for a dedicated review account that holds no real money, and clear it
+         * once the store review is done. user-service WARNs at every boot while it is on.
+         */
+        private boolean productionAllowed = false;
     }
 
     /** Trust windows and the device-count rules (§8.3, §8.6). */
