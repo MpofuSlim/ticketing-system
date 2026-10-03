@@ -18,6 +18,7 @@ import org.springframework.web.client.RestClientResponseException;
 
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
@@ -80,8 +81,12 @@ public class InnbucksApiClient {
     private final Retry retry;
     private final CircuitBreaker circuitBreaker;
 
-    private volatile String accessToken;
-    private volatile Instant tokenExpiry = Instant.EPOCH;
+    /**
+     * The Merchant API bearer token. Single-flight, never {@code synchronized}:
+     * a slow login must not block calls that hold a usable token (CLAUDE.md,
+     * "Upstream token caches are single-flight, never synchronized").
+     */
+    private final SingleFlightTokenCache<String> tokens;
 
     public InnbucksApiClient(InnbucksApiProperties properties,
                              ObjectMapper objectMapper,
@@ -101,6 +106,9 @@ public class InnbucksApiClient {
                 .build();
         this.retry = retryRegistry.retry(RESILIENCE_INSTANCE_NAME);
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker(RESILIENCE_INSTANCE_NAME);
+        this.tokens = new SingleFlightTokenCache<>("InnBucks API", this::login,
+                SingleFlightTokenCache.waitBound(properties.getConnectTimeoutMs(), properties.getReadTimeoutMs()),
+                message -> new InnbucksApiTransientException(message, 502), Clock.systemUTC());
     }
 
     /** True when base-url + all three credentials are present. */
@@ -269,12 +277,13 @@ public class InnbucksApiClient {
 
     /** Run an authed call; on 401, force one token refresh and replay once. */
     private <T> T withAuthRetryOn401(java.util.function.Function<String, T> call) {
+        String token = tokens.get();
         try {
-            return call.apply(currentToken(false));
+            return call.apply(token);
         } catch (UnauthorizedException first) {
             log.info("innbucks-api returned 401 — refreshing token and replaying once");
             try {
-                return call.apply(currentToken(true));
+                return call.apply(tokens.refreshAfterRejection(token));
             } catch (UnauthorizedException second) {
                 throw new InnbucksApiException(
                         "InnBucks API rejected our credentials twice (401) — check BANK_API_USERNAME/PASSWORD/KEY", 401);
@@ -282,10 +291,13 @@ public class InnbucksApiClient {
         }
     }
 
-    private synchronized String currentToken(boolean force) {
-        if (!force && accessToken != null && Instant.now().isBefore(tokenExpiry)) {
-            return accessToken;
-        }
+    /**
+     * One {@code POST /auth/third-party} login. Run only by
+     * {@link SingleFlightTokenCache}, which shares it between concurrent callers.
+     * Refreshes 30s before the token's {@code exp}; a caller that arrives in
+     * those 30s while another refreshes keeps using the current token.
+     */
+    private SingleFlightTokenCache.CachedToken<String> login() {
         try {
             String raw = restClient.post()
                     .uri(LOGIN_PATH)
@@ -300,10 +312,11 @@ public class InnbucksApiClient {
             if (token == null || token.toString().isBlank()) {
                 throw new InnbucksApiException("InnBucks API login returned no accessToken", 502);
             }
-            accessToken = token.toString();
-            tokenExpiry = deriveExpiry(accessToken).minusSeconds(30);
-            log.info("innbucks-api login succeeded; token cached until {}", tokenExpiry);
-            return accessToken;
+            String accessToken = token.toString();
+            Instant expiresAt = deriveExpiry(accessToken);
+            Instant refreshAt = expiresAt.minusSeconds(30);
+            log.info("innbucks-api login succeeded; token cached until {}", refreshAt);
+            return new SingleFlightTokenCache.CachedToken<>(accessToken, refreshAt, expiresAt);
         } catch (RestClientResponseException e) {
             int status = e.getStatusCode().value();
             if (status == 401 || status == 403) {

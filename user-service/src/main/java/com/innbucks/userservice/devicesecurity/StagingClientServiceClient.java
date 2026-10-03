@@ -1,5 +1,7 @@
 package com.innbucks.userservice.devicesecurity;
 
+import com.innbucks.userservice.client.SingleFlightTokenCache;
+import com.innbucks.userservice.client.SingleFlightTokenCache.CachedToken;
 import com.innbucks.userservice.config.CorrelationIdPropagatingInterceptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -67,8 +69,12 @@ public class StagingClientServiceClient {
     private final RestClient restClient;
     private final DeviceSecurityProperties.Staging config;
     private final Clock clock;
-    private final Object lock = new Object();
-    private volatile ClientServiceToken cached;
+    /**
+     * Single-flight, never {@code synchronized}: a slow staging login must not
+     * block sign-ins that can use the current token (CLAUDE.md, "Upstream token
+     * caches are single-flight, never synchronized").
+     */
+    private final SingleFlightTokenCache<ClientServiceToken> tokens;
 
     public StagingClientServiceClient(DeviceSecurityProperties.Staging config, Clock clock) {
         this(buildRestClient(config), config, clock);
@@ -78,6 +84,9 @@ public class StagingClientServiceClient {
         this.restClient = restClient;
         this.config = config;
         this.clock = clock;
+        this.tokens = new SingleFlightTokenCache<>("Staging client-service", this::login,
+                SingleFlightTokenCache.waitBound(config.getConnectTimeoutMs(), config.getReadTimeoutMs()),
+                StagingUnavailableException::new, clock);
     }
 
     static RestClient buildRestClient(DeviceSecurityProperties.Staging config) {
@@ -99,31 +108,36 @@ public class StagingClientServiceClient {
 
     /**
      * A token with at least {@code refresh-margin} of life left — the cached one,
-     * or a fresh one. One caller refreshes while the others wait, so a burst of
-     * sign-ins at expiry costs staging one call, not hundreds.
+     * or a fresh one. One login is in flight at a time, so a burst of sign-ins at
+     * expiry costs staging one call, not hundreds; and it is never run under a
+     * lock, so a slow staging login holds up only the sign-ins that have no
+     * usable token, each for at most connect + read timeout.
      */
     public ClientServiceToken token() {
         if (!isConfigured()) {
             throw new StagingUnavailableException("staging client-service credential is not provisioned");
         }
-        ClientServiceToken current = cached;
-        if (fresh(current)) return current;
-        synchronized (lock) {
-            current = cached;
-            if (fresh(current)) return current;
-            ClientServiceToken next = fetch();
-            cached = next;
-            return next;
-        }
+        return tokens.get();
     }
 
     /** Drops the cached token, e.g. after staging rejected it. */
     public void invalidate() {
-        cached = null;
+        tokens.invalidate();
     }
 
-    private boolean fresh(ClientServiceToken t) {
-        return t != null && t.expiresAt().isAfter(LocalDateTime.now(clock).plus(config.getRefreshMargin()));
+    /**
+     * The refresh starts at TWO margins before expiry and the token is handed
+     * out until ONE margin before it. The second margin is the
+     * stale-while-refreshing window: sign-ins that arrive while one of them
+     * refreshes keep the current token, and none is ever handed a token with
+     * less than {@code refresh-margin} of life left — the promise the margin
+     * exists for (the app uses it after we return it).
+     */
+    private CachedToken<ClientServiceToken> login() {
+        ClientServiceToken next = fetch();
+        Instant expiresAt = next.expiresAt().toInstant(ZoneOffset.UTC);
+        Duration margin = config.getRefreshMargin();
+        return new CachedToken<>(next, expiresAt.minus(margin.multipliedBy(2)), expiresAt.minus(margin));
     }
 
     @SuppressWarnings("unchecked")
