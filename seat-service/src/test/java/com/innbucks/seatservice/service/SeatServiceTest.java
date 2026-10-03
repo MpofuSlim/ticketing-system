@@ -202,7 +202,7 @@ class SeatServiceTest {
         Seat seat = availableSeat(seatId, category(9));
         seat.setStatus(Seat.SeatStatus.LOCKED);
         seat.setLockExpiresAt(LocalDateTime.now(ZoneOffset.UTC).plusSeconds(60));
-        when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
+        when(seatRepo.findWithCategoryById(seatId)).thenReturn(Optional.of(seat));
         when(store.get("seat:lock:" + seatId)).thenReturn("user@example.com");
 
         service.confirmSeat(seatId, "user@example.com");
@@ -220,7 +220,7 @@ class SeatServiceTest {
 
         UUID seatId = UUID.randomUUID();
         Seat seat = availableSeat(seatId, category(9));
-        when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
+        when(seatRepo.findWithCategoryById(seatId)).thenReturn(Optional.of(seat));
         when(store.get(any())).thenReturn("other@example.com");
 
         RuntimeException ex = assertThrows(RuntimeException.class,
@@ -238,7 +238,7 @@ class SeatServiceTest {
 
         UUID seatId = UUID.randomUUID();
         Seat seat = availableSeat(seatId, category(9));
-        when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
+        when(seatRepo.findWithCategoryById(seatId)).thenReturn(Optional.of(seat));
         when(store.get(any())).thenReturn(null);
 
         assertThrows(RuntimeException.class,

@@ -66,7 +66,7 @@ class BookingServiceExtendHoldTest {
     void livePendingHold_isExtendedToTheRequestedDeadline() {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         Booking b = pendingBooking(now.plusMinutes(3));
-        when(bookingRepository.findById(b.getId())).thenReturn(Optional.of(b));
+        when(bookingRepository.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
         LocalDateTime until = now.plusMinutes(13);
 
         BookingResponseDTO dto = service.extendHold(b.getId(), until);
@@ -80,7 +80,7 @@ class BookingServiceExtendHoldTest {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         LocalDateTime alreadyLong = now.plusMinutes(30);
         Booking b = pendingBooking(alreadyLong);
-        when(bookingRepository.findById(b.getId())).thenReturn(Optional.of(b));
+        when(bookingRepository.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         BookingResponseDTO dto = service.extendHold(b.getId(), now.plusMinutes(13));
 
@@ -93,7 +93,7 @@ class BookingServiceExtendHoldTest {
     void lapsedHold_refuses409_paymentMustNotProceed() {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         Booking b = pendingBooking(now.minusSeconds(30));
-        when(bookingRepository.findById(b.getId())).thenReturn(Optional.of(b));
+        when(bookingRepository.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         assertThatThrownBy(() -> service.extendHold(b.getId(), now.plusMinutes(13)))
                 .isInstanceOf(BookingConflictException.class)
@@ -105,7 +105,7 @@ class BookingServiceExtendHoldTest {
     void nonPendingBooking_refuses() {
         Booking b = pendingBooking(LocalDateTime.now(ZoneOffset.UTC).plusMinutes(3));
         b.setStatus(Booking.BookingStatus.CONFIRMED);
-        when(bookingRepository.findById(b.getId())).thenReturn(Optional.of(b));
+        when(bookingRepository.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         assertThatThrownBy(() -> service.extendHold(b.getId(),
                 LocalDateTime.now(ZoneOffset.UTC).plusMinutes(13)))
@@ -116,7 +116,7 @@ class BookingServiceExtendHoldTest {
     @Test
     void unknownBooking_isNotFound() {
         UUID id = UUID.randomUUID();
-        when(bookingRepository.findById(id)).thenReturn(Optional.empty());
+        when(bookingRepository.findByIdWithItems(id)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.extendHold(id,
                 LocalDateTime.now(ZoneOffset.UTC).plusMinutes(13)))

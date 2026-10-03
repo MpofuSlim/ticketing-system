@@ -35,7 +35,7 @@ public class TicketRenderingService {
     /** PNG bytes of the QR for one ticket of a CONFIRMED booking, or empty. */
     @Transactional(readOnly = true)
     public Optional<byte[]> ticketQrPng(UUID bookingId, String ticketNumber) {
-        Booking booking = bookingRepository.findById(bookingId).orElse(null);
+        Booking booking = bookingRepository.findByIdWithItems(bookingId).orElse(null);
         if (booking == null || booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
             return Optional.empty();
         }
@@ -50,7 +50,7 @@ public class TicketRenderingService {
     /** Self-contained HTML ticket page for a CONFIRMED booking, or empty. */
     @Transactional(readOnly = true)
     public Optional<String> ticketPageHtml(UUID bookingId, String publicBaseUrl) {
-        Booking booking = bookingRepository.findById(bookingId).orElse(null);
+        Booking booking = bookingRepository.findByIdWithItems(bookingId).orElse(null);
         if (booking == null || booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
             return Optional.empty();
         }

@@ -233,11 +233,10 @@ class SeatCategoryServiceTest {
         String imgA = "https://cdn.innbucks.co.zw/sections/a.png";
 
         when(catRepo.findByEventIdAndDeletedFalse(eventId)).thenReturn(List.of(cat));
-        // Two A seats carry the image, one B seat carries none.
-        when(seatRepo.findByCategoryIdIn(anyList())).thenReturn(List.of(
-                Seat.builder().category(cat).sectionLabel("A").sectionImageUrl(imgA).build(),
-                Seat.builder().category(cat).sectionLabel("A").sectionImageUrl(imgA).build(),
-                Seat.builder().category(cat).sectionLabel("B").build()));
+        // Section A (two seats) carries the image, section B (one seat) none.
+        when(seatRepo.countSections(anyList())).thenReturn(List.of(
+                section(catId, "A", 2, imgA),
+                section(catId, "B", 1, null)));
         when(booking.fetchActiveCountsByCategories(any())).thenReturn(Optional.empty());
 
         CreateCategoryResponseDTO dto = service(catRepo, seatRepo, booking)
@@ -400,10 +399,9 @@ class SeatCategoryServiceTest {
         when(catRepo.findById(id)).thenReturn(Optional.of(existing));
         when(catRepo.existsByEventIdAndNameAndDeletedFalseAndIdNot(eventId, "VVIP", id)).thenReturn(false);
         // Sections come back from the persisted seats, not the request.
-        when(seatRepo.findByCategoryIdIn(List.of(id))).thenReturn(List.of(
-                Seat.builder().sectionLabel("A").seatNumber(1).build(),
-                Seat.builder().sectionLabel("A").seatNumber(2).build(),
-                Seat.builder().sectionLabel("B").seatNumber(1).build()));
+        when(seatRepo.countSections(List.of(id))).thenReturn(List.of(
+                section(id, "A", 2, null),
+                section(id, "B", 1, null)));
         when(booking.fetchActiveCountsByCategories(List.of(id)))
                 .thenReturn(Optional.of(Map.of(id, 13L)));
 
@@ -437,7 +435,7 @@ class SeatCategoryServiceTest {
         when(catRepo.findById(id)).thenReturn(Optional.of(existing));
         // ...AndIdNot excludes self, so the same-name check returns false → no conflict.
         when(catRepo.existsByEventIdAndNameAndDeletedFalseAndIdNot(eventId, "VIP", id)).thenReturn(false);
-        when(seatRepo.findByCategoryIdIn(List.of(id))).thenReturn(List.of());
+        when(seatRepo.countSections(List.of(id))).thenReturn(List.of());
 
         assertDoesNotThrow(() -> service(catRepo, seatRepo)
                 .updateCategory(id, updateRequest("VIP", "tweaked copy", "75.00")));
@@ -723,7 +721,7 @@ class SeatCategoryServiceTest {
         existing.setName("VIP");
         when(catRepo.findById(id)).thenReturn(Optional.of(existing));
         when(catRepo.existsByEventIdAndNameAndDeletedFalseAndIdNot(eventId, "VIP", id)).thenReturn(false);
-        when(seatRepo.findByCategoryIdIn(List.of(id))).thenReturn(List.of());
+        when(seatRepo.countSections(List.of(id))).thenReturn(List.of());
         when(booking.fetchActiveCountsByCategories(List.of(id)))
                 .thenReturn(Optional.of(Map.of(id, 12L)));
 
@@ -745,7 +743,7 @@ class SeatCategoryServiceTest {
 
         when(catRepo.findByEventIdAndDeletedFalse(eventId)).thenReturn(List.of(
                 category(vip, eventId, 50, 50), category(ga, eventId, 50, 50)));
-        when(seatRepo.findByCategoryIdIn(anyList())).thenReturn(List.of());
+        when(seatRepo.countSections(anyList())).thenReturn(List.of());
         when(booking.fetchActiveCountsByCategories(any()))
                 .thenReturn(Optional.of(Map.of(vip, 37L, ga, 12L)));
 
@@ -767,7 +765,7 @@ class SeatCategoryServiceTest {
 
         when(catRepo.findByEventIdAndDeletedFalse(eventId)).thenReturn(List.of(
                 category(vip, eventId, 50, 50), category(ga, eventId, 50, 50)));
-        when(seatRepo.findByCategoryIdIn(anyList())).thenReturn(List.of());
+        when(seatRepo.countSections(anyList())).thenReturn(List.of());
         // Only VIP appears in the counts; GA is absent → no active bookings → full.
         when(booking.fetchActiveCountsByCategories(any()))
                 .thenReturn(Optional.of(Map.of(vip, 50L)));
@@ -789,7 +787,7 @@ class SeatCategoryServiceTest {
 
         when(catRepo.findByEventIdAndDeletedFalse(eventId))
                 .thenReturn(List.of(category(vip, eventId, 50, 50)));
-        when(seatRepo.findByCategoryIdIn(anyList())).thenReturn(List.of());
+        when(seatRepo.countSections(anyList())).thenReturn(List.of());
         when(booking.fetchActiveCountsByCategories(any()))
                 .thenReturn(Optional.of(Map.of(vip, 60L)));
 
@@ -810,7 +808,7 @@ class SeatCategoryServiceTest {
         // Stored mirror says 20 available; booking-service is unreachable.
         when(catRepo.findByEventIdAndDeletedFalse(eventId))
                 .thenReturn(List.of(category(vip, eventId, 50, 20)));
-        when(seatRepo.findByCategoryIdIn(anyList())).thenReturn(List.of());
+        when(seatRepo.countSections(anyList())).thenReturn(List.of());
         when(booking.fetchActiveCountsByCategories(any())).thenReturn(Optional.empty());
 
         Map<UUID, Integer> avail = availabilityByCategory(
@@ -823,5 +821,15 @@ class SeatCategoryServiceTest {
         return result.stream().collect(Collectors.toMap(
                 CreateCategoryResponseDTO::getSeatCategoryId,
                 CreateCategoryResponseDTO::getAvailableSeats));
+    }
+
+    /** One row of SeatRepository.countSections: a section and its seat count. */
+    private static SeatRepository.SectionCount section(UUID categoryId, String label, long seats, String imageUrl) {
+        return new SeatRepository.SectionCount() {
+            @Override public UUID getCategoryId() { return categoryId; }
+            @Override public String getSectionLabel() { return label; }
+            @Override public Long getSeatCount() { return seats; }
+            @Override public String getImageUrl() { return imageUrl; }
+        };
     }
 }
