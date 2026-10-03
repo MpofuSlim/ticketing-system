@@ -135,6 +135,14 @@ spec:
             - { name: MAIL_FROM, valueFrom: { configMapKeyRef: { name: cell-zw, key: MAIL_FROM, optional: true } } }
             - { name: MAIL_USERNAME, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: MAIL_USERNAME, optional: true } } }
             - { name: MAIL_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: MAIL_PASSWORD, optional: true } } }
+            # The fleet's Prometheus scrape token: Prometheus presents it as
+            # X-Metrics-Token on /actuator/prometheus (prometheus/prometheus.yml,
+            # the loans-service job), and loans compares it like every fleet
+            # service. The same value as every other pod, read key by key because
+            # this pod has no envFrom of the cell Secret. Optional: without it the
+            # scrape is refused and the staging target reads down; nothing else
+            # depends on it.
+            - { name: METRICS_SCRAPE_TOKEN, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: METRICS_SCRAPE_TOKEN, optional: true } } }
           # Documents arrive as base64 inside JSON (up to 5 MB each), so one
           # application holds the JSON, the decoded bytes and image buffers at
           # once — more headroom than the fleet's 640-768Mi.

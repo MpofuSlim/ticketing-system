@@ -4,6 +4,9 @@ groups:
     interval: 30s
     rules:
 
+      # loans-service is scraped but deliberately NOT in this regex: it runs on
+      # staging only, so its target is up=0 on production by design and would
+      # page there forever (prometheus.yml, the loans-service job).
       - alert: ServiceDown
         expr: up{job=~"api-gateway|user-service|event-service|seat-service|booking-service|payment-service|loyalty-service|marketplace-service"} == 0
         for: 2m

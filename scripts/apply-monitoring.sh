@@ -60,5 +60,7 @@ echo
 echo "Done. Verify targets are UP (expect every job green, incl. the 5"
 echo "token-authed services — a 401 here means METRICS_SCRAPE_TOKEN differs"
 echo "between cell-zw-secrets and the metrics-scrape-token Secret):"
+echo "(Exception: loans-service is DOWN on any host without the loans"
+echo "Deployment, i.e. production, by design — nothing alerts on it.)"
 echo "  kubectl -n $NS port-forward svc/prometheus 9091:9090 &"
 echo "  open http://localhost:9091/targets"

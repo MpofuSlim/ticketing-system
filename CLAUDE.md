@@ -198,7 +198,8 @@ are kept in lock-step per `docs/fleet-wiring.md` in the innbucks-loans repo.
   It gets `envFrom` of its own Secret only, plus explicit `env:` entries that
   name each cell key it needs (`POSTGRES_*`, `INNBUCKS_COUNTRY`,
   `PUBLIC_API_PREFIX`, `WHATSAPP_GATEWAY_URL`, and the SES keys `MAIL_ENABLED` /
-  `_HOST` / `_PORT` / `_FROM` / `_USERNAME` / `_PASSWORD`, all optional). Don't
+  `_HOST` / `_PORT` / `_FROM` / `_USERNAME` / `_PASSWORD`, and
+  `METRICS_SCRAPE_TOKEN`, all optional). Don't
   "simplify" it into the fleet shape, and never put a loans key in the cell
   files — every pod gets those.
 - **Loans email goes the way user-service sends Foundry's**: branded HTML, over
@@ -272,8 +273,17 @@ are kept in lock-step per `docs/fleet-wiring.md` in the innbucks-loans repo.
   `SwaggerSecurityConfigTest`.
 - **Deploys pin like the fleet**: loans' Release tags `sha-<full sha>` too
   (innbucks-loans #116), so `kubectl -n ticketing set image deployment/loans-service
-  '*=ghcr.io/mpofuslim/loans-api:sha-<full sha>'`. Loans has no metrics endpoint yet,
-  so it has no Prometheus job and `ServiceDown` does not watch it.
+  '*=ghcr.io/mpofuslim/loans-api:sha-<full sha>'`.
+- **Prometheus scrapes it, and nothing alerts on it.** The `loans-service` job
+  (`prometheus/prometheus.yml`) reads `/actuator/prometheus` on 8088 with the
+  fleet's `X-Metrics-Token`, which the pod gets through its explicit
+  `METRICS_SCRAPE_TOKEN` env entry. **On production that job is `up=0` by
+  design** — the Service has no endpoints there — so loans is deliberately NOT
+  in `ServiceDown`'s job regex, and no rule may key on `up{job="loans-service"}`
+  while loans is staging-only; read its health on staging's `/targets` page.
+  Adding it to `ServiceDown` belongs to the change that takes loans to
+  production. The job reaches a cell only through `scripts/apply-monitoring.sh`
+  (or the prometheus-config ConfigMap alone plus a Prometheus restart).
 
 ## External-service contract tests (WireMock)
 
