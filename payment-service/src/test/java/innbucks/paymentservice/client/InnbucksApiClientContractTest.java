@@ -548,4 +548,29 @@ class InnbucksApiClientContractTest {
 
         wireMock.verify(2, getRequestedFor(urlEqualTo("/api/code/2009200566693/miniStatement")));
     }
+
+    @Test
+    @DisplayName("trace context: inside a live trace, login, generation and inquiry carry no traceparent")
+    void traceContext_neverReachesInnbucks() {
+        stubLogin();
+        wireMock.stubFor(post(urlEqualTo("/api/code/generate"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(GENERATED_OK)));
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"responseCode\":0,\"code\":\"701285660\",\"amount\":\"5000\",\"status\":\"New\"}")));
+        InnbucksApiClient client = newClient("http://localhost:" + wireMock.port());
+
+        ActiveTrace.within(() -> client.generatePaymentCode("TKT-PMT-x", "n1", 5000));
+        ActiveTrace.within(() -> client.inquireCodeStatus("701285660"));
+
+        for (String path : new String[] {"/auth/third-party", "/api/code/generate", "/api/code/inquiry"}) {
+            wireMock.verify(1, postRequestedFor(urlEqualTo(path)));
+            for (String header : new String[] {"traceparent", "tracestate", "baggage", "b3", "X-B3-TraceId"}) {
+                wireMock.verify(0, postRequestedFor(urlEqualTo(path)).withHeader(header, matching(".*")));
+            }
+        }
+    }
 }

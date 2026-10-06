@@ -110,9 +110,12 @@ All metrics carry an `application` tag set to `spring.application.name` so
 dashboards can slice by service. A `prometheus/` directory holds the scrape
 config, alert rules, and an SLO doc.
 
-- **Tracing** — Micrometer Tracing with the OpenTelemetry bridge is wired but
-  **off by default**. Set `TRACING_ENABLED=true` (and an OTLP endpoint) to
-  export spans.
+- **Tracing** — Micrometer Tracing with the OpenTelemetry bridge: trace and
+  span ids are always generated, propagated as W3C `traceparent` (gateway →
+  services, Feign, RestClient/RestTemplate, async executors — never to
+  partners) and printed in every log line. **Export is off by default**; set
+  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to a collector to ship spans, sampled at
+  `TRACING_SAMPLING_PROBABILITY` (0.1). See CLAUDE.md "Tracing and compression".
 - **Logging** — human-readable in dev; **structured JSON** (Logstash encoder)
   in deployed profiles (`json`), so Loki/ELK/CloudWatch can ingest. Every
   request carries a correlation ID, propagated across services and into the

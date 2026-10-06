@@ -199,7 +199,8 @@ are kept in lock-step per `docs/fleet-wiring.md` in the innbucks-loans repo.
   name each cell key it needs (`POSTGRES_*`, `INNBUCKS_COUNTRY`,
   `PUBLIC_API_PREFIX`, `WHATSAPP_GATEWAY_URL`, and the SES keys `MAIL_ENABLED` /
   `_HOST` / `_PORT` / `_FROM` / `_USERNAME` / `_PASSWORD`, and
-  `METRICS_SCRAPE_TOKEN`, all optional). Don't
+  `METRICS_SCRAPE_TOKEN`, and the tracing pair `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` /
+  `TRACING_SAMPLING_PROBABILITY`, all optional). Don't
   "simplify" it into the fleet shape, and never put a loans key in the cell
   files — every pod gets those.
 - **Loans email goes the way user-service sends Foundry's**: branded HTML, over
@@ -2354,6 +2355,79 @@ side-effects (`BookingConfirmed/Cancelled` → notifications, `TransactionComple
 is just no cross-service bus. **Do not reintroduce a producer-only Kafka bus.**
 If a genuine event-consumer use case lands, add a broker deliberately *with real
 consumers* (and consumer-side idempotency), not a publish-only spike.
+
+## Tracing and compression
+
+**Every request carries a trace id from the gateway onward, and every log line
+prints it; nothing is EXPORTED until a cell names a collector.** Same
+conventions in InnRewards, market-place and innbucks-loans — change them
+together.
+
+- **Why it was dead before.** Boot 4 moved tracing auto-configuration out of
+  actuator into its own modules. The root pom had the libraries
+  (`micrometer-tracing-bridge-otel`, `opentelemetry-exporter-otlp`) but not
+  `spring-boot-micrometer-tracing-opentelemetry`, so no Tracer existed: every
+  `%X{traceId}` printed empty and no `traceparent` crossed a hop, whatever
+  `TRACING_ENABLED` said. The module is declared, NOT
+  `spring-boot-starter-opentelemetry` — that starter also pushes OTLP METRICS.
+- **Export is gated on the endpoint, and the endpoint is NOT in any
+  application.yaml.** Boot maps `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` onto
+  `management.opentelemetry.tracing.export.otlp.endpoint` itself and skips a
+  blank value, so no exporter bean exists. **Never add
+  `endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:}`**: an EMPTY property still
+  satisfies the exporter's `@ConditionalOnProperty`, and the OTLP builder then
+  refuses `""` — every pod crash-loops (measured; pinned by
+  `OtlpExportGateTest.anEmptyEndpointProperty_failsTheBoot`). Likewise the old
+  `management.otlp.tracing.endpoint` (a deprecated alias) defaulted to
+  `localhost:4318` and would export to nothing, logging a failure every few
+  seconds. `management.tracing.enabled` is now
+  `management.tracing.export.enabled` (true). OTLP log export is off
+  (`management.logging.export.otlp.enabled: false`): logs go to stdout.
+- **Env keys** (`deploy/cells/cell.<iso>.env`): `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
+  (blank; set per host in the local file to export),
+  `TRACING_SAMPLING_PROBABILITY` (0.1 — parent-based, so the gateway's
+  decision rides the whole trace), `GATEWAY_COMPRESSION_ENABLED` (true). The
+  retired `TRACING_ENABLED` / `OTLP_ENDPOINT` are read by nothing. On a live
+  cell add/remove them ONE KEY AT A TIME (`PROD_UPGRADE_RUNBOOK.md` §5).
+- **Propagation** is W3C `traceparent`. The gateway CONSUMES NOTHING
+  (`management.tracing.propagation.consume: []`): it is the edge, a caller's
+  `traceparent` would let the internet pick our trace ids and force sampling,
+  and Spring Cloud Gateway replaces it with its own on the proxied request.
+  Services consume the default. `X-Correlation-Id` is untouched and logged
+  beside `traceId`/`spanId` — it is the support reference, the trace is not.
+- **Clients are observed by a BeanPostProcessor, not by how they are built**
+  (`TracingConfig` in every service): every `RestClient.Builder` and
+  `RestTemplate` BEAN gets the `ObservationRegistry`. The services define
+  their own builder beans and have no `spring-boot-restclient`, so Boot's
+  observed builder never existed here. booking's `@FeignClient`s are observed
+  through `feign-micrometer` (Spring Cloud OpenFeign applies the capability).
+  `@Async` executors carry the trace with `ContextPropagatingTaskDecorator`
+  (booking composes it with its MDC decorator and exposes it as the
+  `TaskDecorator` bean Boot's `applicationTaskExecutor` picks up).
+- **Trace context never reaches a partner** (InnBucks, ZimSwitch, EcoCash,
+  WhatsApp, SES). `FleetOnlyTracePropagator` wraps the propagator: it injects
+  only into a request whose host is a single DNS label — a k8s Service short
+  name (or `localhost`); a partner always has a dotted name, an IP literal has
+  dots or colons, an unreadable carrier is refused. The partner clients are
+  built from a static `RestClient.builder()` and are not observed at all; the
+  guard is what keeps that true if a refactor moves them onto the bean.
+  EcoCash's edge allow-lists even the User-Agent — an unexpected header is a
+  refused payment. Pinned by each service's `TracingConfigurationTest` and the
+  `traceContext_never*` cases in the EcoCash / InnBucks contract tests.
+- **Logs:** both layouts already print `traceId`/`spanId` from the MDC (the
+  plain pattern and the JSON encoder's `includeMdcKeyName`); they now have
+  values. The gateway sets `spring.reactor.context-propagation: auto` so its
+  Reactor threads restore the trace too.
+- **Compression lives in ONE place: the gateway** (`server.compression`,
+  JSON/HTML/CSV/CSS/JS, ≥ 1 KB, plus `Vary: Accept-Encoding` from
+  `CompressionVaryWebFilter`). The host nginx config is not in this repo and
+  Cloudflare compresses for browsers, but Cloudflare fetches from the origin
+  uncompressed, so the EC2 egress (billed) carried every body at full size.
+  Never per service: S2S calls never leave the cell, and Netty passes an
+  already-encoded body through rather than double-encoding. Images and other
+  binary types keep their `Content-Length`; a compressed text body is chunked,
+  which is what Cloudflare already did to it on the way to the client.
+  Pinned by `GatewayCompressionAndTracingTest`.
 
 ## Deploying to the EC2 k3s cell after a merge
 

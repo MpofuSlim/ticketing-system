@@ -143,6 +143,11 @@ spec:
             # scrape is refused and the staging target reads down; nothing else
             # depends on it.
             - { name: METRICS_SCRAPE_TOKEN, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: METRICS_SCRAPE_TOKEN, optional: true } } }
+            # Tracing, the fleet's two keys (innbucks-loans #155). Blank endpoint
+            # = nothing exported; loans still continues and logs the gateway's
+            # trace either way. Optional, so a cell without them changes nothing.
+            - { name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, valueFrom: { configMapKeyRef: { name: cell-zw, key: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, optional: true } } }
+            - { name: TRACING_SAMPLING_PROBABILITY, valueFrom: { configMapKeyRef: { name: cell-zw, key: TRACING_SAMPLING_PROBABILITY, optional: true } } }
           # Documents arrive as base64 inside JSON (up to 5 MB each), so one
           # application holds the JSON, the decoded bytes and image buffers at
           # once — more headroom than the fleet's 640-768Mi.

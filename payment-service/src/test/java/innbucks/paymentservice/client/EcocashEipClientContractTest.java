@@ -455,4 +455,24 @@ class EcocashEipClientContractTest {
         props.setNotifyUrl("https://tickets.example.co.zw/foundry/payments/ecocash/notify");
         assertThat(client.canStartCharge()).isTrue();
     }
+
+    @Test
+    @DisplayName("trace context: inside a live trace, neither the charge nor the query carries traceparent")
+    void traceContext_neverReachesEcocash() {
+        // EcoCash's edge allow-lists even the User-Agent; an unexpected header
+        // is a refused payment. And an internal trace id is not theirs to hold.
+        wireMock.stubFor(post(urlEqualTo(CHARGE_PATH)).willReturn(okJson(CHARGE_PENDING_PDF)));
+        wireMock.stubFor(get(urlEqualTo(QUERY_PATH)).willReturn(okJson(QUERY_COMPLETED_PDF)));
+        EcocashEipClient client = newClient(wireMock.baseUrl());
+
+        ActiveTrace.within(() -> client.charge(CORRELATOR, MSISDN, 300, "USD", "TKZ-TEST-REF", "Ticketize online payment"));
+        ActiveTrace.within(() -> client.query(MSISDN, CORRELATOR));
+
+        for (String header : new String[] {"traceparent", "tracestate", "baggage", "b3", "X-B3-TraceId"}) {
+            wireMock.verify(0, postRequestedFor(urlEqualTo(CHARGE_PATH)).withHeader(header, matching(".*")));
+            wireMock.verify(0, getRequestedFor(urlEqualTo(QUERY_PATH)).withHeader(header, matching(".*")));
+        }
+        wireMock.verify(1, postRequestedFor(urlEqualTo(CHARGE_PATH)));
+        wireMock.verify(1, getRequestedFor(urlEqualTo(QUERY_PATH)));
+    }
 }
