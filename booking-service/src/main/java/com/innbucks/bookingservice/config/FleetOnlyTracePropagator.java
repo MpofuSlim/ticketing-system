@@ -55,8 +55,7 @@ public final class FleetOnlyTracePropagator implements Propagator {
 
     static String hostOf(Object carrier) {
         if (carrier instanceof HttpRequest request) {
-            URI uri = request.getURI();
-            return uri == null ? null : uri.getHost();
+            return request.getURI().getHost();
         }
         if (carrier instanceof feign.Request request) {
             // The @FeignClient(name = "...") clients: every one is a fleet peer
