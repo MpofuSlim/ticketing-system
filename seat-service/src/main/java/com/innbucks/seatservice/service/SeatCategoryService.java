@@ -16,7 +16,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -68,6 +71,29 @@ public class SeatCategoryService {
         this(categoryRepository, seatRepository, bookingServiceClient, eventClientProvider, null);
     }
 
+    /**
+     * The phases of {@link #updateCategory}. A setter so the plain-{@code new}
+     * unit tests keep their construction; Spring always calls it, and with none
+     * set the phases run inline.
+     */
+    private TransactionTemplate readTx;
+    private TransactionTemplate writeTx;
+
+    @Autowired
+    void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.readTx = TransactionPhases.readOnly(transactionManager);
+        this.writeTx = TransactionPhases.readWrite(transactionManager);
+    }
+
+    // createCategory and deleteCategory still make their event-service /
+    // booking-service calls inside their transaction, ON PURPOSE: those calls
+    // are the fail-closed oversell guard (requireCapacityHeadroom) and the
+    // delete guard (requireNoActiveBookings), whose answers decide the write,
+    // and the oversell guard sums the event's live categories in the SAME
+    // transaction that inserts the new one. Splitting them would also move the
+    // remote refusal (503) ahead of the local ones (duplicate name, price, seat
+    // cap), changing which error a caller sees. They hold no row lock during
+    // the call (every write comes after it) — only the connection.
     @Transactional
     public CreateCategoryResponseDTO createCategory(CreateCategoryRequestDTO request) {
         return createCategory(request, null, null, true, null);
@@ -205,7 +231,6 @@ public class SeatCategoryService {
                 .build();
     }
 
-    @Transactional
     public CreateCategoryResponseDTO updateCategory(UUID categoryId, UpdateCategoryRequestDTO request) {
         return updateCategory(categoryId, request, null, null, true, null);
     }
@@ -215,61 +240,91 @@ public class SeatCategoryService {
      * Seat layout and event are immutable here — see {@link UpdateCategoryRequestDTO}.
      * Mirrors {@code deleteCategory}'s auth shape: SUPER_ADMIN passes straight
      * through, an EVENT_ORGANIZER must own the category's event.
+     *
+     * <p><b>Deliberately NOT {@code @Transactional}: no remote call is made
+     * while a transaction is open.</b> It used to hold one across both of its
+     * remote calls — the event-service ownership lookup, and, after the write,
+     * the booking-service live-count fetch for the response (which ran with the
+     * category's UPDATE pending and the connection held). Now:
+     * <ol>
+     *   <li>an organizer's call reads the category in a short read-only
+     *       transaction and asks event-service with none open. The event a
+     *       category belongs to never changes, so the ownership answer still
+     *       holds at the write; the guard stays fail-closed (403 when it cannot
+     *       be verified) and keeps its place in the order of refusals;</li>
+     *   <li>one write transaction re-reads the category (404 if it was deleted
+     *       meanwhile, as it would have been), validates, saves, and rebuilds the
+     *       sections from the seats table;</li>
+     *   <li>the live count for the response is fetched after that commit. It
+     *       decides nothing — it only renders {@code availableSeats}, and it
+     *       already degraded to the stored mirror when booking-service was down.</li>
+     * </ol>
      */
-    @Transactional
     public CreateCategoryResponseDTO updateCategory(UUID categoryId,
                                                     UpdateCategoryRequestDTO request,
                                                     UUID callerOrganizerUuid,
                                                     String requesterEmail,
                                                     boolean isAdmin,
                                                     String authHeader) {
-        SeatCategory category = categoryRepository.findById(categoryId)
+        if (!isAdmin) {
+            SeatCategory found = TransactionPhases.inTransaction(readTx, () -> loadLiveForUpdate(categoryId));
+            requireEventOwnership(found.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
+        }
+
+        record Updated(SeatCategory category, List<SectionSeatConfigDTO> sections) {
+        }
+        Updated updated = TransactionPhases.inTransaction(writeTx, () -> {
+            SeatCategory category = loadLiveForUpdate(categoryId);
+
+            // Defence-in-depth on top of the DTO @DecimalMin (only fires on @Valid
+            // controller calls), same as createCategory.
+            if (request.getPrice() == null || request.getPrice().signum() <= 0) {
+                log.warn("Category update rejected, non-positive price categoryId={} price={}",
+                        categoryId, request.getPrice());
+                throw new BadRequestException("Price must be greater than 0.");
+            }
+
+            // Renaming onto a name another live category in the same event already
+            // uses is a conflict; ...AndIdNot lets a no-op rename (same name) through.
+            if (categoryRepository.existsByEventIdAndNameAndDeletedFalseAndIdNot(
+                    category.getEventId(), request.getName(), categoryId)) {
+                log.warn("Category update rejected, duplicate name eventId={} name={} categoryId={}",
+                        category.getEventId(), request.getName(), categoryId);
+                throw new ConflictException("Category '" + request.getName()
+                        + "' already exists for this event");
+            }
+
+            log.info("Updating seat category categoryId={} eventId={} name={} requesterEmail={} isAdmin={}",
+                    categoryId, category.getEventId(), request.getName(), requesterEmail, isAdmin);
+
+            category.setName(HtmlSanitizer.stripAll(request.getName()));
+            category.setDescription(HtmlSanitizer.stripAll(request.getDescription()));
+            category.setPrice(request.getPrice());
+            categoryRepository.save(category);
+            layoutCache.evict(category.getEventId());
+
+            // Return the same shape getCategoriesByEvent emits — sections rebuilt
+            // from the persisted seats (unchanged by this edit).
+            return new Updated(category, sectionsForCategory(categoryId));
+        });
+
+        // Live availability for the response, after the commit (degrades to the
+        // stored mirror if booking-service is down).
+        Map<UUID, Long> counts = bookingServiceClient
+                .fetchActiveCountsByCategories(List.of(categoryId))
+                .orElse(null);
+        SeatCategory category = updated.category();
+        log.info("Seat category updated categoryId={} eventId={}", categoryId, category.getEventId());
+        return toCreateResponseDTO(category, updated.sections(), liveAvailableSeats(category, counts));
+    }
+
+    private SeatCategory loadLiveForUpdate(UUID categoryId) {
+        return categoryRepository.findById(categoryId)
                 .filter(c -> !c.isDeleted())
                 .orElseThrow(() -> {
                     log.warn("Category update failed, not found categoryId={}", categoryId);
                     return new NotFoundException("Seat category not found");
                 });
-
-        if (!isAdmin) {
-            requireEventOwnership(category.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
-        }
-
-        // Defence-in-depth on top of the DTO @DecimalMin (only fires on @Valid
-        // controller calls), same as createCategory.
-        if (request.getPrice() == null || request.getPrice().signum() <= 0) {
-            log.warn("Category update rejected, non-positive price categoryId={} price={}",
-                    categoryId, request.getPrice());
-            throw new BadRequestException("Price must be greater than 0.");
-        }
-
-        // Renaming onto a name another live category in the same event already
-        // uses is a conflict; ...AndIdNot lets a no-op rename (same name) through.
-        if (categoryRepository.existsByEventIdAndNameAndDeletedFalseAndIdNot(
-                category.getEventId(), request.getName(), categoryId)) {
-            log.warn("Category update rejected, duplicate name eventId={} name={} categoryId={}",
-                    category.getEventId(), request.getName(), categoryId);
-            throw new ConflictException("Category '" + request.getName()
-                    + "' already exists for this event");
-        }
-
-        log.info("Updating seat category categoryId={} eventId={} name={} requesterEmail={} isAdmin={}",
-                categoryId, category.getEventId(), request.getName(), requesterEmail, isAdmin);
-
-        category.setName(HtmlSanitizer.stripAll(request.getName()));
-        category.setDescription(HtmlSanitizer.stripAll(request.getDescription()));
-        category.setPrice(request.getPrice());
-        categoryRepository.save(category);
-        layoutCache.evict(category.getEventId());
-
-        // Return the same shape getCategoriesByEvent emits — sections rebuilt
-        // from the persisted seats (unchanged by this edit) + live availability
-        // (degrades to the stored mirror if booking-service is down).
-        List<SectionSeatConfigDTO> sections = sectionsForCategory(categoryId);
-        Map<UUID, Long> counts = bookingServiceClient
-                .fetchActiveCountsByCategories(List.of(categoryId))
-                .orElse(null);
-        log.info("Seat category updated categoryId={} eventId={}", categoryId, category.getEventId());
-        return toCreateResponseDTO(category, sections, liveAvailableSeats(category, counts));
     }
 
     /** Trim a section image URL; treat blank/empty as "no image" (null). */

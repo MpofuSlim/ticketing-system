@@ -1,5 +1,7 @@
 package innbucks.paymentservice.security;
 
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -94,8 +96,14 @@ public class JwtFilter extends OncePerRequestFilter {
         }
 
         String token = authHeader.substring(7);
+        // Verified ONCE per request (signature under the alg-selected key, iss,
+        // aud, expiry); every claim below is read from this one result instead
+        // of re-parsing and re-verifying the token for each claim.
+        Claims claims;
         try {
-            if (!jwtUtil.isTokenValid(token)) {
+            try {
+                claims = jwtUtil.parseClaims(token);
+            } catch (JwtException | IllegalArgumentException e) {
                 writeUnauthorized(response, "INVALID_TOKEN", "Token is invalid or expired");
                 return;
             }
@@ -118,11 +126,11 @@ public class JwtFilter extends OncePerRequestFilter {
             // TTL elapses. Fail-open: a legacy token with no userUuid /
             // tokenVersion claim, or a Redis blip (currentVersion == null),
             // passes through unchanged so a store outage never 401s everyone.
-            UUID userUuid = jwtUtil.extractUserUuid(token);
+            UUID userUuid = jwtUtil.extractUserUuid(claims);
             if (userUuid != null) {
                 Long currentVersion = tokenVersionStore.currentVersion(userUuid.toString());
                 if (currentVersion != null) {
-                    Long tokenVersion = jwtUtil.extractTokenVersion(token);
+                    Long tokenVersion = jwtUtil.extractTokenVersion(claims);
                     if (tokenVersion != null && tokenVersion < currentVersion) {
                         log.warn("Rejected superseded token (tokenVersion={} < current={}) path={}",
                                 tokenVersion, currentVersion, request.getRequestURI());
@@ -134,11 +142,11 @@ public class JwtFilter extends OncePerRequestFilter {
             // mustChangePassword gate. A user with a temp password may not
             // touch /payments/** until they've rotated it via user-service's
             // /auth/change-password. Same rule as the other services.
-            if (jwtUtil.extractMustChangePassword(token)) {
+            if (jwtUtil.extractMustChangePassword(claims)) {
                 writePasswordChangeRequired(response);
                 return;
             }
-            String phoneNumber = jwtUtil.extractPhoneNumber(token);
+            String phoneNumber = jwtUtil.extractPhoneNumber(claims);
             if (phoneNumber == null) {
                 // Token is signature-valid but missing the phoneNumber claim
                 // (e.g. a staff token from MERCHANT_ADMIN). Reject — every
@@ -162,7 +170,7 @@ public class JwtFilter extends OncePerRequestFilter {
         // extractHomeCountry already returns null on any failure / missing
         // claim, so a legacy token or staff token just skips the put.
         // Cleared in finally so request-thread recycling doesn't leak it.
-        String homeCountry = jwtUtil.extractHomeCountry(token);
+        String homeCountry = jwtUtil.extractHomeCountry(claims);
         // Step 7 — wrong-cell defence in depth. A JWT minted by another cell
         // that somehow reached this one (misrouted client, stale base URL) is
         // rejected with 409 wrong_cell so the FE can switch base URL and retry.

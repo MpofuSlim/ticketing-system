@@ -1,5 +1,8 @@
 package com.innbucks.bookingservice.client;
 
+import com.innbucks.bookingservice.config.PooledHttpClientProperties;
+import com.innbucks.bookingservice.config.PooledHttpClient;
+import feign.hc5.ApacheHttp5Client;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.innbucks.bookingservice.dto.LoyaltyEarnRequest;
 import com.innbucks.bookingservice.dto.LoyaltyRedeemRequest;
@@ -32,6 +35,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class LoyaltyServiceClientContractTest {
 
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
+
     private static final String TOKEN = "test-internal-token";
     private static final UUID ORGANIZER = UUID.fromString("0a571c1c-7c75-4000-a000-0000000000aa");
     private static final String PHONE = "+263771234567";
@@ -58,6 +64,8 @@ class LoyaltyServiceClientContractTest {
 
     private static LoyaltyServiceClient build(String baseUrl) {
         return Feign.builder()
+                // the production transport: Feign's HC5 client over the module's pool
+                .client(new ApacheHttp5Client(POOL.httpClient()))
                 .contract(new SpringMvcContract())
                 .encoder(new JacksonEncoder())
                 .decoder(new JacksonDecoder())

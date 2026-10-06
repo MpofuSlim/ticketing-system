@@ -3,6 +3,7 @@ package innbucks.paymentservice.client;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import innbucks.paymentservice.config.CorrelationIdPropagatingInterceptor;
+import innbucks.paymentservice.config.PooledHttpClient;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -11,15 +12,13 @@ import io.github.resilience4j.retry.RetryRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.http.HttpHeaders;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
-import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -91,17 +90,18 @@ public class InnbucksApiClient {
     public InnbucksApiClient(InnbucksApiProperties properties,
                              ObjectMapper objectMapper,
                              RetryRegistry retryRegistry,
-                             CircuitBreakerRegistry circuitBreakerRegistry) {
+                             CircuitBreakerRegistry circuitBreakerRegistry,
+                             PooledHttpClient pooledHttpClient) {
         this.properties = properties;
         this.objectMapper = objectMapper;
-        HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(properties.getConnectTimeoutMs()))
-                .build();
-        JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
-        rf.setReadTimeout(Duration.ofMillis(properties.getReadTimeoutMs()));
+        // The module's shared pool, this client's own timeouts (CLAUDE.md,
+        // "Outbound HTTP clients are pooled").
+        var rf = pooledHttpClient.requestFactory(properties.getConnectTimeoutMs(), properties.getReadTimeoutMs());
         this.restClient = RestClient.builder()
                 .baseUrl(properties.getBaseUrl() == null ? "http://localhost" : properties.getBaseUrl())
                 .requestFactory(rf)
+                // the exact User-Agent this partner has always seen from us
+                .defaultHeader(HttpHeaders.USER_AGENT, PooledHttpClient.JDK_HTTP_CLIENT_USER_AGENT)
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())
                 .build();
         this.retry = retryRegistry.retry(RESILIENCE_INSTANCE_NAME);

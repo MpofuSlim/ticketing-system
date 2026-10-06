@@ -12,7 +12,9 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Comparator;
@@ -44,6 +46,14 @@ import java.util.Locale;
  * counted ({@code tickets.gate_lookup{outcome}}) but not written to
  * {@code scan_attempts}: a lookup redeems nothing, and counting it there would
  * inflate every scan report. The admission itself is audited by the scan.
+ *
+ * <p><b>No transaction is open during the authorization check.</b> The booking
+ * and its tickets are read in a short read-only transaction (one fetch-join, so
+ * the detached copy carries every ticket); the team-member assignment question
+ * to user-service is asked after it has closed. It used to run inside a
+ * method-level read-only transaction, holding a pooled connection for as long
+ * as user-service took to answer. Nothing is written here, so there is no
+ * lock or idempotency property for the split to weaken.
  */
 @Service
 @Slf4j
@@ -61,7 +71,18 @@ public class GateLookupService {
         this.meterRegistryProvider = meterRegistryProvider;
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * The read phase's template. A setter so the plain-{@code new} unit tests
+     * keep their construction; with none set, the read runs inline.
+     */
+    private TransactionTemplate readTx;
+
+    @Autowired
+    void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.readTx = TransactionPhases.readOnly(transactionManager);
+    }
+
+    /** Deliberately NOT {@code @Transactional} — see the class javadoc. */
     public GateLookupResponseDTO lookup(String rawConfirmationNumber) {
         String confirmationNumber = normalise(rawConfirmationNumber);
         if (confirmationNumber.isEmpty()) {
@@ -71,7 +92,9 @@ public class GateLookupService {
                 ? null : SecurityContextHolder.getContext().getAuthentication().getName();
 
         // Items fetched with the booking: the FOUND answer lists every ticket.
-        Booking booking = bookingRepository.findByConfirmationNumberWithItems(confirmationNumber).orElse(null);
+        Booking booking = TransactionPhases.inTransaction(readTx,
+                () -> bookingRepository.findByConfirmationNumberWithItems(confirmationNumber))
+                .orElse(null);
         if (booking == null) {
             log.info("Gate lookup miss confirmationNumber={} scanner={}", confirmationNumber, scanner);
             return refusal(GateLookupResponseDTO.Status.BOOKING_NOT_FOUND, confirmationNumber);
@@ -81,6 +104,7 @@ public class GateLookupService {
                     confirmationNumber, booking.getStatus(), scanner);
             return refusal(GateLookupResponseDTO.Status.BOOKING_NOT_CONFIRMED, confirmationNumber);
         }
+        // May ask user-service — after the read transaction has closed.
         ScanTicketResponseDTO.Status refused =
                 ticketScanService.authorizationRefusal(booking, confirmationNumber);
         if (refused != null) {

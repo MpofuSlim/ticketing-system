@@ -1,5 +1,8 @@
 package com.innbucks.userservice.client;
 
+import com.innbucks.userservice.config.PooledHttpClient;
+import com.innbucks.userservice.config.PooledHttpClientProperties;
+import com.innbucks.userservice.config.InnbucksNotifyClientConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.stubbing.Scenario;
@@ -30,6 +33,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * built the same way the email contract test builds it.
  */
 class SmsNotificationClientContractTest {
+
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
 
     private static final String LOGIN = "/auth/third-party";
     private static final String SMS = "/api/notification/sms";
@@ -62,7 +68,7 @@ class SmsNotificationClientContractTest {
         props.setUsername("test-user");
         props.setPassword("test-pass");
         EmailNotificationClient notificationApi = new EmailNotificationClient(
-                RestClient.builder().baseUrl("http://localhost:" + port).build(),
+                new InnbucksNotifyClientConfig().innbucksNotifyRestClient(props, POOL),
                 props, new ObjectMapper());
         return new SmsNotificationClient(notificationApi);
     }

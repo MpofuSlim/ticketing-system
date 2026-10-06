@@ -20,6 +20,12 @@ import org.springframework.web.client.RestClient;
 @Configuration
 public class LoadBalancedRestClientConfig {
 
+    // Both builders start on the module's shared pool (PooledHttpClient) with
+    // the default timeouts, so nothing built from them can land on Spring's
+    // default request factory. A client with its own timeouts swaps in
+    // pooledHttpClient.requestFactory(connect, read) — same pool, its numbers.
+    // CLAUDE.md, "Outbound HTTP clients are pooled".
+
     /**
      * The plain (non-load-balanced) builder, kept @Primary so anything that
      * autowires a RestClient.Builder by type gets this one — crucially the
@@ -32,13 +38,13 @@ public class LoadBalancedRestClientConfig {
     @Bean
     @Primary
     @Scope("prototype")
-    public RestClient.Builder restClientBuilder() {
-        return RestClient.builder();
+    public RestClient.Builder restClientBuilder(PooledHttpClient pooledHttpClient) {
+        return RestClient.builder().requestFactory(pooledHttpClient.requestFactory());
     }
 
     @Bean
     @LoadBalanced
-    public RestClient.Builder loadBalancedRestClientBuilder() {
-        return RestClient.builder();
+    public RestClient.Builder loadBalancedRestClientBuilder(PooledHttpClient pooledHttpClient) {
+        return RestClient.builder().requestFactory(pooledHttpClient.requestFactory());
     }
 }

@@ -3,6 +3,8 @@ package com.innbucks.userservice.security;
 import com.innbucks.userservice.cells.CellAffinityChecker;
 import com.innbucks.userservice.cells.WrongCellException;
 import com.innbucks.userservice.service.TokenRevocationService;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import lombok.RequiredArgsConstructor;
@@ -68,8 +70,8 @@ public class JwtFilter extends OncePerRequestFilter {
      * carry. The extra query costs one small indexed read, and only for tokens
      * predating the claim — it stops happening on its own as sessions turn over.
      */
-    private List<String> permissionsFor(String token, List<String> roles) {
-        return authorityFor(token, null, roles).permissions();
+    private List<String> permissionsFor(Claims claims, List<String> roles) {
+        return authorityFor(claims, null, roles).permissions();
     }
 
     /**
@@ -87,9 +89,9 @@ public class JwtFilter extends OncePerRequestFilter {
     private com.innbucks.userservice.repository.UserRepository userRepository;
 
     /** Roles and permissions to authorize with — see {@link #permissionsFor}. */
-    private com.innbucks.userservice.service.StaffMintFilter.Minted authorityFor(String token, String subject,
+    private com.innbucks.userservice.service.StaffMintFilter.Minted authorityFor(Claims claims, String subject,
                                                                                List<String> roles) {
-        List<String> claimed = jwtUtil.extractPermissions(token);
+        List<String> claimed = jwtUtil.extractPermissions(claims);
         if (!claimed.isEmpty() || roles.isEmpty() || permissionResolver == null) {
             return new com.innbucks.userservice.service.StaffMintFilter.Minted(roles, claimed);
         }
@@ -124,8 +126,14 @@ public class JwtFilter extends OncePerRequestFilter {
         }
 
         String token = authHeader.substring(7);
+        // Verified ONCE per request (signature under the alg-selected key, iss,
+        // aud, expiry); every claim below is read from this one result instead
+        // of re-parsing and re-verifying the token for each claim.
+        Claims claims;
         try {
-            if (!jwtUtil.isTokenValid(token)) {
+            try {
+                claims = jwtUtil.parseClaims(token);
+            } catch (JwtException e) {
                 // Tampered signature, expired, or malformed. Reject immediately
                 // so the client can distinguish "refresh me" from "you forgot a
                 // token" instead of slipping through unauthenticated and hitting
@@ -138,7 +146,7 @@ public class JwtFilter extends OncePerRequestFilter {
                 return;
             }
 
-            String email = jwtUtil.extractEmail(token);
+            String email = jwtUtil.extractEmail(claims);
 
             // Single-active-session gate. Each /auth/login bumps the user's
             // token_version column; a token whose claim is stale belongs to
@@ -152,7 +160,7 @@ public class JwtFilter extends OncePerRequestFilter {
             // account is refused on its very next request — not merely once the
             // access token expires. ACCOUNT_DEACTIVATED is its own code so the FE
             // can say why instead of offering a refresh that will also be refused.
-            long claimedVersion = jwtUtil.extractTokenVersion(token);
+            long claimedVersion = jwtUtil.extractTokenVersion(claims);
             TokenRevocationService.SessionState session =
                     tokenRevocationService.sessionState(email, claimedVersion);
             if (session == TokenRevocationService.SessionState.INACTIVE) {
@@ -173,17 +181,17 @@ public class JwtFilter extends OncePerRequestFilter {
             // to the change-password screen. AuthService bumps token_version
             // on successful change, so the claim-carrying JWT is invalid
             // immediately afterward and the next login mints a fresh token.
-            if (jwtUtil.extractMustChangePassword(token)) {
+            if (jwtUtil.extractMustChangePassword(claims)) {
                 writePasswordChangeRequired(response);
                 return;
             }
             com.innbucks.userservice.service.StaffMintFilter.Minted authority =
-                    authorityFor(token, email, jwtUtil.extractRoles(token));
+                    authorityFor(claims, email, jwtUtil.extractRoles(claims));
             List<String> roles = authority.roles();
             List<String> permissions = authority.permissions();
-            List<String> services = jwtUtil.extractServices(token);
-            Integer tier = jwtUtil.extractTier(token);
-            Boolean verified = jwtUtil.extractVerified(token);
+            List<String> services = jwtUtil.extractServices(claims);
+            Integer tier = jwtUtil.extractTier(claims);
+            Boolean verified = jwtUtil.extractVerified(claims);
 
             List<SimpleGrantedAuthority> authorities = new ArrayList<>();
             for (String role : roles) {
@@ -227,9 +235,9 @@ public class JwtFilter extends OncePerRequestFilter {
             // principal type, which would break every existing `auth.getName()`
             // call that expects the email). Read via
             // {@link AuthenticatedCaller#userUuid(Authentication)}.
-            UUID userUuid = jwtUtil.extractUserUuid(token);
-            UUID organizerUuid = jwtUtil.extractOrganizerUuid(token);
-            UUID organizationId = jwtUtil.extractOrganizationId(token);
+            UUID userUuid = jwtUtil.extractUserUuid(claims);
+            UUID organizerUuid = jwtUtil.extractOrganizerUuid(claims);
+            UUID organizationId = jwtUtil.extractOrganizationId(claims);
             if (userUuid != null || organizerUuid != null || organizationId != null) {
                 Map<String, Object> details = new LinkedHashMap<>();
                 if (userUuid != null) details.put(AuthDetailsKeys.USER_UUID, userUuid);
@@ -257,7 +265,7 @@ public class JwtFilter extends OncePerRequestFilter {
         // tokens with no MSISDN, or customers whose phone prefix isn't a
         // known InnBucks market) — we just skip the MDC put in that case
         // rather than fabricate a value.
-        String homeCountry = safeExtractHomeCountry(token);
+        String homeCountry = safeExtractHomeCountry(claims);
 
         // Step 7 — wrong-cell defence in depth. A JWT minted by another cell
         // that somehow reached this one (misrouted client, stale base URL) is
@@ -288,11 +296,11 @@ public class JwtFilter extends OncePerRequestFilter {
         }
     }
 
-    private String safeExtractHomeCountry(String token) {
+    private String safeExtractHomeCountry(Claims claims) {
         try {
-            return jwtUtil.extractHomeCountry(token);
+            return jwtUtil.extractHomeCountry(claims);
         } catch (Exception e) {
-            // Tokens that pass isTokenValid above should never fail claim
+            // Claims that verified above should never fail claim
             // extraction, but if they do we'd rather lose the MDC tag than
             // 500 the request — auth already succeeded, downstream should
             // proceed without it.

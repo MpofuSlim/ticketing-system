@@ -1,5 +1,7 @@
 package com.innbucks.userservice.integration;
 
+import com.innbucks.userservice.config.PooledHttpClientProperties;
+import com.innbucks.userservice.config.PooledHttpClient;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -35,6 +37,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class LoyaltyMerchantIdsByOrganizationContractTest {
 
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
+
     private static final String TOKEN = "the-shared-secret";
     private static final UUID ORG = UUID.fromString("7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f");
     private static final UUID M1 = UUID.fromString("b3f1c9d2-4a77-4e21-9c60-11ab22cd33ef");
@@ -64,7 +69,7 @@ class LoyaltyMerchantIdsByOrganizationContractTest {
     }
 
     private LoyaltyServiceClient client(String baseUrl, String token) {
-        return new LoyaltyServiceClient(RestClient.builder(), baseUrl, 2000, 3000, token);
+        return new LoyaltyServiceClient(RestClient.builder(), baseUrl, 2000, 3000, token, POOL);
     }
 
     @Test
