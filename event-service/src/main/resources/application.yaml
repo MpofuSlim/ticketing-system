@@ -104,6 +104,24 @@ booking-service:
 user-service:
   base-url: http://user-service
 
+# Local (per-pod) read caches — CLAUDE.md "Caching: what is cached, what never
+# is, and why". Eviction on a write reaches only the pod that made it; each TTL
+# is the longest another replica can serve the old value. A TTL or max-size of
+# 0 switches that one cache off; enabled=false (EVENTS_CACHE_ENABLED) all of
+# them. Hit ratio: cache_gets_total{cache_manager="read"} in Prometheus.
+events:
+  cache:
+    enabled: true
+    public-event-pages:   # anonymous-branch list pages; max-size counts events
+      ttl: 30s
+      max-size: 5000
+    organizers:           # organizer business details from user-service
+      ttl: 5m
+      max-size: 5000
+    seat-categories:      # public event detail's category layout from seat-service
+      ttl: 30s
+      max-size: 5000
+
 resilience4j:
   circuitbreaker:
     instances:

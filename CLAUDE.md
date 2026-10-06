@@ -1596,6 +1596,99 @@ sessions, statements recorded per thread by the `it`-profile `SqlRecorder`).
   sizes are explicit on the two collections, so they hold whatever the global
   setting becomes.
 
+## Caching: what is cached, what never is, and why
+
+**Four local (per-pod) Caffeine caches sit on the hottest public reads; nothing
+that decides authorization, availability or money is cached.** Before them,
+every storefront list, event page and ticket list hit Postgres and two or three
+sibling services per request.
+
+| Cache (service) | Key | TTL / size | Evicted by | What a client can see stale |
+|---|---|---|---|---|
+| `public-event-pages` (event) | query kind + from/to + venue + country + category + search text + page + size + sort | 30s / 5000 **events** | ANY event write on this pod: update, activate, deactivate, reject, approve, banner replace/delete, delete | another replica can list an event as it was (incl. just unpublished/rejected/deleted, or just past its end) for ≤30s |
+| `organizers` (event) | organizer `userUuid` | 5m / 5000 | nothing (user-service owns it) | organizer business name/address/email ≤5m old |
+| `seat-categories` (event) | eventId | 30s / 5000 | nothing (seat-service owns it) | **public** event detail's category layout ≤30s behind seat-service's answer, which can itself be ≤60s old (next row): ≤90s worst case. The owner and staff read it live |
+| `category-layout` (seat) | eventId | 60s / 5000 | create / update / delete of a category in that event, on this pod | another replica serves the old name/price/sections ≤60s |
+| `event-lookups` (booking) | eventId | 60s / 5000 | nothing (event-service owns it) | ticket list title/venue/dates, and its UPCOMING/LIVE/PAST label, ≤60s old |
+
+- **What is cached is immutable snapshots, never entities or JSON.** Records
+  rebuilt into a fresh DTO on every read, so one caller decorating or mutating
+  its response never reaches the next. Never JSON: the market-offset rendering
+  happens per request in Jackson (`WireAudience`), and one DTO renders
+  differently for S2S and human audiences.
+- **Only the anonymous list branch is cached.** `GET /events` and
+  `/events/active` send organizers and team members to different, uncached
+  methods; the four cached methods answer every caller identically (published
+  only, organizer id stripped). So the key carries every query input but no
+  caller identity. A new cached read whose answer depends on the caller must
+  either cache only the caller-independent branch or put the caller's scope in
+  the key.
+- **Eviction is local; the TTL is the cross-pod bound.** A write evicts on the
+  pod that made it, now and again after commit (`ReadThroughCache`, closing the
+  window where a concurrent reader re-caches the pre-commit row). Other replicas
+  keep their copy until the TTL. No Redis pub/sub invalidation, deliberately:
+  the TTLs are short enough that it is not worth a second failure mode.
+- **A failure is never cached.** A breaker fallback, a malformed answer, or a
+  lookup with no organizer uuid is returned and forgotten, so one blip does not
+  blank a page for the whole TTL. An answer of "this organizer has no profile"
+  IS cached; it is an answer.
+- **Kill switches:** `EVENTS_CACHE_ENABLED`, `SEATS_CACHE_ENABLED`,
+  `BOOKINGS_CACHE_ENABLED` (`false` = pass-through), and per cache
+  `<prefix>.cache.<name>.ttl` / `.max-size` (`0` = that cache off), e.g.
+  `EVENTS_CACHE_PUBLICEVENTPAGES_TTL=10s`. Defaults live in each service's
+  `application.yaml`; no cell key is needed. The `test` and `it` profiles switch
+  caching off, because ITs write rows straight through the repository and read
+  them back in one shared context; the caches have their own unit tests.
+- **Hit ratio is in Prometheus.** Boot binds every cache of every `CacheManager`
+  bean at startup: `cache_gets_total{cache_manager="read",cache=…,result="hit"|"miss"}`,
+  `cache_puts_total`, `cache_evictions_total`, `cache_size`. Caches must
+  therefore be registered by name in `ReadCacheConfig`; one created lazily later
+  is never bound. Don't call `CaffeineCacheMetrics.monitor` yourself, because the
+  meters would then be bound twice. The LoadBalancer's own cache manager is
+  `autowireCandidate=false`, so it neither collides with `readCacheManager` nor
+  gets bound.
+
+**Never cache these.** Each one is load-bearing for a guarantee elsewhere in
+this file:
+
+- **Anything that decides authorization or session validity:** `JwtFilter`'s
+  per-request `(token_version, active)` read, roles/permissions resolution at
+  mint, refresh tokens, MFA, staff eligibility, and every event-ownership check
+  (booking's `requireEventOwnership`, seat's `requireEventOwnership`). The
+  revocation guarantees depend on these being live. That is also why
+  `GET /events/{id}` reads its row live on every call: that row decides whether
+  a draft or rejected event is a 404. The owner and platform staff also get the
+  seat-category layout live (`fetchForEventUncached`), so an organizer building
+  a seat map sees each edit at once.
+- **Availability or remaining stock a write path relies on:** booking's
+  category inventory claims, the active-booking counts (attached live on every
+  list and detail read, cached page or not), `availableSeats`/`availableTickets`.
+  seat-service's stored-mirror fallback is read from Postgres in the degraded
+  path, not from the layout cache. One documented exception is display-only:
+  a cached event page carries the event row's own `availableTickets` mirror,
+  which a response shows only where booking-service reports no live count for
+  that event, and which can therefore lag ≤30s. Availability writes
+  (`consume`/`release`) deliberately do not clear the page cache, because a
+  sale burst would otherwise empty it on every confirmed booking.
+- **The fail-closed guards' reads:** seat-category delete's active-booking
+  count, `requireCapacityHeadroom`'s allocation sum, event-service's
+  `fetchAllocatedSeats` on a capacity edit. Each reads live and still answers
+  503 when it cannot ask. `GatewayCachingTest` and `SeatCategoryServiceCachingTest`
+  pin that they bypass the caches.
+- **Money, payments, bookings and tickets:** a category's price for a booking
+  (`GET /seat-categories/{id}`, read live on every `POST /bookings`), anything in
+  payment-service, booking and ticket rows, the scan path. TicketScanService's
+  own event-window cache predates this one and is not part of it.
+- **Anything that could show one tenant's or organizer's data to another.** Key
+  on every input that scopes the result, or cache only a branch whose answer
+  does not depend on the caller.
+
+Pinned by `EventServiceCachingTest`, `GatewayCachingTest`, `ReadCacheConfigTest`
+and `ReadThroughCacheTest` (event), `SeatCategoryServiceCachingTest` and
+`ReadCacheConfigTest` (seat), and `EventLookupCacheTest` and
+`BookingServiceEventLookupCachingTest` (booking). Services share no code, so
+each module keeps its own `cache/` package; change them together.
+
 ## Timestamps — store everything in UTC
 
 The user/booking/seat/event services map timestamps as `LocalDateTime`

@@ -10,7 +10,8 @@ import com.innbucks.seatservice.exception.NotFoundException;
 import com.innbucks.seatservice.exception.ServiceUnavailableException;
 import com.innbucks.seatservice.repository.*;
 import com.innbucks.seatservice.util.HtmlSanitizer;
-import lombok.RequiredArgsConstructor;
+import com.innbucks.seatservice.cache.ReadCacheConfig;
+import com.innbucks.seatservice.cache.ReadThroughCache;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.AccessDeniedException;
@@ -29,7 +30,6 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class SeatCategoryService {
 
@@ -43,6 +43,30 @@ public class SeatCategoryService {
     private final SeatRepository seatRepository;
     private final BookingServiceClient bookingServiceClient;
     private final ObjectProvider<EventServiceClient> eventClientProvider;
+    /** Static category layout per event; see {@link #getCategoriesByEvent}. */
+    private final ReadThroughCache layoutCache;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SeatCategoryService(SeatCategoryRepository categoryRepository,
+                               SeatRepository seatRepository,
+                               BookingServiceClient bookingServiceClient,
+                               ObjectProvider<EventServiceClient> eventClientProvider,
+                               @org.springframework.beans.factory.annotation.Qualifier(ReadCacheConfig.READ_CACHE_MANAGER)
+                               org.springframework.cache.CacheManager cacheManager) {
+        this.categoryRepository = categoryRepository;
+        this.seatRepository = seatRepository;
+        this.bookingServiceClient = bookingServiceClient;
+        this.eventClientProvider = eventClientProvider;
+        this.layoutCache = ReadThroughCache.of(cacheManager, ReadCacheConfig.CATEGORY_LAYOUT);
+    }
+
+    /** No layout cache: every listing reads Postgres. */
+    public SeatCategoryService(SeatCategoryRepository categoryRepository,
+                               SeatRepository seatRepository,
+                               BookingServiceClient bookingServiceClient,
+                               ObjectProvider<EventServiceClient> eventClientProvider) {
+        this(categoryRepository, seatRepository, bookingServiceClient, eventClientProvider, null);
+    }
 
     @Transactional
     public CreateCategoryResponseDTO createCategory(CreateCategoryRequestDTO request) {
@@ -137,6 +161,7 @@ public class SeatCategoryService {
             }
         }
         seatRepository.saveAll(seats);
+        layoutCache.evict(request.getEventId());
 
         log.info("Seat category created categoryId={} eventId={} name={} totalSeats={}",
                 category.getId(), request.getEventId(), request.getName(), totalSeats);
@@ -234,6 +259,7 @@ public class SeatCategoryService {
         category.setDescription(HtmlSanitizer.stripAll(request.getDescription()));
         category.setPrice(request.getPrice());
         categoryRepository.save(category);
+        layoutCache.evict(category.getEventId());
 
         // Return the same shape getCategoriesByEvent emits — sections rebuilt
         // from the persisted seats (unchanged by this edit) + live availability
@@ -320,14 +346,37 @@ public class SeatCategoryService {
         return sections;
     }
 
+    /**
+     * The event's live categories for the public listing.
+     *
+     * <p><b>Two halves, cached differently.</b> The LAYOUT — which categories,
+     * their name, description, price, total seats and section breakdown — is
+     * cached per event ({@code seats.cache.category-layout.ttl}, 60s) and
+     * evicted by this pod's create / update / delete of a category in that
+     * event. Seats are generated once, at category creation, so section counts
+     * only move with those writes. AVAILABILITY is never cached: the
+     * booking-service active counts are asked on every call, and when
+     * booking-service cannot answer, the stored mirror is read from Postgres
+     * now (or taken from the rows this very call loaded) rather than from the
+     * cache. Another replica can serve the old layout for up to the TTL.
+     *
+     * <p>None of the write guards read through this: the capacity-headroom
+     * check queries the repository itself and the delete guard asks
+     * booking-service directly, both fail closed.
+     */
     public List<CreateCategoryResponseDTO> getCategoriesByEvent(UUID eventId) {
         log.debug("Fetching seat categories eventId={}", eventId);
-        List<SeatCategory> categories = categoryRepository.findByEventIdAndDeletedFalse(eventId);
-        List<UUID> categoryIds = categories.stream()
-                .map(SeatCategory::getId)
+        Map<UUID, Integer> mirrorLoadedNow = new java.util.HashMap<>();
+        EventLayout layout = layoutCache.get(eventId, () -> {
+            List<SeatCategory> categories = categoryRepository.findByEventIdAndDeletedFalse(eventId);
+            categories.forEach(c -> mirrorLoadedNow.put(c.getId(), c.getAvailableSeats()));
+            return EventLayout.of(categories, sectionsByCategory(categories.stream()
+                    .map(SeatCategory::getId)
+                    .collect(Collectors.toList())));
+        });
+        List<UUID> categoryIds = layout.categories().stream()
+                .map(CategoryLayout::id)
                 .collect(Collectors.toList());
-
-        Map<UUID, List<SectionSeatConfigDTO>> sectionsByCategory = sectionsByCategory(categoryIds);
 
         // One booking-service round trip covers every category in the event;
         // null counts (booking-service down) → each category falls back to
@@ -335,14 +384,66 @@ public class SeatCategoryService {
         Map<UUID, Long> counts = bookingServiceClient
                 .fetchActiveCountsByCategories(categoryIds)
                 .orElse(null);
+        Map<UUID, Integer> mirror = counts != null || categoryIds.isEmpty()
+                ? Map.of()
+                : (mirrorLoadedNow.isEmpty() ? storedMirror(categoryIds) : mirrorLoadedNow);
 
-        return categories.stream()
-                .map(category -> toCreateResponseDTO(
-                        category,
-                        sectionsByCategory.getOrDefault(category.getId(), List.of()),
-                        liveAvailableSeats(category, counts)
-                ))
+        return layout.categories().stream()
+                .map(category -> category.toDto(liveAvailableSeats(
+                        category.id(), category.totalSeats(), mirror.get(category.id()), counts)))
                 .collect(Collectors.toList());
+    }
+
+    /** The stored availableSeats mirror, read now — the degraded path only. */
+    private Map<UUID, Integer> storedMirror(List<UUID> categoryIds) {
+        Map<UUID, Integer> mirror = new java.util.HashMap<>();
+        for (SeatCategory category : categoryRepository.findAllById(categoryIds)) {
+            mirror.put(category.getId(), category.getAvailableSeats());
+        }
+        return mirror;
+    }
+
+    /** One event's cached layout: immutable, never availability. */
+    record EventLayout(List<CategoryLayout> categories) {
+        static EventLayout of(List<SeatCategory> categories, Map<UUID, List<SectionSeatConfigDTO>> sections) {
+            return new EventLayout(categories.stream()
+                    .map(c -> new CategoryLayout(c.getId(), c.getEventId(), c.getName(), c.getDescription(),
+                            c.getPrice(), c.getTotalSeats(),
+                            sections.getOrDefault(c.getId(), List.of()).stream()
+                                    .map(sec -> new SectionLayout(sec.getSection(), sec.getSeatCount(),
+                                            sec.getImageUrl()))
+                                    .toList()))
+                    .toList());
+        }
+    }
+
+    record CategoryLayout(UUID id, UUID eventId, String name, String description,
+                          java.math.BigDecimal price, Integer totalSeats, List<SectionLayout> sections) {
+
+        /** A fresh response DTO, in exactly {@code toCreateResponseDTO}'s shape. */
+        CreateCategoryResponseDTO toDto(Integer availableSeats) {
+            List<SectionSeatConfigDTO> sectionCopies = sections.stream()
+                    .map(section -> {
+                        SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
+                        dto.setSection(section.section());
+                        dto.setSeatCount(section.seatCount());
+                        dto.setImageUrl(normalizeImageUrl(section.imageUrl()));
+                        return dto;
+                    })
+                    .collect(Collectors.toList());
+            return CreateCategoryResponseDTO.builder()
+                    .seatCategoryId(id)
+                    .eventId(eventId)
+                    .name(name)
+                    .description(description)
+                    .price(price)
+                    .availableSeats(availableSeats)
+                    .sections(sectionCopies)
+                    .build();
+        }
+    }
+
+    record SectionLayout(String section, int seatCount, String imageUrl) {
     }
 
     @Transactional
@@ -369,6 +470,7 @@ public class SeatCategoryService {
         requireNoActiveBookings(category);
         category.setDeleted(true);
         categoryRepository.save(category);
+        layoutCache.evict(category.getEventId());
         log.info("Seat category soft-deleted categoryId={} eventId={}", categoryId, category.getEventId());
     }
 
@@ -594,11 +696,16 @@ public class SeatCategoryService {
      * map has zero active bookings, so it reads as full capacity.
      */
     private int liveAvailableSeats(SeatCategory category, Map<UUID, Long> counts) {
-        int total = category.getTotalSeats() == null ? 0 : category.getTotalSeats();
+        return liveAvailableSeats(category.getId(), category.getTotalSeats(), category.getAvailableSeats(), counts);
+    }
+
+    private static int liveAvailableSeats(UUID categoryId, Integer totalSeats, Integer storedAvailable,
+                                          Map<UUID, Long> counts) {
+        int total = totalSeats == null ? 0 : totalSeats;
         if (counts == null) {
-            return category.getAvailableSeats() == null ? total : category.getAvailableSeats();
+            return storedAvailable == null ? total : storedAvailable;
         }
-        long active = counts.getOrDefault(category.getId(), 0L);
+        long active = counts.getOrDefault(categoryId, 0L);
         return (int) Math.max(0L, total - active);
     }
 }
