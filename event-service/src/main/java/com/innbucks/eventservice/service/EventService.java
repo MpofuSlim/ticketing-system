@@ -537,10 +537,7 @@ public class EventService {
         Page<EventResponseDTO> dtos = enrichSnapshots(entities);
         int n = 1;
         for (EventResponseDTO dto : dtos.getContent()) {
-            if (dto != null) {
-                dto.setEventNo(n);
-            }
-            n++;
+            dto.setEventNo(n++);
         }
         return stripInternalIds(dtos);
     }
@@ -584,9 +581,6 @@ public class EventService {
                 .map(EventSnapshot::tenantUserUuid)
                 .toList());
         return page.map(snapshot -> {
-            if (snapshot == null) {
-                return null;
-            }
             EventResponseDTO dto = snapshot.toDto();
             applyLiveAvailability(dto, snapshot.eventId(), snapshot.totalCapacity(), finalCounts);
             if (snapshot.tenantUserUuid() != null) {
