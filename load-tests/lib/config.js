@@ -36,10 +36,16 @@ export function list(name, fallback) {
 // address. Anything else is a public host.
 const LOCAL_HOST = /^(localhost|127(\.\d{1,3}){3}|::1|host\.docker\.internal|[a-z0-9-]+|[a-z0-9.-]+\.local|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2})$/;
 
-// The public gateway origins this suite treats as STAGING. Every other public
-// URL counts as production and is refused unless ALLOW_PRODUCTION=true.
-// Override with STAGING_URLS (comma list) if staging moves.
-export const DEFAULT_STAGING_URLS = 'https://dtx.innbucks.co.zw/foundry';
+// There is NO default staging URL. dtx.innbucks.co.zw is the production ZW
+// gateway origin (deploy/cells/cell.zw.env, INNBUCKS_CELLS_REGISTRY), so a
+// staging target must be named explicitly with STAGING_URLS (comma list).
+// Every other public URL counts as production and is refused unless
+// ALLOW_PRODUCTION=true.
+export const DEFAULT_STAGING_URLS = '';
+
+// Hosts that are production whatever STAGING_URLS says: listing one there by
+// mistake must not turn the guard off.
+export const KNOWN_PRODUCTION_HOSTS = ['dtx.innbucks.co.zw'];
 
 function parseUrl(raw) {
   const m = /^(https?):\/\/(\[[0-9a-f:]+\]|[^/:?#]+)(?::(\d+))?(\/[^?#]*)?$/i.exec(raw);
@@ -64,15 +70,19 @@ function normalised(u) {
 export function resolveTarget() {
   const raw = str('BASE_URL', undefined);
   if (!raw) {
-    throw new Error('BASE_URL is required, e.g. -e BASE_URL=https://dtx.innbucks.co.zw/foundry');
+    throw new Error('BASE_URL is required, e.g. -e BASE_URL=https://<staging host>/foundry');
   }
   const url = parseUrl(raw);
   const baseUrl = normalised(url);
-  const staging = list('STAGING_URLS', DEFAULT_STAGING_URLS).map((s) => normalised(parseUrl(s)));
+  const staging = list('STAGING_URLS', DEFAULT_STAGING_URLS)
+    .filter((s) => s.length > 0)
+    .map((s) => normalised(parseUrl(s)));
 
   let kind;
   if (LOCAL_HOST.test(url.host)) {
     kind = 'local';
+  } else if (KNOWN_PRODUCTION_HOSTS.includes(url.host)) {
+    kind = 'production';
   } else if (staging.includes(baseUrl)) {
     kind = 'staging';
   } else {
@@ -84,7 +94,7 @@ export function resolveTarget() {
   }
   if (kind === 'production' && !bool('ALLOW_PRODUCTION')) {
     throw new Error(
-      `Refusing to run: ${baseUrl} is not a listed staging URL (${staging.join(', ')}) ` +
+      `Refusing to run: ${baseUrl} is treated as PRODUCTION (listed staging URLs: ${staging.join(', ') || 'none'}). ` +
         'so it is treated as PRODUCTION. Point BASE_URL at staging, add the URL to ' +
         'STAGING_URLS if it really is staging, or set ALLOW_PRODUCTION=true on purpose.',
     );

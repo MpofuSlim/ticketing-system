@@ -27,8 +27,8 @@ load-tests/
 
 - **Production is refused by default.** `BASE_URL` is classified before any
   request: a private or local host is `local`; a URL listed in `STAGING_URLS`
-  (default `https://dtx.innbucks.co.zw/foundry`) is `staging`; **everything
-  else is `production`** and the run aborts unless `ALLOW_PRODUCTION=true`.
+  (no default; you must name staging) is `staging`; **everything else is
+  `production`** and the run aborts unless `ALLOW_PRODUCTION=true`.
   The guard fails closed: a typo or an unknown host counts as production.
   Plain `http://` to a public host is refused too.
 - **Writes on production need a second key.** Even with `ALLOW_PRODUCTION=true`,
@@ -47,13 +47,11 @@ load-tests/
   identifier in user-service) and `POST /auth/refresh` (rotates the token and
   is reuse-detected — a replay revokes the whole session family).
 
-> **Confirm the staging URL before the first run.** The default staging entry
-> follows the request that commissioned this suite. `deploy/cells/cell.zw.env`
-> describes its `https://dtx.innbucks.co.zw/foundry/...` `ECOCASH_NOTIFY_URL`
-> as *production's* value (staging overrides it locally). If
-> `dtx.innbucks.co.zw/foundry` serves production, set `STAGING_URLS` to
-> staging's real URL — and change the default in `lib/config.js` — before
-> anyone runs this.
+> **`https://dtx.innbucks.co.zw/foundry` is PRODUCTION** (the ZW gateway
+> origin in `deploy/cells/cell.zw.env`). It is hard-listed as production in
+> `lib/config.js` (`KNOWN_PRODUCTION_HOSTS`), so naming it in `STAGING_URLS`
+> does not make it staging. Run against the staging host's own URL and pass the
+> same value in `STAGING_URLS`.
 
 ---
 
@@ -63,7 +61,7 @@ From the repo root. With a k6 binary (v1.x, tested on 1.8.1):
 
 ```sh
 k6 run \
-  -e BASE_URL=https://dtx.innbucks.co.zw/foundry \
+  -e BASE_URL=$STAGING_URL -e STAGING_URLS=$STAGING_URL \
   -e PROFILE=smoke \
   -e SCENARIOS=catalogue,ratelimit \
   load-tests/fleet.js
@@ -73,7 +71,7 @@ With Docker (no install; `-e` on `docker run` reaches k6 as an env var):
 
 ```sh
 docker run --rm -i -v "$PWD/load-tests:/scripts:ro" \
-  -e BASE_URL=https://dtx.innbucks.co.zw/foundry \
+  -e BASE_URL=$STAGING_URL -e STAGING_URLS=$STAGING_URL \
   -e PROFILE=smoke -e SCENARIOS=catalogue,ratelimit \
   grafana/k6:1.8.1 run /scripts/fleet.js
 ```
@@ -82,7 +80,7 @@ docker run --rm -i -v "$PWD/load-tests:/scripts:ro" \
 
 ```sh
 k6 run \
-  -e BASE_URL=https://dtx.innbucks.co.zw/foundry \
+  -e BASE_URL=$STAGING_URL -e STAGING_URLS=$STAGING_URL \
   -e PROFILE=smoke \
   -e SCENARIOS=catalogue,checkout,till,ratelimit \
   -e CHECKOUT_EVENT_ID=<loadtest event uuid> \
@@ -200,10 +198,10 @@ and can retry.
 
 | Variable | Needed by | Default | Meaning |
 |---|---|---|---|
-| `BASE_URL` | all | — (required) | Public gateway base, with the edge prefix, e.g. `https://dtx.innbucks.co.zw/foundry` |
+| `BASE_URL` | all | — (required) | Public gateway base, with the edge prefix, e.g. the staging host's `https://<host>/foundry` |
 | `PROFILE` | all | `smoke` | `smoke`, `load` or `soak` |
 | `SCENARIOS` | all | `catalogue` | Comma list of `catalogue`, `checkout`, `till`, `ratelimit` |
-| `STAGING_URLS` | guard | `https://dtx.innbucks.co.zw/foundry` | Comma list of URLs treated as staging |
+| `STAGING_URLS` | guard | — (none) | Comma list of URLs treated as staging |
 | `ALLOW_PRODUCTION` | guard | `false` | `true` to run against a non-staging public URL |
 | `ALLOW_PRODUCTION_WRITES` | guard | `false` | `true` to also allow checkout / till writes there |
 | `THINK_TIME_SCALE` | all | `1` | Multiplier on think time (`0` = none) |

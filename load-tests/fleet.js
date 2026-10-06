@@ -1,6 +1,6 @@
 // Fleet load tests — one entry point, scenarios chosen with SCENARIOS.
 //
-//   k6 run -e BASE_URL=https://dtx.innbucks.co.zw/foundry -e PROFILE=smoke \
+//   k6 run -e BASE_URL=<staging base url> -e STAGING_URLS=<same url> -e PROFILE=smoke \
 //          -e SCENARIOS=catalogue,ratelimit load-tests/fleet.js
 //
 // See load-tests/README.md for every variable, what each scenario touches and

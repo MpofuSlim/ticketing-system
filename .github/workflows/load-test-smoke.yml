@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       base_url:
-        description: "Public gateway base URL (staging), e.g. https://dtx.innbucks.co.zw/foundry"
+        description: "Public gateway base URL of STAGING; must be listed in the LOADTEST_STAGING_URLS repository variable"
         required: true
         type: string
       scenarios:
@@ -72,6 +72,9 @@ jobs:
           TILL_TOKEN: ${{ secrets.LOADTEST_TILL_TOKEN }}
           LOYALTY_TENANT_ID: ${{ secrets.LOADTEST_TENANT_ID }}
           TILL_LOOKUP_PHONE: ${{ secrets.LOADTEST_TILL_LOOKUP_PHONE }}
+          # Staging is named by a repository VARIABLE, not by the person running
+          # the workflow, so an input cannot mark a production URL as staging.
+          STAGING_URLS: ${{ vars.LOADTEST_STAGING_URLS }}
           PROFILE: smoke
           ALLOW_PRODUCTION: "false"
           ALLOW_PRODUCTION_WRITES: "false"
