@@ -99,22 +99,39 @@ public class JwtUtil {
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
+    // --- Readers ------------------------------------------------------------
+    // Every claim reader exists twice: once over an already-verified Claims
+    // (what JwtFilter uses — it verifies the token ONCE per request through
+    // parseClaims and reads every claim from that one result), and once over a
+    // raw token (verifies again, for callers outside the filter). The String
+    // form delegates to the Claims form, so the two can never disagree; each
+    // keeps exactly the null / exception behaviour it always had.
+
     public String extractEmail(String token) {
-        return getClaims(token).getSubject();
+        return extractEmail(getClaims(token));
     }
 
-    @SuppressWarnings("unchecked")
+    public String extractEmail(Claims claims) {
+        return claims.getSubject();
+    }
+
     public List<String> extractRoles(String token) {
-        Object raw = getClaims(token).get("roles");
-        if (raw instanceof Collection<?> c) {
-            return c.stream().map(Object::toString).toList();
-        }
-        return List.of();
+        return extractRoles(getClaims(token));
     }
 
-    @SuppressWarnings("unchecked")
+    public List<String> extractRoles(Claims claims) {
+        return stringList(claims.get("roles"));
+    }
+
     public List<String> extractServices(String token) {
-        Object raw = getClaims(token).get("services");
+        return extractServices(getClaims(token));
+    }
+
+    public List<String> extractServices(Claims claims) {
+        return stringList(claims.get("services"));
+    }
+
+    private static List<String> stringList(Object raw) {
         if (raw instanceof Collection<?> c) {
             return c.stream().map(Object::toString).toList();
         }
@@ -126,16 +143,28 @@ public class JwtUtil {
     }
 
     public Integer extractTier(String token) {
-        return getClaims(token).get("tier", Integer.class);
+        return extractTier(getClaims(token));
+    }
+
+    public Integer extractTier(Claims claims) {
+        return claims.get("tier", Integer.class);
     }
 
     public Boolean extractVerified(String token) {
-        return getClaims(token).get("verified", Boolean.class);
+        return extractVerified(getClaims(token));
+    }
+
+    public Boolean extractVerified(Claims claims) {
+        return claims.get("verified", Boolean.class);
     }
 
     /** The user's registered country, carried as a JWT claim by user-service. */
     public String extractCountry(String token) {
-        return getClaims(token).get("country", String.class);
+        return extractCountry(getClaims(token));
+    }
+
+    public String extractCountry(Claims claims) {
+        return claims.get("country", String.class);
     }
 
     public boolean isTokenValid(String token) {
@@ -161,7 +190,15 @@ public class JwtUtil {
      */
     public String extractHomeCountry(String token) {
         try {
-            String home = getClaims(token).get("homeCountry", String.class);
+            return extractHomeCountry(getClaims(token));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public String extractHomeCountry(Claims claims) {
+        try {
+            String home = claims.get("homeCountry", String.class);
             return (home == null || home.isBlank()) ? null : home;
         } catch (Exception e) {
             return null;
@@ -177,6 +214,10 @@ public class JwtUtil {
         return extractUuidClaim(token, "userUuid");
     }
 
+    public UUID extractUserUuid(Claims claims) {
+        return uuidClaim(claims, "userUuid");
+    }
+
     /**
      * Per-user session epoch from the {@code tokenVersion} claim (OWASP A07 /
      * CWE-613). {@link JwtFilter} compares it against the fleet-current value
@@ -188,7 +229,15 @@ public class JwtUtil {
      */
     public Long extractTokenVersion(String token) {
         try {
-            Object raw = getClaims(token).get("tokenVersion");
+            return extractTokenVersion(getClaims(token));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public Long extractTokenVersion(Claims claims) {
+        try {
+            Object raw = claims.get("tokenVersion");
             if (raw instanceof Number n) return n.longValue();
             if (raw == null) return null;
             return Long.parseLong(raw.toString());
@@ -205,7 +254,15 @@ public class JwtUtil {
      */
     public boolean extractMustChangePassword(String token) {
         try {
-            Boolean v = getClaims(token).get("mustChangePassword", Boolean.class);
+            return extractMustChangePassword(getClaims(token));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public boolean extractMustChangePassword(Claims claims) {
+        try {
+            Boolean v = claims.get("mustChangePassword", Boolean.class);
             return Boolean.TRUE.equals(v);
         } catch (Exception e) {
             return false;
@@ -223,9 +280,21 @@ public class JwtUtil {
         return extractUuidClaim(token, "organizerUuid");
     }
 
+    public UUID extractOrganizerUuid(Claims claims) {
+        return uuidClaim(claims, "organizerUuid");
+    }
+
     private UUID extractUuidClaim(String token, String name) {
         try {
-            String raw = getClaims(token).get(name, String.class);
+            return uuidClaim(getClaims(token), name);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static UUID uuidClaim(Claims claims, String name) {
+        try {
+            String raw = claims.get(name, String.class);
             if (raw == null || raw.isBlank()) return null;
             return UUID.fromString(raw);
         } catch (Exception e) {
@@ -233,7 +302,20 @@ public class JwtUtil {
         }
     }
 
-    private Claims getClaims(String token) {
+    /**
+     * Verifies the token — signature under the key its own {@code alg} header
+     * selects ({@link #keyLocator}: RS* → the configured public key, else the
+     * HS256 secret), {@code iss}, {@code aud} and expiry — and returns its
+     * claims. Throws {@link JwtException} (or {@link IllegalArgumentException}
+     * for a blank token) when any of that fails.
+     *
+     * <p>This is the ONE place a token is parsed. {@link JwtFilter} calls it
+     * once per request and reads every claim from the result; the String
+     * readers above call it each time they are used, so they are for callers
+     * outside the filter only. {@code JwtFilterParseOnceTest} counts calls
+     * here to pin "exactly once per request".
+     */
+    public Claims parseClaims(String token) {
         ensureKeyMaterial();
         return Jwts.parser()
                 .keyLocator(keyLocator)
@@ -242,5 +324,9 @@ public class JwtUtil {
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
+    }
+
+    private Claims getClaims(String token) {
+        return parseClaims(token);
     }
 }
