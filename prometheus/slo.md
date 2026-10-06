@@ -189,9 +189,10 @@ Spans can't reach the OTel collector. App keeps running but you lose
 trace visibility — every alert that says "look at the trace" becomes
 guesswork until this is fixed.
 
-1. Check `OTLP_ENDPOINT` env var on the pod matches the live collector
-   address.
-2. Curl the collector from inside the pod: `curl -v $OTLP_ENDPOINT`.
+1. Check `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` env var on the pod matches the
+   live collector address.
+2. Curl the collector from inside the pod:
+   `curl -v $OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.
 3. If the collector is up but rejecting: check its receive logs for
    schema/protocol mismatch (usually a major OTel version skew between
    SDK and collector).

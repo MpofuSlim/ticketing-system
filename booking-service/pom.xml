@@ -142,6 +142,15 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-openfeign</artifactId>
         </dependency>
+        <!-- Observes every @FeignClient call: Spring Cloud OpenFeign applies
+             MicrometerObservationCapability when this is on the classpath, so
+             the calls to user/event/seat/loyalty-service record a client span
+             and carry traceparent (CLAUDE.md "Tracing and compression").
+             Version managed by the spring-cloud / openfeign BOM. -->
+        <dependency>
+            <groupId>io.github.openfeign</groupId>
+            <artifactId>feign-micrometer</artifactId>
+        </dependency>
 
         <!-- Service discovery: siblings resolve by name via Spring Cloud
              LoadBalancer, through the static discovery map in application.yaml

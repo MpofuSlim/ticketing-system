@@ -4,8 +4,11 @@ import org.slf4j.MDC;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.TaskDecorator;
+import org.springframework.core.task.support.CompositeTaskDecorator;
+import org.springframework.core.task.support.ContextPropagatingTaskDecorator;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -36,7 +39,9 @@ import java.util.concurrent.ThreadPoolExecutor;
  *   <li>Waits up to 30s for queued deliveries on shutdown, so a rolling deploy
  *       does not silently discard tickets that were just paid for.</li>
  *   <li>The SLF4J MDC (correlation id, country) is copied onto the worker, so
- *       a delivery's log lines still join the confirm request that caused it.</li>
+ *       a delivery's log lines still join the confirm request that caused it.
+ *       So is the TRACE (the current observation), so the event-service
+ *       availability call a delivery makes continues the confirm's trace.</li>
  * </ul>
  *
  * <p>Declaring an {@code Executor} bean normally switches Boot's own
@@ -60,12 +65,31 @@ public class AsyncConfig {
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix(THREAD_NAME_PREFIX);
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
-        executor.setTaskDecorator(mdcPropagating());
+        executor.setTaskDecorator(requestContextPropagating());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         // Comfortably over one booking's worst case (a few gateway timeouts in
         // a row), short enough that a wedged pool never blocks shutdown forever.
         executor.setAwaitTerminationSeconds(30);
         return executor;
+    }
+
+    /**
+     * The decorator Boot's own {@code applicationTaskExecutor} picks up (it
+     * takes the context's single {@link TaskDecorator} bean), so a plain
+     * {@code @Async} — the event-change broadcast — carries the request's
+     * trace and MDC too, exactly like {@link #ticketDeliveryExecutor()}.
+     */
+    @Bean
+    public TaskDecorator requestContextTaskDecorator() {
+        return requestContextPropagating();
+    }
+
+    /**
+     * MDC first (outermost), then the trace: the trace scope adds and removes
+     * its own traceId/spanId inside the MDC the outer decorator restores.
+     */
+    static TaskDecorator requestContextPropagating() {
+        return new CompositeTaskDecorator(List.of(new ContextPropagatingTaskDecorator(), mdcPropagating()));
     }
 
     /**

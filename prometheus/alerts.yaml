@@ -166,8 +166,8 @@ groups:
 
       # (Removed) OtelExportFailing: it queried
       # otlp_exporter_exported_spans_failed_total, a series nothing in the
-      # fleet produces (tracing is TRACING_ENABLED:false in the cell and the
-      # Micrometer OTLP exporter doesn't emit that metric name) — a
+      # fleet produces (the cell exports no spans — OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+      # is blank — and the OTLP exporter doesn't emit that metric name) — a
       # permanently-green alert is worse than no alert. Re-add against the
       # real exporter metrics when tracing is switched on with a collector.
 

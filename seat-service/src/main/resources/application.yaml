@@ -130,13 +130,31 @@ management:
     distribution:
       slo:
         "[http.server.requests]": 50ms,100ms,250ms,500ms,1s,2s,5s
+  # Tracing (CLAUDE.md "Tracing and compression"): ids are ALWAYS generated
+  # and propagated (W3C traceparent) and land in every log line's MDC as
+  # traceId/spanId; EXPORT is off until a collector is named. Boot 4 renamed
+  # management.tracing.enabled to management.tracing.export.enabled.
+  #
+  # The export endpoint is deliberately NOT set here. Boot maps the standard
+  # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT env var onto
+  # management.opentelemetry.tracing.export.otlp.endpoint itself, and skips it
+  # when it is blank — which is what keeps the OTLP exporter bean from existing
+  # at all. A `${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:}` line here would bind an
+  # EMPTY endpoint, which still satisfies the exporter's @ConditionalOnProperty
+  # — and the OTLP builder then refuses "", failing the boot. The old
+  # `management.otlp.tracing.endpoint` default (localhost:4318) would export to
+  # nothing and log a failure every few seconds. Pinned by TracingConfigurationTest.
   tracing:
-    enabled: ${TRACING_ENABLED:false}
+    export:
+      enabled: true
     sampling:
-      probability: ${TRACE_SAMPLE:0.1}
-  otlp:
-    tracing:
-      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+      probability: ${TRACING_SAMPLING_PROBABILITY:0.1}
+  # Logs go to stdout (and from there to the log pipeline), never over OTLP —
+  # even if someone sets the generic OTEL_EXPORTER_OTLP_ENDPOINT.
+  logging:
+    export:
+      otlp:
+        enabled: false
 
 innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}
