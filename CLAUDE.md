@@ -199,7 +199,8 @@ are kept in lock-step per `docs/fleet-wiring.md` in the innbucks-loans repo.
   name each cell key it needs (`POSTGRES_*`, `INNBUCKS_COUNTRY`,
   `PUBLIC_API_PREFIX`, `WHATSAPP_GATEWAY_URL`, and the SES keys `MAIL_ENABLED` /
   `_HOST` / `_PORT` / `_FROM` / `_USERNAME` / `_PASSWORD`, and
-  `METRICS_SCRAPE_TOKEN`, all optional). Don't
+  `METRICS_SCRAPE_TOKEN`, and the tracing pair `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` /
+  `TRACING_SAMPLING_PROBABILITY`, all optional). Don't
   "simplify" it into the fleet shape, and never put a loans key in the cell
   files — every pod gets those.
 - **Loans email goes the way user-service sends Foundry's**: branded HTML, over
