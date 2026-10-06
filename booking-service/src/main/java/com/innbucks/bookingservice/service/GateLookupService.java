@@ -93,7 +93,8 @@ public class GateLookupService {
 
         // Items fetched with the booking: the FOUND answer lists every ticket.
         Booking booking = TransactionPhases.inTransaction(readTx,
-                () -> bookingRepository.findByConfirmationNumberWithItems(confirmationNumber).orElse(null));
+                () -> bookingRepository.findByConfirmationNumberWithItems(confirmationNumber))
+                .orElse(null);
         if (booking == null) {
             log.info("Gate lookup miss confirmationNumber={} scanner={}", confirmationNumber, scanner);
             return refusal(GateLookupResponseDTO.Status.BOOKING_NOT_FOUND, confirmationNumber);

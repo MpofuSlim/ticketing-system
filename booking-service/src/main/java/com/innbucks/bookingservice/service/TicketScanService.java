@@ -253,7 +253,8 @@ public class TicketScanService {
         // so the detached item still answers every gate below (status,
         // tenantUserUuid, eventId, holderName) once the transaction has closed.
         BookingItem item = TransactionPhases.inTransaction(readTx,
-                () -> bookingItemRepository.findByTicketNumberWithBooking(ticketNumber).orElse(null));
+                () -> bookingItemRepository.findByTicketNumberWithBooking(ticketNumber))
+                .orElse(null);
         if (item == null) {
             log.info("Ticket scan miss ticketNumber={} scanner={}", ticketNumber, scannerEmail);
             ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
