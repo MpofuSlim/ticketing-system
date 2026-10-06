@@ -24,3 +24,10 @@ app:
     store: memory
   seat-lock-reaper:
     enabled: false
+
+# Read caches off: tests write rows straight through the repository and read
+# them back over HTTP in one shared context, so a cached page from an earlier
+# test would be served stale. The caches have their own unit tests.
+seats:
+  cache:
+    enabled: false

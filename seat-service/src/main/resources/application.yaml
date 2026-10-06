@@ -69,6 +69,18 @@ booking-service:
   connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
 
+# Local (per-pod) read cache — CLAUDE.md "Caching: what is cached, what never
+# is, and why". The static category layout per event; availability is never
+# cached. A category write evicts only on the pod that made it; the TTL is the
+# longest another replica serves the old layout. ttl or max-size 0 switches it
+# off; enabled=false (SEATS_CACHE_ENABLED) switches every read cache off.
+seats:
+  cache:
+    enabled: true
+    category-layout:
+      ttl: 60s
+      max-size: 5000
+
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   # OWASP A02 stage-1 RS256/JWKS dual-verify. When JWT_PUBLIC_KEY is set this

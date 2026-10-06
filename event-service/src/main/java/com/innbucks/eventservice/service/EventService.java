@@ -17,7 +17,8 @@ import com.innbucks.eventservice.exception.ServiceUnavailableException;
 import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
 import com.innbucks.eventservice.util.HtmlSanitizer;
-import lombok.RequiredArgsConstructor;
+import com.innbucks.eventservice.cache.EventSnapshot;
+import com.innbucks.eventservice.cache.PublicEventCatalog;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.*;
 import org.springframework.stereotype.Service;
@@ -27,7 +28,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -37,7 +37,6 @@ import java.util.Set;
 import java.util.UUID;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class EventService {
 
@@ -76,6 +75,44 @@ public class EventService {
     private final OrganizerGateway organizerGateway;
     private final BookingNotificationGateway bookingNotificationGateway;
     private final OrganizerNotificationGateway organizerNotificationGateway;
+    /** The anonymous-branch list cache. Every event write below clears it;
+     *  see {@link PublicEventCatalog} for what is cached and how stale it can be. */
+    private final PublicEventCatalog publicEventCatalog;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public EventService(EventRepository eventRepository,
+                        com.innbucks.eventservice.config.MarketTimeZone marketTimeZone,
+                        EventMapper eventMapper,
+                        SeatCategoryGateway seatCategoryGateway,
+                        BookingGateway bookingGateway,
+                        OrganizerGateway organizerGateway,
+                        BookingNotificationGateway bookingNotificationGateway,
+                        OrganizerNotificationGateway organizerNotificationGateway,
+                        PublicEventCatalog publicEventCatalog) {
+        this.eventRepository = eventRepository;
+        this.marketTimeZone = marketTimeZone;
+        this.eventMapper = eventMapper;
+        this.seatCategoryGateway = seatCategoryGateway;
+        this.bookingGateway = bookingGateway;
+        this.organizerGateway = organizerGateway;
+        this.bookingNotificationGateway = bookingNotificationGateway;
+        this.organizerNotificationGateway = organizerNotificationGateway;
+        this.publicEventCatalog = publicEventCatalog;
+    }
+
+    /** No list cache: every public listing reads Postgres. */
+    public EventService(EventRepository eventRepository,
+                        com.innbucks.eventservice.config.MarketTimeZone marketTimeZone,
+                        EventMapper eventMapper,
+                        SeatCategoryGateway seatCategoryGateway,
+                        BookingGateway bookingGateway,
+                        OrganizerGateway organizerGateway,
+                        BookingNotificationGateway bookingNotificationGateway,
+                        OrganizerNotificationGateway organizerNotificationGateway) {
+        this(eventRepository, marketTimeZone, eventMapper, seatCategoryGateway, bookingGateway,
+                organizerGateway, bookingNotificationGateway, organizerNotificationGateway,
+                PublicEventCatalog.uncached(eventMapper));
+    }
 
     public Page<EventResponseDTO> getAllActiveEvents(
             LocalDateTime from,
@@ -85,15 +122,14 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         log.debug("Fetching active events from={} to={} venue={} page={} size={} sortBy={}",
                 from, to, venue, page, size, sortBy);
         // Published events only for this anonymous listing: active=true, not
         // admin-rejected, not ended. Drafts / admin-rejected events must never
         // surface publicly — organizers see their own via GET /events/my.
-        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        return stripInternalIds(enrichWithAvailability(
-                eventRepository.findAllActiveOnly(from, to, venue, null, now, pageable)));
+        // Same query as getActiveOnlyEvents with no country/category filter,
+        // so the two share cache entries.
+        return getActiveOnlyEvents(from, to, venue, null, null, page, size, sortBy);
     }
 
     /** Nulls organizer-internal identifiers before a response leaves an
@@ -121,14 +157,22 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
+        String sort = sortField(sortBy);
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, sort));
         log.debug("Fetching active=true events from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                 from, to, venue, country, category, page, size, sortBy);
-        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        Page<Event> events = category == null
-                ? eventRepository.findAllActiveOnly(from, to, venue, country, now, pageable)
-                : eventRepository.findAllActiveOnlyByCategory(from, to, venue, country, category, now, pageable);
-        return stripInternalIds(enrichWithAvailability(events));
+        // The page itself (which events, in what order) is cached per query;
+        // availability and organizer details are attached fresh below.
+        Page<EventSnapshot> events = publicEventCatalog.page(
+                PublicEventCatalog.PageKey.active(from, to, venue, country, category, page, size, sort),
+                pageable,
+                () -> {
+                    LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+                    return category == null
+                            ? eventRepository.findAllActiveOnly(from, to, venue, country, now, pageable)
+                            : eventRepository.findAllActiveOnlyByCategory(from, to, venue, country, category, now, pageable);
+                });
+        return stripInternalIds(enrichSnapshots(events));
     }
 
     /**
@@ -362,9 +406,16 @@ public class EventService {
                     eventId, event.isActive(), event.isRejected());
             throw new NotFoundException("Event not found");
         }
+        // The row above is read live on every call: it is what decides whether
+        // a draft or rejected event is visible, and that is never cached. The
+        // seat-category layout may come from a short-lived cache for the
+        // public, but the owner / platform staff always see seat-service live,
+        // so an organizer building a seat map sees each change at once.
         EventResponseDTO response = toDtoWithAvailability(event, fetchActiveCounts(eventId));
         attachOrganizer(response, event, resolveOrganizers(List.of(event)));
-        response.setSeatCategories(seatCategoryGateway.fetchForEvent(eventId));
+        response.setSeatCategories(owner
+                ? seatCategoryGateway.fetchForEventUncached(eventId)
+                : seatCategoryGateway.fetchForEvent(eventId));
         // Keep the organizer's internal id for the owner/admin who act on it;
         // strip it for anonymous/other-organizer (public) consumption.
         return owner ? response : stripInternalIds(response);
@@ -457,11 +508,15 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
+        String sort = sortField(sortBy);
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, sort));
         log.debug("Searching events q={} page={} size={} sortBy={}", q, page, size, sortBy);
-        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        return stripInternalIds(enrichWithAvailability(
-                eventRepository.searchByKeyword(q == null ? "" : q.trim(), now, pageable)));
+        String keyword = q == null ? "" : q.trim();
+        Page<EventSnapshot> events = publicEventCatalog.page(
+                PublicEventCatalog.PageKey.search(keyword, page, size, sort),
+                pageable,
+                () -> eventRepository.searchByKeyword(keyword, LocalDateTime.now(ZoneOffset.UTC), pageable));
+        return stripInternalIds(enrichSnapshots(events));
     }
 
     public Page<EventResponseDTO> getEventsByCountry(
@@ -470,27 +525,21 @@ public class EventService {
             int size
     ) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("startDateTime").ascending());
-        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        log.debug("Fetching active upcoming events by country={} cutoff={} page={} size={}",
-                country, now, page, size);
+        log.debug("Fetching active upcoming events by country={} page={} size={}", country, page, size);
 
-        Page<Event> entities = eventRepository
-                .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
-                        country, now, pageable);
+        Page<EventSnapshot> entities = publicEventCatalog.page(
+                PublicEventCatalog.PageKey.byCountry(country, page, size),
+                pageable,
+                () -> eventRepository
+                        .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
+                                country, LocalDateTime.now(ZoneOffset.UTC), pageable));
 
-        Map<UUID, Long> activeCounts = bookingGateway.activeCountsByEventIds(
-                entities.getContent().stream().map(Event::getEventId).toList());
-        Map<UUID, OrganizerDTO> organizers = resolveOrganizers(entities.getContent());
-
-        List<EventResponseDTO> dtos = new ArrayList<>(entities.getNumberOfElements());
+        Page<EventResponseDTO> dtos = enrichSnapshots(entities);
         int n = 1;
-        for (Event event : entities.getContent()) {
-            EventResponseDTO dto = toDtoWithAvailability(event, activeCounts);
-            attachOrganizer(dto, event, organizers);
+        for (EventResponseDTO dto : dtos.getContent()) {
             dto.setEventNo(n++);
-            dtos.add(dto);
         }
-        return stripInternalIds(new PageImpl<>(dtos, pageable, entities.getTotalElements()));
+        return stripInternalIds(dtos);
     }
 
     // Returns the event mapped to its DTO with availableTickets recomputed as
@@ -498,12 +547,47 @@ public class EventService {
     // when booking-service is unreachable (the gateway returns an empty map).
     private EventResponseDTO toDtoWithAvailability(Event event, Map<UUID, Long> activeCounts) {
         EventResponseDTO dto = eventMapper.toDTO(event);
-        Long active = activeCounts == null ? null : activeCounts.get(event.getEventId());
-        if (active != null && event.getTotalCapacity() != null) {
-            int remaining = Math.max(0, event.getTotalCapacity() - active.intValue());
+        applyLiveAvailability(dto, event.getEventId(), event.getTotalCapacity(), activeCounts);
+        return dto;
+    }
+
+    private static void applyLiveAvailability(EventResponseDTO dto, UUID eventId, Integer totalCapacity,
+                                              Map<UUID, Long> activeCounts) {
+        Long active = activeCounts == null ? null : activeCounts.get(eventId);
+        if (dto != null && active != null && totalCapacity != null) {
+            int remaining = Math.max(0, totalCapacity - active.intValue());
             dto.setAvailableTickets(remaining);
         }
-        return dto;
+    }
+
+    /**
+     * The cached-page twin of {@link #enrichWithAvailability}: a fresh DTO per
+     * snapshot, decorated with the LIVE active-booking count (never cached —
+     * see CLAUDE.md "Caching") and the organizer details.
+     */
+    private Page<EventResponseDTO> enrichSnapshots(Page<EventSnapshot> page) {
+        List<EventSnapshot> content = page.getContent();
+        List<UUID> ids = content.stream()
+                .filter(Objects::nonNull)
+                .map(EventSnapshot::eventId)
+                .filter(Objects::nonNull)
+                .toList();
+        Map<UUID, Long> activeCounts = ids.isEmpty()
+                ? Collections.emptyMap()
+                : bookingGateway.activeCountsByEventIds(ids);
+        Map<UUID, Long> finalCounts = activeCounts == null ? Collections.emptyMap() : activeCounts;
+        Map<UUID, OrganizerDTO> organizers = resolveOrganizersByUuid(content.stream()
+                .filter(Objects::nonNull)
+                .map(EventSnapshot::tenantUserUuid)
+                .toList());
+        return page.map(snapshot -> {
+            EventResponseDTO dto = snapshot.toDto();
+            applyLiveAvailability(dto, snapshot.eventId(), snapshot.totalCapacity(), finalCounts);
+            if (snapshot.tenantUserUuid() != null) {
+                dto.setOrganizer(organizers.get(snapshot.tenantUserUuid()));
+            }
+            return dto;
+        });
     }
 
     private Page<EventResponseDTO> enrichWithAvailability(Page<Event> page) {
@@ -533,8 +617,13 @@ public class EventService {
     // circuit breaker falls back) so listings still serve — just without
     // organizer details.
     private Map<UUID, OrganizerDTO> resolveOrganizers(Collection<Event> events) {
-        List<UUID> tenantUserUuids = events.stream()
+        return resolveOrganizersByUuid(events.stream()
                 .map(Event::getTenantUserUuid)
+                .toList());
+    }
+
+    private Map<UUID, OrganizerDTO> resolveOrganizersByUuid(Collection<UUID> uuids) {
+        List<UUID> tenantUserUuids = uuids.stream()
                 .filter(Objects::nonNull)
                 .toList();
         Map<UUID, OrganizerDTO> organizers = organizerGateway.organizersByUserUuids(tenantUserUuids);
@@ -676,6 +765,7 @@ public class EventService {
         // client a fresh URL would hand it the cached one. Pinned by
         // replaceBanner_swapsTheStoredBytes_andVersionsTheBannerUrl.
         Event saved = eventRepository.saveAndFlush(event);
+        publicEventCatalog.invalidateAll();
         log.info("Event banner replaced eventId={} tenantUserUuid={} contentType={} bytes={}",
                 eventId, tenantUserUuid, saved.getBannerContentType(), banner.getSize());
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
@@ -695,6 +785,7 @@ public class EventService {
         eventRepository.clearBannerImage(eventId);
         event.setBannerContentType(null);
         Event saved = eventRepository.save(event);
+        publicEventCatalog.invalidateAll();
         log.info("Event banner cleared eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
@@ -790,13 +881,20 @@ public class EventService {
     // non-blank value outside the allowlist is a clean 400 rather than a 500
     // PropertyReferenceException (which also leaks entity field names).
     private static Sort ascendingSort(String sortBy) {
+        return Sort.by(Sort.Direction.ASC, sortField(sortBy));
+    }
+
+    /** The validated sort property: the default for null/blank, a 400 for
+     *  anything outside the allowlist. Runs BEFORE any cache lookup, so a
+     *  bad sortBy is refused rather than becoming a cache key. */
+    private static String sortField(String sortBy) {
         if (sortBy == null || sortBy.isBlank()) {
-            return Sort.by(Sort.Direction.ASC, DEFAULT_SORT_FIELD);
+            return DEFAULT_SORT_FIELD;
         }
         if (!SORTABLE_FIELDS.contains(sortBy)) {
             throw new BadRequestException("Invalid sort field: " + sortBy);
         }
-        return Sort.by(Sort.Direction.ASC, sortBy);
+        return sortBy;
     }
 
     private static Location toLocation(LocationDTO dto) {
@@ -939,6 +1037,7 @@ public class EventService {
         }
 
         Event saved = eventRepository.save(event);
+        publicEventCatalog.invalidateAll();
         log.info("Event updated eventId={} tenantUserUuid={} title={} venue={} startDateTime={} endDateTime={}",
                 eventId, tenantUserUuid, saved.getTitle(), saved.getVenue(), saved.getStartDateTime(), saved.getEndDateTime());
 
@@ -1053,6 +1152,7 @@ public class EventService {
         boolean wasActive = event.isActive();
         event.setActive(true);
         Event saved = eventRepository.save(event);
+        publicEventCatalog.invalidateAll();
         log.info("Event activated eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
         // Tell the owning organizer their event is live (email-first, WhatsApp
         // fallback via user-service). Only on a real state change — a repeated
@@ -1083,6 +1183,7 @@ public class EventService {
         boolean wasActive = event.isActive();
         event.setActive(false);
         Event saved = eventRepository.save(event);
+        publicEventCatalog.invalidateAll();
         log.info("Event deactivated eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
         // Tell the owning organizer their event was unpublished (email-first,
         // WhatsApp fallback via user-service). Only on a real state change —
@@ -1112,6 +1213,7 @@ public class EventService {
         event.setRejected(true);
         event.setActive(false);
         Event saved = eventRepository.save(event);
+        publicEventCatalog.invalidateAll();
         log.info("Event rejected eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
         // Tell the owning organizer their event was declined (email-first,
         // WhatsApp fallback via user-service). Only on a real state change —
@@ -1139,6 +1241,7 @@ public class EventService {
         boolean wasRejected = event.isRejected();
         event.setRejected(false);
         Event saved = eventRepository.save(event);
+        publicEventCatalog.invalidateAll();
         log.info("Event approved eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
         // Tell the owning organizer their event has been approved (email-first,
         // WhatsApp fallback via user-service). Only on a real state change —
@@ -1170,6 +1273,7 @@ public class EventService {
 
         event.setDeleted(true);
         eventRepository.save(event);
+        publicEventCatalog.invalidateAll();
         log.info("Event deleted (soft) eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
 
         // A soft-delete is a cancellation — tell confirmed attendees. Best-effort.

@@ -5,7 +5,13 @@ import com.innbucks.eventservice.dto.EventSeatCategoryResponseDTO;
 import com.innbucks.eventservice.dto.EventSectionResponseDTO;
 import com.innbucks.eventservice.dto.SeatCategorySectionDTO;
 import com.innbucks.eventservice.dto.SeatCategoryServiceResponseDTO;
+import com.innbucks.eventservice.cache.ReadCacheConfig;
+import com.innbucks.eventservice.cache.ReadThroughCache;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
@@ -35,17 +41,69 @@ public class SeatCategoryGateway {
     private final RestTemplate restTemplate;
     private final CircuitBreaker circuitBreaker;
     private final String seatServiceBaseUrl;
+    private final ReadThroughCache layoutCache;
 
+    @Autowired
     public SeatCategoryGateway(
             RestTemplate restTemplate,
             CircuitBreakerFactory<?, ?> circuitBreakerFactory,
-            @Value("${seat-service.base-url:http://seat-service}") String seatServiceBaseUrl) {
+            @Value("${seat-service.base-url:http://seat-service}") String seatServiceBaseUrl,
+            @Qualifier(ReadCacheConfig.READ_CACHE_MANAGER) CacheManager cacheManager) {
         this.restTemplate = restTemplate;
         this.circuitBreaker = circuitBreakerFactory.create("seatCategories");
         this.seatServiceBaseUrl = seatServiceBaseUrl;
+        this.layoutCache = ReadThroughCache.of(cacheManager, ReadCacheConfig.SEAT_CATEGORIES);
     }
 
+    /** No cache: every {@link #fetchForEvent} calls seat-service. */
+    public SeatCategoryGateway(
+            RestTemplate restTemplate,
+            CircuitBreakerFactory<?, ?> circuitBreakerFactory,
+            String seatServiceBaseUrl) {
+        this(restTemplate, circuitBreakerFactory, seatServiceBaseUrl, null);
+    }
+
+    /**
+     * The event's seat categories for PUBLIC display, served from a per-event
+     * cache ({@code events.cache.seat-categories.ttl}, 30s) when this pod has
+     * a fresh copy.
+     *
+     * <p>What is cached is the static layout only — name, description, price,
+     * section labels and seat counts (the allocation, not remaining stock;
+     * this response has never carried live availability). Category writes
+     * happen in seat-service, so nothing here can evict: a new, repriced or
+     * deleted category reaches the public detail view within the TTL. The
+     * booking itself prices from seat-service live, never from this.
+     *
+     * <p><b>A failure is never cached.</b> Only a real seat-service answer is
+     * stored; the breaker fallback (empty list) is returned and forgotten, so
+     * one blip does not hide an event's categories for the whole TTL.
+     */
     public List<EventSeatCategoryResponseDTO> fetchForEvent(UUID eventId) {
+        Cache.ValueWrapper hit = layoutCache.lookup(eventId);
+        if (hit != null && hit.get() instanceof CategoryLayout layout) {
+            return layout.toDtos();
+        }
+        return circuitBreaker.run(
+                () -> {
+                    CategoryLayout layout = CategoryLayout.of(fetchRaw(eventId));
+                    layoutCache.put(eventId, layout);
+                    return layout.toDtos();
+                },
+                throwable -> {
+                    log.warn("seatCategories breaker fallback eventId={}",
+                            eventId, throwable);
+                    return Collections.emptyList();
+                }
+        );
+    }
+
+    /**
+     * Same answer as {@link #fetchForEvent}, always from seat-service. For the
+     * event's owner and platform staff, who must see their own seat-map edits
+     * at once rather than after another replica's TTL.
+     */
+    public List<EventSeatCategoryResponseDTO> fetchForEventUncached(UUID eventId) {
         return circuitBreaker.run(
                 () -> doFetch(eventId),
                 throwable -> {
@@ -74,6 +132,10 @@ public class SeatCategoryGateway {
      * and the existing listing endpoint already carries it — no new endpoint,
      * no seat-service change. Deliberately not {@code availableSeats}, which is
      * live remaining stock, not the allocation.
+     *
+     * <p><b>Never cached</b>, unlike {@link #fetchForEvent}: it gates a
+     * capacity write (the oversell guard), and a cached allocation would let a
+     * capacity cut through against a seat map that has since grown.
      */
     public java.util.Optional<Long> fetchAllocatedSeats(UUID eventId) {
         return circuitBreaker.run(
@@ -127,6 +189,57 @@ public class SeatCategoryGateway {
                         .sections(mapSectionsWithPrice(category.getSections(), category.getPrice()))
                         .build())
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * The cached form of one event's categories: immutable records, rebuilt
+     * into fresh DTOs on every read so no caller can mutate what the next one
+     * is served. Produces exactly what {@link #doFetch} produces.
+     */
+    record CategoryLayout(List<CategoryView> categories) {
+
+        static CategoryLayout of(List<SeatCategoryServiceResponseDTO> raw) {
+            List<CategoryView> views = new java.util.ArrayList<>(raw.size());
+            for (SeatCategoryServiceResponseDTO category : raw) {
+                List<SectionView> sections = new java.util.ArrayList<>();
+                if (category.getSections() != null) {
+                    for (SeatCategorySectionDTO section : category.getSections()) {
+                        sections.add(new SectionView(section.getSection(), section.getSeatCount()));
+                    }
+                }
+                views.add(new CategoryView(category.getName(), category.getDescription(),
+                        category.getPrice(), List.copyOf(sections)));
+            }
+            return new CategoryLayout(List.copyOf(views));
+        }
+
+        List<EventSeatCategoryResponseDTO> toDtos() {
+            if (categories.isEmpty()) {
+                return Collections.emptyList();
+            }
+            return categories.stream()
+                    .map(c -> EventSeatCategoryResponseDTO.builder()
+                            .name(c.name())
+                            .description(c.description())
+                            .categoryPrice(c.price())
+                            .sections(c.sections().isEmpty()
+                                    ? Collections.emptyList()
+                                    : c.sections().stream()
+                                            .map(s -> EventSectionResponseDTO.builder()
+                                                    .section(s.section())
+                                                    .seatCount(s.seatCount())
+                                                    .price(c.price())
+                                                    .build())
+                                            .collect(Collectors.toList()))
+                            .build())
+                    .collect(Collectors.toList());
+        }
+    }
+
+    record CategoryView(String name, String description, BigDecimal price, List<SectionView> sections) {
+    }
+
+    record SectionView(String section, Integer seatCount) {
     }
 
     private List<EventSectionResponseDTO> mapSectionsWithPrice(

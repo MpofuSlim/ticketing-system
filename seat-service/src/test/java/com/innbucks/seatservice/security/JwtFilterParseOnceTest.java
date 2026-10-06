@@ -17,6 +17,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.web.SpringJUnitWebConfig;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.context.WebApplicationContext;
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
@@ -78,6 +79,12 @@ class JwtFilterParseOnceTest {
         @Bean SeatCategoryService seatCategoryService() { return mock(SeatCategoryService.class); }
         @Bean SeatCategoryAnalyticsService seatCategoryAnalyticsService() {
             return mock(SeatCategoryAnalyticsService.class);
+        }
+        // The service mocks still get their @Autowired setters called, and
+        // SeatCategoryService builds its read/write TransactionTemplates from
+        // one (#684). Nothing here runs a transaction.
+        @Bean PlatformTransactionManager transactionManager() {
+            return mock(PlatformTransactionManager.class);
         }
     }
 

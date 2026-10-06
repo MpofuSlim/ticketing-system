@@ -24,3 +24,10 @@ spring:
 jwt:
   secret: test-test-test-test-test-test-test-test
   expiration: 3600000
+
+# Read caches off: tests write rows straight through the repository and read
+# them back over HTTP in one shared context, so a cached page from an earlier
+# test would be served stale. The caches have their own unit tests.
+events:
+  cache:
+    enabled: false

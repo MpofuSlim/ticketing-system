@@ -213,6 +213,19 @@ app:
     generation-cron: ${INVOICE_GENERATION_CRON:0 30 1 * * *}
     overdue-cron: ${INVOICE_OVERDUE_CRON:0 0 2 * * *}
 
+# Local (per-pod) read cache — CLAUDE.md "Caching: what is cached, what never
+# is, and why". event-service's event lookup for booking creation (organizer
+# uuid) and the public ticket list (title/venue/dates). event-service owns the
+# writes and cannot evict it, so the TTL is the whole staleness bound. Never an
+# ownership check, a price, availability or the scan path. ttl or max-size 0
+# switches it off; enabled=false (BOOKINGS_CACHE_ENABLED) every read cache.
+bookings:
+  cache:
+    enabled: true
+    event-lookups:
+      ttl: 60s
+      max-size: 5000
+
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   expiration: ${JWT_EXPIRATION_MS:86400000}

@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.bookingservice.cache.EventLookupCache;
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.LoyaltyServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
@@ -47,6 +48,7 @@ public class BookingService {
     // is only exercised by tests that opt in.
     private final ObjectProvider<LoyaltyServiceClient> loyaltyClientProvider;
     private final ObjectProvider<EventServiceClient> eventClientProvider;
+    private volatile EventLookupCache eventLookupCache;
     private final LoyaltyEarnRetryService loyaltyEarnRetryService;
     private final TransactionTemplate txTemplate;
     // Read-only twin for the list reads (see loadWithItems): the bookings and
@@ -1171,7 +1173,28 @@ public class BookingService {
      * treats null as "feature degrades gracefully" rather than blocking
      * booking creation.
      */
+    /**
+     * The event's static fields for booking creation (organizer uuid capture)
+     * and the public ticket list. Served from {@link EventLookupCache} when one
+     * is wired — see it for what may be stale and for how long. NOT the path
+     * for an ownership check ({@link #requireEventOwnership} calls
+     * event-service itself, every time).
+     */
     private EventLookupDTO lookupEvent(UUID eventId) {
+        EventLookupCache cache = eventLookupCache;
+        return cache == null ? fetchEventLookup(eventId) : cache.get(eventId, () -> fetchEventLookup(eventId));
+    }
+
+    /**
+     * Setter, not a constructor argument, so the many hand-built instances in
+     * tests keep their constructor; without it every lookup goes live.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setEventLookupCache(EventLookupCache eventLookupCache) {
+        this.eventLookupCache = eventLookupCache;
+    }
+
+    private EventLookupDTO fetchEventLookup(UUID eventId) {
         EventServiceClient event = eventClientProvider == null ? null : eventClientProvider.getIfAvailable();
         if (event == null) {
             return null;
