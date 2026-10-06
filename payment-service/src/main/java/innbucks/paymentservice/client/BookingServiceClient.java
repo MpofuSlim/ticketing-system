@@ -3,17 +3,15 @@ package innbucks.paymentservice.client;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import innbucks.paymentservice.config.CorrelationIdPropagatingInterceptor;
+import innbucks.paymentservice.config.PooledHttpClient;
 import innbucks.paymentservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
-import java.net.http.HttpClient;
-import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -43,20 +41,16 @@ public class BookingServiceClient {
             @Value("${booking-service.connect-timeout-ms:2000}") int connectMs,
             @Value("${booking-service.read-timeout-ms:5000}") int readMs,
             @Value("${innbucks.internal-api-token:}") String internalToken,
-            ObjectMapper objectMapper) {
-        // JDK HttpClient supports PATCH; SimpleClientHttpRequestFactory's
-        // underlying HttpURLConnection rejects it ("Invalid HTTP method:
-        // PATCH"). RestClient applies the request factory's read timeout
-        // per-request, so we wire connect timeout on the HttpClient and
-        // read timeout on the factory.
-        HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(connectMs))
-                .build();
-        JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
-        rf.setReadTimeout(Duration.ofMillis(readMs));
+            ObjectMapper objectMapper,
+            PooledHttpClient pooledHttpClient) {
+        // The module's shared pool, this client's own timeouts (CLAUDE.md,
+        // "Outbound HTTP clients are pooled"). Apache HttpClient supports
+        // PATCH; SimpleClientHttpRequestFactory's HttpURLConnection does not
+        // ("Invalid HTTP method: PATCH"), so never fall back to it here.
+        var rf = pooledHttpClient.requestFactory(connectMs, readMs);
         // Clone the load-balanced builder so "booking-service" resolves through
         // Eureka; clone() keeps the LB interceptor while letting us set a
-        // per-client request factory (JDK HttpClient — needed for PATCH).
+        // per-client request factory (the pooled one — PATCH-capable).
         this.restClient = loadBalancedRestClientBuilder.clone()
                 .baseUrl(baseUrl)
                 .requestFactory(rf)

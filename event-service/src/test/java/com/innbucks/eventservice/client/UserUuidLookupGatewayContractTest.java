@@ -1,12 +1,14 @@
 package com.innbucks.eventservice.client;
 
+import com.innbucks.eventservice.config.PooledHttpClientProperties;
+import com.innbucks.eventservice.config.PooledHttpClient;
+import com.innbucks.eventservice.config.HttpClientConfig;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
 import java.net.ServerSocket;
@@ -43,6 +45,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class UserUuidLookupGatewayContractTest {
 
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
+
     private static WireMockServer wireMock;
     private static UserUuidLookupGateway gateway;
 
@@ -67,11 +72,9 @@ class UserUuidLookupGatewayContractTest {
     }
 
     /** Mirrors the prod RestTemplate, with short timeouts so the refused-connect case fails fast. */
+    /** The production RestTemplate (minus the load balancer) on the shared pool. */
     private static RestTemplate restTemplate() {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(500));
-        factory.setReadTimeout(Duration.ofMillis(2000));
-        return new RestTemplate(factory);
+        return new HttpClientConfig().restTemplate(500, 2000, POOL);
     }
 
     @Test

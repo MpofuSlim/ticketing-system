@@ -1,5 +1,7 @@
 package com.innbucks.userservice.devicesecurity;
 
+import com.innbucks.userservice.config.PooledHttpClientProperties;
+import com.innbucks.userservice.config.PooledHttpClient;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -34,6 +36,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class StagingClientServiceClientContractTest {
 
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
+
     private static final String PATH = "/auth/client-service";
     private static final Instant T0 = Instant.parse("2026-09-29T09:58:12Z");
     private static WireMockServer wireMock;
@@ -66,7 +71,7 @@ class StagingClientServiceClientContractTest {
     }
 
     private static StagingClientServiceClient client(DeviceSecurityProperties.Staging c) {
-        return new StagingClientServiceClient(c, Clock.fixed(T0, ZoneOffset.UTC));
+        return new StagingClientServiceClient(c, Clock.fixed(T0, ZoneOffset.UTC), POOL);
     }
 
     private static String jwtExpiringAt(Instant exp) {

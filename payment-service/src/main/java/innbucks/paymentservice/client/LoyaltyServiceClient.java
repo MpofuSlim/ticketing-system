@@ -3,18 +3,16 @@ package innbucks.paymentservice.client;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import innbucks.paymentservice.config.CorrelationIdPropagatingInterceptor;
+import innbucks.paymentservice.config.PooledHttpClient;
 import innbucks.paymentservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
-import java.net.http.HttpClient;
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -40,12 +38,11 @@ public class LoyaltyServiceClient {
             @Value("${loyalty-service.connect-timeout-ms:2000}") int connectMs,
             @Value("${loyalty-service.read-timeout-ms:5000}") int readMs,
             @Value("${innbucks.internal-api-token:}") String internalToken,
-            ObjectMapper objectMapper) {
-        HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(connectMs))
-                .build();
-        JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
-        rf.setReadTimeout(Duration.ofMillis(readMs));
+            ObjectMapper objectMapper,
+            PooledHttpClient pooledHttpClient) {
+        // The module's shared pool, this client's own timeouts (CLAUDE.md,
+        // "Outbound HTTP clients are pooled").
+        var rf = pooledHttpClient.requestFactory(connectMs, readMs);
         // Clone the load-balanced builder so "loyalty-service" resolves through
         // Eureka; clone() preserves the LB interceptor alongside our per-client
         // request factory and correlation-id interceptor.

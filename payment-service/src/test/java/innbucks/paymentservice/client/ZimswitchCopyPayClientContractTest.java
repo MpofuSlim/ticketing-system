@@ -1,5 +1,7 @@
 package innbucks.paymentservice.client;
 
+import innbucks.paymentservice.config.PooledHttpClient;
+import innbucks.paymentservice.config.PooledHttpClientProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -50,6 +52,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class ZimswitchCopyPayClientContractTest {
 
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
+
     private static final String CHECKOUT_ID = "8a82944a4cc25ebf014cc2c782423202";
     private static final String STATUS_PATH = "/v1/checkouts/" + CHECKOUT_ID + "/payment?entityId=test-entity";
 
@@ -71,7 +76,7 @@ class ZimswitchCopyPayClientContractTest {
                 .waitDuration(Duration.ofMillis(10))
                 .retryExceptions(ZimswitchApiTransientException.class)
                 .build());
-        return new ZimswitchCopyPayClient(props, new ObjectMapper(), retries, CircuitBreakerRegistry.ofDefaults());
+        return new ZimswitchCopyPayClient(props, new ObjectMapper(), retries, CircuitBreakerRegistry.ofDefaults(), POOL);
     }
 
     @BeforeAll
@@ -192,7 +197,7 @@ class ZimswitchCopyPayClientContractTest {
         props.setAccessToken("test-bearer-token");
         // shopperResultUrl deliberately unset — the half-provisioned cell.
         ZimswitchCopyPayClient client = new ZimswitchCopyPayClient(props, new ObjectMapper(),
-                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults());
+                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults(), POOL);
 
         // Pollable: an already-open checkout must stay resolvable, or a config
         // slip would strand rows the customer may already have paid.
@@ -241,7 +246,7 @@ class ZimswitchCopyPayClientContractTest {
         props.setAccessToken("test-bearer-token");
         props.setTestMode("   ");
         ZimswitchCopyPayClient client = new ZimswitchCopyPayClient(props, new ObjectMapper(),
-                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults());
+                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults(), POOL);
 
         client.prepareCheckout("TKT-PMT-x", 100, "USD");
 
@@ -409,7 +414,7 @@ class ZimswitchCopyPayClientContractTest {
         props.setBaseUrl("http://localhost:" + wireMock.port());
         // entityId + accessToken deliberately blank.
         ZimswitchCopyPayClient client = new ZimswitchCopyPayClient(props, new ObjectMapper(),
-                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults());
+                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults(), POOL);
 
         assertThatThrownBy(() -> client.prepareCheckout("TKT-PMT-x", 100, "USD"))
                 .isInstanceOf(ZimswitchApiException.class)
@@ -489,7 +494,7 @@ class ZimswitchCopyPayClientContractTest {
         props.setEntityId("e");
         props.setAccessToken("t");
         ZimswitchCopyPayClient client = new ZimswitchCopyPayClient(props, new ObjectMapper(),
-                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults());
+                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults(), POOL);
 
         assertThat(client.widgetScriptUrl(CHECKOUT_ID))
                 .isEqualTo("https://eu-test.oppwa.com/v1/paymentWidgets.js?checkoutId=" + CHECKOUT_ID);
