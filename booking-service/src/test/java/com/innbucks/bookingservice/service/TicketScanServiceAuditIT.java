@@ -34,8 +34,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * real Postgres (Testcontainers) and asserts six rows landed with the right
  * outcomes.
  *
- * <p>Why integration: the audit-write happens inside the {@code @Transactional}
- * boundary of the scan call. A unit test with mocks can prove
+ * <p>Why integration: the audit-write happens inside the scan's write
+ * transaction (with the claim, or on its own for a refusal). A unit test with
+ * mocks can prove
  * {@code repository.save(...)} was invoked, but only this end-to-end shape
  * proves the row actually reaches the database after the transaction commits.
  *

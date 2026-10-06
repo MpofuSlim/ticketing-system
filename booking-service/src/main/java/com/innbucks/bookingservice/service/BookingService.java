@@ -20,6 +20,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
@@ -893,47 +894,89 @@ public class BookingService {
      * double-credits. If the release call fails (event-service unreachable
      * mid-call), the booking is NOT marked CANCELLED — the admin retries the
      * same call until release succeeds, then the state transition lands.
+     *
+     * <p><b>No transaction is open during the event-service call.</b> It used
+     * to run inside this method's {@code @Transactional}, holding a pooled
+     * connection for as long as event-service took to answer. Now:
+     * <ol>
+     *   <li>a short read-only transaction loads and validates the booking (404 /
+     *       409 exactly as before) and remembers its {@code @Version};</li>
+     *   <li>the release call runs with no transaction — on failure nothing has
+     *       been written, as before;</li>
+     *   <li>one write transaction re-reads the booking and refuses with the
+     *       same {@code ObjectOptimisticLockingFailureException} the old
+     *       commit-time version check threw if ANY change landed since step 1,
+     *       then releases the category counters, sets the flag, flips to
+     *       CANCELLED and publishes {@code BookingCancelled}.</li>
+     * </ol>
+     * The version check is what keeps this as strong as the single transaction
+     * was: that one read the row without a lock too, and its only protection
+     * against a concurrent change between the read and the write was the
+     * optimistic version on the UPDATE. Step 3 applies the same comparison
+     * against the version step 1 read, so a reversal racing a reversal (or
+     * anything else that bumps the version) still loses with the same
+     * exception, and the window in which a successful remote release can be
+     * left without its local flip is unchanged: the same rare manual-fix case
+     * the comment below describes.
      */
-    @Transactional
     public BookingResponseDTO reverseConfirmedBooking(UUID bookingId, String adminEmail) {
         log.info("Reversing confirmed booking bookingId={} adminEmail={}", bookingId, adminEmail);
-        Booking booking = bookingRepository.findByIdWithItems(bookingId)
-                .orElseThrow(() -> {
-                    log.warn("Reverse failed, booking not found bookingId={}", bookingId);
-                    return new NotFoundException("Booking not found");
-                });
+        Booking snapshot = readTx.execute(status -> {
+            Booking booking = bookingRepository.findByIdWithItems(bookingId)
+                    .orElseThrow(() -> {
+                        log.warn("Reverse failed, booking not found bookingId={}", bookingId);
+                        return new NotFoundException("Booking not found");
+                    });
+            if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
+                // Caller can only reverse a CONFIRMED booking. PENDING uses /cancel;
+                // already-CANCELLED is a no-op the caller shouldn't be hitting.
+                log.warn("Reverse rejected, booking not confirmed bookingId={} status={}",
+                        bookingId, booking.getStatus());
+                throw new BookingConflictException(
+                        "This booking can't be reversed at its current stage. Only CONFIRMED bookings can be reversed.");
+            }
+            return booking;
+        });
 
-        if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
-            // Caller can only reverse a CONFIRMED booking. PENDING uses /cancel;
-            // already-CANCELLED is a no-op the caller shouldn't be hitting.
-            log.warn("Reverse rejected, booking not confirmed bookingId={} status={}",
-                    bookingId, booking.getStatus());
-            throw new BookingConflictException(
-                    "This booking can't be reversed at its current stage. Only CONFIRMED bookings can be reversed.");
-        }
-
-        if (!booking.isAvailabilityReleased()) {
+        if (!snapshot.isAvailabilityReleased()) {
             // Event-service release FIRST (remote, may throw → admin retries
-            // with nothing yet mutated). Then the local category-counter
-            // release. Both guarded by the one-shot availabilityReleased flag.
-            // Known rare edge: if the local release threw after the remote one
-            // succeeded, a retry would hit the event-service over-cap clamp;
-            // that's a manual-fix case for this rare admin path (a follow-up
-            // can add a per-booking release ledger to make both idempotent).
-            releaseEventAvailability(booking); // throws on failure → admin retries → no partial state
-            releaseInventory(booking);
-            booking.setAvailabilityReleased(true);
+            // with nothing yet mutated), with no transaction open. Then, in the
+            // write transaction below, the local category-counter release. Both
+            // guarded by the one-shot availabilityReleased flag.
+            // Known rare edge: if the write transaction failed after the remote
+            // release succeeded, a retry would hit the event-service over-cap
+            // clamp; that's a manual-fix case for this rare admin path (a
+            // follow-up can add a per-booking release ledger to make both
+            // idempotent).
+            releaseEventAvailability(snapshot); // throws on failure → admin retries → no partial state
         } else {
             log.info("Skipping release call, already released bookingId={}", bookingId);
         }
 
-        booking.setStatus(Booking.BookingStatus.CANCELLED);
-        bookingRepository.save(booking);
+        BookingResponseDTO reversed = txTemplate.execute(status -> {
+            Booking booking = bookingRepository.findByIdWithItems(bookingId)
+                    .orElseThrow(() -> new NotFoundException("Booking not found"));
+            if (!Objects.equals(booking.getVersion(), snapshot.getVersion())) {
+                // Changed since the read above — the same refusal the old
+                // single transaction's version-checked UPDATE gave.
+                log.warn("Reverse lost a race, booking changed during the release call bookingId={}", bookingId);
+                throw new ObjectOptimisticLockingFailureException(Booking.class, bookingId);
+            }
+            if (!booking.isAvailabilityReleased()) {
+                releaseInventory(booking);
+                booking.setAvailabilityReleased(true);
+            }
+            booking.setStatus(Booking.BookingStatus.CANCELLED);
+            bookingRepository.save(booking);
 
-        eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
+            eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
+            // Rendered before the commit, as it always was, so the response is
+            // unchanged (updatedAt is still the value read, not the flush's).
+            return toDTO(booking);
+        });
 
         log.info("Booking reversed bookingId={} adminEmail={}", bookingId, adminEmail);
-        return toDTO(booking);
+        return reversed;
     }
 
     private void releaseEventAvailability(Booking booking) {

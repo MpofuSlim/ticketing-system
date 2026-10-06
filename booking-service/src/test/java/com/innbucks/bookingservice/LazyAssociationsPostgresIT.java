@@ -356,7 +356,12 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         assertThat(measured.get("PATCH /bookings/internal/{id}/extend-hold")).isEqualTo(2);
         // select + items, update booking, release the counter, the listener's read.
         assertThat(measured.get("PATCH /bookings/{id}/cancel + async notice")).isEqualTo(4);
-        assertThat(measured.get("PATCH /bookings/{id}/reverse")).isEqualTo(4);
+        // The reverse reads the booking + items TWICE: once in a read-only
+        // transaction before the event-service release (so no connection is
+        // held across it), and again in the write transaction after it, where
+        // its version is compared with the first read. The rest is as for the
+        // cancel: update booking, release the counter, the listener's read.
+        assertThat(measured.get("PATCH /bookings/{id}/reverse")).isEqualTo(5);
     }
 
     @Test
