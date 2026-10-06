@@ -112,6 +112,12 @@ public class JwtUtil {
         }
     }
 
+    // Every claim reader exists twice: once over an already-verified Claims
+    // (what JwtFilter uses — it verifies the token ONCE per request through
+    // parseClaims and reads every claim from that one result), and once over a
+    // raw token (verifies again, for callers outside the filter). The String
+    // form delegates to the Claims form, so the two can never disagree.
+
     /**
      * Extract the {@code phoneNumber} claim. Returns null on any failure
      * (bad signature, expired token, missing/blank claim, wrong type) — the
@@ -121,6 +127,10 @@ public class JwtUtil {
     public String extractPhoneNumber(String token) {
         Claims claims = parseOrNull(token);
         if (claims == null) return null;
+        return extractPhoneNumber(claims);
+    }
+
+    public String extractPhoneNumber(Claims claims) {
         String phone = claims.get("phoneNumber", String.class);
         return (phone == null || phone.isBlank()) ? null : phone;
     }
@@ -138,6 +148,10 @@ public class JwtUtil {
     public String extractHomeCountry(String token) {
         Claims claims = parseOrNull(token);
         if (claims == null) return null;
+        return extractHomeCountry(claims);
+    }
+
+    public String extractHomeCountry(Claims claims) {
         String home = claims.get("homeCountry", String.class);
         return (home == null || home.isBlank()) ? null : home;
     }
@@ -151,6 +165,10 @@ public class JwtUtil {
     public UUID extractUserUuid(String token) {
         Claims claims = parseOrNull(token);
         if (claims == null) return null;
+        return extractUserUuid(claims);
+    }
+
+    public UUID extractUserUuid(Claims claims) {
         String raw = claims.get("userUuid", String.class);
         if (raw == null || raw.isBlank()) return null;
         try {
@@ -172,6 +190,10 @@ public class JwtUtil {
     public Long extractTokenVersion(String token) {
         Claims claims = parseOrNull(token);
         if (claims == null) return null;
+        return extractTokenVersion(claims);
+    }
+
+    public Long extractTokenVersion(Claims claims) {
         try {
             Object raw = claims.get("tokenVersion");
             if (raw instanceof Number n) return n.longValue();
@@ -196,25 +218,48 @@ public class JwtUtil {
     public boolean extractMustChangePassword(String token) {
         Claims c = parseOrNull(token);
         if (c == null) return false;
+        return extractMustChangePassword(c);
+    }
+
+    public boolean extractMustChangePassword(Claims claims) {
         try {
-            Boolean v = c.get("mustChangePassword", Boolean.class);
+            Boolean v = claims.get("mustChangePassword", Boolean.class);
             return Boolean.TRUE.equals(v);
         } catch (Exception e) {
             return false;
         }
     }
 
-    private Claims parseOrNull(String token) {
-        if (token == null || token.isBlank()) return null;
+    /**
+     * Verifies the token — signature under the key its own {@code alg} header
+     * selects ({@link #keyLocator}: RS* → the configured public key, else the
+     * HS256 secret), {@code iss}, {@code aud} and expiry — and returns its
+     * claims. Throws {@link JwtException}, or {@link IllegalArgumentException}
+     * for a null / blank token, when any of that fails.
+     *
+     * <p>This is the ONE place a token is parsed. {@link JwtFilter} calls it
+     * once per request and reads every claim from the result; the String
+     * readers above call it each time they are used, so they are for callers
+     * outside the filter only. {@code JwtFilterParseOnceTest} counts calls
+     * here to pin "exactly once per request".
+     */
+    public Claims parseClaims(String token) {
+        if (token == null || token.isBlank()) {
+            throw new IllegalArgumentException("blank token");
+        }
         ensureKeyMaterial();
+        return Jwts.parser()
+                .keyLocator(keyLocator)
+                .requireIssuer(TOKEN_ISSUER)
+                .requireAudience(TOKEN_AUDIENCE)
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+    }
+
+    private Claims parseOrNull(String token) {
         try {
-            return Jwts.parser()
-                    .keyLocator(keyLocator)
-                    .requireIssuer(TOKEN_ISSUER)
-                    .requireAudience(TOKEN_AUDIENCE)
-                    .build()
-                    .parseSignedClaims(token)
-                    .getPayload();
+            return parseClaims(token);
         } catch (JwtException | IllegalArgumentException ex) {
             return null;
         }

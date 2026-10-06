@@ -1,5 +1,7 @@
 package innbucks.paymentservice.client;
 
+import innbucks.paymentservice.config.PooledHttpClient;
+import innbucks.paymentservice.config.PooledHttpClientProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -31,6 +33,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class InnbucksApiClientContractTest {
 
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
+
     private static WireMockServer wireMock;
 
     private static InnbucksApiClient newClient(String baseUrl) {
@@ -47,7 +52,7 @@ class InnbucksApiClientContractTest {
                 .waitDuration(Duration.ofMillis(10))
                 .retryExceptions(InnbucksApiTransientException.class)
                 .build());
-        return new InnbucksApiClient(props, new ObjectMapper(), retries, CircuitBreakerRegistry.ofDefaults());
+        return new InnbucksApiClient(props, new ObjectMapper(), retries, CircuitBreakerRegistry.ofDefaults(), POOL);
     }
 
     @BeforeAll
@@ -429,7 +434,7 @@ class InnbucksApiClientContractTest {
     void unconfigured_refusesWithoutNetwork() {
         InnbucksApiProperties blank = new InnbucksApiProperties();
         InnbucksApiClient unconfigured = new InnbucksApiClient(blank, new ObjectMapper(),
-                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults());
+                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults(), POOL);
 
         assertThatThrownBy(() -> unconfigured.generatePaymentCode("TKT-PMT-x", "n", 5000))
                 .isInstanceOf(InnbucksApiException.class)

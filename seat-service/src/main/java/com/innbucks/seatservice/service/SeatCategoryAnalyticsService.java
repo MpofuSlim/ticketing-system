@@ -13,7 +13,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -27,6 +29,20 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+/**
+ * Per-event seat and booking analytics for the organizer console.
+ *
+ * <p><b>No transaction is open during a remote call.</b> {@link #getEventAnalytics}
+ * used to be {@code @Transactional(readOnly = true)}, so its two remote calls —
+ * the event-service ownership lookup and the booking-service fetch of every
+ * booking for the event — each held a pooled connection for as long as the
+ * other service took to answer (up to the client's read timeout). Both now run
+ * first, with no transaction; seat-service's own reads (the categories, and the
+ * seat-table fallback when booking-service is down) then run in ONE short
+ * read-only transaction. Nothing here writes, and the categories and the
+ * bookings are read from two databases that were never one snapshot, so the
+ * order of the two reads changes nothing in the answer.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -40,7 +56,19 @@ public class SeatCategoryAnalyticsService {
     private final BookingServiceClient bookingServiceClient;
     private final ObjectProvider<EventServiceClient> eventClientProvider;
 
-    @Transactional(readOnly = true)
+    /**
+     * The read phase's template. A setter so the plain-{@code new} unit tests
+     * keep their construction; Spring always calls it, and with none set the
+     * reads run inline.
+     */
+    private TransactionTemplate readTx;
+
+    @Autowired
+    void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.readTx = TransactionPhases.readOnly(transactionManager);
+    }
+
+    /** Deliberately NOT {@code @Transactional} — see the class javadoc. */
     public EventAnalyticsDTO getEventAnalytics(UUID eventId,
                                                UUID callerOrganizerUuid,
                                                String requesterEmail,
@@ -54,9 +82,8 @@ public class SeatCategoryAnalyticsService {
         int safePage = Math.max(0, page);
         int safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, size));
 
-        List<SeatCategory> categories = categoryRepository.findByEventIdAndDeletedFalse(eventId);
-
         // One booking-service round trip covers every category in the event.
+        // Made BEFORE the read transaction opens, so no connection waits on it.
         Optional<List<CategoryBookingDTO>> allBookings =
                 bookingServiceClient.fetchBookingsByEvent(eventId, authHeader);
         boolean reachable = allBookings.isPresent();
@@ -69,12 +96,23 @@ public class SeatCategoryAnalyticsService {
                 .filter(b -> b.getCategoryId() != null)
                 .collect(Collectors.groupingBy(CategoryBookingDTO::getCategoryId));
 
-        List<EventAnalyticsDTO.CategoryAnalytics> blocks = new ArrayList<>(categories.size());
-        for (SeatCategory category : categories) {
-            List<CategoryBookingDTO> categoryBookings =
-                    bookingsByCategory.getOrDefault(category.getId(), List.of());
-            blocks.add(buildCategoryBlock(category, categoryBookings, reachable, safePage, safeSize));
+        // seat-service's own reads, in one short read-only transaction: the
+        // categories, and — only when booking-service was unreachable — each
+        // category's seat-status fallback from the seats table.
+        record LocalReads(List<SeatCategory> categories, List<EventAnalyticsDTO.CategoryAnalytics> blocks) {
         }
+        LocalReads local = TransactionPhases.inTransaction(readTx, () -> {
+            List<SeatCategory> categories = categoryRepository.findByEventIdAndDeletedFalse(eventId);
+            List<EventAnalyticsDTO.CategoryAnalytics> blocks = new ArrayList<>(categories.size());
+            for (SeatCategory category : categories) {
+                List<CategoryBookingDTO> categoryBookings =
+                        bookingsByCategory.getOrDefault(category.getId(), List.of());
+                blocks.add(buildCategoryBlock(category, categoryBookings, reachable, safePage, safeSize));
+            }
+            return new LocalReads(categories, blocks);
+        });
+        List<SeatCategory> categories = local.categories();
+        List<EventAnalyticsDTO.CategoryAnalytics> blocks = local.blocks();
 
         EventAnalyticsDTO.EventTotals totals = rollUp(categories, blocks);
 

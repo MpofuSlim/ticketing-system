@@ -1,5 +1,6 @@
 package com.innbucks.userservice.devicesecurity;
 
+import com.innbucks.userservice.config.PooledHttpClient;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -39,8 +40,9 @@ public class DeviceSecurityConfig {
 
     @Bean
     public StagingClientServiceClient stagingClientServiceClient(DeviceSecurityProperties properties,
-                                                                 Clock deviceSecurityClock) {
-        return new StagingClientServiceClient(properties.getStaging(), deviceSecurityClock);
+                                                                 Clock deviceSecurityClock,
+                                                                 PooledHttpClient pooledHttpClient) {
+        return new StagingClientServiceClient(properties.getStaging(), deviceSecurityClock, pooledHttpClient);
     }
 
     /** Parses the ticket key at boot, so a malformed key fails the deploy, not the first sign-in. */

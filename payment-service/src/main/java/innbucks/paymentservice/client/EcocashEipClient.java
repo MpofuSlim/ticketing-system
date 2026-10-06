@@ -3,6 +3,7 @@ package innbucks.paymentservice.client;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import innbucks.paymentservice.config.CorrelationIdPropagatingInterceptor;
+import innbucks.paymentservice.config.PooledHttpClient;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -13,15 +14,12 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
-import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -105,14 +103,13 @@ public class EcocashEipClient {
     public EcocashEipClient(EcocashProperties properties,
                             ObjectMapper objectMapper,
                             RetryRegistry retryRegistry,
-                            CircuitBreakerRegistry circuitBreakerRegistry) {
+                            CircuitBreakerRegistry circuitBreakerRegistry,
+                            PooledHttpClient pooledHttpClient) {
         this.properties = properties;
         this.objectMapper = objectMapper;
-        HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(properties.getConnectTimeoutMs()))
-                .build();
-        JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
-        rf.setReadTimeout(Duration.ofMillis(properties.getReadTimeoutMs()));
+        // The module's shared pool, this client's own timeouts (CLAUDE.md,
+        // "Outbound HTTP clients are pooled").
+        var rf = pooledHttpClient.requestFactory(properties.getConnectTimeoutMs(), properties.getReadTimeoutMs());
         this.restClient = RestClient.builder()
                 .baseUrl(properties.getBaseUrl() == null ? "http://localhost" : trimTrailingSlash(properties.getBaseUrl()))
                 .requestFactory(rf)

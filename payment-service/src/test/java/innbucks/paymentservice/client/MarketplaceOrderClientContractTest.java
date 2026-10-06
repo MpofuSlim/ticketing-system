@@ -1,5 +1,7 @@
 package innbucks.paymentservice.client;
 
+import innbucks.paymentservice.config.PooledHttpClient;
+import innbucks.paymentservice.config.PooledHttpClientProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import innbucks.paymentservice.client.MarketplaceOrderClient.MarketplaceOrderException;
@@ -50,6 +52,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class MarketplaceOrderClientContractTest {
 
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
+
     private static final String TOKEN = "test-internal-token";
     private static final String REF = "MKT-4F9A1C22B7D3";
     private static final String BASE = "/marketplace/internal/orders/";
@@ -81,7 +86,8 @@ class MarketplaceOrderClientContractTest {
                 "http://localhost:" + port,
                 1000, 2000,
                 TOKEN,
-                new ObjectMapper());
+                new ObjectMapper(),
+                POOL);
     }
 
     /** The gateway over the same client — for the ConfirmOutcome-mapping cases. */

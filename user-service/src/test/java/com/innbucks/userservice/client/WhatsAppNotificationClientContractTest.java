@@ -1,5 +1,8 @@
 package com.innbucks.userservice.client;
 
+import com.innbucks.userservice.config.PooledHttpClient;
+import com.innbucks.userservice.config.PooledHttpClientProperties;
+import com.innbucks.userservice.config.WhatsAppClientConfig;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.innbucks.userservice.config.WhatsAppProperties;
 import org.junit.jupiter.api.AfterAll;
@@ -7,7 +10,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -34,6 +36,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class WhatsAppNotificationClientContractTest {
 
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
+
     private static final String API_KEY = "test-x-api-key";
 
     private static WireMockServer wireMock;
@@ -52,13 +57,7 @@ class WhatsAppNotificationClientContractTest {
         props.setConnectTimeoutMs(500);
         props.setReadTimeoutMs(2000);
 
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(props.getConnectTimeoutMs()));
-        factory.setReadTimeout(Duration.ofMillis(props.getReadTimeoutMs()));
-        RestClient restClient = RestClient.builder()
-                .baseUrl(props.getBaseUrl())
-                .requestFactory(factory)
-                .build();
+        RestClient restClient = new WhatsAppClientConfig().whatsAppRestClient(props, POOL);
         client = new WhatsAppNotificationClient(restClient, props);
     }
 
@@ -156,12 +155,8 @@ class WhatsAppNotificationClientContractTest {
         props.setApiKey(API_KEY);
         props.setConnectTimeoutMs(500);
         props.setReadTimeoutMs(500);
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(props.getConnectTimeoutMs()));
-        factory.setReadTimeout(Duration.ofMillis(props.getReadTimeoutMs()));
         WhatsAppNotificationClient unreachableClient = new WhatsAppNotificationClient(
-                RestClient.builder().baseUrl(props.getBaseUrl()).requestFactory(factory).build(),
-                props);
+                new WhatsAppClientConfig().whatsAppRestClient(props, POOL), props);
 
         assertThatThrownBy(() -> unreachableClient.sendCustomNotification("+263782606983", "msg"))
                 .isInstanceOf(NotificationDeliveryException.class)

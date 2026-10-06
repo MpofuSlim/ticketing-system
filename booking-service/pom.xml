@@ -152,6 +152,19 @@
             <artifactId>feign-micrometer</artifactId>
         </dependency>
 
+        <!-- Feign's Apache HttpClient 5 transport. Without it every @FeignClient
+             runs on Feign's default client (HttpURLConnection): no pool limit,
+             no lease timeout. With it, Spring Cloud OpenFeign wraps the module's
+             ONE pooled CloseableHttpClient (PooledHttpClientConfig) — its own
+             HC5 configuration backs off when that bean exists — so Feign shares
+             the pool, the metrics and the no-retry/no-redirect policy with the
+             RestClients. Version managed by the Spring Cloud BOM (feign-bom).
+             CLAUDE.md, "Outbound HTTP clients are pooled". -->
+        <dependency>
+            <groupId>io.github.openfeign</groupId>
+            <artifactId>feign-hc5</artifactId>
+        </dependency>
+
         <!-- Service discovery: siblings resolve by name via Spring Cloud
              LoadBalancer, through the static discovery map in application.yaml
              (Kubernetes Service DNS). Eureka is retired; the LoadBalancer
