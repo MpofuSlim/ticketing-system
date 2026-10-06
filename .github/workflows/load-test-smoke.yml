@@ -1,0 +1,90 @@
+name: Load test (smoke)
+
+# Manual only. This workflow sends real requests to the URL it is given, so it
+# never runs on push, on a pull request or on a schedule. It runs the SMOKE
+# profile only (1 VU per scenario for 1 minute) — the load and soak profiles
+# are run by hand from a machine near the cell (see load-tests/README.md).
+#
+# It can never target production: ALLOW_PRODUCTION and ENABLE_WRITES are not
+# inputs and are pinned off below, so a production URL is refused by the
+# script's own guard before the first request.
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Public gateway base URL (staging), e.g. https://dtx.innbucks.co.zw/foundry"
+        required: true
+        type: string
+      scenarios:
+        description: "Comma list from catalogue, checkout, till, ratelimit"
+        required: true
+        default: "catalogue,ratelimit"
+        type: string
+      checkout_event_id:
+        description: "checkout only: id of the dedicated LOADTEST event"
+        required: false
+        type: string
+      checkout_category_id:
+        description: "checkout only: id of its LOADTEST seat category"
+        required: false
+        type: string
+      threshold_scale:
+        description: "Multiplier on every latency budget (the runner is far from the cell)"
+        required: true
+        default: "1"
+        type: string
+
+# Least privilege (OWASP A08): the job only reads the repo.
+permissions:
+  contents: read
+
+concurrency:
+  group: load-test-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install k6
+        uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1.2.2
+        with:
+          k6-version: "1.8.1"
+
+      # Inputs reach the script as environment variables, never interpolated
+      # into the shell, so a crafted input cannot inject a command.
+      - name: Run smoke profile
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          SCENARIOS: ${{ inputs.scenarios }}
+          THRESHOLD_SCALE: ${{ inputs.threshold_scale }}
+          CHECKOUT_EVENT_ID: ${{ inputs.checkout_event_id }}
+          CHECKOUT_CATEGORY_ID: ${{ inputs.checkout_category_id }}
+          # Repository secrets; blank when unset, and the scenario that needs
+          # one refuses with a message naming it.
+          CHECKOUT_PHONE: ${{ secrets.LOADTEST_CHECKOUT_PHONE }}
+          TILL_TOKEN: ${{ secrets.LOADTEST_TILL_TOKEN }}
+          LOYALTY_TENANT_ID: ${{ secrets.LOADTEST_TENANT_ID }}
+          TILL_LOOKUP_PHONE: ${{ secrets.LOADTEST_TILL_LOOKUP_PHONE }}
+          PROFILE: smoke
+          ALLOW_PRODUCTION: "false"
+          ALLOW_PRODUCTION_WRITES: "false"
+          ENABLE_WRITES: "false"
+        run: |
+          mkdir -p load-tests/results
+          k6 run --summary-export load-tests/results/summary.json load-tests/fleet.js
+
+      - name: Upload summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: load-test-smoke-summary
+          path: load-tests/results/summary.json
+          if-no-files-found: ignore
+          retention-days: 14
