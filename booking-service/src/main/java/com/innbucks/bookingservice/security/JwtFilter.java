@@ -1,5 +1,7 @@
 package com.innbucks.bookingservice.security;
 
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import lombok.RequiredArgsConstructor;
@@ -74,8 +76,14 @@ public class JwtFilter extends OncePerRequestFilter {
         }
 
         String token = authHeader.substring(7);
+        // Verified ONCE per request (signature under the alg-selected key, iss,
+        // aud, expiry); every claim below is read from this one result instead
+        // of re-parsing and re-verifying the token for each claim.
+        Claims claims;
         try {
-            if (!jwtUtil.isTokenValid(token)) {
+            try {
+                claims = jwtUtil.parseClaims(token);
+            } catch (JwtException e) {
                 // Reject present-but-invalid tokens immediately so clients can
                 // distinguish "refresh me" from "you forgot a token" instead of
                 // slipping through unauthenticated and hitting a downstream
@@ -104,11 +112,11 @@ public class JwtFilter extends OncePerRequestFilter {
             // TTL elapses. Fail-open: a legacy token with no userUuid /
             // tokenVersion claim, or a Redis blip (currentVersion == null),
             // passes through unchanged so a store outage never 401s everyone.
-            UUID userUuid = jwtUtil.extractUserUuid(token);
+            UUID userUuid = jwtUtil.extractUserUuid(claims);
             if (userUuid != null) {
                 Long currentVersion = tokenVersionStore.currentVersion(userUuid.toString());
                 if (currentVersion != null) {
-                    Long tokenVersion = jwtUtil.extractTokenVersion(token);
+                    Long tokenVersion = jwtUtil.extractTokenVersion(claims);
                     if (tokenVersion != null && tokenVersion < currentVersion) {
                         log.warn("Rejected superseded token (tokenVersion={} < current={}) path={}",
                                 tokenVersion, currentVersion, request.getRequestURI());
@@ -122,17 +130,17 @@ public class JwtFilter extends OncePerRequestFilter {
             // claim for accounts that haven't rotated their temp password
             // yet; every other service rejects those tokens until the
             // rotation happens.
-            if (jwtUtil.extractMustChangePassword(token)) {
+            if (jwtUtil.extractMustChangePassword(claims)) {
                 writePasswordChangeRequired(response);
                 return;
             }
 
-            String email = jwtUtil.extractEmail(token);
-            List<String> roles = jwtUtil.extractRoles(token);
-            List<String> services = jwtUtil.extractServices(token);
-            Integer tier = jwtUtil.extractTier(token);
-            Boolean verified = jwtUtil.extractVerified(token);
-            String phoneNumber = jwtUtil.extractPhoneNumber(token);
+            String email = jwtUtil.extractEmail(claims);
+            List<String> roles = jwtUtil.extractRoles(claims);
+            List<String> services = jwtUtil.extractServices(claims);
+            Integer tier = jwtUtil.extractTier(claims);
+            Boolean verified = jwtUtil.extractVerified(claims);
+            String phoneNumber = jwtUtil.extractPhoneNumber(claims);
 
             List<SimpleGrantedAuthority> authorities = new ArrayList<>();
             for (String role : roles) {
@@ -158,10 +166,10 @@ public class JwtFilter extends OncePerRequestFilter {
             auth.setDetails(new JwtAuthDetails(
                     email,
                     phoneNumber,
-                    jwtUtil.extractUserUuid(token),
-                    jwtUtil.extractOrganizerUuid(token),
-                    jwtUtil.extractFirstName(token),
-                    jwtUtil.extractLastName(token)));
+                    jwtUtil.extractUserUuid(claims),
+                    jwtUtil.extractOrganizerUuid(claims),
+                    jwtUtil.extractFirstName(claims),
+                    jwtUtil.extractLastName(claims)));
             SecurityContextHolder.getContext().setAuthentication(auth);
             // TRACE, not DEBUG: this line carries the subject (email = PII) plus
             // the caller's roles/services on every authenticated request. Keep it
@@ -180,7 +188,7 @@ public class JwtFilter extends OncePerRequestFilter {
         // claim (legacy tokens, staff tokens), so we just skip the put in
         // those cases. Cleared in finally so request-thread recycling doesn't
         // leak it into the next request.
-        String homeCountry = jwtUtil.extractHomeCountry(token);
+        String homeCountry = jwtUtil.extractHomeCountry(claims);
         // Step 7 — wrong-cell defence in depth. A JWT minted by another cell
         // that somehow reached this one (misrouted client, stale base URL) is
         // rejected with 409 wrong_cell so the FE can switch base URL and retry.

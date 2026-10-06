@@ -1,5 +1,7 @@
 package com.innbucks.eventservice.security;
 
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import lombok.RequiredArgsConstructor;
@@ -81,8 +83,14 @@ public class JwtFilter extends OncePerRequestFilter {
         }
 
         String token = authHeader.substring(7);
+        // Verified ONCE per request (signature under the alg-selected key, iss,
+        // aud, expiry); every claim below is read from this one result instead
+        // of re-parsing and re-verifying the token for each claim.
+        Claims claims;
         try {
-            if (!jwtUtil.isTokenValid(token)) {
+            try {
+                claims = jwtUtil.parseClaims(token);
+            } catch (JwtException e) {
                 // Reject present-but-invalid tokens immediately so clients can
                 // distinguish "refresh me" from "you forgot a token" instead of
                 // slipping through unauthenticated and hitting a downstream
@@ -109,11 +117,11 @@ public class JwtFilter extends OncePerRequestFilter {
             // TTL elapses. Fail-open: a legacy token with no userUuid /
             // tokenVersion claim, or a Redis blip (currentVersion == null),
             // passes through unchanged so a store outage never 401s everyone.
-            UUID tokenUserUuid = jwtUtil.extractUserUuid(token);
+            UUID tokenUserUuid = jwtUtil.extractUserUuid(claims);
             if (tokenUserUuid != null) {
                 Long currentVersion = tokenVersionStore.currentVersion(tokenUserUuid.toString());
                 if (currentVersion != null) {
-                    Long tokenVersion = jwtUtil.extractTokenVersion(token);
+                    Long tokenVersion = jwtUtil.extractTokenVersion(claims);
                     if (tokenVersion != null && tokenVersion < currentVersion) {
                         log.warn("Rejected superseded token (tokenVersion={} < current={}) path={}",
                                 tokenVersion, currentVersion, request.getRequestURI());
@@ -129,17 +137,17 @@ public class JwtFilter extends OncePerRequestFilter {
             // password is rotated (and the resulting new login mints a
             // fresh token without the claim). The FE branches on the typed
             // errorCode to redirect to its change-password screen.
-            if (jwtUtil.extractMustChangePassword(token)) {
+            if (jwtUtil.extractMustChangePassword(claims)) {
                 writePasswordChangeRequired(response);
                 return;
             }
 
-            String email = jwtUtil.extractEmail(token);
-            List<String> roles = jwtUtil.extractRoles(token);
-            List<String> services = jwtUtil.extractServices(token);
-            Integer tier = jwtUtil.extractTier(token);
-            Boolean verified = jwtUtil.extractVerified(token);
-            String country = jwtUtil.extractCountry(token);
+            String email = jwtUtil.extractEmail(claims);
+            List<String> roles = jwtUtil.extractRoles(claims);
+            List<String> services = jwtUtil.extractServices(claims);
+            Integer tier = jwtUtil.extractTier(claims);
+            Boolean verified = jwtUtil.extractVerified(claims);
+            String country = jwtUtil.extractCountry(claims);
             if (country != null && !country.isBlank()) {
                 request.setAttribute(COUNTRY_ATTRIBUTE, country);
             }
@@ -170,8 +178,8 @@ public class JwtFilter extends OncePerRequestFilter {
             // identifier (and their team-scoping organizerUuid) without
             // re-parsing the token. Read via
             // {@link AuthenticatedCaller#userUuid(Authentication)}.
-            UUID userUuid = jwtUtil.extractUserUuid(token);
-            UUID organizerUuid = jwtUtil.extractOrganizerUuid(token);
+            UUID userUuid = jwtUtil.extractUserUuid(claims);
+            UUID organizerUuid = jwtUtil.extractOrganizerUuid(claims);
             if (userUuid != null || organizerUuid != null) {
                 Map<String, Object> details = new LinkedHashMap<>();
                 if (userUuid != null) details.put(AuthDetailsKeys.USER_UUID, userUuid);
@@ -196,7 +204,7 @@ public class JwtFilter extends OncePerRequestFilter {
         // claim (legacy tokens, staff tokens), so we just skip the put in
         // those cases. Cleared in finally so request-thread recycling doesn't
         // leak it into the next request.
-        String homeCountry = jwtUtil.extractHomeCountry(token);
+        String homeCountry = jwtUtil.extractHomeCountry(claims);
         // Step 7 — wrong-cell defence in depth. A JWT minted by another cell
         // that somehow reached this one (misrouted client, stale base URL) is
         // rejected with 409 wrong_cell so the FE can switch base URL and retry.
