@@ -23,7 +23,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
@@ -53,19 +55,40 @@ import java.util.Map;
  * equal the booking's {@code tenant_user_uuid} (which mirrors the
  * event's owning organizer).
  *
+ * <p><b>Transactions — no remote call is made while one is open.</b> The scan
+ * runs in phases rather than under one method-level {@code @Transactional}:
+ * <ol>
+ *   <li>a short READ-ONLY transaction loads the ticket with its booking
+ *       (fetch-joined, so the detached copy carries everything the gates
+ *       read);</li>
+ *   <li>the gates run with NO transaction: status, organizer ownership, the
+ *       team member's assignment (user-service) and the event-day rule
+ *       (event-service). Each used to hold the pooled connection for as long
+ *       as the other service took to answer — a gate queue at a stadium is
+ *       exactly the burst that turns that into pool exhaustion;</li>
+ *   <li>one WRITE transaction then does the claim and its audit row together
+ *       ({@link #claimAndAudit}); a refusal writes its audit row in a
+ *       transaction of its own.</li>
+ * </ol>
+ * Nothing the gates decide is weakened by the split: the claim was never
+ * protected by a lock taken at the read (the read in the old single
+ * transaction was a plain READ COMMITTED select, so a concurrent change could
+ * already land between it and the claim), and single-shot redemption is the
+ * claim's own {@code WHERE redeemed_at IS NULL}, unchanged.
+ *
  * <p><b>Audit invariant:</b> every scan attempt, regardless of outcome,
  * writes exactly one {@code scan_attempts} row. The audit insert shares
- * the same {@code @Transactional} boundary as the {@code claimRedemption}
- * UPDATE so a crash mid-write rolls both back — and, being in that same
- * committed transaction, the row is queryable by the reporting endpoints the
- * moment the scan response is returned. There is no asynchronous hand-off and
- * no propagation delay to wait out.
+ * the same transaction as the {@code claimRedemption} UPDATE so a crash
+ * mid-write rolls both back — and, being in that same committed transaction,
+ * the row is queryable by the reporting endpoints the moment the scan response
+ * is returned. There is no asynchronous hand-off and no propagation delay to
+ * wait out.
  *
  * <p><b>What the audit try/catch does and does not buy.</b> It catches what
  * fails while BUILDING the row (a missing request context, an MDC lookup) and
  * whatever the persistence call itself throws. It does NOT make an audit write
  * unable to fail the scan: JPA defers the INSERT to flush-at-commit, which
- * happens after this method has returned, so a constraint violation surfaces
+ * happens after the catch has returned, so a constraint violation surfaces
  * at commit and rolls the redemption back with it. Genuinely isolating the two
  * would mean giving the audit write its own {@code REQUIRES_NEW} transaction,
  * which is a real trade — the row would then survive a rolled-back redemption
@@ -131,6 +154,20 @@ public class TicketScanService {
         this.marketTimeZoneProvider = marketTimeZoneProvider;
     }
 
+    /**
+     * The scan's phases (see the class javadoc). A setter so the many
+     * plain-{@code new} unit tests keep their construction; Spring always
+     * calls it, and with none set the phases run inline.
+     */
+    private TransactionTemplate readTx;
+    private TransactionTemplate writeTx;
+
+    @Autowired
+    void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.readTx = TransactionPhases.readOnly(transactionManager);
+        this.writeTx = TransactionPhases.readWrite(transactionManager);
+    }
+
     /** Shared S2S secret for the user-service assignment-check call. */
     @Value("${innbucks.internal-api-token:}")
     private String internalToken;
@@ -188,7 +225,11 @@ public class TicketScanService {
     @Value("${innbucks.scan.event-day-check.fail-open:false}")
     private boolean eventDayCheckFailOpen;
 
-    @Transactional
+    /**
+     * Deliberately NOT {@code @Transactional}: the user-service and
+     * event-service lookups below run with no transaction open. See the class
+     * javadoc for the phases.
+     */
     public ScanTicketResponseDTO scan(String ticketNumber, String scannerDisplayName) {
         long start = System.currentTimeMillis();
 
@@ -208,19 +249,24 @@ public class TicketScanService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
         }
 
-        BookingItem item = bookingItemRepository.findByTicketNumberWithBooking(ticketNumber)
-                .orElse(null);
+        // Phase 1: a short read-only transaction. The booking is fetch-joined,
+        // so the detached item still answers every gate below (status,
+        // tenantUserUuid, eventId, holderName) once the transaction has closed.
+        BookingItem item = TransactionPhases.inTransaction(readTx,
+                () -> bookingItemRepository.findByTicketNumberWithBooking(ticketNumber).orElse(null));
         if (item == null) {
             log.info("Ticket scan miss ticketNumber={} scanner={}", ticketNumber, scannerEmail);
             ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
                     .status(ScanTicketResponseDTO.Status.TICKET_NOT_FOUND)
                     .ticketNumber(ticketNumber)
                     .build();
-            recordAttempt(ticketNumber, null, ScanAttempt.Outcome.TICKET_NOT_FOUND,
+            recordRefusal(ticketNumber, null, ScanAttempt.Outcome.TICKET_NOT_FOUND,
                     scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
             return result;
         }
 
+        // Phase 2: the gates, with no transaction open — two of them ask
+        // another service.
         Booking booking = item.getBooking();
         if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
             log.info("Ticket scan rejected, booking not confirmed ticketNumber={} status={} scanner={}",
@@ -230,7 +276,7 @@ public class TicketScanService {
                     .ticketNumber(ticketNumber)
                     .bookingItemId(item.getId())
                     .build();
-            recordAttempt(ticketNumber, item, ScanAttempt.Outcome.BOOKING_NOT_CONFIRMED,
+            recordRefusal(ticketNumber, item, ScanAttempt.Outcome.BOOKING_NOT_CONFIRMED,
                     scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
             return result;
         }
@@ -245,7 +291,7 @@ public class TicketScanService {
                     .ticketNumber(ticketNumber)
                     .bookingItemId(item.getId())
                     .build();
-            recordAttempt(ticketNumber, item, ScanAttempt.Outcome.WRONG_ORGANIZER,
+            recordRefusal(ticketNumber, item, ScanAttempt.Outcome.WRONG_ORGANIZER,
                     scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
             return result;
         }
@@ -270,7 +316,7 @@ public class TicketScanService {
                     .ticketNumber(ticketNumber)
                     .bookingItemId(item.getId())
                     .build();
-            recordAttempt(ticketNumber, item, ScanAttempt.Outcome.NOT_ASSIGNED_TO_EVENT,
+            recordRefusal(ticketNumber, item, ScanAttempt.Outcome.NOT_ASSIGNED_TO_EVENT,
                     scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
             return result;
         }
@@ -307,16 +353,35 @@ public class TicketScanService {
                         .bookingItemId(item.getId())
                         .eventDate(eventDay)
                         .build();
-                recordAttempt(ticketNumber, item, ScanAttempt.Outcome.WRONG_EVENT_DAY,
+                recordRefusal(ticketNumber, item, ScanAttempt.Outcome.WRONG_EVENT_DAY,
                         scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
                 return result;
             }
         }
 
+        // Phase 3: the claim and its audit row, in ONE transaction, opened only
+        // now that every remote question has been answered.
+        return TransactionPhases.inTransaction(writeTx, () -> claimAndAudit(item, ticketNumber,
+                scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start));
+    }
+
+    /**
+     * The irreversible half of a scan: the atomic claim and its audit row,
+     * which commit or roll back together. Runs inside the scan's write
+     * transaction and makes no remote call.
+     */
+    private ScanTicketResponseDTO claimAndAudit(BookingItem item,
+                                                String ticketNumber,
+                                                UUID scannerOrganizerUuid,
+                                                UUID scannerUserUuid,
+                                                String scannerEmail,
+                                                String scannerDisplayName,
+                                                long start) {
         // Atomic claim. UPDATE returns 1 = first scanner wins; 0 = somebody
         // else already redeemed (or this caller already did on a previous
         // try). Re-read the row to surface the original audit fields in the
-        // ALREADY_REDEEMED branch.
+        // ALREADY_REDEEMED branch — a fresh read in this transaction, so it
+        // sees the winner's committed redeemedAt / redeemedByName.
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         int updated = bookingItemRepository.claimRedemption(
                 item.getId(), now, scannerUserUuid, scannerDisplayName);
@@ -356,6 +421,25 @@ public class TicketScanService {
     }
 
     /**
+     * A refusal's audit row, in a short write transaction of its own: a
+     * refusal decided after a remote check must not have held a transaction
+     * across that check just to write one INSERT at the end. Nothing else is
+     * written on these paths, so there is nothing for the row to commit or roll
+     * back with.
+     */
+    private void recordRefusal(String ticketNumber,
+                               BookingItem item,
+                               ScanAttempt.Outcome outcome,
+                               UUID scannerOrganizerUuid,
+                               UUID scannerUserUuid,
+                               String scannerEmail,
+                               String scannerDisplayName,
+                               long start) {
+        TransactionPhases.runInTransaction(writeTx, () -> recordAttempt(ticketNumber, item, outcome,
+                scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start));
+    }
+
+    /**
      * The scan's two authorization gates — organizer ownership, then a team
      * member's per-event assignment — for a caller that holds a BOOKING rather
      * than a ticket ({@link GateLookupService}). Returns the refusal, or null
@@ -388,8 +472,9 @@ public class TicketScanService {
      * Persist one {@code scan_attempts} row capturing the outcome plus the
      * request-scoped fingerprinting bits (correlation id from MDC, client IP
      * / user-agent from the current servlet request, country from MDC). The
-     * insert runs inside the caller's {@code @Transactional} boundary so it
-     * rolls back together with the {@code claimRedemption} update on a crash.
+     * insert runs inside the caller's transaction — {@link #claimAndAudit}'s,
+     * so it rolls back together with the {@code claimRedemption} update on a
+     * crash, or {@link #recordRefusal}'s.
      *
      * <p>Wrapped in try/catch and intentionally swallowing: the customer is
      * at the gate. A failure here is logged at WARN and counted via
