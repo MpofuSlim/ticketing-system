@@ -353,6 +353,71 @@ it would pin a carrier thread if virtual threads were ever enabled).
 - Services share no code, so each module keeps its own copy of the class and
   its `SingleFlightTokenCacheTest`; change them together.
 
+## Outbound HTTP clients are pooled
+
+**Every outbound HTTP client in a service rides that service's ONE
+`PooledHttpClient`** (`config/PooledHttpClient*` in user, booking, payment,
+seat and event): an Apache HttpClient 5 classic client over a single
+`PoolingHttpClientConnectionManager`. Before it, clients built their own
+transport — `SimpleClientHttpRequestFactory`, a private JDK `HttpClient` per
+client (which negotiates HTTP/2), Feign's default `HttpURLConnection` client —
+with no pool limit and no lease timeout.
+
+- **No per-call clients, no default factory.** Never `new
+  SimpleClientHttpRequestFactory()`, `JdkClientHttpRequestFactory`,
+  `HttpClient.newBuilder()`, `new RestTemplate()` or a bare
+  `RestClient.builder()` in main code. A client takes `PooledHttpClient` and
+  calls `requestFactory(connectMs, readMs)`: same pool, its own timeouts,
+  applied per request. Both `RestClient.Builder` beans
+  (`LoadBalancedRestClientConfig`) start on the pool with the defaults. The
+  factory is never a bean: Spring's `destroy()` would close the shared client.
+- **Keep a client's deliberate timeouts.** The `*-timeout-ms` keys still
+  decide; `outbound-http.connect-timeout` / `read-timeout` (2s / 10s) only
+  cover a client with none.
+- **No automatic retries** (`disableAutomaticRetries`). HttpClient's default
+  strategy re-sends some requests after an I/O error, and InnBucks code
+  generation, ZimSwitch prepare-checkout and the EcoCash charge must never be
+  sent twice. A client that wants retries has its own Resilience4j wrapper.
+  Stale pooled connections are caught by `validate-after-inactivity` (2s) and
+  the idle evictor (30s), not by a retry.
+- **HTTP/1.1 only.** HttpClient 5 classic never negotiates HTTP/2, which is
+  what broke the notification contract tests (`RST_STREAM`) when a client fell
+  onto the JDK `HttpClient`. The payment partners (InnBucks, ZimSwitch,
+  EcoCash) were on the JDK client and so MAY have spoken HTTP/2 over TLS; they
+  now speak HTTP/1.1.
+- **No redirects, no cookies, no compression.** A redirect re-sends
+  `X-Api-Key` / `X-Internal-Token` / a bearer to whatever host `Location`
+  names, so a 3xx comes back as a response. The client is shared across
+  partners, so it keeps no cookie state, and it adds no `Accept-Encoding`.
+- **A partner keeps the User-Agent it always saw.** Partner edges allow-list
+  User-Agents (EcoCash, above). EcoCash keeps `Ticketize-Payments/1.0`; the
+  InnBucks Merchant API and ZimSwitch keep the JDK client's
+  `Java-http-client/<java.version>`; the notification API, WhatsApp gateway and
+  DTX staging keep HttpURLConnection's `Java/<java.version>`
+  (`PooledHttpClient.*_USER_AGENT`). In-cluster calls send HttpClient's default.
+- **Feign rides the same client.** booking-service declares `feign-hc5`; Spring
+  Cloud OpenFeign's own HC5 configuration backs off because
+  `PooledHttpClientConfig` exposes the `CloseableHttpClient` and its connection
+  manager as beans, so `FeignBlockingLoadBalancerClient` wraps
+  `ApacheHttp5Client` over the shared pool. Feign's per-client
+  `connect-timeout` / `read-timeout` still apply per request.
+- **Proxy and TLS come from the system**, as before: `ProxySelector.getDefault()`
+  and `DefaultClientTlsStrategy.createSystemDefault()` (`javax.net.ssl.*`).
+  Lease (1s), connect, TLS handshake and response are all bounded; the
+  handshake runs before any per-client timeout applies, so it is bounded by
+  the pool-wide `read-timeout` (10s).
+- **Pools fit the small cell:** `outbound-http.max-total` 50,
+  `max-per-route` 20, both env-overridable (`OUTBOUND_HTTP_*`). Metrics:
+  `httpcomponents_httpclient_pool_total_connections{state=leased|available}`,
+  `..._total_pending`, `..._total_max`, all `{httpclient="outbound"}`. A
+  sustained `pending > 0` means callers are queueing for a connection.
+- The pool does not change the single-flight rule above: nothing locks around
+  a call, and a login waits for a lease like any other request.
+- Each module keeps its own copy of the three classes, `PooledHttpClientTest`
+  (the wire policy) and `OutboundClientsArePooledTest` (every client is wired
+  to the pool with its own timeouts); change them together. A new outbound
+  client belongs in that module's `OutboundClientsArePooledTest`.
+
 ## Swagger response examples
 
 **Every endpoint you add or modify MUST have meaningful `@ApiResponses` with

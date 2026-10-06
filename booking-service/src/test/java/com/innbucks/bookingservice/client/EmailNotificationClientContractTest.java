@@ -1,5 +1,8 @@
 package com.innbucks.bookingservice.client;
 
+import com.innbucks.bookingservice.config.PooledHttpClient;
+import com.innbucks.bookingservice.config.PooledHttpClientProperties;
+import com.innbucks.bookingservice.config.InnbucksNotifyClientConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.innbucks.bookingservice.config.InnbucksNotifyProperties;
@@ -31,6 +34,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * fails the build. A fresh client per test keeps the token cache empty.
  */
 class EmailNotificationClientContractTest {
+
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
 
     private static final String LOGIN = "/auth/third-party";
     private static final String EMAIL = "/api/notification/email";
@@ -70,7 +76,7 @@ class EmailNotificationClientContractTest {
         props.setPassword("test-pass");
         props.setHtmlEnabled(htmlEnabled);
         return new EmailNotificationClient(
-                RestClient.builder().baseUrl("http://localhost:" + port).build(),
+                new InnbucksNotifyClientConfig().innbucksNotifyRestClient(props, POOL),
                 props, new ObjectMapper());
     }
 

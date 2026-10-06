@@ -153,6 +153,16 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- WireMock for PooledHttpClientTest, which pins the shared outbound
+             transport's wire policy (HTTP/1.1, no retries, no redirects).
+             Shaded standalone classifier, same version as the other modules. -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.13.2</version>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>

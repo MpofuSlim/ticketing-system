@@ -3,9 +3,10 @@ package com.innbucks.userservice.devicesecurity;
 import com.innbucks.userservice.client.SingleFlightTokenCache;
 import com.innbucks.userservice.client.SingleFlightTokenCache.CachedToken;
 import com.innbucks.userservice.config.CorrelationIdPropagatingInterceptor;
+import com.innbucks.userservice.config.PooledHttpClient;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
@@ -76,8 +77,9 @@ public class StagingClientServiceClient {
      */
     private final SingleFlightTokenCache<ClientServiceToken> tokens;
 
-    public StagingClientServiceClient(DeviceSecurityProperties.Staging config, Clock clock) {
-        this(buildRestClient(config), config, clock);
+    public StagingClientServiceClient(DeviceSecurityProperties.Staging config, Clock clock,
+                                      PooledHttpClient pooledHttpClient) {
+        this(buildRestClient(config, pooledHttpClient), config, clock);
     }
 
     StagingClientServiceClient(RestClient restClient, DeviceSecurityProperties.Staging config, Clock clock) {
@@ -89,13 +91,16 @@ public class StagingClientServiceClient {
                 StagingUnavailableException::new, clock);
     }
 
-    static RestClient buildRestClient(DeviceSecurityProperties.Staging config) {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(config.getConnectTimeoutMs()));
-        factory.setReadTimeout(Duration.ofMillis(config.getReadTimeoutMs()));
+    /**
+     * The module's shared pool with this client's own timeouts, and the
+     * User-Agent staging has always seen from us — it is a partner edge
+     * (CLAUDE.md, "Outbound HTTP clients are pooled").
+     */
+    static RestClient buildRestClient(DeviceSecurityProperties.Staging config, PooledHttpClient pooledHttpClient) {
         return RestClient.builder()
                 .baseUrl(config.getBaseUrl())
-                .requestFactory(factory)
+                .requestFactory(pooledHttpClient.requestFactory(config.getConnectTimeoutMs(), config.getReadTimeoutMs()))
+                .defaultHeader(HttpHeaders.USER_AGENT, PooledHttpClient.URL_CONNECTION_USER_AGENT)
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())
                 .build();
     }

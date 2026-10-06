@@ -1,5 +1,7 @@
 package innbucks.paymentservice.client;
 
+import innbucks.paymentservice.config.PooledHttpClient;
+import innbucks.paymentservice.config.PooledHttpClientProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -41,6 +43,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class EcocashEipClientContractTest {
 
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
+
     private static final String CORRELATOR = "1763385010123456";
     private static final String MSISDN = "263777222093";
     private static final String QUERY_PATH = "/payment/v1/" + MSISDN + "/transactions/amount/" + CORRELATOR;
@@ -64,7 +69,7 @@ class EcocashEipClientContractTest {
                 .waitDuration(Duration.ofMillis(10))
                 .retryExceptions(EcocashApiTransientException.class)
                 .build());
-        return new EcocashEipClient(props, new ObjectMapper(), retries, CircuitBreakerRegistry.ofDefaults());
+        return new EcocashEipClient(props, new ObjectMapper(), retries, CircuitBreakerRegistry.ofDefaults(), POOL);
     }
 
     @BeforeAll
@@ -417,7 +422,7 @@ class EcocashEipClientContractTest {
     void guardRails() {
         EcocashProperties blank = new EcocashProperties();
         EcocashEipClient unconfigured = new EcocashEipClient(blank, new ObjectMapper(),
-                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults());
+                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults(), POOL);
         assertThat(unconfigured.isConfigured()).isFalse();
         assertThatThrownBy(() -> unconfigured.charge(CORRELATOR, MSISDN, 300, "USD", "X", "Ticketize online payment"))
                 .isInstanceOf(EcocashApiException.class);
@@ -441,7 +446,7 @@ class EcocashEipClientContractTest {
         props.setMerchantPin("1234");
         // no notifyUrl
         EcocashEipClient client = new EcocashEipClient(props, new ObjectMapper(),
-                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults());
+                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults(), POOL);
         assertThat(client.isConfigured()).isTrue();
         assertThat(client.canStartCharge()).isFalse();
 

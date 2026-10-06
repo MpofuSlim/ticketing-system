@@ -2,6 +2,7 @@ package com.innbucks.userservice.integration;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.innbucks.userservice.config.CorrelationIdPropagatingInterceptor;
+import com.innbucks.userservice.config.PooledHttpClient;
 import com.innbucks.userservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,7 +12,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -32,10 +32,11 @@ public class LoyaltyServiceClient {
                                 @Value("${loyalty-service.base-url:http://loyalty-service}") String baseUrl,
                                 @Value("${loyalty-service.connect-timeout-ms:2000}") int connectTimeoutMs,
                                 @Value("${loyalty-service.read-timeout-ms:3000}") int readTimeoutMs,
-                                @Value("${innbucks.internal-api-token:}") String internalToken) {
-        var requestFactory = new org.springframework.http.client.SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofMillis(connectTimeoutMs));
-        requestFactory.setReadTimeout(Duration.ofMillis(readTimeoutMs));
+                                @Value("${innbucks.internal-api-token:}") String internalToken,
+                                PooledHttpClient pooledHttpClient) {
+        // The module's shared pool, this client's own timeouts (CLAUDE.md,
+        // "Outbound HTTP clients are pooled").
+        var requestFactory = pooledHttpClient.requestFactory(connectTimeoutMs, readTimeoutMs);
         // Clone the load-balanced builder so "loyalty-service" resolves through
         // Eureka; clone() preserves the LB interceptor alongside our per-client
         // request factory and correlation-id interceptor.

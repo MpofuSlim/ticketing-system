@@ -3,6 +3,7 @@ package com.innbucks.seatservice.client;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.seatservice.config.CorrelationIdPropagatingInterceptor;
+import com.innbucks.seatservice.config.PooledHttpClient;
 import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.CategoryActiveCountDTO;
 import com.innbucks.seatservice.dto.CategoryBookingDTO;
@@ -43,24 +44,20 @@ public class BookingServiceClient {
             @Value("${booking-service.connect-timeout-ms:2000}") int connectTimeoutMs,
             @Value("${booking-service.read-timeout-ms:5000}") int readTimeoutMs,
             @Value("${innbucks.internal-api-token}") String internalToken,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            PooledHttpClient pooledHttpClient) {
         this.internalToken = internalToken;
         // Clone the load-balanced builder so "booking-service" resolves through
         // Eureka; clone() preserves the LB interceptor alongside our per-client
-        // request factory and correlation-id interceptor.
+        // request factory and correlation-id interceptor. The factory is the
+        // module's shared pool with this client's own timeouts (CLAUDE.md,
+        // "Outbound HTTP clients are pooled").
         this.restClient = loadBalancedRestClientBuilder.clone()
                 .baseUrl(baseUrl)
-                .requestFactory(buildRequestFactory(connectTimeoutMs, readTimeoutMs))
+                .requestFactory(pooledHttpClient.requestFactory(connectTimeoutMs, readTimeoutMs))
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())
                 .build();
         this.objectMapper = objectMapper;
-    }
-
-    private static org.springframework.http.client.SimpleClientHttpRequestFactory buildRequestFactory(int connectMs, int readMs) {
-        var f = new org.springframework.http.client.SimpleClientHttpRequestFactory();
-        f.setConnectTimeout(connectMs);
-        f.setReadTimeout(readMs);
-        return f;
     }
 
     /**

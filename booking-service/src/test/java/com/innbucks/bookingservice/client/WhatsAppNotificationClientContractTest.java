@@ -1,5 +1,8 @@
 package com.innbucks.bookingservice.client;
 
+import com.innbucks.bookingservice.config.PooledHttpClient;
+import com.innbucks.bookingservice.config.PooledHttpClientProperties;
+import com.innbucks.bookingservice.config.WhatsAppClientConfig;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.innbucks.bookingservice.config.WhatsAppProperties;
 import org.junit.jupiter.api.AfterAll;
@@ -7,7 +10,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -29,6 +31,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class WhatsAppNotificationClientContractTest {
 
+    /** The production transport: the module's shared pool (CLAUDE.md, "Outbound HTTP clients are pooled"). */
+    private static final PooledHttpClient POOL = new PooledHttpClient(new PooledHttpClientProperties());
+
     private static WireMockServer wireMock;
     private static WhatsAppNotificationClient client;
     private static WhatsAppProperties props;
@@ -44,13 +49,7 @@ class WhatsAppNotificationClientContractTest {
         props.setConnectTimeoutMs(500);
         props.setReadTimeoutMs(2000);
 
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(props.getConnectTimeoutMs()));
-        factory.setReadTimeout(Duration.ofMillis(props.getReadTimeoutMs()));
-        RestClient restClient = RestClient.builder()
-                .baseUrl(props.getBaseUrl())
-                .requestFactory(factory)
-                .build();
+        RestClient restClient = new WhatsAppClientConfig().whatsAppRestClient(props, POOL);
         client = new WhatsAppNotificationClient(restClient, props);
     }
 
@@ -117,12 +116,9 @@ class WhatsAppNotificationClientContractTest {
         try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
             closedPort = s.getLocalPort();
         }
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(500));
-        factory.setReadTimeout(Duration.ofMillis(500));
         RestClient dead = RestClient.builder()
                 .baseUrl("http://localhost:" + closedPort)
-                .requestFactory(factory)
+                .requestFactory(POOL.requestFactory(500, 500))
                 .build();
         WhatsAppNotificationClient unreachable = new WhatsAppNotificationClient(dead, props);
 
@@ -201,12 +197,9 @@ class WhatsAppNotificationClientContractTest {
         try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
             closedPort = s.getLocalPort();
         }
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(500));
-        factory.setReadTimeout(Duration.ofMillis(500));
         RestClient dead = RestClient.builder()
                 .baseUrl("http://localhost:" + closedPort)
-                .requestFactory(factory)
+                .requestFactory(POOL.requestFactory(500, 500))
                 .build();
         WhatsAppNotificationClient unreachable = new WhatsAppNotificationClient(dead, props);
 
@@ -253,7 +246,7 @@ class WhatsAppNotificationClientContractTest {
         stagingProps.setApiKey("test-api-key");
         stagingProps.setEventQrCodePath(stagingPath);
         WhatsAppNotificationClient stagingClient = new WhatsAppNotificationClient(
-                RestClient.builder().baseUrl(stagingProps.getBaseUrl()).build(), stagingProps);
+                new WhatsAppClientConfig().whatsAppRestClient(stagingProps, POOL), stagingProps);
 
         wireMock.stubFor(post(urlEqualTo(stagingPath)).willReturn(aResponse().withStatus(200)));
 
