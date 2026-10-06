@@ -1515,6 +1515,40 @@ to poll, had no read state, and **reached no non-admin at all**.
   A must reach a connection held by replica B). The ETag makes polling cheap
   enough that this is a clean follow-up rather than a prerequisite.
 
+## No remote call while a transaction is open (booking, seat, user)
+
+**A Feign / RestClient call to another service, or a send to a notification
+gateway, never runs while a transaction holds a pooled connection.** A
+method-level `@Transactional` holds its connection from the first read to the
+commit, so a slow sibling (or its read timeout) holds it too — a gate queue
+or a slow event-service is then pool exhaustion. Use the shapes already in
+the code: remote reads BEFORE the transaction; a short read-only
+`TransactionTemplate` phase, the call, then a write phase
+(`TicketScanService`, `GateLookupService`, `BookingService.reverseConfirmedBooking`,
+`SeatCategoryAnalyticsService`, `SeatCategoryService.updateCategory`); or an
+`@Async` `AFTER_COMMIT` listener (a synchronous one still holds the
+connection). Services built with `new` in unit tests take their templates
+through a setter and run phases inline without one (`TransactionPhases`).
+
+- **A write decided on a read made before the call re-checks it in the write
+  phase.** The reversal compares the booking's `@Version` with the first read
+  and throws the same `ObjectOptimisticLockingFailureException` the old
+  commit-time check did; the category update re-reads (404 if deleted). The
+  scan needs nothing extra: single-shot is the claim's own `WHERE redeemed_at
+  IS NULL`, and the claim and its audit row still share one transaction.
+- **Left inside their transaction, on purpose:** seat-service's
+  `createCategory` (the oversell guard sums the live categories in the same
+  transaction that inserts the new one) and `deleteCategory` (the delete
+  guard). Both are fail-closed guards whose answer decides the write, and
+  moving the remote 503 ahead of the local refusals would change which error a
+  caller sees. Neither holds a row lock during the call.
+- Pinned by `RemoteCallsOutsideTransactionTest` (booking, seat — the client
+  stubs assert `isActualTransactionActive()` is false), the
+  `RemoteCallsOutsideTransactionsPostgresIT`s (no resource bound, the row
+  lockable `FOR UPDATE NOWAIT` from another connection during the call),
+  `SendsOutsideTransactionsPostgresIT` and user-service's
+  `OtpDeliveryOutsideTransactionIT`.
+
 ## JPA associations are LAZY — fetch explicitly (booking-service, seat-service)
 
 **Every association is `FetchType.LAZY`; a read path that needs the other side
