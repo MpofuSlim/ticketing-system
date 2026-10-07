@@ -141,6 +141,33 @@ groups:
           description: "All {{ $labels.pool }} Hikari connections in use for >1m on {{ $labels.instance }}."
           runbook: "prometheus/slo.md#hikaripoolexhausted"
 
+      # The cell's Postgres connection budget (PostgresConnectionBudgetTest,
+      # CLAUDE.md "Postgres connection budget"): max_connections 150, of which
+      # 10 are reserved for backups / operators. The test pins the MANIFESTS;
+      # this catches the live cell drifting from them — a pool raised with
+      # `kubectl set env`, a replica added by hand. Sums are across scraped
+      # pods; each job scrapes its Service, i.e. ONE pod, so revisit these when
+      # a service runs more than one replica.
+      - alert: PostgresConnectionBudgetExceeded
+        expr: sum(hikaricp_connections_max) > 140
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Hikari pools in the cell can open {{ $value }} Postgres connections (budget 140)"
+          description: "The configured pool maxima sum above max_connections (150) minus the reserve (10). A rollout or a sale can now be refused with 'too many clients already'."
+          runbook: "prometheus/slo.md#postgresconnectionbudgetexceeded"
+
+      - alert: PostgresConnectionsHigh
+        expr: sum(hikaricp_connections) > 125
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $value }} Postgres connections open across the cell (max_connections 150)"
+          description: "The pools have grown close to the server limit; the next pool to grow, or an operator's psql, may be refused."
+          runbook: "prometheus/slo.md#postgresconnectionbudgetexceeded"
+
       - alert: JvmHeapPressure
         expr: |
           sum by (job, instance) (jvm_memory_used_bytes{area="heap"})

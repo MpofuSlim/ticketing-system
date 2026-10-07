@@ -51,6 +51,10 @@ spec:
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/event_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            # Connection budget: Σ pools × replicas + one rollout surge + reserve must fit
+            # postgres max_connections (PostgresConnectionBudgetTest, CLAUDE.md).
+            - { name: DB_POOL_MAX, value: "10" }
+            - { name: DB_POOL_MIN, value: "5" }
             - { name: DB_DRIVER, value: "org.postgresql.Driver" }
             - { name: HIBERNATE_DIALECT, value: "org.hibernate.dialect.PostgreSQLDialect" }
             - { name: JPA_DDL_AUTO, value: "validate" }
@@ -99,6 +103,10 @@ spec:
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/seat_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            # Connection budget: Σ pools × replicas + one rollout surge + reserve must fit
+            # postgres max_connections (PostgresConnectionBudgetTest, CLAUDE.md).
+            - { name: DB_POOL_MAX, value: "20" }
+            - { name: DB_POOL_MIN, value: "5" }
             - { name: DB_DRIVER, value: "org.postgresql.Driver" }
             - { name: HIBERNATE_DIALECT, value: "org.hibernate.dialect.PostgreSQLDialect" }
             - { name: JPA_DDL_AUTO, value: "validate" }
@@ -148,6 +156,10 @@ spec:
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/booking_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            # Connection budget: Σ pools × replicas + one rollout surge + reserve must fit
+            # postgres max_connections (PostgresConnectionBudgetTest, CLAUDE.md).
+            - { name: DB_POOL_MAX, value: "20" }
+            - { name: DB_POOL_MIN, value: "5" }
             - { name: DB_DRIVER, value: "org.postgresql.Driver" }
             - { name: HIBERNATE_DIALECT, value: "org.hibernate.dialect.PostgreSQLDialect" }
             - { name: JPA_DDL_AUTO, value: "validate" }
@@ -223,6 +235,10 @@ spec:
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/payment_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            # Connection budget: Σ pools × replicas + one rollout surge + reserve must fit
+            # postgres max_connections (PostgresConnectionBudgetTest, CLAUDE.md).
+            - { name: DB_POOL_MAX, value: "15" }
+            - { name: DB_POOL_MIN, value: "2" }
             - { name: DB_DRIVER, value: "org.postgresql.Driver" }
             - { name: JPA_DDL_AUTO, value: "validate" }
             - { name: REDIS_HOST, value: "redis" }
@@ -271,6 +287,10 @@ spec:
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/loyalty_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            # Connection budget: Σ pools × replicas + one rollout surge + reserve must fit
+            # postgres max_connections (PostgresConnectionBudgetTest, CLAUDE.md).
+            - { name: DB_POOL_MAX, value: "15" }
+            - { name: DB_POOL_MIN, value: "10" }
             - { name: DB_DRIVER, value: "org.postgresql.Driver" }
             - { name: HIBERNATE_DIALECT, value: "org.hibernate.dialect.PostgreSQLDialect" }
             - { name: JPA_DDL_AUTO, value: "validate" }
@@ -325,6 +345,10 @@ spec:
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/marketplace_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            # Connection budget: Σ pools × replicas + one rollout surge + reserve must fit
+            # postgres max_connections (PostgresConnectionBudgetTest, CLAUDE.md).
+            - { name: DB_POOL_MAX, value: "10" }
+            - { name: DB_POOL_MIN, value: "10" }
             - { name: DB_DRIVER, value: "org.postgresql.Driver" }
             - { name: HIBERNATE_DIALECT, value: "org.hibernate.dialect.PostgreSQLDialect" }
             - { name: JPA_DDL_AUTO, value: "validate" }
