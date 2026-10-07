@@ -43,7 +43,7 @@ services:
       - "--requirepass"
       - "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}"
       - "--maxmemory"
-      - "512mb"
+      - "256mb"
       - "--maxmemory-policy"
       - "noeviction"
     ports:

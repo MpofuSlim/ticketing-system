@@ -463,11 +463,12 @@ design; neither works alone.
   exact race was in `LoginRateLimiter` (`auth:rl:*`) and is now one script that
   sets the TTL whenever the key has none, healing old strays too. A hand-written
   ops `SET` (e.g. the `TokenVersionPublishFailing` runbook) takes a `PX` too.
-- **Sizing: `maxmemory 512mb` in a 768 Mi container.** The bulk is the
+- **Sizing: `maxmemory 256mb` in a 384 Mi container.** The bulk is the
   booking/payment idempotency entries (~2 KB each — the stored response — for
   24 h); everything else is a few MB (token versions ≈ password logins in 7 d
-  × ~150 B; limiter buckets live seconds). 512 MB holds ~250k idempotent
-  requests a day. Keep `maxmemory` ≈ 2/3 of the container limit — the rest is
+  × ~150 B; limiter buckets live seconds). 256 MB holds ~125k idempotent
+  requests a day; staging measured 1.45 MB used (peak 1.60 MB) on 2026-10-07,
+  so this is headroom, not a forecast. Grow it when `RedisMemoryHigh` says so. Keep `maxmemory` ≈ 2/3 of the container limit — the rest is
   AOF-rewrite copy-on-write, client buffers and fragmentation — and never raise
   `maxmemory` live past that, or the kernel OOM-kills the pod instead.
 - **Watched** by `redis-exporter` (`deploy/k8s/monitoring/`, job `redis`) and
