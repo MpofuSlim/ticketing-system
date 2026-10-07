@@ -3,10 +3,13 @@ package com.innbucks.userservice.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -35,7 +38,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * </ul>
  *
  * Both counters live in Redis under {@code auth:rl:<kind>:<dimension>:<value>}
- * with the configured TTL (fixed-window). When either bucket exceeds its
+ * with the configured TTL (fixed-window), set in the SAME script as the
+ * increment ({@link #INCREMENT_IN_WINDOW_LUA}). When either bucket exceeds its
  * cap the call is rejected with a {@link RateLimitedException} carrying
  * the seconds the caller should wait before retrying.
  *
@@ -53,6 +57,30 @@ import java.util.concurrent.ConcurrentHashMap;
 public class LoginRateLimiter {
 
     private static final String KEY_PREFIX = "auth:rl:";
+
+    /**
+     * {@code INCR} the window counter and give it its TTL in ONE atomic step;
+     * returns the new count. The TTL is set only when the key has none
+     * ({@code PTTL < 0}), so a steady stream never extends the window.
+     *
+     * <p>It used to be {@code INCR} then a separate {@code EXPIRE} when the
+     * count came back 1. A failure between the two — the EXPIRE call erroring,
+     * the pod dying — left a counter with NO TTL, which locks that account or
+     * address out for good once it passes the cap, and under the cell's
+     * {@code noeviction} Redis policy never leaves memory either (CLAUDE.md,
+     * "Redis — noeviction"). Testing {@code PTTL < 0} rather than
+     * {@code count == 1} also heals a counter the old code left TTL-less.
+     */
+    static final String INCREMENT_IN_WINDOW_LUA = """
+            local count = redis.call('INCR', KEYS[1])
+            if redis.call('PTTL', KEYS[1]) < 0 then
+              redis.call('PEXPIRE', KEYS[1], ARGV[1])
+            end
+            return count
+            """;
+
+    static final RedisScript<Long> INCREMENT_IN_WINDOW =
+            new DefaultRedisScript<>(INCREMENT_IN_WINDOW_LUA, Long.class);
 
     private final int loginPerIdentifierMax;
     private final int loginPerIpMax;
@@ -168,20 +196,12 @@ public class LoginRateLimiter {
 
     private long increment(String key, Duration ttl) {
         try {
-            Long count = redis.opsForValue().increment(key);
-            if (count == null) {
-                return 0L;
-            }
-            if (count == 1L) {
-                // Only set TTL on the first increment so the window
-                // starts when the first attempt lands and a steady
-                // stream doesn't keep extending it.
-                redis.expire(key, ttl);
-            }
-            return count;
+            Long count = redis.execute(INCREMENT_IN_WINDOW, List.of(key), Long.toString(ttl.toMillis()));
+            return count == null ? 0L : count;
         } catch (RuntimeException ex) {
-            // Redis down — fall back to the per-instance in-memory limiter
-            // instead of failing open. See class javadoc.
+            // Redis down, or refusing writes (noeviction at maxmemory answers
+            // -OOM) — fall back to the per-instance in-memory limiter instead
+            // of failing open. See class javadoc.
             log.error("Redis auth rate-limiter unreachable key={}; using per-instance in-memory fallback", key, ex);
             return incrementInMemory(key, ttl);
         }

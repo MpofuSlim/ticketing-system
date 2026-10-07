@@ -419,6 +419,70 @@ with no pool limit and no lease timeout.
   to the pool with its own timeouts); change them together. A new outbound
   client belongs in that module's `OutboundClientsArePooledTest`.
 
+## Redis — `noeviction`, and every key carries a TTL
+
+**The cell's one Redis runs `maxmemory-policy noeviction`
+(`deploy/k8s/01-infra.yaml`, `docker-compose.yml`), and every key any service
+writes — this repo, InnRewards' loyalty-service, market-place — MUST carry a
+TTL, set in the SAME command or script as the write.** Both halves are the
+design; neither works alone.
+
+- **Why not an evicting policy.** It was `allkeys-lru`. This Redis holds
+  session revocation (`auth:tokenver:*`, 7 d; `auth:revoked:*`, ≤ the 15-min
+  access TTL), replay guards (`auth:federation:jti:*`), idempotency keys
+  (`POST /bookings#…`, `POST /payments/…#…`, 24 h), seat holds (`seat:lock:*`)
+  and the limiters. Under memory pressure LRU drops any of them, and every
+  reader treats a missing key as "nothing recorded" — a revoked session is
+  accepted again, a retried payment or booking runs twice, a replayed
+  assertion is admitted. Silently: no error anywhere. **`volatile-*` is no
+  better**, because those safety keys all HAVE TTLs (they must, to bound
+  memory), so they are exactly volatile's candidates — and `volatile-ttl`
+  evicts the shortest-lived first, i.e. the logout denylist and the replay
+  guards. Do not "tune" the policy back to any of them.
+- **What full memory does instead: writes fail with `-OOM`, reads keep
+  working**, and every caller already handles a failed write as a Redis
+  outage (measured on `redis:7`: `SET`, `SET NX`, and `EVAL` scripts whose first
+  write grows memory are refused; `GET`, `DEL` succeed). By family: token-version
+  publish → counted, `TokenVersionPublishFailing` (downstream fails open ≤ 15
+  min, as in an outage — but already-published versions are never lost);
+  logout denylist write → WARN, same bound; login / support / voucher-guess
+  limiters and the gateway's fail-safe routes → per-replica fallback; the
+  gateway's other routes → no limiter (by design, as in an outage);
+  `/auth/exchange` jti guard → 503, no session; seat hold → the lock
+  transaction rolls back (5xx, no seat held); booking `Idempotency-Key`
+  reservation → 500 before the booking runs; the COMPLETED write after a
+  request ran → best-effort (the caller gets its real response; a retry with
+  that key runs again — a payment then meets the one-payment-per-order guard);
+  loyalty's
+  on-demand eligibility SETNX → check skipped, `USER_PENDING`. Memory drains
+  on its own as TTLs lapse.
+- **Every write sets its TTL atomically.** `SET … EX|PX`, `SET … NX EX`, or a
+  Lua script that `PEXPIRE`s in the same call. **Never `INCR` then a separate
+  `EXPIRE`**: a failure between the two leaves a key with no TTL, which under
+  `noeviction` never leaves — and for a counter is a permanent lockout. That
+  exact race was in `LoginRateLimiter` (`auth:rl:*`) and is now one script that
+  sets the TTL whenever the key has none, healing old strays too. A hand-written
+  ops `SET` (e.g. the `TokenVersionPublishFailing` runbook) takes a `PX` too.
+- **Sizing: `maxmemory 512mb` in a 768 Mi container.** The bulk is the
+  booking/payment idempotency entries (~2 KB each — the stored response — for
+  24 h); everything else is a few MB (token versions ≈ password logins in 7 d
+  × ~150 B; limiter buckets live seconds). 512 MB holds ~250k idempotent
+  requests a day. Keep `maxmemory` ≈ 2/3 of the container limit — the rest is
+  AOF-rewrite copy-on-write, client buffers and fragmentation — and never raise
+  `maxmemory` live past that, or the kernel OOM-kills the pod instead.
+- **Watched** by `redis-exporter` (`deploy/k8s/monitoring/`, job `redis`) and
+  the `redis` alert group: `RedisMemoryHigh` (75%) / `…Critical` (90%),
+  `RedisRefusingWrites` (`-OOM` seen), `RedisEvictingKeys` /
+  `RedisEvictionPolicyDrift` (must never fire under `noeviction`),
+  `RedisKeysWithoutTtl` (`keys − expires > 0` for an hour — the rule above,
+  enforced), `RedisDown`, `RedisExporterDown`.
+- **Changing the args restarts `redis-0`.** It has `appendonly yes` on a PVC,
+  so a restart replays the AOF and loses no keys, but for its few seconds
+  every caller is on its outage path. The policy itself is live-switchable —
+  `CONFIG SET maxmemory-policy noeviction` — and `maxmemory` too (within the
+  limit); neither survives a restart unless the manifest says the same
+  (`CONFIG REWRITE` does not work: Redis runs with no config file).
+
 ## Swagger response examples
 
 **Every endpoint you add or modify MUST have meaningful `@ApiResponses` with

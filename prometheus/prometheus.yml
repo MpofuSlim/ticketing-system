@@ -121,3 +121,12 @@ scrape_configs:
         files: [ /etc/prometheus/secrets/metrics-scrape-token ]
     static_configs:
       - targets: [ "loans-service:8088" ]
+
+  # The cell's shared Redis, through redis-exporter (deploy/k8s/monitoring/).
+  # Feeds the `redis` alert group: memory vs maxmemory, -OOM write refusals,
+  # evictions (must stay 0 under noeviction), TTL-less keys, and the live
+  # maxmemory-policy. No token: the exporter is in-cluster only and serves
+  # numbers, never key names or values.
+  - job_name: redis
+    static_configs:
+      - targets: [ "redis-exporter:9121" ]

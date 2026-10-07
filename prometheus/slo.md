@@ -197,6 +197,93 @@ guesswork until this is fixed.
    schema/protocol mismatch (usually a major OTel version skew between
    SDK and collector).
 
+### `RedisDown`
+
+`redis-exporter` reports `redis_up == 0`: Redis itself is not answering.
+
+What that does to the fleet, by family (CLAUDE.md, "Redis — noeviction"):
+revocation reads (`auth:tokenver:*`, `auth:revoked:*`) fail OPEN until each
+access token expires (≤ 15 min); booking/payment requests carrying an
+`Idempotency-Key`, and seat holds, fail CLOSED (5xx); `/auth/exchange` answers
+503; the login, support and voucher-guess limiters and the gateway's fail-safe
+routes fall back to per-replica windows; the gateway's other routes lose their
+limiter.
+
+1. `kubectl -n ticketing get pod redis-0` and its events / logs. A pod
+   OOM-killed by the container limit (not Redis's own maxmemory) shows as
+   `OOMKilled` — the limit is too close to `maxmemory`; see `RedisMemoryHigh`.
+2. Redis runs with `appendonly yes` on a PVC, so a restarted pod replays its AOF
+   and comes back with every session-revocation key it had.
+
+### `RedisExporterDown`
+
+Prometheus cannot scrape `redis-exporter:9121`. Redis may be fine; what is
+lost is every other alert in the `redis` group.
+`kubectl -n ticketing get pod -l app=redis-exporter` and its logs (an auth
+error means `REDIS_PASSWORD` in `cell-zw-secrets` changed — restart the
+exporter).
+
+### `RedisMemoryHigh`
+
+Redis memory is above 75% (ticket) / 90% (page) of `maxmemory`. The policy is
+`noeviction`, so at 100% Redis refuses every write (`RedisRefusingWrites`)
+rather than dropping keys.
+
+1. See where it goes: `kubectl -n ticketing exec redis-0 -- sh -c 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" INFO memory; redis-cli --no-auth-warning -a "$REDIS_PASSWORD" INFO keyspace'`.
+   The expected bulk is the booking/payment idempotency entries (24 h TTL,
+   ~2 KB each); count them with
+   `kubectl -n ticketing exec redis-0 -- sh -c 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" --scan --pattern "POST /*" --count 1000 | wc -l'`.
+2. Every key carries a TTL, so memory drains on its own as they lapse; a
+   sale spike recedes within 24 h. If it will not wait, raise `maxmemory`
+   live — **only while it stays ≤ ~2/3 of the container memory limit**
+   (`kubectl -n ticketing get sts redis -o jsonpath='{.spec.template.spec.containers[0].resources.limits.memory}'`):
+   `kubectl -n ticketing exec redis-0 -- sh -c 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" CONFIG SET maxmemory <n>mb'`. Beyond that, raise the limit and
+   `maxmemory` together in `deploy/k8s/01-infra.yaml` (restarts `redis-0`).
+3. **Never** switch the policy to an evicting one to make room — that is the
+   silent fail-open this setup exists to prevent.
+
+### `RedisRefusingWrites`
+
+Redis answered writes with `-OOM command not allowed when used memory >
+'maxmemory'`. Each caller is on its Redis-outage path (see `RedisDown` for the
+list) — the loud, fail-closed-where-it-matters outcome `noeviction` was chosen
+for. Act as for `RedisMemoryHigh`: make room by raising `maxmemory`
+within the container limit, then find what grew.
+
+### `RedisEvictingKeys`
+
+Redis evicted keys, or reports a `maxmemory-policy` other than `noeviction`.
+Under `noeviction` this never happens, so the policy drifted — usually a pod
+restarted from a manifest without the change, or a manual `CONFIG SET`.
+Evicted keys may include session revocations (a signed-out or deactivated
+account's tokens accepted again downstream) and idempotency keys (a retried
+payment or booking processed twice).
+
+1. Put it back: `kubectl -n ticketing exec redis-0 -- sh -c 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" CONFIG SET maxmemory-policy noeviction'`.
+2. Check `deploy/k8s/01-infra.yaml` on the host says `noeviction` too, or the
+   next restart reverts it.
+3. Evicted revocations stop mattering once the access tokens they covered
+   expire (≤ 15 min). An account that must be cut off downstream sooner gets
+   its version re-published by hand:
+   `SET auth:tokenver:<userUuid> <users.token_version> PX 604800000`.
+
+### `RedisKeysWithoutTtl`
+
+`redis_db_keys - redis_db_keys_expiring > 0` for an hour: something stored a
+key with no TTL. Under `noeviction` such a key never leaves memory, and a
+counter without a TTL (the old `auth:rl:*` INCR-then-EXPIRE race) is a
+permanent lockout.
+
+1. List them (O(keys) — run off-peak):
+   ```sh
+   kubectl -n ticketing exec redis-0 -- sh -c 'R="redis-cli --no-auth-warning -a $REDIS_PASSWORD"
+     $R --scan --count 1000 | while read -r k; do [ "$($R PTTL "$k")" = "-1" ] && echo "$k"; done'
+   ```
+2. `auth:rl:*` leftovers are stale counters: `DEL` them (the current limiter
+   heals one on its next hit anyway). Anything else: find the writer, fix it
+   to set the TTL in the same command or script, then `DEL` or `PEXPIRE` the
+   strays.
+
 ### `AuditIntegrityBroken`
 
 A row in `audit_events` failed its `row_hmac` recompute — its **content**
@@ -268,7 +355,9 @@ session's access token until it expires (at most the access-token TTL).
 user-service for `Failed to publish token version` to see which users were
 affected; nothing is retried, so if a specific deactivation must bite
 downstream before the TTL runs out, `SET auth:tokenver:<userUuid>
-<current token_version>` by hand once Redis is back.
+<current token_version> PX 604800000` by hand once Redis is back — always with
+the `PX` (the refresh-token lifetime): under `noeviction` a key without a TTL
+never leaves (`RedisKeysWithoutTtl`).
 
 The publish only ever RAISES the stored value (a Lua compare-and-set, so two
 bumps whose after-commit writes land out of order cannot move it backwards). The

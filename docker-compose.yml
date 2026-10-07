@@ -32,8 +32,10 @@ services:
     image: redis:7-alpine
     container_name: innbucks-redis
     restart: unless-stopped
-    mem_limit: 256m
-    mem_reservation: 128m
+    mem_limit: 768m
+    mem_reservation: 256m
+    # noeviction, never an evicting policy — see deploy/k8s/01-infra.yaml and
+    # CLAUDE.md "Redis — noeviction". Keep the two in lock-step.
     command:
       - "redis-server"
       - "--appendonly"
@@ -41,9 +43,9 @@ services:
       - "--requirepass"
       - "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}"
       - "--maxmemory"
-      - "200mb"
+      - "512mb"
       - "--maxmemory-policy"
-      - "allkeys-lru"
+      - "noeviction"
     ports:
       - "127.0.0.1:6379:6379"
     volumes:

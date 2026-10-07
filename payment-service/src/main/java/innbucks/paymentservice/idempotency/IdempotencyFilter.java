@@ -147,11 +147,29 @@ public class IdempotencyFilter extends OncePerRequestFilter {
                         wrapper.getContentAsByteArray(),
                         bodyHash
                 );
-                store.put(cacheKey, snapshot, TTL_SECONDS);
-                log.debug("Idempotency cache store key={} status={} bodyHash={}",
-                        key, wrapper.getStatus(), bodyHash);
+                storeCompleted(cacheKey, snapshot, key);
             }
             wrapper.copyBodyToResponse();
+        }
+    }
+
+    /**
+     * Records the response, best-effort. The request has ALREADY run — on
+     * {@code POST /payments} a payment code or checkout has been minted — so a
+     * store that cannot take the write (Redis down, or refusing writes at
+     * maxmemory under the cell's {@code noeviction} policy — CLAUDE.md,
+     * "Redis — noeviction") must not replace the real response with a 500 that
+     * hides the code from the customer. A retry with this key then runs again
+     * and meets the one-payment-per-order guard instead of a replay.
+     */
+    private void storeCompleted(String cacheKey, StoredResponse snapshot, String key) {
+        try {
+            store.put(cacheKey, snapshot, TTL_SECONDS);
+            log.debug("Idempotency cache store key={} status={} bodyHash={}",
+                    key, snapshot.status(), snapshot.bodySha256());
+        } catch (RuntimeException e) {
+            log.warn("Idempotency cache store FAILED key={} status={}; the response is delivered, "
+                    + "but a retry with this key will run again", key, snapshot.status(), e);
         }
     }
 
