@@ -213,6 +213,31 @@ class SeatServiceTest {
     }
 
     @Test
+    void confirmSeat_aLockKeyThatCannotBeDeleted_stillReturnsTheBooking() {
+        // The delete runs after BOOKED has committed: throwing there would
+        // report a failure for a seat that IS sold. The key names the buyer of
+        // a BOOKED seat, which nothing locks again, and expires with its TTL.
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, mock(SeatCategoryRepository.class), store);
+
+        UUID seatId = UUID.randomUUID();
+        Seat seat = availableSeat(seatId, category(9));
+        seat.setStatus(Seat.SeatStatus.LOCKED);
+        when(seatRepo.findWithCategoryById(seatId)).thenReturn(Optional.of(seat));
+        when(store.get("seat:lock:" + seatId)).thenReturn("user@example.com");
+        doThrow(new IllegalStateException("redis down")).when(store).delete("seat:lock:" + seatId);
+
+        SeatResponseDTO result = service.confirmSeat(seatId, "user@example.com");
+
+        assertEquals(Seat.SeatStatus.BOOKED, result.getStatus());
+        InOrder order = inOrder(store, seatRepo);
+        order.verify(store).get("seat:lock:" + seatId);
+        order.verify(seatRepo).save(seat);
+        order.verify(store).delete("seat:lock:" + seatId);
+    }
+
+    @Test
     void confirmSeat_rejectsWhenLockBelongsToOtherUser() {
         SeatRepository seatRepo = mock(SeatRepository.class);
         SeatLockStore store = mock(SeatLockStore.class);

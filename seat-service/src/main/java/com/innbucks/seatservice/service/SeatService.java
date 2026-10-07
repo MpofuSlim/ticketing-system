@@ -12,10 +12,13 @@ import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -35,6 +38,19 @@ public class SeatService {
 
     static final long LOCK_TTL_SECONDS = 300; // 5 minutes
     static final String LOCK_KEY_PREFIX = "seat:lock:";
+
+    /**
+     * The transaction confirmSeat commits the booking in, so its after-commit
+     * Redis delete runs with no connection or row lock held. A setter, so the
+     * unit tests that build this with {@code new} keep their construction; with
+     * none set the phase runs inline.
+     */
+    private TransactionTemplate writeTx;
+
+    @Autowired
+    void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.writeTx = TransactionPhases.readWrite(transactionManager);
+    }
 
     public List<SeatResponseDTO> getSeatsByCategory(UUID categoryId) {
         log.debug("Fetching seats categoryId={}", categoryId);
@@ -153,7 +169,20 @@ public class SeatService {
 
         // Redis put goes last: if it throws, the surrounding transaction rolls
         // back and the seat returns to AVAILABLE. Doing it before the DB writes
-        // would leak a Redis owner whenever the transaction failed afterwards.
+        // would leak a Redis owner whenever the transaction failed afterwards —
+        // and confirmSeat books on the owner alone.
+        //
+        // It stays INSIDE the transaction (seat and category row locks and the
+        // pooled connection held) on purpose; neither way out is safe:
+        //  - BEFORE the transaction it would run before we know the hold is
+        //    granted, and SET overwrites: a refused attempt on a seat someone
+        //    else holds would replace their owner, and their confirm fails 409.
+        //  - AFTER COMMIT a failed put leaves a committed LOCKED row with no
+        //    owner: nobody can confirm or release it, nobody else can lock it,
+        //    and the caller is told it failed — the seat is out of sale until
+        //    the reaper reclaims it at its TTL.
+        // In here, a success means BOTH halves of the hold exist and a failure
+        // undoes both. The cost is bounded by spring.data.redis.timeout.
         String lockKey = LOCK_KEY_PREFIX + seatId;
         seatLockStore.put(lockKey, userEmail, LOCK_TTL_SECONDS);
 
@@ -171,37 +200,58 @@ public class SeatService {
                 .build();
     }
 
-    @Transactional
+    /**
+     * Deliberately NOT {@code @Transactional}: the booking commits in a phase of
+     * its own, and the lock owner is deleted only after that phase has RETURNED
+     * — committed, its connection back in the pool, no row lock held. See
+     * {@link #deleteLockQuietly}.
+     */
     public SeatResponseDTO confirmSeat(UUID seatId, String userEmail) {
         log.info("Confirming seat seatId={} userEmail={}", seatId, userEmail);
-        // Category fetched with the seat: the response names it.
-        Seat seat = seatRepository.findWithCategoryById(seatId)
-                .orElseThrow(() -> {
-                    log.warn("Confirm failed, seat not found seatId={}", seatId);
-                    return new NotFoundException("Seat not found");
-                });
-
         String lockKey = LOCK_KEY_PREFIX + seatId;
-        String lockOwner = seatLockStore.get(lockKey);
+        SeatResponseDTO booked = TransactionPhases.inTransaction(writeTx, () -> {
+            // Category fetched with the seat: the response names it.
+            Seat seat = seatRepository.findWithCategoryById(seatId)
+                    .orElseThrow(() -> {
+                        log.warn("Confirm failed, seat not found seatId={}", seatId);
+                        return new NotFoundException("Seat not found");
+                    });
 
-        if (lockOwner == null || !lockOwner.equals(userEmail)) {
-            // 409 covers both branches the message lumps together: lock expired
-            // (legit user retried after TTL, state changed under them) and lock
-            // is owned by a different user (race lost). Both surface as "your
-            // seat hold isn't valid anymore, restart the booking" in the FE.
-            log.warn("Confirm rejected, lock expired or owned by another user seatId={} userEmail={} lockOwner={}",
-                    seatId, userEmail, lockOwner);
-            throw new ConflictException("Lock expired or belongs to a different user");
-        }
+            // The ownership read stays INSIDE the transaction, next to the write
+            // it authorises: it is the gate that turns a hold into a sale and it
+            // fails closed (a Redis error rolls the confirm back). Moving it
+            // before the transaction would save one Redis round trip by widening
+            // the gap between "the owner is X" and "BOOKED for X".
+            String lockOwner = seatLockStore.get(lockKey);
 
-        seat.setStatus(Seat.SeatStatus.BOOKED);
-        seat.setLockExpiresAt(null);
-        seatRepository.save(seat);
-        seatLockStore.delete(lockKey);
+            if (lockOwner == null || !lockOwner.equals(userEmail)) {
+                // 409 covers both branches the message lumps together: lock expired
+                // (legit user retried after TTL, state changed under them) and lock
+                // is owned by a different user (race lost). Both surface as "your
+                // seat hold isn't valid anymore, restart the booking" in the FE.
+                log.warn("Confirm rejected, lock expired or owned by another user seatId={} userEmail={} lockOwner={}",
+                        seatId, userEmail, lockOwner);
+                throw new ConflictException("Lock expired or belongs to a different user");
+            }
+
+            seat.setStatus(Seat.SeatStatus.BOOKED);
+            seat.setLockExpiresAt(null);
+            seatRepository.save(seat);
+            return toDTO(seat);
+        });
+
+        // The owner key goes only once BOOKED has committed. The read above took
+        // no row lock, so the commit can still fail on Seat's @Version — e.g. the
+        // hold went stale and another customer reclaimed it meanwhile. A delete
+        // made before that commit (as this used to be) erased the NEW holder's
+        // key and left them unable to confirm a seat the database says is
+        // theirs. Once committed the seat is BOOKED, which lockSeat, releaseSeat
+        // and the reaper all refuse, so nobody can come to own this key again.
+        deleteLockQuietly(lockKey, seatId);
 
         log.info("Seat booked seatId={} section={} number={} userEmail={}",
-                seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail);
-        return toDTO(seat);
+                seatId, booked.getSectionLabel(), booked.getSeatNumber(), userEmail);
+        return booked;
     }
 
     @Transactional
@@ -255,6 +305,11 @@ public class SeatService {
             log.warn("Release: category counter not incremented (already at total) categoryId={}", categoryId);
         }
 
+        // Deleted INSIDE the transaction, under the row lock, on purpose. The
+        // moment this commits the seat is AVAILABLE, and the next lockSeat
+        // (blocked on this row until then) PUTs its own owner under the same
+        // key. Deleting after commit could land after that put and erase the
+        // new holder's key; in here the row lock orders our delete first.
         seatLockStore.delete(lockKey);
         log.info("Seat released seatId={} section={} number={} userEmail={}",
                 seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail);
@@ -290,10 +345,31 @@ public class SeatService {
                     seatId, categoryId);
         }
 
+        // Inside the transaction for the same reason as releaseSeat: once this
+        // commits the seat is AVAILABLE and a new holder's PUT may follow, so
+        // the delete must be ordered before it by the row lock we hold.
         seatLockStore.delete(LOCK_KEY_PREFIX + seatId);
         log.info("Reaper released stale lock seatId={} section={} number={}",
                 seatId, seat.getSectionLabel(), seat.getSeatNumber());
         return true;
+    }
+
+    /**
+     * Deletes the owner of a seat that is already BOOKED and committed.
+     *
+     * <p>A failure is logged, not thrown: the booking is committed, and an
+     * exception here would reach the caller as an error for a seat that IS
+     * booked. The key left behind is harmless — it names the buyer of a BOOKED
+     * seat, which no path locks, releases or reaps — and its Redis TTL removes
+     * it.
+     */
+    private void deleteLockQuietly(String lockKey, UUID seatId) {
+        try {
+            seatLockStore.delete(lockKey);
+        } catch (RuntimeException ex) {
+            log.warn("Seat booked but its lock key could not be deleted; it expires with its TTL seatId={}",
+                    seatId, ex);
+        }
     }
 
     private SeatResponseDTO toDTO(Seat seat) {
