@@ -49,6 +49,17 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
+      # Bounded, because two of the three Redis callers run INSIDE a database
+      # transaction: SeatService's lock-owner put/get/delete hold a pooled
+      # connection and the seat's row lock (on lock, also the category row the
+      # availability counter lives on) for as long as Redis takes to answer.
+      # Lettuce's default is 60s. A timeout changes no outcome, only how soon it
+      # arrives: the seat-lock calls fail CLOSED (the exception rolls the hold,
+      # confirm or release back, as a Redis error always did; the reaper skips
+      # that seat until its next tick; confirm's after-commit delete only logs),
+      # and JwtFilter's denylist / token-version reads fail OPEN as before.
+      timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
       repositories:
         enabled: false
 
