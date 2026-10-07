@@ -318,7 +318,7 @@ class RemoteCallsOutsideTransactionTest {
         ObjectProvider<EventServiceClient> events = mock(ObjectProvider.class);
         when(events.getIfAvailable()).thenReturn(eventServiceClient);
         return new BookingService(bookingRepo, itemRepo, mock(CategoryInventoryRepository.class),
-                mock(SeatServiceClient.class), publisher, new QrCodeGenerator(), null, events, null,
+                mock(SeatServiceClient.class), publisher, new QrCodeGenerator(), events,
                 txManager);
     }
 

@@ -55,7 +55,7 @@ class BookingServiceEventLookupCachingTest {
         service = new BookingService(bookingRepo, itemRepo,
                 mock(CategoryInventoryRepository.class), mock(SeatServiceClient.class),
                 mock(ApplicationEventPublisher.class), new QrCodeGenerator(),
-                null, provider, null, mock(PlatformTransactionManager.class));
+                provider, mock(PlatformTransactionManager.class));
         service.setEventLookupCache(new EventLookupCache(
                 new ReadCacheConfig().readCacheManager(new ReadCacheProperties())));
 

@@ -5,7 +5,6 @@ import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.exception.BookingConflictException;
 import com.innbucks.bookingservice.exception.NotFoundException;
-import com.innbucks.bookingservice.loyalty.LoyaltyEarnRetryService;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
@@ -48,8 +47,6 @@ class BookingServiceExtendHoldTest {
                 mock(ApplicationEventPublisher.class),
                 mock(QrCodeGenerator.class),
                 mock(ObjectProvider.class),
-                mock(ObjectProvider.class),
-                mock(LoyaltyEarnRetryService.class),
                 mock(PlatformTransactionManager.class));
         when(bookingRepository.save(any(Booking.class))).thenAnswer(inv -> inv.getArgument(0));
     }

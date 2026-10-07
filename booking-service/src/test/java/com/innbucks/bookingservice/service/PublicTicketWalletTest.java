@@ -55,7 +55,7 @@ class PublicTicketWalletTest {
         return new BookingService(bookingRepo, mock(BookingItemRepository.class),
                 mock(CategoryInventoryRepository.class), mock(SeatServiceClient.class),
                 mock(ApplicationEventPublisher.class), new QrCodeGenerator(),
-                null, provider, null, mock(PlatformTransactionManager.class));
+                provider, mock(PlatformTransactionManager.class));
     }
 
     private static Booking booking(UUID eventId, Booking.BookingStatus status, String ticketNumber) {

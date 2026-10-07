@@ -17,7 +17,7 @@ import org.springframework.context.annotation.Configuration;
  * S2S contract holds by construction instead of by luck, for consumers that are
  * stricter than we are.
  *
- * <p>Applies to all four Feign clients (seat, event, user, loyalty) — Spring
+ * <p>Applies to all three Feign clients (seat, event, user) — Spring
  * Cloud OpenFeign picks up {@link RequestInterceptor} beans globally.
  */
 @Configuration
