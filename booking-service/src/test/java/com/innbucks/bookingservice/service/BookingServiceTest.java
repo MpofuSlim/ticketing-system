@@ -139,7 +139,7 @@ class BookingServiceTest {
         // BookingService treats these as "loyalty not wired" and just confirms
         // cash-only bookings.
         return new BookingService(bookingRepo, itemRepo, inventoryRepo, seatClient, eventPublisher,
-                new QrCodeGenerator(), null, null, null,
+                new QrCodeGenerator(), null,
                 mock(PlatformTransactionManager.class));
     }
 
@@ -1289,7 +1289,7 @@ class BookingServiceTest {
 
         BookingService service = new BookingService(bookingRepo, itemRepo,
                 successfulInventory(), stubClient(fx), mock(ApplicationEventPublisher.class),
-                new QrCodeGenerator(), null, provider, null,
+                new QrCodeGenerator(), provider,
                 mock(PlatformTransactionManager.class));
 
         // Guest path: userEmail = null.
@@ -1331,7 +1331,7 @@ class BookingServiceTest {
 
         BookingService service = new BookingService(bookingRepo, itemRepo,
                 successfulInventory(), stubClient(fx), mock(ApplicationEventPublisher.class),
-                new QrCodeGenerator(), null, provider, null,
+                new QrCodeGenerator(), provider,
                 mock(PlatformTransactionManager.class));
 
         service.createBooking(null, "+263770000001", fx.request);
@@ -1356,7 +1356,7 @@ class BookingServiceTest {
         when(provider.getIfAvailable()).thenReturn(eventClient);
         return new BookingService(bookingRepo, mock(BookingItemRepository.class),
                 successfulInventory(), mock(SeatServiceClient.class), publisher,
-                new QrCodeGenerator(), null, provider, null,
+                new QrCodeGenerator(), provider,
                 mock(PlatformTransactionManager.class));
     }
 

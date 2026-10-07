@@ -68,7 +68,6 @@ import static org.mockito.Mockito.when;
         "app.booking.reminder-cron=-",
         "app.booking.organizer-reminder-cron=-",
         "app.booking.expiration-poll-interval-ms=86400000",
-        "app.loyalty-earn-retry.initial-delay-ms=86400000",
         "app.invoicing.scheduler-enabled=false",
         // The event-day rule is ON: its event-service lookup is one of the
         // calls under test.

@@ -2348,6 +2348,14 @@ deleted. The **empty `event_outbox` table is left dormant** (harmless under
 `ddl-auto: validate`; no entity maps it) rather than dropped — drop it in a later
 migration if you want.
 
+**The ticket loyalty-earn path is retired as well.** Ticket bookings stopped
+earning points (product decision: points accrue only through shop checkout in
+loyalty-service), which left booking-service's earn retry job a no-op. Its
+classes, booking's `LoyaltyServiceClient` + fallback + DTOs, and the
+`booking.loyalty_earn_retry.*` metrics are deleted. The `loyalty_earn_retry` table
+is left dormant like `event_outbox`: its rows are history and must **never** be
+credited, so do not resurrect a drain for them.
+
 Domain events are now **in-process only**: `ApplicationEventPublisher` +
 `@TransactionalEventListener(AFTER_COMMIT)` still drive the notification
 side-effects (`BookingConfirmed/Cancelled` → notifications, `TransactionCompletedEvent`

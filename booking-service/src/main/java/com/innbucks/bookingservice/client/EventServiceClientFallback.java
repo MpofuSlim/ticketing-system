@@ -8,8 +8,7 @@ import org.springframework.stereotype.Component;
 
 // Returns a null payload on event-service failure. Booking creation stays
 // possible even when event-service is down; the resulting booking just has
-// tenantId=null, which means loyalty earn/redeem will be skipped at confirm
-// time. Booking flow is never blocked by an event-service outage.
+// tenantId=null. Booking flow is never blocked by an event-service outage.
 @Component
 @Slf4j
 public class EventServiceClientFallback implements EventServiceClient {

@@ -96,7 +96,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.booking.reminder-cron=-",
         "app.booking.organizer-reminder-cron=-",
         "app.booking.expiration-poll-interval-ms=86400000",
-        "app.loyalty-earn-retry.initial-delay-ms=86400000",
         "app.invoicing.scheduler-enabled=false",
         // The event-day rule asks event-service (mocked to answer nothing for
         // scans); it is not what is under test here.

@@ -2,7 +2,6 @@ package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.cache.EventLookupCache;
 import com.innbucks.bookingservice.client.EventServiceClient;
-import com.innbucks.bookingservice.client.LoyaltyServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.*;
 import com.innbucks.bookingservice.entity.*;
@@ -10,10 +9,8 @@ import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.exception.BookingConflictException;
 import com.innbucks.bookingservice.exception.DependencyUnavailableException;
-import com.innbucks.bookingservice.exception.LoyaltyServiceUnavailableException;
 import com.innbucks.bookingservice.exception.NotFoundException;
 import com.innbucks.bookingservice.util.MsisdnMasking;
-import com.innbucks.bookingservice.loyalty.LoyaltyEarnRetryService;
 import com.innbucks.bookingservice.repository.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -44,12 +41,9 @@ public class BookingService {
     private final ApplicationEventPublisher eventPublisher;
     private final QrCodeGenerator qrCodeGenerator;
     // ObjectProvider so unit tests that build the service with `new` and pass
-    // null for the loyalty/event clients still work — the loyalty integration
-    // is only exercised by tests that opt in.
-    private final ObjectProvider<LoyaltyServiceClient> loyaltyClientProvider;
+    // null for the event client still work.
     private final ObjectProvider<EventServiceClient> eventClientProvider;
     private volatile EventLookupCache eventLookupCache;
-    private final LoyaltyEarnRetryService loyaltyEarnRetryService;
     private final TransactionTemplate txTemplate;
     // Read-only twin for the list reads (see loadWithItems): the bookings and
     // their LAZY items are read inside it; mapping (QR rendering) and any
@@ -92,20 +86,13 @@ public class BookingService {
     @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
     private String eventInternalToken;
 
-    // Same shared fleet secret, presented to loyalty-service's S2S ticketing
-    // endpoints (organizer = merchant). Separate field so the call sites read clearly.
-    @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
-    private String loyaltyInternalToken;
-
     public BookingService(BookingRepository bookingRepository,
                           BookingItemRepository bookingItemRepository,
                           CategoryInventoryRepository categoryInventoryRepository,
                           SeatServiceClient seatServiceClient,
                           ApplicationEventPublisher eventPublisher,
                           QrCodeGenerator qrCodeGenerator,
-                          ObjectProvider<LoyaltyServiceClient> loyaltyClientProvider,
                           ObjectProvider<EventServiceClient> eventClientProvider,
-                          LoyaltyEarnRetryService loyaltyEarnRetryService,
                           PlatformTransactionManager transactionManager) {
         this.bookingRepository = bookingRepository;
         this.bookingItemRepository = bookingItemRepository;
@@ -113,9 +100,7 @@ public class BookingService {
         this.seatServiceClient = seatServiceClient;
         this.eventPublisher = eventPublisher;
         this.qrCodeGenerator = qrCodeGenerator;
-        this.loyaltyClientProvider = loyaltyClientProvider;
         this.eventClientProvider = eventClientProvider;
-        this.loyaltyEarnRetryService = loyaltyEarnRetryService;
         // Programmatic transaction wrapping ONLY the booking writes (see
         // createBooking -> persistBooking). Mirrors the TransactionTemplate
         // pattern in loyalty-service ShopService / user-service AuditService.
