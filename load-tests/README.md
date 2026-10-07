@@ -6,7 +6,8 @@ the same tool the booking write-path campaign used
 ([`docs/booking-capacity-and-scaling.md`](../docs/booking-capacity-and-scaling.md) §5,
 `booking-flat.js`). That script sweeps `POST /bookings` alone to find the write
 ceiling; this suite covers the rest of the fleet: catalogue reads, a checkout
-that never pays, a loyalty till, and the gateway rate limiter.
+that never pays, a loyalty till, the gateway rate limiter, and (staging only)
+the lending back office.
 
 No dependencies beyond the k6 binary — no remote `jslib` imports, no Node, no JVM.
 
@@ -19,6 +20,7 @@ load-tests/
   scenarios/checkout.js  POST /bookings on a test event, then abandon (no payment)
   scenarios/till.js      a SHOP_USER cashier; writes behind ENABLE_WRITES
   scenarios/ratelimit.js 429 correctness check on the 2FA route
+  scenarios/lending.js   loans back office, read-only, STAGING ONLY
 ```
 
 ---
@@ -43,6 +45,16 @@ load-tests/
   printed masked (`****0000`). Never put a token on a shared command line you
   then paste into a ticket.
 - **Never `/payments`.** No scenario calls payment-service.
+- **Lending is staging-only, whatever the flags say.** loans-service runs on
+  staging alone (production's Service has no endpoints: every `/lending/**`
+  call there is a 500), so `lending` refuses any target classified as
+  production — `ALLOW_PRODUCTION=true` does not unlock it. It is read-only:
+  its one non-GET is a single sign-in, in `setup()`, shared by every VU and
+  **never retried** (loans locks an account for 30 minutes after seven wrong
+  passwords). It never calls loans' `forgot-password` (edge-denied, and it
+  replaces the password) and refuses an account with a temporary password
+  rather than change it. Never run it with `--http-debug=full`: that prints the
+  sign-in body, password included.
 - **Not loaded, on purpose:** `POST /auth/login` (limited to 5/min per
   identifier in user-service) and `POST /auth/refresh` (rotates the token and
   is reuse-detected — a replay revokes the whole session family).
@@ -92,6 +104,25 @@ k6 run \
   load-tests/fleet.js
 ```
 
+**Everything that is configured:** `SCENARIOS=all` runs every scenario whose
+inputs are set and prints the ones it skipped (`checkout` without
+`CHECKOUT_EVENT_ID`, `till` without `TILL_TOKEN`, `lending` without
+`LENDING_USERNAME`/`LENDING_PASSWORD` or off staging). A scenario you NAME is
+never skipped: it refuses with the variable it is missing.
+
+**Lending on staging** (after provisioning §6):
+
+```sh
+k6 run \
+  -e BASE_URL=$STAGING_URL -e STAGING_URLS=$STAGING_URL \
+  -e PROFILE=smoke -e SCENARIOS=lending \
+  -e LENDING_USERNAME="$LENDING_USERNAME" -e LENDING_PASSWORD="$LENDING_PASSWORD" \
+  load-tests/fleet.js
+```
+
+(Prefer exporting the two variables in the shell over typing the password on
+the command line, where it lands in shell history.)
+
 Add `--summary-export load-tests/results/summary.json` to keep the numbers
 (`results/` is git-ignored).
 
@@ -126,9 +157,15 @@ never spends another's budget.
 | | `booking_create` | 1500 ms | | | |
 | `till` | `till_my_shop`, `till_vouchers_by_phone`, `till_redemption_rate`, `till_qr_status` | 800 ms | < 1 % | `TILL_RATE` 5/s | `TILL_SOAK_RATE` 2/s |
 | | `till_earn`, `till_burn` (writes only) | 1500 ms | | | |
+| `lending` | `lending_loans_list`, `lending_loan_detail`, `lending_my_work`, `lending_merchant_users` | 800 ms | < 1 % | `LENDING_RATE` 1/s | `LENDING_SOAK_RATE` 0.5/s |
+| | `lending_work_queues`, `lending_queue_items`, `lending_credit_pending`, `lending_staff_search` | 1200 ms | | | |
 | `ratelimit` | `ratelimit_429` count > 0, `ratelimit_recovered` count > 0, `ratelimit_unexpected` count == 0 | — | — | fixed | fixed |
 
 Every scenario also requires `checks` > 99 %.
+
+A `lending` endpoint the account cannot read (see §4) is not called, and its
+budget then shows in the summary as a passing `p(95)=0s`: read it as "not
+exercised", not as fast.
 
 The budgets assume a generator close to the cell. From far away (a GitHub
 runner, ~250 ms round trip to ZW), raise all of them at once with
@@ -192,6 +229,37 @@ For ~5 s the generator's public IP has no 2FA budget on that cell: someone
 signing in from the same IP (an office NAT) would get one 429 on the code step
 and can retry.
 
+### `lending` — a credit officer in the lending portal, read-only, STAGING ONLY
+
+loans-service (`MpofuSlim/innbucks-loans`, `loans-service-route`, `/lending/**`)
+is its own identity provider, so `setup()` signs in to **loans** once —
+`POST /lending/v1/auth/login {username, password}` — and every VU reuses that
+bearer (24 h by default, `JWT_EXPIRATION_MS`; the pre-flight refuses one that
+would expire mid-run). A refused sign-in aborts the run with the reason (401
+wrong password, 423 locked, temporary password, an admin or till account) and
+is not retried.
+
+Per journey, all GET, with 2–8 s of reading between screens:
+
+| Request | `endpoint` tag | Who can read it (loans' own `@PreAuthorize`) |
+|---|---|---|
+| `/lending/v1/loans?page&size=20` (first 1–3 pages) | `lending_loans_list` | any signed-in user (CREDIT_MANAGER / FINANCE see every merchant's loans) |
+| `/lending/v1/loans/{loanId}` | `lending_loan_detail` | same scope; lists documents WITHOUT content, so no document-view log row |
+| `/lending/v1/work-queues` | `lending_work_queues` | CREDIT_MANAGER, FINANCE |
+| `/lending/v1/work-queues/{stage}/items` | `lending_queue_items` | whoever may VIEW the stage; stages come from the summary |
+| `/lending/v1/work-queues/mine` | `lending_my_work` | CREDIT_MANAGER, FINANCE |
+| `/lending/v1/loans/pending-credit-decision?page=0&size=20` | `lending_credit_pending` | only when the summary lists `CREDIT_DECISION` |
+| `/lending/v1/staff-members?status=ACTIVE[&q=]&page=0&size=20` | `lending_staff_search` | HUMAN_CAPITAL, CREDIT_MANAGER, FINANCE |
+| `/lending/v1/merchants/{merchantCode}/users` | `lending_merchant_users` | CREDIT_MANAGER (loans' only user listing a non-admin can read) |
+
+Loan ids come from the first list page (or `LENDING_LOAN_IDS`), merchant codes
+from `GET /lending/v1/merchants`, stages from `GET /lending/v1/work-queues`,
+all in `setup()`. Reads the account's groups cannot reach are skipped with a
+warning, never sent to collect 403s. **Not loaded:** `GET /lending/v1/dashboard`
+(SUPER_ADMIN only — this suite never uses an admin account) and every write:
+nothing is decided, assigned, lodged, booked, paid, messaged or reset.
+**Leaves nothing behind** but the sign-in.
+
 ---
 
 ## 5. Environment variables
@@ -200,7 +268,7 @@ and can retry.
 |---|---|---|---|
 | `BASE_URL` | all | — (required) | Public gateway base, with the edge prefix, e.g. the staging host's `https://<host>/foundry` |
 | `PROFILE` | all | `smoke` | `smoke`, `load` or `soak` |
-| `SCENARIOS` | all | `catalogue` | Comma list of `catalogue`, `checkout`, `till`, `ratelimit` |
+| `SCENARIOS` | all | `catalogue` | Comma list of `catalogue`, `checkout`, `till`, `ratelimit`, `lending`; or `all` (every configured one) |
 | `STAGING_URLS` | guard | — (none) | Comma list of URLs treated as staging |
 | `ALLOW_PRODUCTION` | guard | `false` | `true` to run against a non-staging public URL |
 | `ALLOW_PRODUCTION_WRITES` | guard | `false` | `true` to also allow checkout / till writes there |
@@ -227,6 +295,11 @@ and can retry.
 | `LOYALTY_TEST_USER_ID` | till burns | unset (no burns) | Loyalty user id of that phone in the test tenant |
 | `TILL_EARN_RATIO` / `TILL_BURN_RATIO` | till writes | `0.3` / `0.1` | Share of journeys that earn / burn |
 | `TILL_EARN_AMOUNT` | till writes | `1` | Earn amount in `TILL_CURRENCY` |
+| `LENDING_USERNAME` / `LENDING_PASSWORD` | lending | — | The dedicated loans back-office test account (§6). Both unset: `SCENARIOS=all` skips lending |
+| `LENDING_RATE` / `LENDING_SOAK_RATE` | lending | `1` / `0.5` | Journeys per second (~7–8 GETs each) |
+| `LENDING_LOAN_IDS` | lending | discovered | Fixed numeric loan ids to open (comma list) |
+| `LENDING_STAFF_STATUS` | lending | `ACTIVE` | Employment status the staff search filters on |
+| `LENDING_STAFF_QUERIES` | lending | unset (no `q`) | Search texts for the staff register (comma list): test employee numbers, never a real person's name or phone |
 
 ---
 
@@ -282,11 +355,37 @@ and can retry.
 
 **ratelimit** — nothing.
 
+**lending** — staging only.
+
+1. A **dedicated** user in the staging loans portal, created by a loans
+   SUPER_ADMIN (`POST /lending/v1/merchants/{merchantCode}/users`): a test
+   account, named as one (e.g. `loadtest-credit`), never a real person's.
+   Group **`CREDIT_MANAGER`** — the one group that reaches every read in §4.
+   Give it an email and mobile number the team controls: loans sends the
+   username and a temporary password there. Never `SUPER_ADMIN` or `MERCHANT_TILL` (the pre-flight refuses both).
+   Give it **no credit authority level**, so that even by hand it could not
+   approve a loan once approval limits are configured. Loans has no read-only
+   group: CREDIT_MANAGER can decide credit and assign queue items, so the
+   password lives only in the secret store and the account is used by nothing
+   but this suite. (`FINANCE` also works, without the merchant-users read;
+   `HUMAN_CAPITAL` gets the loan list and the staff search only.)
+2. Sign in to the portal once by hand and set a permanent password: a new
+   account's is temporary, and the suite refuses to change it.
+3. Some loans on staging the account can see. Without any, only the list page
+   is read. `LENDING_LOAN_IDS` pins particular ones.
+4. Optional: `LENDING_STAFF_QUERIES` with test employee numbers on the staging
+   staff register.
+
+If a run aborts with **423**, the account is locked (seven wrong passwords):
+wait 30 minutes or have a loans SUPER_ADMIN reset it, and fix the secret
+before the next run.
+
 ### CI secrets (for the workflow in §10)
 
 `LOADTEST_CHECKOUT_PHONE`, `LOADTEST_TILL_TOKEN`, `LOADTEST_TENANT_ID`,
-`LOADTEST_TILL_LOOKUP_PHONE` — each optional; a scenario that needs a missing
-one refuses with its name.
+`LOADTEST_TILL_LOOKUP_PHONE`, `LOADTEST_LENDING_USERNAME`,
+`LOADTEST_LENDING_PASSWORD` — each optional; a scenario that needs a missing
+one refuses with its name (`all` skips a scenario whose main input is unset).
 
 ---
 
@@ -299,6 +398,7 @@ one refuses with its name.
 | `till` reads | none (an unknown QR token is not recorded as fraud) | none |
 | `till` writes | PURCHASE earns (`LOADTEST-<uuid>` references) and 1-point REDEMPTIONs on the test merchant; the test phone's wallet grows; the merchant's next invoice period counts these points. | An SMS/WhatsApp per earn and per burn to `LOYALTY_TEST_PHONE` (sent after commit; dropped and counted on `loyalty.notify.rejected` if loyalty's notification pool is saturated). |
 | `ratelimit` | none | none |
+| `lending` | none (one successful sign-in; it only clears the account's failed-login counter) | none |
 
 The booking rows and earns are real data on that cell. Run against staging.
 
@@ -317,6 +417,11 @@ the bearer token when present, else the client IP. The catch-all routes allow
   share one bucket: about **10 journeys/s** per token.
 - `checkout` is far below its limits at any sane rate; the SMS bill is its real
   limit.
+- `lending` sends its ~7–8 GETs per journey with ONE loans token (signed in
+  once for the run), so every VU shares one `loans-service-route` bucket: about
+  **6 journeys/s** caps it. The default `LENDING_RATE=1` (~8 req/s) is set by
+  the backend instead: loans-service runs **one replica** with a 19-connection
+  Hikari pool on staging. Raise it in steps while watching §9.1.
 
 Above those rates the gateway answers **429**, which this suite counts as a
 failed request — it says "the generator is mis-sized", not "the fleet is
@@ -384,6 +489,30 @@ rate(hikaricp_connections_acquire_seconds_sum[1m])
 loyalty-service and marketplace-service export the same series under their own
 `job`.
 
+**loans-service (`lending`)** — the `loans-service` scrape job
+(`prometheus/prometheus.yml`) reads `/actuator/prometheus` on 8088. It is
+**staging only**: on production it reads `up=0` by design, so read these on
+staging's Prometheus. Its `http_server_requests` carries the same fixed SLO
+buckets (50ms … 5s); `uri` is the full template, e.g.
+`/lending/v1/loans/{loanId}`.
+
+```promql
+up{job="loans-service"}                            # 1 on staging, before you start
+histogram_quantile(0.95, sum by (le, uri)
+  (rate(http_server_requests_seconds_bucket{job="loans-service",uri=~"/lending/.*"}[1m])))
+sum by (uri, status) (rate(http_server_requests_seconds_count{job="loans-service"}[1m]))
+hikaricp_connections_active{job="loans-service"} / hikaricp_connections_max{job="loans-service"}  # max 19
+hikaricp_connections_pending{job="loans-service"}
+rate(hikaricp_connections_timeout_total{job="loans-service"}[1m])  # loans fails a wait after 5s
+sum(jvm_memory_used_bytes{job="loans-service",area="heap"}) / sum(jvm_memory_max_bytes{job="loans-service",area="heap"})
+rate(jvm_gc_pause_seconds_sum{job="loans-service"}[1m])
+process_cpu_usage{job="loans-service"}
+```
+
+A 401 or 423 on `/lending/v1/auth/login` in the gateway's series means the
+sign-in failed and the run aborted; a 500 on every `/lending/**` call means the
+target has no loans-service (production).
+
 **JVM and GC**
 
 ```promql
@@ -426,6 +555,8 @@ never on push, pull request or schedule). It runs the **smoke** profile against
 the `base_url` input with the scenarios you name, and uploads the k6 summary as
 an artifact. `ALLOW_PRODUCTION`, `ALLOW_PRODUCTION_WRITES` and `ENABLE_WRITES`
 are not inputs and are pinned `false`, so CI can never target production or
-write loyalty data. A GitHub runner is far from the cell: use the
+write loyalty data. `lending` takes its account from the
+`LOADTEST_LENDING_USERNAME` / `LOADTEST_LENDING_PASSWORD` secrets and, being
+staging-only, refuses any URL not listed in `LOADTEST_STAGING_URLS`. A GitHub runner is far from the cell: use the
 `threshold_scale` input (e.g. `2`) if latency budgets fail on round-trip time
 alone. `load` and `soak` are run by hand from a machine close to the cell.

@@ -16,7 +16,7 @@ on:
         required: true
         type: string
       scenarios:
-        description: "Comma list from catalogue, checkout, till, ratelimit"
+        description: "Comma list from catalogue, checkout, till, ratelimit, lending (staging only); or all (every configured one)"
         required: true
         default: "catalogue,ratelimit"
         type: string
@@ -72,6 +72,11 @@ jobs:
           TILL_TOKEN: ${{ secrets.LOADTEST_TILL_TOKEN }}
           LOYALTY_TENANT_ID: ${{ secrets.LOADTEST_TENANT_ID }}
           TILL_LOOKUP_PHONE: ${{ secrets.LOADTEST_TILL_LOOKUP_PHONE }}
+          # lending: the dedicated loans back-office test account (staging
+          # only; the scenario refuses any URL not in LOADTEST_STAGING_URLS
+          # and signs in exactly once per run).
+          LENDING_USERNAME: ${{ secrets.LOADTEST_LENDING_USERNAME }}
+          LENDING_PASSWORD: ${{ secrets.LOADTEST_LENDING_PASSWORD }}
           # Staging is named by a repository VARIABLE, not by the person running
           # the workflow, so an input cannot mark a production URL as staging.
           STAGING_URLS: ${{ vars.LOADTEST_STAGING_URLS }}
