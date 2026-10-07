@@ -107,30 +107,45 @@ and effectively unusable under load to **~12 ms median, 0 errors at 300 req/s**.
 Ordered by priority. Items 4.1, 4.2 and 4.5 are **latent issues that exist
 today** regardless of scaling plans.
 
-### 4.1 Postgres connection budget — over-subscribed (do this first)
+### 4.1 Postgres connection budget — sized, and pinned by a test
 
-The six data services' Hikari pools sum to **150** max connections, but Postgres
-default `max_connections` is **100**:
+> **Updated 2026-10-07.** When this hand-off was written the six data services'
+> pools summed to 150 against a default `max_connections` of 100. The cell now
+> starts Postgres with `max_connections=150` (`deploy/k8s/01-infra.yaml`), but
+> eight Deployments (adding loyalty, marketplace and loans) then summed to
+> exactly 150 with nothing left for a rollout's extra pod or an operator.
 
-| Service | `DB_POOL_MAX` |
-|---|---|
-| loyalty | 50 |
-| booking, seat, user, payment, event | 20 each |
-| **Total** | **150** |
+Every Deployment that uses the cell Postgres now sets `DB_POOL_MAX` /
+`DB_POOL_MIN` explicitly, and **`PostgresConnectionBudgetTest`** (api-gateway)
+fails the build unless
 
-Under load this can produce `FATAL: sorry, too many clients already` — a failure
-mode unrelated to the application. **Pick one:**
+```
+Σ DB_POOL_MAX × replicas  +  the largest rollout surge (one extra pod)  +  reserve (10)  ≤  max_connections
+```
 
-- **Raise `max_connections`** to comfortably exceed the sum of pools (e.g. 200),
-  **and/or**
-- **Introduce PgBouncer** (transaction pooling) so the services multiplex onto a
-  small fixed set of real Postgres backends — required anyway before horizontal
-  scaling (§4.3). The loyalty-service config already anticipates PgBouncer.
+| Service | `DB_POOL_MAX` (min idle) | Why |
+|---|---|---|
+| booking-service | 20 (5) | the measured write path (§2) |
+| seat-service | 20 (5) | ~2× the booking rate (§2) |
+| user-service | 15 (5) | login cost is Argon2 CPU, not connections |
+| payment-service | 15 (2) | short transactions; pollers + checkout |
+| loyalty-service | 15 (10) | till earn/burn; was 50 in the table this replaced |
+| event-service | 10 (5) | read-mostly, behind the read cache |
+| marketplace-service | 10 (10) | its own default min idle |
+| loans-service | 10 (2) | staging only today; counted on every host |
+| **Steady total** | **115** | + surge 20 + reserve 10 = **145 ≤ 150** |
+
+The reserve covers the nightly `pg_dumpall`, operators' `psql` during an
+incident (every service connects as the superuser, so Postgres's own
+superuser-reserved slots are open to the pools too) and marketplace-service's
+Flyway, which opens its own unpooled connections at start-up.
 
 > Note: a Postgres connection is a full OS process (~5–10 MB). Do **not** treat
 > `max_connections` as a throughput dial — past ~`2 × cores` *active* queries,
-> more connections reduce throughput. Keep app pools modest (10–20) and let
-> PgBouncer fan them in.
+> more connections reduce throughput. Keep app pools modest (10–20). **Adding a
+> replica (§4.3) adds its whole pool to the sum**, so going past one replica
+> means lowering per-pod pools or introducing PgBouncer (transaction pooling) —
+> the test will say which by failing first.
 
 ### 4.2 Postgres tuning — applied on the test box, NOT yet in IaC
 
@@ -168,8 +183,10 @@ That balancing is per connection, so with keep-alive pools it is uneven; the
 planned Linkerd mesh balances per request (see CLAUDE.md, Service discovery).
 
 - Each additional booking-service replica adds **~300 req/s** of clean capacity,
-  **provided** the Postgres connection budget (§4.1) is solved first — otherwise
-  N replicas × 20 connections will exhaust Postgres.
+  **provided** it fits the Postgres connection budget (§4.1) — the budget has
+  5 connections of slack today, so a second 20-connection pod needs pools
+  lowered elsewhere or PgBouncer; `PostgresConnectionBudgetTest` fails the
+  build until it fits.
 - Scale **seat-service alongside** booking-service: each booking makes ~2
   seat-service calls, so seat-service sees ~2× the booking rate.
 - **Recommended target architecture for >1k req/s:** 3–4 replicas each of

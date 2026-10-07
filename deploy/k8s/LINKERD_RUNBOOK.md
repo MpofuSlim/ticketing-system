@@ -170,6 +170,12 @@ twice. Check each one first:
 
 - [ ] **Postgres connection budget** — N replicas × pool size must fit
       `max_connections` (docs/booking-capacity-and-scaling.md §4.1).
+      `PostgresConnectionBudgetTest` (api-gateway) reads `replicas` and
+      `DB_POOL_MAX` from these manifests and fails the build when they don't;
+      there are 5 connections of slack today, so raising a replica count means
+      lowering pools (or PgBouncer) in the same PR. The live alerts
+      (`PostgresConnectionBudgetExceeded`) sum one scraped pod per service, so
+      revisit them at the same time.
 - [ ] **Scheduled jobs must be safe to run on every replica at once.** Each
       replica runs every `@Scheduled` method. As of this writing (checked by
       grepping for `@SchedulerLock`):

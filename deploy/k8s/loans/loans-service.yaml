@@ -109,8 +109,9 @@ spec:
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/loans_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
-            # Small pool: the cell postgres allows 150 connections and the
-            # fleet's pools already come close to that between them.
+            # Connection budget: Σ pools × replicas + one rollout surge + reserve must fit
+            # postgres max_connections (PostgresConnectionBudgetTest, CLAUDE.md).
+            # Counted on every host, though production runs no loans pod yet.
             - { name: DB_POOL_MAX, value: "10" }
             - { name: DB_POOL_MIN, value: "2" }
             # The market clock, the same value every fleet service reads.

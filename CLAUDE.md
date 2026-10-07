@@ -173,6 +173,48 @@ cell ConfigMap/Secret** — a pod referencing a missing key is
 `CreateContainerConfigError`, not a warning. The FreeMarker CVE override went
 with it: nothing else in the reactor pulls FreeMarker.
 
+## Postgres connection budget — every pool is in the manifest, and they must fit
+
+**The cell Postgres starts with `max_connections=150` (`deploy/k8s/01-infra.yaml`),
+and `PostgresConnectionBudgetTest` (api-gateway) fails the build unless
+`Σ DB_POOL_MAX × replicas + the largest rollout surge + 10 reserved ≤ 150`.**
+It reads every Deployment in `deploy/k8s` (recursively — loans too) whose
+`DB_URL` points at the cell postgres, and each of them must set `DB_POOL_MAX`
+AND `DB_POOL_MIN` explicitly, so a packaged default changing in another repo
+(loyalty-service, marketplace-service, loans-service ship their own) can never
+move the sum unseen.
+
+- **Today: 115 steady + 20 surge + 10 reserve = 145.** booking 20, seat 20,
+  user 15, payment 15, loyalty 15, event 10, marketplace 10, loans 10 (staging
+  only, counted on every host — `deploy/k8s` is one set of manifests). Before
+  this the eight pools summed to exactly 150 (seven at their default 20, loans
+  10) with no room for a rollout's extra pod or an operator.
+- **Why the surge and the reserve count.** A RollingUpdate runs the new pod
+  beside the old one (maxSurge 25%, rounded up: one pod at one replica), and the
+  new pod's pool opens while the old one still holds its own; loans is Recreate
+  (no surge). Every service connects as the cell superuser, so Postgres's own
+  `superuser_reserved_connections` are open to the pools too — the 10 reserved
+  are what is left for `pg_dumpall` (`scripts/backup-postgres.sh`), an operator's
+  `psql` in an incident, and marketplace's Flyway, which opens its own unpooled
+  connections at start-up. Past the limit, Postgres refuses the NEXT connection
+  (`FATAL: sorry, too many clients already`) — usually a rollout's new pod or
+  booking/seat mid-sale.
+- **Lower a pool before raising `max_connections`.** A `DB_POOL_MAX` change is
+  an env change (`kubectl set env`, one pod restart, image pin kept); raising
+  `max_connections` restarts Postgres and costs ~5–10 MB a connection, and past
+  ~2 × cores active queries more connections slow Postgres down anyway.
+- **A new replica adds its whole pool.** Going past one replica (Linkerd
+  runbook §8) means lowering pools or adding PgBouncer in the same PR; the test
+  says so by failing. `SPRING_DATASOURCE_HIKARI_*` in a cell env file or a
+  Deployment would size a pool behind the test's back (relaxed binding beats the
+  yaml's `${DB_POOL_MAX}`), so the test refuses it anywhere under `deploy/`.
+- **Live drift** — a pool raised by hand, a replica added — is
+  `PostgresConnectionBudgetExceeded` / `PostgresConnectionsHigh` (sums of
+  `hikaricp_connections_max` / `hikaricp_connections`; each job scrapes one pod,
+  so revisit them with the first second replica).
+- `docker-compose.yml` runs only this repo's five services at their packaged
+  20 each (100 of 150) and is not part of the test.
+
 ## loans-service joins behind the gateway (MpofuSlim/innbucks-loans)
 
 **The lending API runs in the cell as `loans-service` (image

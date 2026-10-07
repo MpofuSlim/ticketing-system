@@ -156,6 +156,28 @@ time out.
 3. Long-term fix is almost never "increase pool size" — it's an
    uncached query or a transaction that forgot to commit.
 
+### `PostgresConnectionBudgetExceeded`
+
+The Hikari pools the cell can open (or has open, for `PostgresConnectionsHigh`)
+are near Postgres's `max_connections` (150, `deploy/k8s/01-infra.yaml`). Past
+it, Postgres refuses the next connection with `FATAL: sorry, too many clients
+already` — to whichever pool grows next, often a rollout's new pod or
+booking/seat in a sale, and to an operator's `psql`, since every service
+connects as the superuser and so can use the superuser-reserved slots too.
+
+1. Compare the live pools with the manifests:
+   `kubectl -n ticketing get deploy -o custom-columns='NAME:.metadata.name,REPLICAS:.spec.replicas,POOL:.spec.template.spec.containers[0].env[?(@.name=="DB_POOL_MAX")].value'`
+   — every value should match `deploy/k8s` (PostgresConnectionBudgetTest pins
+   those to fit). A pool raised or a replica added by hand is the usual cause.
+2. See who holds what:
+   `kubectl -n ticketing exec postgres-0 -- psql -U postgres -c "SELECT datname, state, count(*) FROM pg_stat_activity GROUP BY 1, 2 ORDER BY 3 DESC;"`
+3. Fix by lowering a `DB_POOL_MAX` (`kubectl -n ticketing set env
+   deployment/<svc> DB_POOL_MAX=<n>` restarts that service's pod, no Postgres
+   restart) and committing the same value to the manifest. Raising
+   `max_connections` restarts Postgres and costs ~5–10 MB per connection — the
+   last resort (the test reads it from the manifest; move the two thresholds in
+   `alerts.yaml` with it).
+
 ### `JvmHeapPressure`
 
 Heap > 85% for 10 minutes. Next major GC will pause the app for
