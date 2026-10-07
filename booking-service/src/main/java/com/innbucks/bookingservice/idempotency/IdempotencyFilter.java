@@ -105,10 +105,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
                         wrapper.getContentType(),
                         wrapper.getContentAsByteArray()
                 );
-                store.put(cacheKey, snapshot, COMPLETED_TTL_SECONDS);
-                stored = true;
-                log.debug("Idempotency cache store key={} scope={} status={}",
-                        key, scope, wrapper.getStatus());
+                stored = storeCompleted(cacheKey, snapshot, key, scope);
             }
         } finally {
             if (!stored) {
@@ -119,6 +116,29 @@ public class IdempotencyFilter extends OncePerRequestFilter {
                 }
             }
             wrapper.copyBodyToResponse();
+        }
+    }
+
+    /**
+     * Records the completed response, best-effort. The request has ALREADY run
+     * and committed, so a store that cannot take the write (Redis down, or
+     * refusing writes at maxmemory under the cell's {@code noeviction} policy —
+     * CLAUDE.md, "Redis — noeviction") must not turn that success into an error:
+     * the caller gets its real response, and the reservation is released by the
+     * caller's {@code finally}, so a retry with this key runs again rather than
+     * being answered 409 for the rest of the reservation's TTL.
+     *
+     * @return whether the completed entry was stored
+     */
+    private boolean storeCompleted(String cacheKey, StoredResponse snapshot, String key, String scope) {
+        try {
+            store.put(cacheKey, snapshot, COMPLETED_TTL_SECONDS);
+            log.debug("Idempotency cache store key={} scope={} status={}", key, scope, snapshot.status());
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("Idempotency cache store FAILED key={} scope={} status={}; the response is delivered, "
+                    + "but a retry with this key will run again", key, scope, snapshot.status(), e);
+            return false;
         }
     }
 

@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class IdempotencyFilterTest {
@@ -248,5 +249,33 @@ class IdempotencyFilterTest {
         });
 
         assertEquals(1, reads.get());
+    }
+
+    @Test
+    void deliversTheRealResponse_whenTheStoreRefusesTheWrite() throws Exception {
+        // Redis at maxmemory under noeviction answers every write -OOM. The
+        // payment has already been created; the customer must still get the
+        // code in the response, never a 500 that hides it.
+        IdempotencyStore store = mock(IdempotencyStore.class);
+        when(store.get(any())).thenReturn(Optional.empty());
+        doThrow(new org.springframework.dao.InvalidDataAccessApiUsageException(
+                "OOM command not allowed when used memory > 'maxmemory'."))
+                .when(store).put(any(), any(), anyLong());
+        IdempotencyFilter filter = new IdempotencyFilter(store);
+
+        MockHttpServletRequest req = postWithBody("/payments/innbucks", "{\"orderRef\":\"BKG-1\"}");
+        req.addHeader("Idempotency-Key", "oom-1");
+        MockHttpServletResponse res = new MockHttpServletResponse();
+
+        assertDoesNotThrow(() -> filter.doFilterInternal(req, res, (rq, rs) -> {
+            HttpServletResponse http = (HttpServletResponse) rs;
+            http.setStatus(202);
+            http.setContentType("application/json");
+            http.getWriter().write("{\"paymentCode\":\"123456\"}");
+        }));
+
+        verify(store).put(eq("POST /payments/innbucks#oom-1"), any(), anyLong());
+        assertEquals(202, res.getStatus());
+        assertEquals("{\"paymentCode\":\"123456\"}", res.getContentAsString());
     }
 }

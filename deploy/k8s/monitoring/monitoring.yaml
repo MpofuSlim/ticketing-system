@@ -143,3 +143,46 @@ spec:
       volumes:
         - { name: config, configMap: { name: alertmanager-config } }
         - { name: state,  emptyDir: {} }
+---
+# Redis metrics for the `redis` alert group (prometheus/alerts.yaml): memory
+# against maxmemory, writes refused with -OOM, evictions (there must be none
+# under noeviction), keys without a TTL, and the live maxmemory-policy. A
+# separate Deployment rather than a sidecar so adding it never restarts Redis.
+# In-cluster only; it reads the same REDIS_PASSWORD the services use.
+apiVersion: v1
+kind: Service
+metadata: { name: redis-exporter, namespace: ticketing }
+spec:
+  selector: { app: redis-exporter }
+  ports: [ { name: metrics, port: 9121, targetPort: 9121 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: redis-exporter, namespace: ticketing }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: redis-exporter } }
+  template:
+    metadata: { labels: { app: redis-exporter } }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # The image's own non-root user.
+        runAsNonRoot: true
+        runAsUser: 59000
+        runAsGroup: 59000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: redis-exporter
+          image: oliver006/redis_exporter:v1.93.0
+          env:
+            - { name: REDIS_ADDR, value: "redis://redis:6379" }
+            - { name: REDIS_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: REDIS_PASSWORD } } }
+          ports: [ { containerPort: 9121 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources: { requests: { memory: 16Mi }, limits: { memory: 64Mi } }
+          readinessProbe: { httpGet: { path: /health, port: 9121 }, initialDelaySeconds: 5,  periodSeconds: 10 }
+          livenessProbe:  { httpGet: { path: /health, port: 9121 }, initialDelaySeconds: 15, periodSeconds: 20 }

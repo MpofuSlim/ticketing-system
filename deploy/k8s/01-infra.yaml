@@ -63,11 +63,23 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
-          args: ["redis-server","--appendonly","yes","--requirepass","$(REDIS_PASSWORD)","--maxmemory","200mb","--maxmemory-policy","allkeys-lru"]
+          # noeviction, NEVER an evicting policy (CLAUDE.md, "Redis — noeviction"):
+          # this Redis holds session revocation (auth:tokenver:*, auth:revoked:*),
+          # replay guards and idempotency keys, and every one of them carries a
+          # TTL, so allkeys-* AND volatile-* would both evict them under memory
+          # pressure — silently failing OPEN (a revoked session accepted again, a
+          # duplicate request processed). Full memory instead refuses WRITES with
+          # -OOM, which every caller already treats as a Redis outage, and every
+          # key's TTL drains it. maxmemory stays ~2/3 of the container limit: the
+          # rest is AOF-rewrite copy-on-write, client buffers and fragmentation.
+          # Watched by the redis-exporter alerts (prometheus/alerts.yaml, group redis).
+          # Changing these args restarts redis-0; the policy can be switched live
+          # with CONFIG SET instead (rollout notes in the PR / CLAUDE.md).
+          args: ["redis-server","--appendonly","yes","--requirepass","$(REDIS_PASSWORD)","--maxmemory","256mb","--maxmemory-policy","noeviction"]
           env:
             - { name: REDIS_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: REDIS_PASSWORD } } }
           ports: [ { containerPort: 6379 } ]
-          resources: { requests: { memory: 128Mi }, limits: { memory: 256Mi } }
+          resources: { requests: { memory: 128Mi }, limits: { memory: 384Mi } }
           readinessProbe:
             tcpSocket: { port: 6379 }
             initialDelaySeconds: 5

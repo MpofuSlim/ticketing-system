@@ -279,4 +279,34 @@ class IdempotencyFilterTest {
         postWithHeader.addHeader("Idempotency-Key", "k1");
         assertFalse(filter.shouldNotFilter(postWithHeader));
     }
+
+    @Test
+    void deliversTheRealResponse_andReleases_whenTheStoreRefusesTheCompletedWrite() throws Exception {
+        // Redis at maxmemory under noeviction answers every write -OOM. The
+        // booking has already committed: the caller gets its 201, and the
+        // reservation is released so a retry runs instead of a 409 for 30s.
+        IdempotencyStore store = mock(IdempotencyStore.class);
+        when(store.get(any())).thenReturn(Optional.empty());
+        when(store.tryReserve(any(), anyLong())).thenReturn(true);
+        doThrow(new org.springframework.dao.InvalidDataAccessApiUsageException(
+                "OOM command not allowed when used memory > 'maxmemory'."))
+                .when(store).put(any(), any(), anyLong());
+        IdempotencyFilter filter = new IdempotencyFilter(store);
+
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/bookings");
+        req.addHeader("Idempotency-Key", "oom-1");
+        req.setRemoteAddr("10.0.0.9");
+        MockHttpServletResponse res = new MockHttpServletResponse();
+
+        assertDoesNotThrow(() -> filter.doFilterInternal(req, res, (rq, rs) -> {
+            HttpServletResponse http = (HttpServletResponse) rs;
+            http.setStatus(201);
+            http.setContentType("application/json");
+            http.getWriter().write("{\"confirmation\":\"INN-9\"}");
+        }));
+
+        assertEquals(201, res.getStatus());
+        assertEquals("{\"confirmation\":\"INN-9\"}", res.getContentAsString());
+        verify(store).release(contains("oom-1"));
+    }
 }

@@ -198,6 +198,111 @@ groups:
       # permanently-green alert is worse than no alert. Re-add against the
       # real exporter metrics when tracing is switched on with a collector.
 
+  # The cell's shared Redis (redis-exporter, job "redis"). It runs
+  # maxmemory-policy noeviction (CLAUDE.md, "Redis — noeviction"): session
+  # revocation, replay guards and idempotency keys all carry TTLs, so any
+  # evicting policy would silently drop them and fail OPEN. Under noeviction a
+  # full Redis refuses WRITES instead — loud, and every caller treats it as an
+  # outage — so the memory alerts exist to act BEFORE that, and the eviction /
+  # policy alerts exist to catch the policy drifting back.
+  - name: redis
+    interval: 30s
+    rules:
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Redis is unreachable from redis-exporter"
+          description: "redis_up has been 0 for 2m. Revocation reads fail open fleet-wide, booking/payment idempotency and seat holds fail closed, and the limiters fall back to per-replica windows."
+          runbook: "prometheus/slo.md#redisdown"
+
+      # Without the exporter every other rule in this group is silently green.
+      - alert: RedisExporterDown
+        expr: up{job="redis"} == 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "redis-exporter is not being scraped"
+          description: "Prometheus cannot scrape redis-exporter; Redis memory and policy alerts are blind until it is back."
+          runbook: "prometheus/slo.md#redisexporterdown"
+
+      - alert: RedisMemoryHigh
+        expr: |
+          redis_memory_used_bytes / redis_memory_max_bytes > 0.75
+            and redis_memory_max_bytes > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Redis memory above 75% of maxmemory"
+          description: "Redis uses {{ $value | humanizePercentage }} of maxmemory. At 100% it refuses every write (noeviction): plan the headroom now."
+          runbook: "prometheus/slo.md#redismemoryhigh"
+
+      - alert: RedisMemoryCritical
+        expr: |
+          redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+            and redis_memory_max_bytes > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Redis memory above 90% of maxmemory"
+          description: "Redis uses {{ $value | humanizePercentage }} of maxmemory; writes start failing with -OOM at 100%."
+          runbook: "prometheus/slo.md#redismemoryhigh"
+
+      # The noeviction failure mode itself: Redis refused writes for lack of
+      # memory. Bookings/payments with an Idempotency-Key and seat holds 5xx,
+      # federated logins 503, token-version publishes fail.
+      - alert: RedisRefusingWrites
+        expr: increase(redis_errors_total{err="OOM"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "Redis is refusing writes (-OOM at maxmemory)"
+          description: "{{ $value | humanize }} writes refused with -OOM in 5m. Every caller is now running its Redis-outage path."
+          runbook: "prometheus/slo.md#redisrefusingwrites"
+
+      # Expected 0 for ever: noeviction never evicts. Any eviction means the
+      # policy drifted back to an evicting one and revocation / idempotency
+      # keys may be dropping silently.
+      - alert: RedisEvictingKeys
+        expr: increase(redis_evicted_keys_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "Redis is evicting keys"
+          description: "{{ $value | humanize }} keys evicted in 15m — the eviction policy is no longer noeviction, so session revocations and idempotency keys can be silently lost."
+          runbook: "prometheus/slo.md#redisevictingkeys"
+
+      - alert: RedisEvictionPolicyDrift
+        expr: redis_instance_info{maxmemory_policy!="noeviction"} == 1
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Redis maxmemory-policy is {{ $labels.maxmemory_policy }}, not noeviction"
+          description: "A restart from an old manifest or a manual CONFIG SET put Redis back on an evicting policy."
+          runbook: "prometheus/slo.md#redisevictingkeys"
+
+      # Under noeviction a key with no TTL never leaves memory: every key the
+      # fleet writes must carry one, set atomically with the write.
+      - alert: RedisKeysWithoutTtl
+        expr: |
+          sum by (instance) (redis_db_keys) - sum by (instance) (redis_db_keys_expiring) > 0
+        for: 1h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Redis holds {{ $value }} keys with no TTL"
+          description: "Some writer stored a key without a TTL. Under noeviction it stays until deleted by hand."
+          runbook: "prometheus/slo.md#rediskeyswithoutttl"
+
   # OWASP A09 — security-abuse detection. Fed by user-service SecurityMetrics
   # (security.* counters, exported as security_*_total). Baselines for these are
   # ~0 in normal operation, so the thresholds are deliberately low: they're

@@ -55,6 +55,9 @@ kubectl apply -f "$REPO_ROOT/deploy/k8s/monitoring/"
 kubectl -n "$NS" rollout restart deployment/prometheus deployment/alertmanager
 kubectl -n "$NS" rollout status  deployment/prometheus
 kubectl -n "$NS" rollout status  deployment/alertmanager
+# redis-exporter (job "redis") reads REDIS_PASSWORD from cell-zw-secrets; it
+# needs no restart for a Prometheus config change, only to exist.
+kubectl -n "$NS" rollout status  deployment/redis-exporter
 
 echo
 echo "Done. Verify targets are UP (expect every job green, incl. the 5"
