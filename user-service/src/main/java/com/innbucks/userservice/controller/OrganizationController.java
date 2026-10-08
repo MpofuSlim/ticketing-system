@@ -278,8 +278,9 @@ public class OrganizationController {
                                     """)})),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
                     description = "No account with that email — which is also the answer for an InnBucks staff "
-                            + "address or staff account (staff never join a business, and the answer does not "
-                            + "reveal which addresses are staff) — or the caller is not a member of the organization",
+                            + "account (staff never join a business, and the answer does not reveal which accounts "
+                            + "are staff) — or the caller is not a member of the organization. An InnBucks address "
+                            + "that is an ordinary account is added like any other.",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "No such account", value = """
                                     {

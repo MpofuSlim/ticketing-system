@@ -133,9 +133,6 @@ public class StaffPolicyException extends RuntimeException {
     public static final String ROLES_NOT_ACCEPTED = "roles_not_accepted";
     public static final String ROLES_NOT_ACCEPTED_MESSAGE =
             "Staff accounts are created by an administrator with POST /admin/staff.";
-    public static final String EMAIL_DOMAIN_RESERVED = "email_domain_reserved";
-    public static final String EMAIL_DOMAIN_RESERVED_MESSAGE =
-            "InnBucks staff addresses can't be used here. Your administrator will invite you.";
     public static final String INVITE_INVALID = "invite_invalid";
     public static final String INVITE_INVALID_MESSAGE =
             "This invite link is no longer valid. Ask your administrator to send a new one.";
@@ -211,11 +208,6 @@ public class StaffPolicyException extends RuntimeException {
     public static StaffPolicyException rolesNotAccepted() {
         return new StaffPolicyException(HttpStatus.BAD_REQUEST, ROLES_NOT_ACCEPTED, ROLES_NOT_ACCEPTED_MESSAGE,
                 Map.of("field", "roles"));
-    }
-
-    public static StaffPolicyException emailDomainReserved() {
-        return new StaffPolicyException(HttpStatus.BAD_REQUEST, EMAIL_DOMAIN_RESERVED,
-                EMAIL_DOMAIN_RESERVED_MESSAGE, Map.of("field", "email"));
     }
 
     public static StaffPolicyException inviteInvalid() {

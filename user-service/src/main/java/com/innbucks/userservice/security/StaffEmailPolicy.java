@@ -46,11 +46,12 @@ import java.util.regex.Pattern;
  * detected here; the invite's binding to the address it was sent to limits the
  * damage.
  *
- * <p>{@link #isReserved} is a different, broader question: may this address be
- * written by a NON-staff path (registration, tier-2, shop staff, team members,
- * first approval)? Anything on a staff domain or a subdomain of one is reserved,
- * so {@code POST /admin/staff} is the only path that ever writes an on-domain
- * address.
+ * <p>The rule runs ONE way: a staff account must be on a staff domain, but an
+ * address on a staff domain is not thereby staff. Registration, tier-2, shop
+ * staff, team members and approvals accept InnBucks addresses like any other
+ * (owner decision, 2026-10-08); such an account gains no staff authority, which
+ * needs an email proven by redeeming an invite and an accepted staff profile
+ * ({@link com.innbucks.userservice.service.StaffEligibility}).
  */
 @Component
 public class StaffEmailPolicy {
@@ -187,28 +188,6 @@ public class StaffEmailPolicy {
         if (at < 0 || at == address.length() - 1) return false;
         String domain = address.substring(at + 1);
         return printableAscii(domain) && properties.domains().contains(domain.toLowerCase(Locale.ROOT));
-    }
-
-    /**
-     * True when {@code email} sits on a staff domain or any subdomain of one,
-     * ignoring case and trailing dots — an address only {@code POST /admin/staff}
-     * may write. False on a cell that names no staff domain.
-     */
-    public boolean isReserved(String email) {
-        return isReserved(email, properties.domains());
-    }
-
-    public static boolean isReserved(String email, Set<String> domains) {
-        if (email == null || domains == null || domains.isEmpty()) return false;
-        String address = email.strip();
-        int at = address.lastIndexOf('@');
-        if (at < 0) return false;
-        String domain = address.substring(at + 1).toLowerCase(Locale.ROOT);
-        while (domain.endsWith(".")) domain = domain.substring(0, domain.length() - 1);
-        for (String d : domains) {
-            if (domain.equals(d) || domain.endsWith("." + d)) return true;
-        }
-        return false;
     }
 
     private static boolean printableAscii(String s) {

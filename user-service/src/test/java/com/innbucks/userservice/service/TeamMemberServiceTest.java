@@ -76,7 +76,7 @@ class TeamMemberServiceTest {
                 new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersionPublisher),
                 refreshTokenRepository, deviceTrustService, otpRepository);
         service = new TeamMemberService(userRepository, assignmentRepository, passwordEncoder,
-                eventPublisher, revoker, org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
+                eventPublisher, revoker);
         ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
         ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
                 com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
@@ -135,7 +135,7 @@ class TeamMemberServiceTest {
         UUID organizerUuid = UUID.randomUUID();
         User organizer = organizer(organizerUuid);
         authenticateAs(organizer);
-        when(userRepository.existsByEmail("tariro@harare-arena.co.zw")).thenReturn(false);
+        when(userRepository.existsByEmailIgnoreCase("tariro@harare-arena.co.zw")).thenReturn(false);
         when(userRepository.existsByPhoneNumberAndHomeCountry("+263773456789", "ZW")).thenReturn(false);
         when(passwordEncoder.encode(any())).thenReturn("HASHED");
 
@@ -167,7 +167,7 @@ class TeamMemberServiceTest {
         // scanner cannot redeem a ticket until it is rotated.
         User organizer = organizer(UUID.randomUUID());
         authenticateAs(organizer);
-        when(userRepository.existsByEmail("tariro@harare-arena.co.zw")).thenReturn(false);
+        when(userRepository.existsByEmailIgnoreCase("tariro@harare-arena.co.zw")).thenReturn(false);
         when(userRepository.existsByPhoneNumberAndHomeCountry("+263773456789", "ZW")).thenReturn(false);
         when(passwordEncoder.encode(any())).thenReturn("HASHED");
 
@@ -186,7 +186,7 @@ class TeamMemberServiceTest {
     @Test
     void create_rejectsDuplicateEmail() {
         authenticateAs(organizer(UUID.randomUUID()));
-        when(userRepository.existsByEmail("tariro@harare-arena.co.zw")).thenReturn(true);
+        when(userRepository.existsByEmailIgnoreCase("tariro@harare-arena.co.zw")).thenReturn(true);
 
         assertThatThrownBy(() -> service.createTeamMember(createDto()))
                 .isInstanceOf(ResponseStatusException.class)
@@ -200,7 +200,7 @@ class TeamMemberServiceTest {
         // address. Left open, a rotated BOOTSTRAP_ADMIN_EMAIL (or a deleted
         // admin row) would let DataInitializer adopt that row as SUPER_ADMIN —
         // with the temporary password this call hands to the organizer.
-        // Refused before the existsByEmail lookup, so it holds on a cell where
+        // Refused before the duplicate-email lookup, so it holds on a cell where
         // no admin row currently occupies the address.
         authenticateAs(organizer(UUID.randomUUID()));
         CreateTeamMemberDTO dto = createDto();
@@ -497,7 +497,7 @@ class TeamMemberServiceTest {
      *  test below needs the same repo / encoder stubs. */
     private void primeCreateHappyPath() {
         authenticateAs(organizer(UUID.randomUUID()));
-        when(userRepository.existsByEmail(any())).thenReturn(false);
+        when(userRepository.existsByEmailIgnoreCase(any())).thenReturn(false);
         when(userRepository.existsByPhoneNumberAndHomeCountry(any(), any())).thenReturn(false);
         when(passwordEncoder.encode(any())).thenReturn("HASHED");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> {
@@ -626,7 +626,7 @@ class TeamMemberServiceTest {
         authenticateAsSuperAdmin(admin);
         when(userRepository.findByEmail(admin.getEmail())).thenReturn(Optional.of(admin));
         when(userRepository.findByUserUuid(organizerUuid)).thenReturn(Optional.of(target));
-        when(userRepository.existsByEmail(any())).thenReturn(false);
+        when(userRepository.existsByEmailIgnoreCase(any())).thenReturn(false);
         when(userRepository.existsByPhoneNumberAndHomeCountry(any(), any())).thenReturn(false);
         when(passwordEncoder.encode(any())).thenReturn("HASHED");
         ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);

@@ -235,32 +235,19 @@ public class StaffEligibility {
 
     /**
      * For a path where a BUSINESS names a person by email (adding a member):
-     * true when the address is on a staff domain, or {@code person} is a staff
-     * account. The refusal is audited ({@code STAFF_GRANT_REFUSED}) and the
-     * caller must answer exactly as it does for an address with no account —
-     * otherwise a business owner could probe which addresses are InnBucks staff.
+     * true when {@code person} is a staff account. The refusal is audited
+     * ({@code STAFF_GRANT_REFUSED}) and the caller must answer exactly as it
+     * does for an address with no account — otherwise a business owner could
+     * probe which accounts are InnBucks staff. An address on a staff domain is
+     * NOT refused for that alone: InnBucks addresses are ordinary business and
+     * customer addresses (owner decision, 2026-10-08).
      */
-    public boolean refusedAsUnknownAccount(String email, User person, String actor, String site) {
-        boolean reserved = email != null && emailPolicy.isReserved(email);
-        boolean staff = person != null && isStaffAccount(person);
-        if (!reserved && !staff) return false;
+    public boolean refusedAsUnknownAccount(User person, String actor, String site) {
+        if (person == null || !isStaffAccount(person)) return false;
         roleGrantGuard.recordRefusal(actor, person, StaffPolicyException.STAFF_ACCOUNT_NOT_ELIGIBLE,
                 Map.of("site", site, "answeredAs", "account_not_found"));
-        log.warn("Refused {} for a staff address/account (answered as unknown) by={}", site, actor);
+        log.warn("Refused {} for a staff account (answered as unknown) by={}", site, actor);
         return true;
-    }
-
-    /**
-     * {@code email} is being written by a NON-staff path: 400
-     * {@code email_domain_reserved} when it sits on a staff domain. Run BEFORE
-     * any duplicate-email check, so these paths cannot be used to discover which
-     * staff addresses exist.
-     */
-    public void requireEmailNotReserved(String email, String actor, String site) {
-        if (!emailPolicy.isReserved(email)) return;
-        roleGrantGuard.recordRefusal(actor, null, StaffPolicyException.EMAIL_DOMAIN_RESERVED, Map.of("site", site));
-        log.info("Refused a staff-domain address at {}", site);
-        throw StaffPolicyException.emailDomainReserved();
     }
 
     /**

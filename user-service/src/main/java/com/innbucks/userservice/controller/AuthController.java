@@ -73,8 +73,8 @@ public class AuthController {
                     "`bpoNumber` are required. Customers must use the tiered /auth/customer/register endpoints.\n\n" +
                     "**This is business self-sign-up only.** A non-empty `roles` list is refused (400 " +
                     "`roles_not_accepted`) — staff accounts are created with `POST /admin/staff`; an absent or " +
-                    "empty `roles` is accepted. An address on an InnBucks staff domain is refused (400 " +
-                    "`email_domain_reserved`), checked before the duplicate-email check.")
+                    "empty `roles` is accepted. An InnBucks address (`@innbucks.co.zw`, `@innbucks.co.ke`) " +
+                    "registers like any other; it does not make the account staff.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -122,13 +122,6 @@ public class AuthController {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Staff accounts are created by an administrator with POST /admin/staff.",
                                       "data": { "errorCode": "roles_not_accepted", "field": "roles" }
-                                    }
-                                    """),
-                            @ExampleObject(name = "An InnBucks staff address", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
-                                      "data": { "errorCode": "email_domain_reserved", "field": "email" }
                                     }
                                     """)
                     }))
@@ -1137,8 +1130,8 @@ public class AuthController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure, no Tier-1 customer matches the supplied `msisdn`, or an "
-                            + "InnBucks staff address.",
+                    description = "Validation failure, no Tier-1 customer matches the supplied `msisdn`, or "
+                            + "another account already holds the email (in any letter case).",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "No such customer", value = """
@@ -1148,11 +1141,11 @@ public class AuthController {
                                       "data": null
                                     }
                                     """),
-                                    @ExampleObject(name = "An InnBucks staff address", value = """
+                                    @ExampleObject(name = "Email held by another account", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
-                                      "data": { "errorCode": "email_domain_reserved", "field": "email" }
+                                      "message": "Email already registered",
+                                      "data": null
                                     }
                                     """)
                             })),

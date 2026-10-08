@@ -114,21 +114,6 @@ class StaffEmailPolicyTest {
     }
 
     @Test
-    @DisplayName("isReserved: a staff domain or any subdomain, any case, trailing dots ignored — for NON-staff writers")
-    void reserved() {
-        assertThat(StaffEmailPolicy.isReserved("x@innbucks.co.zw", DOMAINS)).isTrue();
-        assertThat(StaffEmailPolicy.isReserved("X@INNBUCKS.CO.KE", DOMAINS)).isTrue();
-        assertThat(StaffEmailPolicy.isReserved("x@mail.innbucks.co.zw", DOMAINS)).isTrue();
-        assertThat(StaffEmailPolicy.isReserved("x@innbucks.co.zw.", DOMAINS)).isTrue();
-        assertThat(StaffEmailPolicy.isReserved("x+tag@innbucks.co.zw", DOMAINS)).isTrue();
-        assertThat(StaffEmailPolicy.isReserved("x@notinnbucks.co.zw", DOMAINS)).isFalse();
-        assertThat(StaffEmailPolicy.isReserved("x@gmail.com", DOMAINS)).isFalse();
-        assertThat(StaffEmailPolicy.isReserved(null, DOMAINS)).isFalse();
-        // A cell naming no staff domain reserves nothing.
-        assertThat(StaffEmailPolicy.isReserved("x@innbucks.co.zw", Set.of())).isFalse();
-    }
-
-    @Test
     @DisplayName("the domain message names the configured domains")
     void message() {
         assertThat(StaffEmailPolicy.domainNotAllowedMessage(List.of("innbucks.co.zw", "innbucks.co.ke")))

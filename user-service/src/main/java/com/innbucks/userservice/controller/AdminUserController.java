@@ -397,9 +397,7 @@ public class AdminUserController {
                     "accounts are not gated this way.\n\n" +
                     "**Staff accounts are switched ON only through `POST /admin/staff/{id}/reactivate`** " +
                     "(409 `use_staff_endpoints` here): that endpoint re-checks the email domain and resets the " +
-                    "credentials. The FIRST approval of a registration on an InnBucks staff address is refused " +
-                    "(400 `email_domain_reserved`) — approving it would mail a temporary password to whatever " +
-                    "phone the registrant typed.\n\n" +
+                    "credentials.\n\n" +
                     "Requires the `users:activation:write` permission."
     )
     @ApiResponses({
@@ -439,7 +437,7 @@ public class AdminUserController {
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "`active` missing from the body, or the first approval of an InnBucks staff address",
+                    description = "`active` missing from the body",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "Validation failed", value = """
@@ -447,13 +445,6 @@ public class AdminUserController {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Validation failed",
                                       "data": { "active": "active field is required" }
-                                    }
-                                    """),
-                                    @ExampleObject(name = "Registration on a staff address", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
-                                      "data": { "errorCode": "email_domain_reserved", "field": "email" }
                                     }
                                     """)
                             })),

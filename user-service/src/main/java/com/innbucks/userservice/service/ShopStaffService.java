@@ -70,8 +70,6 @@ public class ShopStaffService {
     /** Whether the caller RUNS the organization their session acts for — the
      *  gate on which loyalty merchants' staff they may manage. */
     private final OrganizationMemberRepository organizationMembers;
-    /** Staff addresses are reserved (V44): shop staff are never created at one. */
-    private final StaffEligibility staffEligibility;
 
     /** Upper bound on rows per bulk upload — a guard rail on an unbounded import,
      *  not a product limit; split larger files. */
@@ -270,9 +268,9 @@ public class ShopStaffService {
                         e.getReason() == null ? "Rejected" : e.getReason()));
                 failed++;
             } catch (com.innbucks.userservice.exception.StaffPolicyException e) {
-                // A typed refusal (V44 — e.g. a staff-domain address, 400
-                // email_domain_reserved): its message is written for the client,
-                // so the row reports it rather than "Unexpected error".
+                // A typed refusal (V44 — a StaffPolicyException): its message is
+                // written for the client, so the row reports it rather than
+                // "Unexpected error".
                 results.add(BulkShopUserResultDTO.RowResult.failed(dr.line(), email, e.getMessage()));
                 failed++;
             } catch (RuntimeException e) {
@@ -475,12 +473,6 @@ public class ShopStaffService {
     private User buildStaff(String firstName, String middleName, String lastName,
                             String email, String phone,
                             User.Role role, UUID merchantId, UUID shopId, String tempPassword) {
-        // An InnBucks STAFF address is never shop staff (V44): the temporary
-        // password would go to the merchant admin who created it, handing them a
-        // login at a staff address. FIRST — before the bootstrap-admin and
-        // duplicate checks — so this path cannot confirm which staff addresses
-        // exist, the platform admin's among them.
-        staffEligibility.requireEmailNotReserved(email, currentCallerName(), "shop_staff_create");
         // Shop staff are never minted at the platform admin's address — see the
         // matching guard in TeamMemberService. A row left here is one a rotated
         // BOOTSTRAP_ADMIN_EMAIL (or a deleted admin row) could hand SUPER_ADMIN
@@ -490,7 +482,8 @@ public class ShopStaffService {
             log.warn("Refused shop-staff creation at the bootstrap admin address role={}", role);
             throw badRequest("Email already registered");
         }
-        if (userRepository.existsByEmail(email)) {
+        // Case-insensitive, like registration: uk_users_email is case-sensitive.
+        if (userRepository.existsByEmailIgnoreCase(email)) {
             throw badRequest("Email already registered");
         }
         // Canonicalise to E.164 (+<cc><national>) against this cell's country
@@ -527,11 +520,6 @@ public class ShopStaffService {
                 .loyaltyMerchantId(merchantId)
                 .loyaltyShopId(shopId)
                 .build();
-    }
-
-    private static String currentCallerName() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth == null ? null : auth.getName();
     }
 
     private User requireCaller() {

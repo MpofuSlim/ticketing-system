@@ -882,8 +882,7 @@ V44 the console made "staff" through `/auth/register`, which silently dropped
 the `roles` it sent and minted an organizer or merchant admin with a business of
 its own, approved by a temporary password mailed to whatever phone the form
 held. Now registration refuses a non-empty `roles` (400 `roles_not_accepted`;
-absent and `[]` still accepted) and every self-service email writer refuses a
-staff address.
+absent and `[]` still accepted).
 
 - **Staff-eligible** (`StaffEligibility`) = active, not SUPER_ADMIN, email on
   `STAFF_ALLOWED_EMAIL_DOMAINS` (exact domain, `StaffEmailPolicy`), email PROVEN
@@ -956,22 +955,44 @@ staff address.
   or adoptable account is 409 `use_staff_invite`.
 - **Staff never belong to a business.** `changeRole` and service request
   submit/approve refuse a staff account (409 `staff_account_not_eligible`);
-  `addMember` answers a staff account, or ANY staff-domain address, exactly like
-  an unknown email (404 `account_not_found`, still audited
-  `STAFF_GRANT_REFUSED`) so a business owner cannot probe which addresses are
-  staff; tier-2 refuses a staff account's phone in its own words. The mint
+  `addMember` answers a staff ACCOUNT exactly like an unknown email (404
+  `account_not_found`, still audited `STAFF_GRANT_REFUSED`) so a business owner
+  cannot probe which accounts are staff; tier-2 refuses a staff account's phone
+  in its own words. The mint
   never puts `orgId`/`orgRole`/
   `products` on a profiled account's token whatever `organization_members`
   holds (`ProfiledAccountNeverGetsOrgClaimsIT`). Service-request approval that
   adds a role now records `USER_ROLES_CHANGED`.
-- **A staff address is reserved** at every other `User.email` writer —
-  register, tier-2, shop-staff and team-member create, and the FIRST approval of
-  a registration — 400 `email_domain_reserved`, checked FIRST (before the
-  bootstrap-admin and duplicate checks) so none of them is an oracle for which
-  staff addresses exist, the platform admin's among them. Reserved
-  means the domain or any subdomain. `RoleWriterInventoryTest` lists every
-  writer of `User.roles`, `User.email`, memberships and products and fails on a
-  new one — decide guarded or unreachable, and write the reason there.
+- **The domain rule runs ONE way: a staff account must be on a staff domain,
+  but an InnBucks address is not thereby staff** (owner decision, 2026-10-08).
+  `@innbucks.co.zw` / `@innbucks.co.ke` are the addresses businesses register
+  with most, so register, tier-2, shop-staff and team-member create, the first
+  approval of a registration and `addMember` accept them like any other domain.
+  V44 had also reserved them for staff (400 `email_domain_reserved`); nobody
+  asked for that half, it blocked real merchants, and it is gone. Nothing
+  depended on it: an InnBucks-address merchant gains no staff authority, which
+  still needs an invite-proven email plus an accepted staff profile, and a staff
+  invite for an address a business account already holds is refused
+  (`email_taken`, or `adoption_blocked` for a legacy row) — one address is one
+  account, so the person uses another address for one of the two. **Do not
+  reintroduce a domain reservation** on a non-staff writer.
+  `RoleWriterInventoryTest` lists every writer of `User.roles`, `User.email`,
+  memberships and products and fails on a new one — decide guarded or
+  unreachable, and write the reason there.
+- **One account per address, whatever its letter case (V49).**
+  `GClerkson@innbucks.co.zw` and `gclerkson@innbucks.co.zw` never both exist
+  (owner decision, 2026-10-08). `uq_users_email_upper` (a unique index on
+  `UPPER(email)`, replacing V48's plain one) enforces it in the database, so a
+  race between two requests or a writer that forgot its check cannot store the
+  second spelling; every writer also checks case-insensitively first so the
+  caller gets `Email already registered` rather than a constraint error
+  (register, staff create, tier-2 — excluding the customer's own row —, shop
+  staff, team members). `uk_users_email` (V1) stays and is now redundant.
+  Sign-in still looks the address up EXACTLY as typed; the index only stops
+  two accounts sharing it. A new email writer checks with
+  `existsByEmailIgnoreCase` / `findAllByEmailIgnoreCase`, never `existsByEmail`.
+  V49 FAILS on a database that already holds a letter-case pair — resolve those
+  rows first; which account keeps the address is an operator's call.
 - **The mint-time backstop** (`StaffMintFilter`, `AuthService.buildResponse` and
   `JwtFilter`'s perms-less legacy path): an ineligible holder of staff authority
   (a NAMED role name or a PLATFORM code) is counted on
@@ -999,8 +1020,8 @@ staff address.
   (its sign-in paths are null-safe on the phone). What it does is IGNORE
   `staff_profiles` and `email_verified_at`: an INVITED account — new, adopted or
   reactivated — can set a password through forgot-password BY EMAIL without ever
-  redeeming its invite; the mint filter and every staff refusal (reserved
-  domain, eligibility, business role, no-business-for-staff) stop; and `/auth/staff-invite/**` is a 404, so pending
+  redeeming its invite; the mint filter and every staff refusal (eligibility,
+  business role, no-business-for-staff) stop; and `/auth/staff-invite/**` is a 404, so pending
   invites cannot be redeemed. Adopted accounts do NOT reopen to their previous
   holder — adoption already replaced the password and cleared the TOTP. Roll
   back only as an emergency, and re-invite the INVITED accounts after rolling

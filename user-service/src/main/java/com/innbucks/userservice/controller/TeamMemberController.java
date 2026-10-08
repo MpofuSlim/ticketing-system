@@ -89,7 +89,7 @@ public class TeamMemberController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "Validation failed, email/phone already registered, or an InnBucks staff address",
+                    responseCode = "400", description = "Validation failed, or email/phone already registered",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "Rejected", value = """
@@ -97,13 +97,6 @@ public class TeamMemberController {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Email already registered",
                                       "data": null
-                                    }
-                                    """),
-                                    @ExampleObject(name = "An InnBucks staff address", value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
-                                      "data": { "errorCode": "email_domain_reserved", "field": "email" }
                                     }
                                     """)
                             })),

@@ -135,14 +135,6 @@ public class UserAdminService {
         // the user has since changed.
         boolean firstApproval = active && !user.isApproved();
 
-        // A registration on an InnBucks STAFF address is never approved: approval
-        // mails a temporary password to whatever phone the registrant typed, so
-        // approving one would hand a squatter a working login at a staff
-        // address. Staff are invited through POST /admin/staff instead.
-        if (firstApproval) {
-            staffEligibility.requireEmailNotReserved(user.getEmail(), adminEmail, "first_approval");
-        }
-
         // Retry semantics: if the row already shows the requested state AND it
         // isn't a still-pending first approval, only treat as a no-op when the
         // previous credential delivery actually reached the user. The original

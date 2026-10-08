@@ -38,8 +38,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -52,9 +52,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@code POST /auth/register} (V44 §1.1): the {@code roles} field used to be
  * dropped silently — a console creating "staff" here got a business owner. It is
  * now refused when NON-EMPTY (400 {@code roles_not_accepted}); absent and
- * {@code []} are accepted exactly as before. A staff address is refused
- * (400 {@code email_domain_reserved}) BEFORE the duplicate-email check, so
- * registration is no oracle for which staff addresses exist.
+ * {@code []} are accepted exactly as before. An InnBucks address registers like
+ * any other (owner decision, 2026-10-08) and gains no staff role; a letter-case
+ * variant of an address already held is refused as a duplicate.
  */
 class RegisterRolesFieldTest {
 
@@ -123,23 +123,27 @@ class RegisterRolesFieldTest {
     }
 
     @Test
-    @DisplayName("a staff address: 400 email_domain_reserved, decided BEFORE the duplicate check")
-    void reservedBeforeDuplicate() throws Exception {
-        when(users.existsByEmailIgnoreCase(anyString())).thenReturn(true);
-        for (String email : new String[]{"tariro.moyo@innbucks.co.zw", "Tariro.Moyo@INNBUCKS.CO.KE",
+    @DisplayName("an InnBucks address registers like any other: 201, a business role, no staff role")
+    void innbucksAddressRegisters() throws Exception {
+        for (String email : new String[]{"gclerkson@innbucks.co.zw", "Tariro.Moyo@INNBUCKS.CO.KE",
                 "someone@hr.innbucks.co.zw"}) {
-            register(email, null)
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.message").value(
-                            "InnBucks staff addresses can't be used here. Your administrator will invite you."))
-                    .andExpect(jsonPath("$.data.errorCode").value("email_domain_reserved"));
+            register(email, null).andExpect(status().isCreated());
         }
-        verify(users, never()).existsByEmailIgnoreCase(anyString());
-        verify(users, never()).save(any(User.class));
+        org.mockito.ArgumentCaptor<User> saved = org.mockito.ArgumentCaptor.forClass(User.class);
+        verify(users, org.mockito.Mockito.atLeast(3)).save(saved.capture());
+        assertThat(saved.getAllValues()).extracting(User::getEmail)
+                .contains("gclerkson@innbucks.co.zw", "Tariro.Moyo@INNBUCKS.CO.KE", "someone@hr.innbucks.co.zw");
+        assertThat(saved.getAllValues()).allSatisfy(u -> assertThat(u.getRoles())
+                .containsExactly(User.Role.MERCHANT_ADMIN.name()));
+    }
 
-        // ...while a non-staff duplicate still gets the ordinary answer.
-        register("rudo@chikwanha-traders.co.zw", null)
+    @Test
+    @DisplayName("a letter-case variant of an address already held: 400 Email already registered")
+    void caseVariantIsADuplicate() throws Exception {
+        when(users.existsByEmailIgnoreCase("GClerkson@innbucks.co.zw")).thenReturn(true);
+        register("GClerkson@innbucks.co.zw", null)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Email already registered"));
+        verify(users, never()).save(any(User.class));
     }
 }

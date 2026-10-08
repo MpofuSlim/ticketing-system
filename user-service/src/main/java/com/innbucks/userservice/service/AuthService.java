@@ -310,13 +310,6 @@ public class AuthService implements ApplicationEventPublisherAware {
             log.warn("Registration refused — a roles list was sent email={}", request.getEmail());
             throw com.innbucks.userservice.exception.StaffPolicyException.rolesNotAccepted();
         }
-        // A staff address is never self-registered (V44). Checked BEFORE the
-        // duplicate-email check below, so registration cannot be used to find
-        // out which staff addresses exist.
-        if (staffEligibility != null) {
-            staffEligibility.requireEmailNotReserved(request.getEmail(), null, "register");
-        }
-
         Set<String> bundles = parseBundles(request.getDefaultServices());
         // Services.rolesFor still speaks the built-in Role enum — bundle-to-role
         // is a fixed platform mapping, not something an operator composes — so

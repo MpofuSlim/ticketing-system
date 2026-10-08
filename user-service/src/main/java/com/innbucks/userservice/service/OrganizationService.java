@@ -365,16 +365,13 @@ public class OrganizationService {
         if (me.getRole() != OrganizationMember.Role.OWNER && role != OrganizationMember.Role.STAFF) {
             throw OrganizationException.roleInsufficient("Only an owner can add an owner or an admin.");
         }
-        // A staff address, or a staff account, is answered exactly like an
-        // address with no account (404 account_not_found) — a business owner must
-        // not be able to probe which addresses are InnBucks staff. The refusal is
-        // still audited as STAFF_GRANT_REFUSED.
-        if (staffEligibility.refusedAsUnknownAccount(req.getEmail(), null, caller.getEmail(),
-                "organization_add_member")) {
-            throw accountNotFound();
-        }
+        // A staff ACCOUNT is answered exactly like an address with no account
+        // (404 account_not_found) — a business owner must not be able to probe
+        // which accounts are InnBucks staff. The refusal is still audited as
+        // STAFF_GRANT_REFUSED. An InnBucks address that is an ordinary business or
+        // customer account is added like any other (owner decision, 2026-10-08).
         User person = resolveAccount(req.getEmail());
-        if (staffEligibility.refusedAsUnknownAccount(null, person, caller.getEmail(), "organization_add_member")) {
+        if (staffEligibility.refusedAsUnknownAccount(person, caller.getEmail(), "organization_add_member")) {
             throw accountNotFound();
         }
         if (members.findByOrganizationIdAndUserId(orgId, person.getId()).isPresent()) {

@@ -23,10 +23,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * A staff account never joins a business (V44). Adding one — or naming any
- * staff-domain address — is answered exactly like an unknown email (404
- * {@code account_not_found}), so a business owner cannot probe which addresses
- * are InnBucks staff; the refusal is still audited. Changing the role of one
+ * A staff account never joins a business (V44). Adding one is answered exactly
+ * like an unknown email (404 {@code account_not_found}), so a business owner
+ * cannot probe which accounts are InnBucks staff; the refusal is still audited.
+ * An InnBucks ADDRESS is not refused for that alone: an ordinary account on one
+ * is added like any other (owner decision, 2026-10-08). Changing the role of one
  * already in (a legacy row) is 409 {@code staff_account_not_eligible}. And the platform resolution
  * for an organization console-created "staff" own: suspend it.
  */
@@ -35,15 +36,15 @@ class OrganizationAddMemberRefusesStaffTest {
     private final StaffDispatchHarness h = new StaffDispatchHarness();
 
     @Test
-    @DisplayName("adding a staff account, or any staff-domain address: the same 404 as an unknown email, still audited")
+    @DisplayName("adding a staff account: the same 404 as an unknown email, still audited; an ordinary InnBucks-address account is added")
     void addMember() throws Exception {
         User owner = h.account("rudo@shop.co.zw", "MERCHANT_ADMIN");
         Organization org = h.organizationOf(owner, OrganizationMember.Role.OWNER);
         h.eligibleStaff("tariro.moyo@innbucks.co.zw", "CALL_CENTER_AGENT");
         h.account("legacy.po@gmail.com", "PRODUCT_OFFICER");   // an off-domain staff-role holder
 
-        // A staff account, an unknown staff-domain address, an off-domain staff
-        // account and a plain unknown address all read identically.
+        // A staff account, an off-domain staff account and two unknown
+        // addresses (one on an InnBucks domain) all read identically.
         for (String email : new String[]{"tariro.moyo@innbucks.co.zw", "nobody@innbucks.co.ke",
                 "legacy.po@gmail.com", "nobody@example.com"}) {
             h.mvc.perform(post("/organizations/{id}/members", org.getId()).principal(StaffDispatchHarness.asUser(owner))
@@ -54,10 +55,17 @@ class OrganizationAddMemberRefusesStaffTest {
                             "There's no account with that email. Ask them to register first, then add them."))
                     .andExpect(jsonPath("$.data.errorCode").value("account_not_found"));
         }
-        // ...but the three staff cases are on the audit chain; the plain unknown one is not.
-        verify(h.audit, times(3)).recordFailure(eq(AuditEventType.STAFF_GRANT_REFUSED),
+        // ...but the two staff accounts are on the audit chain; the unknown addresses are not.
+        verify(h.audit, times(2)).recordFailure(eq(AuditEventType.STAFF_GRANT_REFUSED),
                 eq(owner.getEmail()), any(), any(), any(), eq("staff_account_not_eligible"), any(), any());
         assertThat(h.memberRows).hasSize(1);
+
+        // An ordinary account on an InnBucks address joins like any other.
+        h.account("gclerkson@innbucks.co.zw", "MERCHANT_ADMIN");
+        h.mvc.perform(post("/organizations/{id}/members", org.getId()).principal(StaffDispatchHarness.asUser(owner))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"gclerkson@innbucks.co.zw\",\"role\":\"STAFF\"}"))
+                .andExpect(status().isCreated());
 
         h.account("colleague@example.com", "CUSTOMER");
         h.mvc.perform(post("/organizations/{id}/members", org.getId()).principal(StaffDispatchHarness.asUser(owner))
