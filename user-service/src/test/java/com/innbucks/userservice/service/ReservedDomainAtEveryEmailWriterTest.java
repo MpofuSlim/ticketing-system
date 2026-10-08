@@ -148,7 +148,7 @@ class ReservedDomainAtEveryEmailWriterTest {
         when(users.findByEmail(merchantAdmin.getEmail())).thenReturn(Optional.of(merchantAdmin));
         when(loyalty.findShop(shopId)).thenReturn(Optional.of(new LoyaltyServiceClient.ShopLookupResponse(
                 shopId.toString(), merchantId.toString(), "tenant-1", "ACTIVE")));
-        when(users.existsByEmail(anyString())).thenReturn(true);
+        when(users.existsByEmailIgnoreCase(anyString())).thenReturn(true);
 
         CreateShopAdminDTO dto = new CreateShopAdminDTO();
         dto.setFirstName("Tariro");
@@ -161,7 +161,7 @@ class ReservedDomainAtEveryEmailWriterTest {
                 com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
         dto.setEmail(com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
         assertReserved(() -> service.createShopAdmin(dto));
-        verify(users, never()).existsByEmail(anyString());
+        verify(users, never()).existsByEmailIgnoreCase(anyString());
         verify(users, never()).save(any(User.class));
     }
 
@@ -179,7 +179,7 @@ class ReservedDomainAtEveryEmailWriterTest {
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(organizer.getEmail(), null));
         when(users.findByEmail(organizer.getEmail())).thenReturn(Optional.of(organizer));
-        when(users.existsByEmail(anyString())).thenReturn(true);
+        when(users.existsByEmailIgnoreCase(anyString())).thenReturn(true);
 
         CreateTeamMemberDTO dto = new CreateTeamMemberDTO();
         dto.setFirstName("Tariro");
@@ -189,7 +189,7 @@ class ReservedDomainAtEveryEmailWriterTest {
         assertReserved(() -> service.createTeamMember(dto));
         dto.setEmail(com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
         assertReserved(() -> service.createTeamMember(dto));
-        verify(users, never()).existsByEmail(anyString());
+        verify(users, never()).existsByEmailIgnoreCase(anyString());
         verify(users, never()).save(any(User.class));
     }
 

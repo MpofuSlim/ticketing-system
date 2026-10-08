@@ -1137,8 +1137,9 @@ public class AuthController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure, no Tier-1 customer matches the supplied `msisdn`, or an "
-                            + "InnBucks staff address.",
+                    description = "Validation failure, no Tier-1 customer matches the supplied `msisdn`, an "
+                            + "InnBucks staff address, or another account already holds the email (in any "
+                            + "letter case).",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "No such customer", value = """
@@ -1153,6 +1154,13 @@ public class AuthController {
                                       "code": "400 BAD_REQUEST",
                                       "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
                                       "data": { "errorCode": "email_domain_reserved", "field": "email" }
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Email held by another account", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Email already registered",
+                                      "data": null
                                     }
                                     """)
                             })),

@@ -98,7 +98,7 @@ class ShopStaffServiceTest {
         when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
                 new LoyaltyServiceClient.ShopLookupResponse(
                         shopId.toString(), merchantId.toString(), "tenant-1", "ACTIVE")));
-        when(userRepository.existsByEmail("tendai@shop.co.zw")).thenReturn(false);
+        when(userRepository.existsByEmailIgnoreCase("tendai@shop.co.zw")).thenReturn(false);
         when(userRepository.existsByPhoneNumberAndHomeCountry("+263771234567", "ZW")).thenReturn(false);
         when(passwordEncoder.encode(anyString())).thenReturn("hashed");
     }
@@ -143,7 +143,7 @@ class ShopStaffServiceTest {
         authenticateAs(User.builder().email("shopadmin@x.com")
                 .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .loyaltyShopId(shopId).loyaltyMerchantId(merchantId).build());
-        when(userRepository.existsByEmail("rufaro@shop.co.zw")).thenReturn(false);
+        when(userRepository.existsByEmailIgnoreCase("rufaro@shop.co.zw")).thenReturn(false);
         when(userRepository.existsByPhoneNumberAndHomeCountry("+263772345678", "ZW")).thenReturn(false);
         when(passwordEncoder.encode(anyString())).thenReturn("hashed");
 

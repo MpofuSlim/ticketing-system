@@ -490,7 +490,9 @@ public class ShopStaffService {
             log.warn("Refused shop-staff creation at the bootstrap admin address role={}", role);
             throw badRequest("Email already registered");
         }
-        if (userRepository.existsByEmail(email)) {
+        // Case-insensitive, like registration (V49: one account per address,
+        // whatever its letter case).
+        if (userRepository.existsByEmailIgnoreCase(email)) {
             throw badRequest("Email already registered");
         }
         // Canonicalise to E.164 (+<cc><national>) against this cell's country

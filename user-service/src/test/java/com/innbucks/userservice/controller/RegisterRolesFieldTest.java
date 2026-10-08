@@ -142,4 +142,14 @@ class RegisterRolesFieldTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Email already registered"));
     }
+
+    @Test
+    @DisplayName("a letter-case variant of an address already held: 400 Email already registered (V49)")
+    void caseVariantIsADuplicate() throws Exception {
+        when(users.existsByEmailIgnoreCase("Rudo@Chikwanha-Traders.co.zw")).thenReturn(true);
+        register("Rudo@Chikwanha-Traders.co.zw", null)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Email already registered"));
+        verify(users, never()).save(any(User.class));
+    }
 }

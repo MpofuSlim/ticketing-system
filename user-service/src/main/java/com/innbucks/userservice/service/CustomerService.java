@@ -153,13 +153,13 @@ public class CustomerService {
         // platform admin's among them.
         staffEligibility.requireEmailNotReserved(request.getEmail(), null, "customer_tier2");
         // Tier-2 is the one place a self-service caller picks an arbitrary email
-        // for an existing row, and it has no uniqueness check of its own —
-        // uk_users_email is all that stands behind it, and that index is
-        // case-sensitive. Left open, a customer could park a case-variant of the
-        // platform admin's address on their own account and wait for a
+        // for an existing row. Left open, a customer could park a case-variant
+        // of the platform admin's address on their own account and wait for a
         // BOOTSTRAP_ADMIN_EMAIL re-spelling to promote it. The seeder refuses to
         // adopt a CUSTOMER row, so this is the belt to that braces. Checked
-        // before anything is loaded or written.
+        // before anything is loaded or written; the general "another account
+        // holds this address in any letter case" check follows once the
+        // caller's own account is known.
         if (com.innbucks.userservice.util.BootstrapAdminEmail.matches(bootstrapAdminEmail, request.getEmail())) {
             log.warn("Refused tier-2 registration claiming the bootstrap admin address");
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already registered");
@@ -170,6 +170,16 @@ public class CustomerService {
         // subject and the address its invite was bound to).
         staffEligibility.requireNotStaffAccount(profile.getUser(), null, "customer_tier2",
                 com.innbucks.userservice.exception.StaffPolicyException.STAFF_ACCOUNT_NOT_A_CUSTOMER_MESSAGE);
+        // Another account already holding this address, in any letter case, is
+        // refused like registration refuses it (V49: one account per address).
+        // The customer's own row is excluded, so re-submitting their own
+        // address in another case is not a duplicate.
+        Long ownId = profile.getUser().getId();
+        if (userRepository.findAllByEmailIgnoreCase(request.getEmail()).stream()
+                .anyMatch(other -> !other.getId().equals(ownId))) {
+            log.warn("Refused tier-2 registration: email already held by another account");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already registered");
+        }
 
         // Strip any HTML from the free-text name fields before they land on the
         // persisted profile + user (OWASP A03 / stored-XSS). The raw request

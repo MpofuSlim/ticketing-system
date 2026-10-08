@@ -146,10 +146,11 @@ class ShopStaffServiceBulkTest {
     @Test
     void duplicateEmailRow_failsOnlyThatRow() {
         authenticateAsShopAdmin(SHOP, MERCHANT);
-        when(userRepository.existsByEmail("dupe@shop.co.zw")).thenReturn(true);
+        // Case-insensitive: "Dupe@Shop.co.zw" is the stored dupe@shop.co.zw.
+        when(userRepository.existsByEmailIgnoreCase("Dupe@Shop.co.zw")).thenReturn(true);
         String csv = HEADER
                 + "Rufaro,T,Ncube,rufaro@shop.co.zw,+263772345678\n"
-                + "Dupe,,User,dupe@shop.co.zw,+263772345679\n";
+                + "Dupe,,User,Dupe@Shop.co.zw,+263772345679\n";
 
         BulkShopUserResultDTO result = service.bulkImportShopUsersCsv(csv);
 
@@ -157,7 +158,7 @@ class ShopStaffServiceBulkTest {
         assertThat(result.failed()).isEqualTo(1);
         BulkShopUserResultDTO.RowResult bad = result.results().get(1);
         assertThat(bad.status()).isEqualTo("FAILED");
-        assertThat(bad.email()).isEqualTo("dupe@shop.co.zw");
+        assertThat(bad.email()).isEqualTo("Dupe@Shop.co.zw");
         assertThat(bad.error()).isEqualTo("Email already registered");
         // The good row still committed its credential delivery; the bad row didn't.
         verify(eventPublisher, times(1)).publishEvent(any(CredentialDeliveryRequested.class));
