@@ -104,7 +104,9 @@ public class TeamMemberService {
             log.warn("Refused TEAM_MEMBER creation at the bootstrap admin address by={}", caller.getEmail());
             throw badRequest("Email already registered");
         }
-        if (userRepository.existsByEmail(req.getEmail())) {
+        // Case-insensitive, like registration (V49: one account per address,
+        // whatever its letter case).
+        if (userRepository.existsByEmailIgnoreCase(req.getEmail())) {
             throw badRequest("Email already registered");
         }
         // Canonicalise to E.164 against this cell's country before the

@@ -972,6 +972,26 @@ staff address.
   means the domain or any subdomain. `RoleWriterInventoryTest` lists every
   writer of `User.roles`, `User.email`, memberships and products and fails on a
   new one — decide guarded or unreachable, and write the reason there.
+  **The reservation is correct and stays — owner decision, re-confirmed
+  2026-10-08: an InnBucks address is staff-only and is never a merchant.** A
+  merchant registering at `@innbucks.co.zw` and getting `email_domain_reserved`
+  is the intended answer, not a bug. #695 removed the reservation after that
+  exact report and was closed unmerged when the owner reversed it. Don't
+  "fix" it again.
+- **One account per address, whatever its letter case (V49).**
+  `GClerkson@…` and `gclerkson@…` never both exist (owner decision,
+  2026-10-08). `uq_users_email_upper` (a unique index on `UPPER(email)`,
+  replacing V48's plain one) enforces it in the database, so a race between
+  two requests or a writer that forgot its check cannot store the second
+  spelling. Every writer also checks case-insensitively first, so the caller
+  gets `Email already registered` rather than a constraint error: register,
+  staff create, tier-2 (excluding the customer's own row), shop staff and team
+  members. `uk_users_email` (V1) stays and is now redundant. Sign-in still looks
+  the address up EXACTLY as typed; the index only stops two accounts sharing
+  it. A new email writer checks with `existsByEmailIgnoreCase` /
+  `findAllByEmailIgnoreCase`, never `existsByEmail`. V49 FAILS on a database
+  that already holds a letter-case pair — resolve those rows first; which
+  account keeps the address is an operator's call.
 - **The mint-time backstop** (`StaffMintFilter`, `AuthService.buildResponse` and
   `JwtFilter`'s perms-less legacy path): an ineligible holder of staff authority
   (a NAMED role name or a PLATFORM code) is counted on
