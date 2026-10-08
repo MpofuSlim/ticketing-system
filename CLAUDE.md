@@ -203,6 +203,16 @@ move the sum unseen.
   an env change (`kubectl set env`, one pod restart, image pin kept); raising
   `max_connections` restarts Postgres and costs ~5–10 MB a connection, and past
   ~2 × cores active queries more connections slow Postgres down anyway.
+- **Every allowed connection must also fit in Postgres' MEMORY** (2026-10-08).
+  The limit was 1 GiB beside `max_connections=150`: a busy connection measured
+  ~7.5 MiB on staging (60 concurrent checkouts took Postgres from 274 to
+  716 MiB), so a busy cell could be OOM-killed on connections alone, taking
+  every service's database with it. It is now 4 GiB (request 1 GiB) with
+  `shared_buffers=1GB`, and the same test fails unless the limit ≥
+  shared_buffers + `max_connections` × 10 MiB + 512 MiB. Raising
+  `max_connections` or `shared_buffers` means raising the limit in the same
+  change. Applying `01-infra.yaml` restarts Postgres (seconds of downtime for
+  every service), so do it at a quiet time.
 - **A new replica adds its whole pool.** Going past one replica (Linkerd
   runbook §8) means lowering pools or adding PgBouncer in the same PR; the test
   says so by failing. `SPRING_DATASOURCE_HIKARI_*` in a cell env file or a
