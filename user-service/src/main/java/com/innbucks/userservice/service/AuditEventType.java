@@ -96,6 +96,20 @@ public enum AuditEventType {
      */
     USER_APPROVED,
     /**
+     * A registration still pending approval was REJECTED
+     * ({@code PUT /admin/users/{id}/reject}): the never-approved account and the
+     * business its registration created were removed, so the same email, phone
+     * and TIN can register again. Written fail-closed
+     * ({@code AuditService.recordRequired}) as the transaction's last statement —
+     * once the rows are gone this is the only record of who was rejected, by
+     * whom and why. Target is the account's {@code userUuid}; metadata carries
+     * the reason, the numeric {@code userId}, the deleted organization ids, the
+     * memberships removed elsewhere, the business name, and the email and phone
+     * MASKED — enough to recognise the applicant without the chain holding their
+     * contact details.
+     */
+    USER_REGISTRATION_REJECTED,
+    /**
      * SUPER_ADMIN re-activated an already-approved user — admin lifted a
      * previous deactivation, no password reset involved.
      */

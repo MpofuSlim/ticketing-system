@@ -9,6 +9,7 @@ import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.service.AdminUserOrder;
 import com.innbucks.userservice.service.AuditContext;
 import com.innbucks.userservice.service.UserAdminService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -161,18 +162,49 @@ public class AdminUserController {
                     "Pass `?active=true` for approved/active accounts, `?active=false` for pending/inactive " +
                     "accounts. Omit to return all status values.\n\n" +
                     "Pass `?includeCustomers=true` to opt back in to the customer-only population (e.g. " +
-                    "for support triage). Defaults to `false`. " +
+                    "for support triage). Defaults to `false`.\n\n" +
+                    "**Order** (the same on every load, whatever the filters): platform owners — accounts " +
+                    "holding `SUPER_ADMIN` — first, then everyone else. Within each group, alphabetical by " +
+                    "`firstName`, then `lastName`, ignoring case; an account with no name comes after every " +
+                    "account that has one, and two accounts with the same name are ordered by `id`. Show the " +
+                    "rows in the order they arrive.\n\n" +
                     "Requires the `users:read` permission."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200", description = "Users retrieved",
+                    responseCode = "200", description = "Users retrieved, platform owners first, then by name",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
                                       "code": "200 OK",
                                       "message": "Users (system, no customers) retrieved",
                                       "data": [
+                                        {
+                                          "id": 1,
+                                          "firstName": "Platform",
+                                          "lastName": "Owner",
+                                          "email": "owner@innbucks.co.zw",
+                                          "phoneNumber": "+263771000001",
+                                          "roles": ["SUPER_ADMIN"],
+                                          "defaultServices": [],
+                                          "active": true,
+                                          "createdAt": "2026-01-05T09:00:00+02:00",
+                                          "business": false
+                                        },
+                                        {
+                                          "id": 14,
+                                          "firstName": "Farai",
+                                          "lastName": "Dube",
+                                          "email": "farai@acme-merch.co.zw",
+                                          "phoneNumber": "+263773111222",
+                                          "roles": ["SHOP_ADMIN"],
+                                          "defaultServices": ["loyalty"],
+                                          "active": true,
+                                          "createdAt": "2026-02-14T10:00:00+02:00",
+                                          "business": false,
+                                          "loyaltyMerchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "loyaltyShopId": "11111111-aaaa-bbbb-cccc-222222222222"
+                                        },
                                         {
                                           "id": 9,
                                           "firstName": "Rumbi",
@@ -182,7 +214,7 @@ public class AdminUserController {
                                           "roles": ["EVENT_ORGANIZER"],
                                           "defaultServices": ["ticketing"],
                                           "active": true,
-                                          "createdAt": "2026-02-12T11:30:00",
+                                          "createdAt": "2026-02-12T13:30:00+02:00",
                                           "business": true,
                                           "businessDetails": {
                                             "businessName": "Showtime Events",
@@ -194,25 +226,16 @@ public class AdminUserController {
                                             "totalEvents": 37,
                                             "rating": 4.6
                                           }
-                                        },
-                                        {
-                                          "id": 14,
-                                          "firstName": "Farai",
-                                          "lastName": "Dube",
-                                          "email": "farai@acme-merch.co.zw",
-                                          "phoneNumber": "+263773111222",
-                                          "roles": ["SHOP_ADMIN"],
-                                          "defaultServices": ["loyalty"],
-                                          "active": true,
-                                          "createdAt": "2026-02-14T08:00:00",
-                                          "business": false,
-                                          "loyaltyMerchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
-                                          "loyaltyShopId": "11111111-aaaa-bbbb-cccc-222222222222"
                                         }
                                       ]
                                     }
                                     """))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller lacks `users:read`",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Missing permission", value = """
+                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                    """)))
     })
     public ResponseEntity<ApiResult<List<UserResponseDTO>>> listUsers(
             @RequestParam(name = "active", required = false) Boolean active,
@@ -225,14 +248,18 @@ public class AdminUserController {
         // whose existence an operator most needs to see. The write endpoints
         // still refuse to act on them (the SUPER_ADMIN guards in
         // UserAdminService and MfaService), so listing grants nothing.
-        List<User> visible;
+        List<User> loaded;
         if (includeCustomers) {
-            visible = (active != null) ? userRepository.findByActive(active) : userRepository.findAll();
+            loaded = (active != null) ? userRepository.findByActive(active) : userRepository.findAll();
         } else {
-            visible = (active != null)
+            loaded = (active != null)
                     ? userRepository.findByActiveExceptOnlyRole(active, User.Role.CUSTOMER.name())
                     : userRepository.findAllExceptOnlyRole(User.Role.CUSTOMER.name());
         }
+        // Platform owners first, then everyone else by name (owner decision,
+        // 2026-10-08). Sorted once here, after loading, so every branch above
+        // gets the same order — the list is unpaged and already in memory.
+        List<User> visible = loaded.stream().sorted(AdminUserOrder.SYSTEM_USERS).toList();
 
         // Batch-load tenant profiles so business accounts carry their business
         // details here too (not just on GET /admin/users/merchants), without an

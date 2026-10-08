@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
@@ -118,6 +119,60 @@ public class LoyaltyServiceClient {
     }
 
     /**
+     * The STRICT twin of {@link #merchantIdsForOrganization}: every loyalty
+     * merchant the organization owns, or {@link Optional#empty()} when the
+     * answer is UNKNOWN. Rejecting a registration ({@code RegistrationRejectionService})
+     * deletes the organization it created, and must not do that while InnRewards
+     * holds a merchant pointing at it — so "could not ask" may never read as
+     * "owns nothing", which is exactly what the fail-open variant returns (an
+     * empty list, the right answer for its ownership check and the wrong one here).
+     *
+     * <p>Unknown is: no internal token configured (nothing is sent), any non-2xx
+     * (4xx included — a 401 is a rejected token, not an answer), a connect or
+     * read failure, and any 2xx whose body is not the documented
+     * {@code {organizationId, merchantIds}} map — no body, no
+     * {@code merchantIds} array, an id that is not a UUID (never skipped: a
+     * malformed id is still a merchant), or an {@code organizationId} echo naming
+     * a different organization. Only a well-formed 2xx is an answer, and an empty
+     * array then genuinely means "owns nothing".
+     */
+    public Optional<List<UUID>> merchantIdsForOrganizationIfKnown(UUID organizationId) {
+        if (organizationId == null) return Optional.empty();
+        if (internalToken == null || internalToken.isBlank()) {
+            log.warn("Loyalty merchant check not answered; INTERNAL_API_TOKEN is not configured");
+            return Optional.empty();
+        }
+        try {
+            ResponseEntity<OrganizationMerchantsResponse> response = http.get()
+                    .uri("/loyalty/internal/merchants/ids-by-organization?organizationId={id}", organizationId)
+                    .header("X-Internal-Token", internalToken)
+                    .retrieve()
+                    .toEntity(OrganizationMerchantsResponse.class);
+            OrganizationMerchantsResponse body = response.getBody();
+            if (!response.getStatusCode().is2xxSuccessful() || body == null || body.merchantIds() == null) {
+                log.warn("Loyalty merchant check not answered organizationId={} status={} body={}",
+                        organizationId, response.getStatusCode().value(), body == null ? "none" : "no merchantIds");
+                return Optional.empty();
+            }
+            if (body.organizationId() != null && !organizationId.equals(UUID.fromString(body.organizationId()))) {
+                log.warn("Loyalty merchant check answered for another organization organizationId={}", organizationId);
+                return Optional.empty();
+            }
+            List<UUID> ids = new ArrayList<>();
+            for (String id : body.merchantIds()) {
+                ids.add(UUID.fromString(id));
+            }
+            return Optional.of(List.copyOf(ids));
+        } catch (Exception ex) {
+            // Every failure — an error status, the network, an unreadable or
+            // malformed body — is "we don't know", never "owns nothing".
+            log.warn("Loyalty merchant check not answered organizationId={} error={}",
+                    organizationId, ex.getClass().getSimpleName());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * Fire-and-log promote webhook: tells loyalty-service that a phone has
      * completed registration so every PENDING LoyaltyUser row matching that
      * phone — across every tenant — flips to ACTIVE. Idempotent on the
@@ -161,4 +216,8 @@ public class LoyaltyServiceClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record MerchantIdsResponse(List<String> merchantIds) {}
+
+    /** The same endpoint, read strictly: the echo is checked too. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record OrganizationMerchantsResponse(String organizationId, List<String> merchantIds) {}
 }

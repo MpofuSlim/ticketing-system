@@ -60,6 +60,14 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByCreatedByOrganizerUuid(UUID organizerUuid);
 
     /**
+     * Whether any account names this one as its organizer — its team members.
+     * {@code created_by_organizer_uuid} is {@code ON DELETE RESTRICT} (V20), so
+     * such an account can never be deleted, and rejecting its registration is
+     * refused up front instead of failing on the constraint.
+     */
+    boolean existsByCreatedByOrganizerUuid(UUID organizerUuid);
+
+    /**
      * "System users" projection — every row except those whose ONLY role is
      * the supplied one. Used by the SUPER_ADMIN portal to list administrators /
      * staff while keeping the (much larger) customer-only population off the
