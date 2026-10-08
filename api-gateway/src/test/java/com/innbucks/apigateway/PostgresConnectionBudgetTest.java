@@ -82,6 +82,17 @@ class PostgresConnectionBudgetTest {
     private static final Path ROOT = Path.of(System.getProperty("user.dir")).getParent();
     private static final Path K8S = ROOT.resolve("deploy/k8s");
     private static final Pattern MAX_CONNECTIONS = Pattern.compile("^max_connections=(\\d+)$");
+    private static final Pattern SHARED_BUFFERS = Pattern.compile("^shared_buffers=(\\d+)(MB|GB)$");
+
+    /**
+     * What one connection may hold. A busy one measured ~7.5 MiB on staging
+     * (2026-10-08: 60 concurrent checkouts took Postgres from 274 to 716 MiB);
+     * 10 leaves room for a sort or a hash using its {@code work_mem}.
+     */
+    static final int PER_CONNECTION_MIB = 10;
+
+    /** The postmaster, background workers, catalogs and slack. */
+    static final int BASE_MIB = 512;
 
     record Pool(String deployment, int replicas, int surge, int max, int min) {
         int steady() {
@@ -109,6 +120,30 @@ class PostgresConnectionBudgetTest {
                                 + " max_connections (a Postgres restart, ~5-10 MB per connection).",
                         steady, surge, RESERVE, worstCase, maxConnections, table(pools))
                 .isLessThanOrEqualTo(maxConnections);
+    }
+
+    /**
+     * Allowing a connection Postgres cannot fit in memory is worse than refusing
+     * it: past the container's limit the kernel kills Postgres, and every
+     * service loses its database at once. The limit was 1 GiB beside
+     * {@code max_connections=150}, which a busy cell could pass on connections
+     * alone. Raising {@code max_connections} or {@code shared_buffers} now has
+     * to raise the limit with it.
+     */
+    @Test
+    void postgresMemoryLimitHoldsTheCacheAndEveryConnection() throws IOException {
+        Map<String, Object> postgres = postgresContainer();
+        int maxConnections = maxConnections();
+        long sharedBuffersMiB = sharedBuffersMiB(postgres);
+        long limitMiB = mebibytes(String.valueOf(
+                map(map(postgres.get("resources")).get("limits")).get("memory")));
+        long needed = sharedBuffersMiB + (long) maxConnections * PER_CONNECTION_MIB + BASE_MIB;
+
+        assertThat(limitMiB)
+                .as("postgres memory limit (%d MiB) must hold shared_buffers (%d MiB) + max_connections (%d)"
+                                + " x %d MiB + %d MiB base = %d MiB",
+                        limitMiB, sharedBuffersMiB, maxConnections, PER_CONNECTION_MIB, BASE_MIB, needed)
+                .isGreaterThanOrEqualTo(needed);
     }
 
     @Test
@@ -156,21 +191,45 @@ class PostgresConnectionBudgetTest {
 
     // ---------------------------------------------------------------------
 
-    private static int maxConnections() throws IOException {
+    private static Map<String, Object> postgresContainer() throws IOException {
         for (Map<String, Object> doc : documents(K8S.resolve("01-infra.yaml"))) {
-            if (!"StatefulSet".equals(doc.get("kind")) || !"postgres".equals(name(doc))) {
-                continue;
+            if ("StatefulSet".equals(doc.get("kind")) && "postgres".equals(name(doc))) {
+                return containers(doc).get(0);
             }
-            for (Map<String, Object> c : containers(doc)) {
-                for (Object arg : list(c.get("args"))) {
-                    Matcher m = MAX_CONNECTIONS.matcher(String.valueOf(arg));
-                    if (m.matches()) {
-                        return Integer.parseInt(m.group(1));
-                    }
-                }
+        }
+        throw new AssertionError("deploy/k8s/01-infra.yaml has no postgres StatefulSet");
+    }
+
+    private static int maxConnections() throws IOException {
+        for (Object arg : list(postgresContainer().get("args"))) {
+            Matcher m = MAX_CONNECTIONS.matcher(String.valueOf(arg));
+            if (m.matches()) {
+                return Integer.parseInt(m.group(1));
             }
         }
         throw new AssertionError("the postgres StatefulSet in deploy/k8s/01-infra.yaml sets no -c max_connections=N");
+    }
+
+    private static long sharedBuffersMiB(Map<String, Object> postgres) {
+        for (Object arg : list(postgres.get("args"))) {
+            Matcher m = SHARED_BUFFERS.matcher(String.valueOf(arg));
+            if (m.matches()) {
+                long n = Long.parseLong(m.group(1));
+                return "GB".equals(m.group(2)) ? n * 1024 : n;
+            }
+        }
+        throw new AssertionError("the postgres StatefulSet must set -c shared_buffers=<n>MB|GB explicitly");
+    }
+
+    /** A Kubernetes memory quantity in Mi or Gi; anything else fails loudly rather than being misread. */
+    static long mebibytes(String quantity) {
+        if (quantity.endsWith("Gi")) {
+            return Long.parseLong(quantity.substring(0, quantity.length() - 2)) * 1024;
+        }
+        if (quantity.endsWith("Mi")) {
+            return Long.parseLong(quantity.substring(0, quantity.length() - 2));
+        }
+        throw new AssertionError("write the postgres memory limit in Mi or Gi, got " + quantity);
     }
 
     private static List<Pool> pools() throws IOException {
