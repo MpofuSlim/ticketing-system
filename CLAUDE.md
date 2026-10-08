@@ -1146,6 +1146,92 @@ which loyalty (InnRewards V51) and marketplace-service each read directly.
   already decided the row. `approve` was fixed alongside `reject` — its Swagger
   had been documenting a 404 it did not actually return.
 
+## Pending registrations can be REJECTED (user-service)
+
+`PUT /admin/users/{id}/reject` with a required `{ "reason": "..." }` (≤ 1000,
+sent to the applicant verbatim) — `RegistrationRejectionService`, behind
+`AdminRegistrationController`.
+
+- **Why it had to exist.** `POST /auth/register` leaves an account unapproved and
+  inactive, and the console's only action on it was Approve (the first
+  `PUT /admin/users/{id}/active` with `true`). A registration nobody wanted stayed
+  pending forever, and its email, phone and BPO / tax number stayed taken, so the
+  applicant could not even fix a typo and register again.
+- **Rejecting FREES THE DETAILS (owner decision, 2026-10-08).** The never-approved
+  account is DELETED with the business its registration created: the tenant
+  profile, and every organization the applicant OWNS and CREATED
+  (`created_by_user_id` = the account) with its members and products (V39
+  cascade). The same email, phone and BPO register again. Not a status: there is
+  no REJECTED account state, and the `id` is a 404 afterwards — approve included.
+- **Every table that referenced the registration was decided** (the class javadoc
+  is the table). Deleted explicitly, because they have no cascade:
+  `tenant_profiles`, `refresh_tokens`, `devices`, the `otps` keyed by the
+  account's email and phone (a reset code requested while pending must not set a
+  re-registration's password), the created `organizations`. Cascaded:
+  `user_roles`, `user_default_services`, `mfa_backup_codes`, `service_requests`,
+  `organization_members`, `organization_products`, `team_member_event_assignment`
+  (`created_by_user_id` / `reviewed_by` are SET NULL). Kept: `audit_events`,
+  `notifications` (V37: history), the support logs, the DTX device-security
+  tables (keyed by MSISDN, about the banking-core customer), `otp_retry_attempts`,
+  `pending_registrations`, `revoked_tokens`.
+- **Refused, with nothing changed:** approved — 409 `registration_already_decided`
+  (deactivate it instead; a decided account is never deleted); a staff account —
+  409 `use_staff_endpoints`; the SUPER_ADMIN — 403; and 409
+  `registration_business_in_use` with `data.reason`: `other_members` (anyone else
+  in the business it created), `loyalty_merchant`, `team_members` (accounts name it
+  as organizer — `ON DELETE RESTRICT`, and team members are never deleted),
+  `customer_account` (a `customer_profiles` row: that is a super-app customer, not
+  just an applicant) and `sole_owner_elsewhere` (it is the only OWNER of somebody
+  else's business, which would be orphaned). A membership in somebody else's
+  business is simply removed with the account (and named in the audit row).
+- **Two phases, because InnRewards is asked in between.** A read-only
+  `TransactionTemplate` phase assesses; with NO transaction open, InnRewards is
+  asked whether it holds a loyalty merchant for each organization to delete; then
+  ONE write transaction locks the account row (`UserRepository.lockById`) and
+  assesses AGAIN. Anything different — gone, approved, refused now, another set of
+  organizations — is 409 `registration_changed` ("Refresh and try again"):
+  InnRewards vouched for the old set only.
+- **The InnRewards check is STRICT.** `LoyaltyServiceClient.merchantIdsForOrganizationIfKnown`
+  returns `Optional.empty()` for every unknown — no internal token, any non-2xx
+  (a 401 is not an answer), connect/read failure, a body without the
+  `merchantIds` array, a malformed id (never skipped: still a merchant), an
+  `organizationId` echo naming another organization — and that is 503
+  `registration_check_unavailable`. Only a well-formed 2xx with `[]` clears an
+  organization. `merchantIdsForOrganization` stays FAIL-OPEN (empty list) for
+  `ShopStaffService`, where an empty set fails its ownership check closed — the
+  same "unknown" means opposite things to the two callers, hence two methods.
+  `LoyaltyMerchantIdsIfKnownContractTest` pins every shape.
+- **Approval takes the same row lock.** `UserAdminService.setActive` reads its
+  target with `lockById`, so approve and reject on one registration serialise:
+  whichever commits first wins; an approval after a rejection is 404, a rejection
+  after an approval 409 `registration_already_decided` (or `registration_changed`
+  when the approval lands between the reject's phases — pinned with real
+  transactions by `RegistrationRejectionPostgresIT`).
+- **REQUIRED audit, last statement** (`USER_REGISTRATION_REJECTED`, after a
+  flush; 503 `audit_unavailable` rolls everything back). Actor = the admin's
+  email; target = the account's `userUuid` (type USER); metadata: `reason`,
+  `userId`, `organizationsDeleted`, `membershipsRemoved`, `businessName`, and the
+  email and phone MASKED (`t****@domain`, `****4567`) — enough to recognise the
+  applicant later without the chain holding the details of someone turned away.
+- **The notice goes AFTER COMMIT** (`RegistrationRejected` →
+  `RegistrationRejectionListener` → `UserNotificationDispatcher`, email then
+  WhatsApp), carrying the contact details captured BEFORE the delete. No
+  `fallbackExecution`, and no in-app notification (the account is gone). A
+  rejection that rolls back tells nobody.
+- **Same permission as approving** (`users:activation:write`), as with service
+  requests: both are the power to decide a registration.
+- **Not reached, known residuals:** marketplace-service has no internal lookup by
+  organization, so a listing a SUPER_ADMIN created on behalf of a pending
+  registrant's organization keeps the deleted id — don't add a lookup just for
+  this without a decision. A loyalty merchant created in the moment between the
+  InnRewards check and the commit is not seen either.
+- **The System Users list order (owner decision, 2026-10-08):** `GET /admin/users`
+  returns platform owners (`SUPER_ADMIN`) first, then everyone else; within each,
+  by first name then last name, case-insensitive (`Locale.ROOT`), no name last,
+  ties by id. One comparator, `AdminUserOrder.SYSTEM_USERS`, applied in Java after
+  loading on every branch (the list is unpaged); `AdminUserOrderTest` and
+  `AdminUserListOrderTest`.
+
 ## Organizations — the business is the tenant (user-service V39)
 
 `organizations` + `organization_members` (`OWNER` / `ADMIN` / `STAFF`) +

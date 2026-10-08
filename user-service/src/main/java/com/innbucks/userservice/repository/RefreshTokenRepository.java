@@ -31,4 +31,13 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID
     @Modifying
     @Query("delete from RefreshToken r where r.expiresAt < :now")
     int deleteExpired(@Param("now") Instant now);
+
+    /**
+     * Every refresh-token row of an account that is being DELETED (a rejected
+     * registration). {@code refresh_tokens.user_id} has no cascade (V8). A
+     * registration pending approval cannot sign in, so there are normally none.
+     */
+    @Modifying
+    @Query("delete from RefreshToken r where r.userId = :userId")
+    int deleteAllForUser(@Param("userId") Long userId);
 }

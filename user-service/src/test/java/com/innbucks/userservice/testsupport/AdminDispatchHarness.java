@@ -128,6 +128,8 @@ public class AdminDispatchHarness {
                 .roles(new LinkedHashSet<>(List.of(roleNames))).active(true).approved(true)
                 .tokenVersion(3L).build();
         when(users.findById(id)).thenReturn(Optional.of(u));
+        // setActive reads its target under the row lock (lockById).
+        when(users.lockById(id)).thenReturn(Optional.of(u));
         when(users.findByEmail(email)).thenReturn(Optional.of(u));
         return u;
     }

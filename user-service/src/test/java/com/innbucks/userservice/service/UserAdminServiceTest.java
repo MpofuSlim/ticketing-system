@@ -65,6 +65,10 @@ class UserAdminServiceTest {
         final com.innbucks.userservice.repository.RoleRepository roleRepo =
                 mock(com.innbucks.userservice.repository.RoleRepository.class);
         {
+            // setActive reads its target under the row lock (lockById) that a
+            // registration rejection takes too. The lock is the same lookup plus
+            // FOR UPDATE, so here it answers whatever a case stubbed on findById.
+            when(userRepo.lockById(anyLong())).thenAnswer(inv -> userRepo.findById(inv.getArgument(0)));
             com.innbucks.userservice.testsupport.BuiltInRoleRows.stub(roleRepo);
             // The administrator every case acts as is the platform owner, so the
             // no-escalation rules (NamedRoleAssignmentTest, RoleRemovalAuthorityTest) never refuse here.
@@ -500,6 +504,37 @@ class UserAdminServiceTest {
         Fixture f = new Fixture();
         when(f.userRepo.findById(99L)).thenReturn(Optional.empty());
         assertThrows(NotFoundException.class, () -> f.service.setActive(99L, true));
+    }
+
+    @Test
+    void setActive_readsTheTargetUnderTheRowLock_thatARejectionTakesToo() {
+        // Approving and rejecting one registration serialise on this lock: a
+        // plain read would let an approval act on an account a rejection is
+        // deleting, and the rejection's re-check could not see the approval.
+        Fixture f = new Fixture();
+        User user = User.builder().id(77L).email("pending@acme.co.zw").phoneNumber("+263771234567")
+                .password("placeholder").active(false).approved(false).build();
+        // doReturn: when(...) would itself call lockById through the fixture's default answer.
+        doReturn(Optional.of(user)).when(f.userRepo).lockById(77L);
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.encoder.encode(anyString())).thenReturn("encoded-temp");
+
+        assertTrue(f.service.setActive(77L, true, "admin@innbucks.co.zw", AuditContext.none()).isApproved());
+
+        verify(f.userRepo).lockById(77L);
+        verify(f.userRepo, never()).findById(77L);
+    }
+
+    @Test
+    void setActive_onARejectedRegistration_isNotFound() {
+        // The rejection deleted the row: the approval waiting on its lock finds nothing.
+        Fixture f = new Fixture();
+        doReturn(Optional.empty()).when(f.userRepo).lockById(78L);
+
+        NotFoundException ex = assertThrows(NotFoundException.class,
+                () -> f.service.setActive(78L, true, "admin@innbucks.co.zw", AuditContext.none()));
+        assertEquals("User not found: 78", ex.getMessage());
+        verifyNoInteractions(f.publisher);
     }
 
     // -- Audit ----------------------------------------------------------------

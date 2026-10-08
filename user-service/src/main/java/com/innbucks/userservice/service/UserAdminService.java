@@ -99,7 +99,11 @@ public class UserAdminService {
 
     @Transactional
     public User setActive(Long id, boolean active, String adminEmail, AuditContext auditContext) {
-        User user = userRepository.findById(id)
+        // SELECT ... FOR UPDATE: the lock RegistrationRejectionService takes too,
+        // so approving and rejecting one registration serialise — whichever
+        // commits first wins and the other sees it (an approval after a
+        // rejection finds no account: 404 below).
+        User user = userRepository.lockById(id)
                 .orElseThrow(() -> new NotFoundException("User not found: " + id));
 
         // SUPER_ADMIN is the platform-owner account, seeded once by
