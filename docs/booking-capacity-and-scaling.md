@@ -149,6 +149,13 @@ Flyway, which opens its own unpooled connections at start-up.
 
 ### 4.2 Postgres tuning — applied on the test box, NOT yet in IaC
 
+> **Partly codified 2026-10-08.** The cell's `deploy/k8s/01-infra.yaml` now runs
+> Postgres with `shared_buffers=1GB` and a 4 GiB memory limit (it was 128 MB in
+> a 1 GiB limit, which 150 busy connections alone could exceed);
+> `PostgresConnectionBudgetTest` keeps the limit above shared_buffers + every
+> allowed connection. The larger set below remains a recommendation for a
+> dedicated database host.
+
 These were set on the running container during testing and **will be lost on the
 next rebuild** unless codified in `docker-compose.yml` / your IaC. Confirmed
 applied (via `SHOW`): `max_connections=200`, `shared_buffers=5GB`, `work_mem=8MB`.

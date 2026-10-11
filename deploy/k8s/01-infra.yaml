@@ -22,13 +22,19 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
-          args: ["postgres","-c","max_connections=150","-c","shared_buffers=128MB"]
+          # Memory: every allowed connection plus the cache must fit the limit,
+          # or a busy moment gets Postgres OOM-killed and every service loses its
+          # database at once. A busy connection measured ~7.5 MiB on staging
+          # (2026-10-08, 60 concurrent checkouts), so 150 of them alone pass 1 GiB.
+          # 4 GiB holds shared_buffers + 150 connections + headroom;
+          # PostgresConnectionBudgetTest pins it (10 MiB per connection).
+          args: ["postgres","-c","max_connections=150","-c","shared_buffers=1GB"]
           ports: [ { containerPort: 5432 } ]
           env:
             - { name: POSTGRES_USER, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
             - { name: POSTGRES_DB, value: postgres }
-          resources: { requests: { memory: 512Mi }, limits: { memory: 1Gi } }
+          resources: { requests: { memory: 1Gi }, limits: { memory: 4Gi } }
           readinessProbe:
             exec: { command: ["sh","-c","pg_isready -U $POSTGRES_USER"] }
             initialDelaySeconds: 5
