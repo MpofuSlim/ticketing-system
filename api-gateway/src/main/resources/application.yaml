@@ -859,9 +859,6 @@ spring:
                 allowCredentials: true
                 maxAge: 3600
 
-gateway:
-  trusted-proxy-count: ${GATEWAY_TRUSTED_PROXY_COUNT:1}
-
 # Fail-safe rate-limit fallback (OWASP A04). When Redis is unreachable the
 # SMS-cost / payment routes wired to @resilientRedisRateLimiter keep throttling
 # via an in-memory Bucket4j bucket (see ResilientRedisRateLimiter). These knobs
@@ -895,6 +892,11 @@ server:
   # Locations) reflects the public https://.../foundry/... form instead of the
   # stripped internal one. No effect on route matching, and a no-op when the
   # headers are absent (local dev, direct calls).
+  # It ALSO rewrites the request's remote address from the left-most
+  # X-Forwarded-For entry (the caller's choice: Cloudflare appends) and strips
+  # that header, so neither may ever key a rate limit. The client IP comes from
+  # the X-Real-IP the host nginx overwrites (ClientIpResolver,
+  # deploy/k8s/README.md §3).
   forward-headers-strategy: framework
   # Response compression lives HERE and only here (CLAUDE.md "Tracing and
   # compression"). Cloudflare already compresses for browsers, but it fetches

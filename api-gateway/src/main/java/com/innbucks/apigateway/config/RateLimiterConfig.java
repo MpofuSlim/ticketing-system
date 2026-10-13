@@ -1,14 +1,15 @@
 package com.innbucks.apigateway.config;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.ratelimit.KeyResolver;
 import org.springframework.cloud.gateway.filter.ratelimit.RedisRateLimiter;
 import org.springframework.cloud.gateway.support.ipresolver.RemoteAddressResolver;
-import org.springframework.cloud.gateway.support.ipresolver.XForwardedRemoteAddressResolver;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpHeaders;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
 import java.net.InetSocketAddress;
@@ -20,38 +21,29 @@ import java.time.Duration;
  * user's quota stays consistent across IP changes); everyone else is keyed
  * by client IP. Falls back to a single shared "anonymous" bucket if neither
  * is available, which is a deliberately tight quota.
+ *
+ * <p>Every IP key comes from {@link #gatewayRemoteAddressResolver}, which reads
+ * the nginx-set {@code X-Real-IP} ({@link ClientIpResolver}). A new IP-keyed
+ * resolver must take its address from that bean too, never from
+ * {@code X-Forwarded-For} or the request's remote address.
  */
 @Configuration
 public class RateLimiterConfig {
 
     /**
-     * Resolves the real client IP for the per-IP rate-limit key.
+     * Resolves the real client IP for the per-IP rate-limit key: the
+     * {@code X-Real-IP} the host nginx sets, parsed as a literal address only.
      *
-     * <p>The gateway sits behind a reverse proxy / ingress in every hosted
-     * environment, so the socket peer is the proxy — not the caller. Without
-     * honouring {@code X-Forwarded-For} every anonymous request collapses into
-     * a single "proxy IP" bucket, which both defeats the limit (one global
-     * quota for the whole internet) and lets a single abuser starve everyone
-     * else. {@code maxTrustedIndex(n)} trusts only the {@code n} right-most XFF
-     * entries (the ones our own proxies appended), so a client cannot widen its
-     * quota by spoofing extra left-most entries.
-     *
-     * <p>{@code gateway.trusted-proxy-count} is the number of trusted proxies in
-     * front of the gateway (default 1 = a single ingress). Set it to {@code 0}
-     * when the gateway is directly internet-exposed (no trusted proxy) so
-     * {@code X-Forwarded-For} is ignored entirely and the key falls back to the
-     * socket peer — otherwise a client could forge the header to mint unlimited
-     * buckets.
+     * <p>The gateway sits behind Cloudflare and the host nginx, so the socket
+     * peer is nginx, not the caller, and {@code X-Forwarded-For} is unusable
+     * here: the {@code framework} forward-headers strategy rewrites the remote
+     * address from its caller-chosen left-most entry and strips the header.
+     * {@link ClientIpResolver} has the full reasoning, and
+     * {@code deploy/k8s/README.md} §3 the nginx config it depends on.
      */
     @Bean
-    public RemoteAddressResolver gatewayRemoteAddressResolver(
-            @Value("${gateway.trusted-proxy-count:1}") int trustedProxyCount) {
-        if (trustedProxyCount <= 0) {
-            // RemoteAddressResolver's default resolve() returns the socket peer
-            // and ignores X-Forwarded-For — exactly the no-trusted-proxy case.
-            return new RemoteAddressResolver() {};
-        }
-        return XForwardedRemoteAddressResolver.maxTrustedIndex(trustedProxyCount);
+    public RemoteAddressResolver gatewayRemoteAddressResolver(MeterRegistry meterRegistry) {
+        return new ClientIpResolver(meterRegistry);
     }
 
     // @Primary so requestRateLimiterGatewayFilterFactory's KeyResolver
@@ -70,11 +62,7 @@ public class RateLimiterConfig {
                 // The token itself is the key; identical tokens => one bucket.
                 return Mono.just("token:" + authHeader.substring(7));
             }
-            InetSocketAddress remote = gatewayRemoteAddressResolver.resolve(exchange);
-            if (remote != null && remote.getAddress() != null) {
-                return Mono.just("ip:" + remote.getAddress().getHostAddress());
-            }
-            return Mono.just("anonymous");
+            return ipKey(gatewayRemoteAddressResolver, exchange, "anonymous");
         };
     }
 
@@ -91,13 +79,7 @@ public class RateLimiterConfig {
      */
     @Bean
     public KeyResolver paymentsInnbucksIpKeyResolver(RemoteAddressResolver gatewayRemoteAddressResolver) {
-        return exchange -> {
-            InetSocketAddress remote = gatewayRemoteAddressResolver.resolve(exchange);
-            if (remote != null && remote.getAddress() != null) {
-                return Mono.just("ip:" + remote.getAddress().getHostAddress());
-            }
-            return Mono.just("anonymous-payments-innbucks");
-        };
+        return exchange -> ipKey(gatewayRemoteAddressResolver, exchange, "anonymous-payments-innbucks");
     }
 
     /**
@@ -121,13 +103,22 @@ public class RateLimiterConfig {
      */
     @Bean
     public KeyResolver preAuthIpKeyResolver(RemoteAddressResolver gatewayRemoteAddressResolver) {
-        return exchange -> {
-            InetSocketAddress remote = gatewayRemoteAddressResolver.resolve(exchange);
-            if (remote != null && remote.getAddress() != null) {
-                return Mono.just("ip:" + remote.getAddress().getHostAddress());
-            }
-            return Mono.just("anonymous-pre-auth");
-        };
+        return exchange -> ipKey(gatewayRemoteAddressResolver, exchange, "anonymous-pre-auth");
+    }
+
+    /**
+     * {@code ip:<address>} for the client address, or {@code fallbackKey} when
+     * there is none. An UNRESOLVED address has none: that is what the
+     * forward-headers transformer builds from {@code X-Forwarded-For}, and it
+     * must never become a key of its own.
+     */
+    private static Mono<String> ipKey(RemoteAddressResolver resolver, ServerWebExchange exchange,
+                                      String fallbackKey) {
+        InetSocketAddress remote = resolver.resolve(exchange);
+        if (remote != null && remote.getAddress() != null) {
+            return Mono.just("ip:" + remote.getAddress().getHostAddress());
+        }
+        return Mono.just(fallbackKey);
     }
 
     /**
