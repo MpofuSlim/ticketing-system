@@ -286,6 +286,8 @@ public class BookingService {
                         continue;
                     }
                     if (deadlockRetried) {
+                        // Not FAILED: that means a second deadlock. This 503 is the
+                        // collision budget's, and reference_collision counts it.
                         recordClaimRetry(BookingMetrics.ClaimRetryOutcome.REFUSED);
                     }
                     log.warn("Claim hit a {} number collision again after {} collision retries, answering 503 "

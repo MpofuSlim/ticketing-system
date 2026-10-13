@@ -20,7 +20,11 @@ import java.util.Map;
  *       serialization failure and was run once more. {@code succeeded}: the
  *       retry booked. {@code failed}: it hit the same failure again and the
  *       caller got a 503. {@code refused}: the retry ran and was refused for
- *       any other reason (sold out, say), which the caller sees as usual. Expected to
+ *       any other reason, which the caller sees exactly as they would have
+ *       without the deadlock: sold out, say, or a reference clash that ran out
+ *       of collision retries (the 503 TRY_AGAIN counted on
+ *       {@code booking.claim.reference_collision}). So {@code failed} alone
+ *       means a second deadlock, and not every 503 is a {@code failed}. Expected to
  *       stay at 0 now that every path locks stock in one order. A clash of a
  *       generated reference is not counted here (see the next one), so this
  *       still reads as lock contention alone.</li>

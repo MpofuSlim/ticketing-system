@@ -284,6 +284,9 @@ class BookingClaimRetryTest {
 
     @Test
     void collisionsExhaustedAfterADeadlockRetry_countTheDeadlockRetryAsRefused() {
+        // The caller gets a 503, yet this is not a `failed`: `failed` means a
+        // second deadlock, and the attempts after the first one clashed instead.
+        // The 503 is the collision budget's, counted on reference_collision.
         when(itemRepo.saveAllAndFlush(anyList()))
                 .thenThrow(lockFailure("40P01"))
                 .thenThrow(collision("uk_booking_items_ticket_number"));
