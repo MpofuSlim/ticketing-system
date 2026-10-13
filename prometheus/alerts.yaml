@@ -488,6 +488,25 @@ groups:
           description: "{{ $value | humanize }} block/unlock/new-phone messages undelivered on every channel in 15m — customers are not being told what happened to their phones."
           runbook: "prometheus/slo.md#devicesecuritynotificationsundelivered"
 
+      # A04: the gateway keys every per-IP rate limit (anonymous calls, OTP,
+      # MFA, password reset, /payments/innbucks, device security) on the
+      # X-Real-IP the host nginx sets (ClientIpResolver). A fallback means it
+      # did not arrive, or was not one address, and those requests share ONE
+      # bucket per route: an nginx edit that drops the line (a renewed vhost, a
+      # certbot rewrite) quietly turns the OTP limit into a fleet-wide 1/s with
+      # no error anywhere. Expected 0 behind an updated nginx. A curl to the
+      # NodePort from the box counts as absent but cannot hold the rate above
+      # zero for 10m.
+      - alert: GatewayClientIpFallback
+        expr: sum by (reason) (rate(gateway_client_ip_fallback_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "api-gateway rate limits are not getting nginx's X-Real-IP ({{ $labels.reason }})"
+          description: "{{ $value | humanize }}/sec requests fell back to the shared per-route rate-limit bucket over 5m (reason={{ $labels.reason }}). absent: nginx is not setting X-Real-IP; invalid: it sends values that are not one address. Every per-IP limit is one global bucket until nginx is fixed."
+          runbook: "prometheus/slo.md#gatewayclientipfallback"
+
   # A09 — payment money-movement integrity. Fed by payment-service PaymentMetrics
   # (payment.* counters, exported as payment_*_total). These were emitted but had
   # NO alert rule, so a customer-debited-without-tickets drip or a settlement
