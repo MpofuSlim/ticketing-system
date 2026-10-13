@@ -90,8 +90,7 @@ class InnbucksPaymentServiceTest {
 
     /** Service + REAL booking gateway (given cell currency) over the shared mocks. */
     private InnbucksPaymentService serviceWith(String cellCurrency) {
-        BookingOrderGateway bookingGateway = new BookingOrderGateway(
-                bookings, events, cellCurrency, Duration.ofMinutes(10));
+        BookingOrderGateway bookingGateway = new BookingOrderGateway(bookings, events, cellCurrency);
         OrderGatewayRegistry registry = new OrderGatewayRegistry(List.of(bookingGateway));
         resolution = new CodePaymentResolutionService(records, registry,
                 new innbucks.paymentservice.config.PaymentMetrics(

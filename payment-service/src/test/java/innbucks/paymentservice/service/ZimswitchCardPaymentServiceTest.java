@@ -272,7 +272,7 @@ class ZimswitchCardPaymentServiceTest {
                 .hasMessage("Card cannot take payment in ZAR — please use another payment method")
                 .satisfies(e -> assertThat(((InvalidPaymentRequestException) e).getStatusCode()).isEqualTo(422));
 
-        verify(gateway, never()).extendHold(anyString());
+        verify(gateway, never()).extendHold(anyString(), any());
         verify(records, never()).openPending(any());
         verify(client, never()).prepareCheckout(anyString(), anyLong(), anyString());
     }

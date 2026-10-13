@@ -36,8 +36,9 @@ import java.util.UUID;
  *
  * <pre>
  *   1. gateway.fetch(orderRef): amount in cents, currency, payable flag
- *   2. gateway.extendHold(orderRef): the product hold provably outlives the
- *      checkout BEFORE any ledger write or upstream call
+ *   2. gateway.extendHold(orderRef, now + checkout TTL + grace): the product
+ *      hold provably outlives the checkout (the gateway's 30-minute ceiling)
+ *      BEFORE any ledger write or upstream call
  *   3. Open a PENDING payment ledger row (REQUIRES_NEW commit)
  *   4. POST /v1/checkouts (amount in MAJOR units — the client converts;
  *      merchantTransactionId = our paymentReference; integrity=true)
@@ -81,7 +82,9 @@ public class ZimswitchCardPaymentService {
      * Slack past the local checkout TTL before a NOT_FOUND row is expired —
      * with the 28-minute local TTL this lands past the gateway's own
      * 30-minute ceiling, after which no new transaction can exist on the
-     * checkout, making "no payment found" a POSITIVE never-paid answer.
+     * checkout, making "no payment found" a POSITIVE never-paid answer. So
+     * the checkout's last payable instant is TTL + this grace, and that is
+     * what the product hold is sized from.
      */
     static final Duration CHECKOUT_EXPIRY_GRACE = Duration.ofMinutes(2);
 
@@ -187,8 +190,12 @@ public class ZimswitchCardPaymentService {
 
         // Product hold must outlive the checkout BEFORE any ledger write or
         // upstream call — a refusal means the order already lapsed, with
-        // ZERO money moved.
-        gateway.extendHold(orderRef);
+        // ZERO money moved. A checkout stays payable until the gateway's
+        // 30-minute ceiling (local TTL + grace), so the hold is sized from
+        // that: a code-sized hold left a card paid after minute 13 with no
+        // ticket.
+        gateway.extendHold(orderRef, Instant.now()
+                .plus(zimswitchProperties.getCheckoutTtl()).plus(CHECKOUT_EXPIRY_GRACE));
 
         String paymentReference = SettlementReference.forTag(snapshot.settlementTag());
         Payment draft = Payment.builder()
@@ -255,6 +262,13 @@ public class ZimswitchCardPaymentService {
                     .build();
         }
 
+        // Stamped AFTER the checkout exists, deliberately not reused from the
+        // hold above: the NOT_FOUND rule closes the row at this deadline +
+        // CHECKOUT_EXPIRY_GRACE, which must land at or past the gateway's
+        // ceiling, and the ceiling runs from the checkout's creation. The hold
+        // still covers it: the gap is the hold call + ledger open + prepare
+        // round trip, bounded by their timeouts at seconds, well inside
+        // HOLD_SAFETY_MARGIN.
         Instant expiresAt = Instant.now().plus(zimswitchProperties.getCheckoutTtl());
         paymentRecordService.markCardCheckoutIssued(opened.getId(),
                 prepared.checkoutId(), prepared.integrity(), expiresAt);

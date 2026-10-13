@@ -1,6 +1,7 @@
 package innbucks.paymentservice.order;
 
 import java.time.Duration;
+import java.time.Instant;
 
 /**
  * Per-product adapter between the InnBucks 2D-code checkout rail and the
@@ -17,8 +18,11 @@ import java.time.Duration;
  *       {@link OrderSnapshot} with the amount ALREADY in cents — each adapter
  *       is the single major↔minor conversion point for its product.</li>
  *   <li>{@link #extendHold} makes the product-side hold (seat hold / stock
- *       hold) provably outlive the payment code the customer is about to be
- *       shown (code TTL + {@link #HOLD_SAFETY_MARGIN}); a refusal means the
+ *       hold) provably outlive the payment instrument the customer is about
+ *       to be given: the rail's last payable instant + {@link #HOLD_SAFETY_MARGIN}.
+ *       Each rail computes that instant ONCE, before the call, and persists
+ *       the deadline it is derived from, so the hold and the ledger can never
+ *       disagree about how long the instrument lives. A refusal means the
  *       order is dead and the adapter throws
  *       {@code InnbucksPaymentService.InvalidPaymentRequestException} BEFORE
  *       any money moves.</li>
@@ -32,10 +36,13 @@ import java.time.Duration;
 public interface OrderGateway {
 
     /**
-     * Extra slack the product-side hold must have past the payment code's own
-     * TTL: one poll interval + the poller's expiry grace + processing margin.
-     * Guarantees a code paid at second 599 of its 10-minute life still
-     * confirms against a LIVE hold.
+     * Extra slack the product-side hold must have past the instrument's last
+     * payable instant: time for the poller to see a payment made at that
+     * instant and confirm the order (a poll interval, the confirm round trip,
+     * clock skew). Guarantees a code paid at second 599 of its 10-minute
+     * life, or a card paid in the last second of its checkout, still
+     * confirms against a LIVE hold. Per rail with the default TTLs: code
+     * 10 + 3 = 13 minutes, EcoCash 5 + 2 + 3 = 10, card 28 + 2 + 3 = 33.
      */
     Duration HOLD_SAFETY_MARGIN = Duration.ofMinutes(3);
 
@@ -49,11 +56,20 @@ public interface OrderGateway {
     OrderSnapshot fetch(String orderRef);
 
     /**
-     * Extend the product-side hold so it outlives the code about to be
-     * minted. Called BEFORE any ledger write or code mint; a refusal throws
-     * with a customer-facing message and zero money moved.
+     * Extend the product-side hold to at least {@code payableUntil} +
+     * {@link #HOLD_SAFETY_MARGIN}, so it outlives the instrument about to be
+     * minted. Called BEFORE any ledger write or mint; a refusal throws with a
+     * customer-facing message and zero money moved — the caller never mints
+     * after a refusal, and an adapter never shortens the hold and reports
+     * success.
+     *
+     * @param payableUntil the last instant the instrument can still be paid:
+     *                     code TTL for an InnBucks code, prompt TTL + the
+     *                     resolver's grace for EcoCash, checkout TTL + the
+     *                     resolver's grace (the gateway's 30-minute ceiling)
+     *                     for a card checkout
      */
-    void extendHold(String orderRef);
+    void extendHold(String orderRef, Instant payableUntil);
 
     /**
      * Confirm the order as paid. {@code confirmationRef} is our stable

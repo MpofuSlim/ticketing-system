@@ -22,7 +22,8 @@ import static org.mockito.Mockito.*;
  * Pins the booking adapter as the SINGLE major→minor conversion point for
  * the booking product (decimal dollars → cents, sub-cent refused, never
  * rounded), plus the snapshot's settlement tag / narration / payer sourcing
- * and the ConfirmOutcome mapping of booking-service's confirm statuses.
+ * the ConfirmOutcome mapping of booking-service's confirm statuses, and the
+ * seat hold sized by the RAIL's last payable instant + the safety margin.
  */
 class BookingOrderGatewayTest {
 
@@ -37,7 +38,7 @@ class BookingOrderGatewayTest {
         bookings = mock(BookingServiceClient.class);
         events = mock(EventServiceClient.class);
         when(events.getSettlementInfo(any())).thenReturn(Optional.empty());
-        gateway = new BookingOrderGateway(bookings, events, "USD", Duration.ofMinutes(10));
+        gateway = new BookingOrderGateway(bookings, events, "USD");
     }
 
     @Test
@@ -83,7 +84,7 @@ class BookingOrderGatewayTest {
 
     @Test
     void fetch_missingCurrency_fallsBackToTheCellCurrency() {
-        gateway = new BookingOrderGateway(bookings, events, "KES", Duration.ofMinutes(10));
+        gateway = new BookingOrderGateway(bookings, events, "KES");
         when(bookings.getBooking(bookingId)).thenReturn(Map.of(
                 "totalAmount", new BigDecimal("40.00")));
 
@@ -126,15 +127,40 @@ class BookingOrderGatewayTest {
     }
 
     @Test
-    void extendHold_requestsTtlPlusSafetyMargin() {
-        Instant before = Instant.now();
+    void extendHold_holdsExactlyThePayableDeadlinePlusTheSafetyMargin() {
+        Instant payableUntil = Instant.parse("2026-10-13T10:30:00Z");
 
-        gateway.extendHold(bookingId.toString());
+        gateway.extendHold(bookingId.toString(), payableUntil);
+
+        verify(bookings).extendHold(bookingId, payableUntil.plus(OrderGateway.HOLD_SAFETY_MARGIN));
+        assertEquals(Duration.ofMinutes(3), OrderGateway.HOLD_SAFETY_MARGIN);
+    }
+
+    /**
+     * The seat hold per rail, with each rail's default last payable instant
+     * (the rail tests pin that each rail sends exactly this). A code-sized
+     * 13 minutes for every rail left a card paid after minute 13 of its
+     * 30-minute checkout with no ticket.
+     */
+    @Test
+    void extendHold_perRail_holdOutlivesThePayableDeadlineByThreeMinutes() {
+        assertHoldFor(Duration.ofMinutes(10), Duration.ofMinutes(13));   // InnBucks code: 10m TTL
+        assertHoldFor(Duration.ofMinutes(5 + 2), Duration.ofMinutes(10)); // EcoCash: 5m prompt + 2m grace
+        assertHoldFor(Duration.ofMinutes(28 + 2), Duration.ofMinutes(33)); // card: 28m checkout + 2m grace
+    }
+
+    private void assertHoldFor(Duration payableWindow, Duration expectedHold) {
+        reset(bookings);
+        Instant before = Instant.now();
+        gateway.extendHold(bookingId.toString(), Instant.now().plus(payableWindow));
+        Instant after = Instant.now();
 
         org.mockito.ArgumentCaptor<Instant> until = org.mockito.ArgumentCaptor.forClass(Instant.class);
         verify(bookings).extendHold(eq(bookingId), until.capture());
-        assertFalse(until.getValue().isBefore(before.plus(Duration.ofMinutes(13)).minusSeconds(5)),
-                "hold must outlive the code by the safety margin");
+        assertFalse(until.getValue().isBefore(before.plus(expectedHold)),
+                "a " + payableWindow + " instrument needs a hold of at least " + expectedHold);
+        assertFalse(until.getValue().isAfter(after.plus(expectedHold)),
+                "the hold is the rail's deadline + the margin, nothing more");
     }
 
     @Test
@@ -143,7 +169,8 @@ class BookingOrderGatewayTest {
                 .when(bookings).extendHold(eq(bookingId), any(Instant.class));
 
         assertEquals(409, assertThrows(InvalidPaymentRequestException.class,
-                () -> gateway.extendHold(bookingId.toString())).getStatusCode());
+                () -> gateway.extendHold(bookingId.toString(), Instant.now().plus(Duration.ofMinutes(10))))
+                .getStatusCode());
     }
 
     @Test
@@ -152,7 +179,8 @@ class BookingOrderGatewayTest {
                 .when(bookings).extendHold(eq(bookingId), any(Instant.class));
 
         assertEquals(503, assertThrows(InvalidPaymentRequestException.class,
-                () -> gateway.extendHold(bookingId.toString())).getStatusCode());
+                () -> gateway.extendHold(bookingId.toString(), Instant.now().plus(Duration.ofMinutes(10))))
+                .getStatusCode());
     }
 
     @Test

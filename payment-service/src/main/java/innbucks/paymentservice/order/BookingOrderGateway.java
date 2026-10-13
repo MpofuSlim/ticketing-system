@@ -9,7 +9,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -26,10 +25,12 @@ import java.util.UUID;
  *       best-effort event-service lookup: tag {@code <settlementCode>} (or the
  *       event-id tag), narration {@code "Ticketize <title> booking <shortId>"}
  *       — a lookup miss degrades, never blocks.</li>
- *   <li>{@link #extendHold}: the existing pre-mint seat-hold extension —
- *       hold must outlive code TTL + {@link #HOLD_SAFETY_MARGIN}; a
- *       404/409/400 refusal means the booking is dead (customer rebooks with
- *       ZERO money moved), anything else refuses 503.</li>
+ *   <li>{@link #extendHold}: the pre-mint seat-hold extension — the hold
+ *       must outlive the rail's last payable instant +
+ *       {@link #HOLD_SAFETY_MARGIN} (code 13, EcoCash 10, card 33 minutes
+ *       with the default TTLs); a 404/409/400 refusal means the booking is
+ *       dead (customer rebooks with ZERO money moved), anything else refuses
+ *       503.</li>
  *   <li>{@link #confirm}: the existing idempotent
  *       {@code PATCH /bookings/internal/{id}/confirm}, mapped onto
  *       {@link ConfirmOutcome} (2xx → CONFIRMED with the confirmation number;
@@ -43,17 +44,14 @@ public class BookingOrderGateway implements OrderGateway {
     private final BookingServiceClient bookingServiceClient;
     private final EventServiceClient eventServiceClient;
     private final String cellCurrency;
-    private final Duration codeTtl;
 
     public BookingOrderGateway(
             BookingServiceClient bookingServiceClient,
             EventServiceClient eventServiceClient,
-            @Value("${innbucks.currency:USD}") String cellCurrency,
-            @Value("${payments.innbucks.code.ttl:PT10M}") Duration codeTtl) {
+            @Value("${innbucks.currency:USD}") String cellCurrency) {
         this.bookingServiceClient = bookingServiceClient;
         this.eventServiceClient = eventServiceClient;
         this.cellCurrency = cellCurrency;
-        this.codeTtl = codeTtl;
     }
 
     @Override
@@ -104,17 +102,18 @@ public class BookingOrderGateway implements OrderGateway {
     }
 
     @Override
-    public void extendHold(String orderRef) {
+    public void extendHold(String orderRef, Instant payableUntil) {
         UUID bookingId = parseBookingId(orderRef);
-        // The hold (5 min from booking) is shorter than the code (10 min from
-        // NOW) — without this, any payment approved after the hold lapsed was
-        // money taken + confirm refused (the paid-but-no-ticket gap). Extend
-        // BEFORE any ledger write or code mint; a refusal means the booking is
-        // already expired/cancelled, so the customer rebooks with ZERO money
-        // moved.
+        // The hold (minutes from booking) is shorter than any instrument (a
+        // code lives 10 min from NOW, a card checkout 30) — without this, any
+        // payment approved after the hold lapsed was money taken + confirm
+        // refused (the paid-but-no-ticket gap). The hold is sized by the
+        // RAIL's own last payable instant: a fixed code-sized window left a
+        // card paid after minute 13 with no ticket. Extend BEFORE any ledger
+        // write or mint; a refusal means the booking is already
+        // expired/cancelled, so the customer rebooks with ZERO money moved.
         try {
-            bookingServiceClient.extendHold(bookingId,
-                    Instant.now().plus(codeTtl).plus(HOLD_SAFETY_MARGIN));
+            bookingServiceClient.extendHold(bookingId, payableUntil.plus(HOLD_SAFETY_MARGIN));
         } catch (BookingServiceClient.BookingConfirmationException e) {
             if (e.getStatusCode() == 404 || e.getStatusCode() == 409 || e.getStatusCode() == 400) {
                 log.warn("[booking-gateway] hold extension refused bookingId={} status={} — payment refused pre-mint: {}",

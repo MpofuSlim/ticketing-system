@@ -5,10 +5,10 @@ import innbucks.paymentservice.client.MarketplaceOrderClient.MarketplaceOrderExc
 import innbucks.paymentservice.client.MarketplaceOrderClient.OrderView;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.Instant;
 
 /**
  * {@link OrderGateway} for marketplace orders, backed by marketplace-service's
@@ -22,10 +22,11 @@ import java.time.Duration;
  *       {@code TKZ-MKT-<unique>} on the merchant statement); narration
  *       {@code "Marketplace order <last 6 of ref>"}.</li>
  *   <li>{@link #extendHold}: {@code PATCH .../extend-expiry?minutes=N} with
- *       the SAME safety window the booking path uses (code TTL +
- *       {@link #HOLD_SAFETY_MARGIN}, rounded up to whole minutes and clamped
- *       to the marketplace's 1..60 contract). A refusal means the order is
- *       dead — the buyer re-orders with ZERO money moved.</li>
+ *       the SAME safety window the booking path uses (the rail's last
+ *       payable instant + {@link #HOLD_SAFETY_MARGIN}, as whole minutes from
+ *       now rounded up and clamped to the marketplace's 1..60 contract). A
+ *       refusal means the order is dead — the buyer re-orders with ZERO
+ *       money moved.</li>
  *   <li>{@link #confirm}: {@code PATCH .../confirm-payment} with
  *       {@code {paymentRef: confirmationRef, amountCents}}. 200 → CONFIRMED
  *       (the marketplace answers the same 200 for an idempotent same-ref
@@ -50,13 +51,9 @@ public class MarketplaceOrderGateway implements OrderGateway {
     private static final int MAX_EXTEND_MINUTES = 60;
 
     private final MarketplaceOrderClient client;
-    private final Duration codeTtl;
 
-    public MarketplaceOrderGateway(
-            MarketplaceOrderClient client,
-            @Value("${payments.innbucks.code.ttl:PT10M}") Duration codeTtl) {
+    public MarketplaceOrderGateway(MarketplaceOrderClient client) {
         this.client = client;
-        this.codeTtl = codeTtl;
     }
 
     @Override
@@ -87,9 +84,9 @@ public class MarketplaceOrderGateway implements OrderGateway {
     }
 
     @Override
-    public void extendHold(String orderRef) {
+    public void extendHold(String orderRef, Instant payableUntil) {
         try {
-            client.extendExpiry(orderRef, holdMinutes());
+            client.extendExpiry(orderRef, holdMinutes(payableUntil, Instant.now()));
         } catch (MarketplaceOrderException e) {
             if (e.getStatusCode() == 404 || e.getStatusCode() == 409 || e.getStatusCode() == 400) {
                 log.warn("[marketplace-gateway] hold extension refused orderRef={} status={} code={} — payment refused pre-mint: {}",
@@ -125,14 +122,15 @@ public class MarketplaceOrderGateway implements OrderGateway {
     }
 
     /**
-     * The same safety window the booking path grants its seat hold — code TTL
-     * + {@link #HOLD_SAFETY_MARGIN} — expressed as the whole minutes the
-     * marketplace's extend-expiry contract takes (rounded UP so the hold
-     * never undershoots the code), clamped to its 1..60 range.
+     * The same safety window the booking path grants its seat hold — the
+     * rail's last payable instant + {@link #HOLD_SAFETY_MARGIN} — expressed
+     * as the whole minutes from {@code now} the marketplace's extend-expiry
+     * contract takes (rounded UP so the hold never undershoots the
+     * instrument), clamped to its 1..60 range.
      */
-    int holdMinutes() {
-        long seconds = codeTtl.plus(HOLD_SAFETY_MARGIN).getSeconds();
-        long minutes = (seconds + 59) / 60;
+    static int holdMinutes(Instant payableUntil, Instant now) {
+        long millis = Duration.between(now, payableUntil.plus(HOLD_SAFETY_MARGIN)).toMillis();
+        long minutes = Math.ceilDiv(millis, 60_000L);
         return (int) Math.max(MIN_EXTEND_MINUTES, Math.min(MAX_EXTEND_MINUTES, minutes));
     }
 

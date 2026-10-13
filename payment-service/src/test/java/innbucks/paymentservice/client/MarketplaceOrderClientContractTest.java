@@ -92,7 +92,7 @@ class MarketplaceOrderClientContractTest {
 
     /** The gateway over the same client — for the ConfirmOutcome-mapping cases. */
     private static MarketplaceOrderGateway gateway(int port) {
-        return new MarketplaceOrderGateway(client(port), Duration.ofMinutes(10));
+        return new MarketplaceOrderGateway(client(port));
     }
 
     // ---- fetch ------------------------------------------------------------
@@ -180,6 +180,26 @@ class MarketplaceOrderClientContractTest {
         client(wireMock.port()).extendExpiry(REF, 13);
 
         wireMock.verify(patchRequestedFor(urlEqualTo(BASE + REF + "/extend-expiry?minutes=13"))
+                .withHeader("X-Internal-Token", equalTo(TOKEN)));
+    }
+
+    @Test
+    @DisplayName("extend-expiry via the gateway: a card checkout's 30-minute ceiling + 3 minutes goes out as ?minutes=33")
+    void extendExpiry_viaGateway_sendsTheRailsWindow() {
+        // The card rail's last payable instant (28m TTL + 2m grace); the
+        // gateway adds the 3m safety margin. The old code-sized 13 left a
+        // card checkout outliving its order by 17 minutes.
+        wireMock.stubFor(patch(urlEqualTo(BASE + REF + "/extend-expiry?minutes=33"))
+                .willReturn(okJson("""
+                        {"code":"OK","message":"Order expiry extended","data":{
+                          "orderRef":"MKT-4F9A1C22B7D3","status":"PENDING_PAYMENT","totalCents":3550,
+                          "currency":"USD","buyerMsisdn":"+263771234567",
+                          "expiresAt":"2026-08-05T11:18:00Z"}}
+                        """)));
+
+        gateway(wireMock.port()).extendHold(REF, Instant.now().plus(Duration.ofMinutes(30)));
+
+        wireMock.verify(patchRequestedFor(urlEqualTo(BASE + REF + "/extend-expiry?minutes=33"))
                 .withHeader("X-Internal-Token", equalTo(TOKEN)));
     }
 

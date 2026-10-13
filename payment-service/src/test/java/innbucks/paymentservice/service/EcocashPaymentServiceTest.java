@@ -276,7 +276,7 @@ class EcocashPaymentServiceTest {
                 .hasMessageContaining("ZAR")
                 .hasMessageContaining("another payment method");
 
-        verify(gateway, never()).extendHold(anyString());
+        verify(gateway, never()).extendHold(anyString(), any());
         verify(records, never()).openPending(any());
         verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString());
     }
@@ -296,7 +296,7 @@ class EcocashPaymentServiceTest {
                 .isInstanceOf(InvalidPaymentRequestException.class)
                 .hasMessageContaining("840");
 
-        verify(gateway, never()).extendHold(anyString());
+        verify(gateway, never()).extendHold(anyString(), any());
         verify(records, never()).openPending(any());
     }
 
@@ -316,7 +316,7 @@ class EcocashPaymentServiceTest {
                 .isInstanceOf(InvalidPaymentRequestException.class)
                 .hasMessageContaining("not available on this deployment");
 
-        verify(gateway, never()).extendHold(anyString());
+        verify(gateway, never()).extendHold(anyString(), any());
         verify(records, never()).openPending(any());
     }
 

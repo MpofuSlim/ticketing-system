@@ -42,8 +42,7 @@ class PaymentResolutionJobTest {
     private static OrderGatewayRegistry registryOver(BookingServiceClient bookings) {
         return new OrderGatewayRegistry(List.of(
                 new BookingOrderGateway(
-                        bookings, mock(EventServiceClient.class),
-                        "USD", Duration.ofMinutes(10))));
+                        bookings, mock(EventServiceClient.class), "USD")));
     }
 
     private static PaymentResolutionJob newPaymentJob(PaymentRepository payments,
