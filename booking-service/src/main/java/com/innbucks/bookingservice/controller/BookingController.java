@@ -78,19 +78,39 @@ public class BookingController {
     private String deploymentCountry;
 
     // Swagger bodies several endpoints share — text blocks are compile-time
-    // constants, so an annotation can reference them. Each is exactly what
-    // GlobalExceptionHandler renders for the case.
-    private static final String EXAMPLE_BAD_ID = """
+    // constants, so an annotation can reference them. Each is exactly what the
+    // running service renders for the case, and package-private so
+    // BookingErrorExamplesPostgresIT can compare real responses against them:
+    // an example nothing executes drifts silently.
+    static final String EXAMPLE_BAD_ID = """
             { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "id": "Must be a valid UUID." } }
             """;
-    private static final String EXAMPLE_CONCURRENT_UPDATE = """
+    static final String EXAMPLE_CONCURRENT_UPDATE = """
             { "code": "409 CONFLICT", "message": "This booking was changed by another request at the same time. Please refresh it and try again.", "data": { "errorCode": "CONCURRENT_UPDATE" } }
             """;
-    private static final String EXAMPLE_NOT_PENDING = """
+    static final String EXAMPLE_NOT_PENDING = """
             { "code": "409 CONFLICT", "message": "Only pending bookings can be confirmed — this one isn't in that state.", "data": null }
             """;
-    private static final String EXAMPLE_DEPENDENCY_DOWN = """
+    static final String EXAMPLE_DEPENDENCY_DOWN = """
             { "code": "503 SERVICE_UNAVAILABLE", "message": "We're having trouble reaching part of the system right now. Please try again in a moment.", "data": null }
+            """;
+    static final String EXAMPLE_NOT_FOUND = """
+            { "code": "404 NOT_FOUND", "message": "Booking not found", "data": null }
+            """;
+    static final String EXAMPLE_INVALID_JWT = """
+            { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+            """;
+    static final String EXAMPLE_FORBIDDEN = """
+            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+            """;
+    static final String EXAMPLE_BAD_INTERNAL_TOKEN = """
+            { "code": "401 UNAUTHORIZED", "message": "Missing or invalid X-Internal-Token", "data": null }
+            """;
+    static final String EXAMPLE_NOT_AN_OBJECT = """
+            { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "body": "The request body must be a single JSON object." } }
+            """;
+    static final String EXAMPLE_UNREADABLE_HOLD_UNTIL = """
+            { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "holdUntil": "Must be an ISO-8601 date-time." } }
             """;
 
     @PostMapping
@@ -180,7 +200,8 @@ public class BookingController {
                                     """),
                             @ExampleObject(name = "Body is not JSON", value = """
                                     { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "body": "The request body is not valid JSON." } }
-                                    """)
+                                    """),
+                            @ExampleObject(name = "Body is JSON but not one object (e.g. an array)", value = EXAMPLE_NOT_AN_OBJECT)
                     })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
@@ -768,16 +789,26 @@ public class BookingController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Hold extended (or already long enough)"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "Missing or invalid X-Internal-Token"),
+                    description = "Missing or invalid X-Internal-Token",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Bad internal token", value = EXAMPLE_BAD_INTERNAL_TOKEN))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
-                    description = "Booking not found"),
+                    description = "Booking not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Unknown booking", value = EXAMPLE_NOT_FOUND))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
                     description = "The id is not a UUID, or holdUntil is missing, unreadable or in the past",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Malformed id", value = EXAMPLE_BAD_ID),
-                            @ExampleObject(name = "Unreadable holdUntil", value = """
-                                    { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "holdUntil": "Must be an ISO-8601 date-time." } }
-                                    """)
+                            @ExampleObject(name = "Unreadable holdUntil (not a date-time, or not a string)",
+                                    value = EXAMPLE_UNREADABLE_HOLD_UNTIL),
+                            @ExampleObject(name = "Missing holdUntil", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "holdUntil": "holdUntil is required" } }
+                                    """),
+                            @ExampleObject(name = "holdUntil in the past", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "holdUntil": "holdUntil must be in the future" } }
+                                    """),
+                            @ExampleObject(name = "Body is JSON but not one object (e.g. an array)", value = EXAMPLE_NOT_AN_OBJECT)
                     })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
                     description = "Booking not PENDING, hold already expired, or the expiry sweep cancelled it "
@@ -1372,11 +1403,16 @@ public class BookingController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "The id is not a UUID",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Malformed id", value = EXAMPLE_BAD_ID))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "No or bad token", value = EXAMPLE_INVALID_JWT))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "The booking belongs to someone else (only its owner or a SUPER_ADMIN may cancel it)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not the owner", value = EXAMPLE_FORBIDDEN))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
-                            { "code": "404 NOT_FOUND", "message": "Booking not found", "data": null }
-                            """))),
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Unknown booking", value = EXAMPLE_NOT_FOUND))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "The booking is not PENDING (already paid, or already cancelled — "
                     + "including by the expiry sweep)",
                     content = @Content(mediaType = "application/json", examples = {
@@ -1463,9 +1499,15 @@ public class BookingController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "The id is not a UUID",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Malformed id", value = EXAMPLE_BAD_ID))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "No or bad token", value = EXAMPLE_INVALID_JWT))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not a SUPER_ADMIN", value = EXAMPLE_FORBIDDEN))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Unknown booking", value = EXAMPLE_NOT_FOUND))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
                     description = "The booking is not CONFIRMED, or it changed while event-service was releasing its "
                             + "seats (CONCURRENT_UPDATE: nothing was written here; read it again and retry)",
@@ -1538,18 +1580,19 @@ public class BookingController {
                                     """)
                     )
             ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing or invalid X-Internal-Token"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing or invalid X-Internal-Token",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Bad internal token", value = EXAMPLE_BAD_INTERNAL_TOKEN))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Unknown booking", value = EXAMPLE_NOT_FOUND))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
                     description = "The booking is not PENDING — cancelled by the customer or by the expiry sweep. "
-                            + "The concurrent-confirm body is kept for a lost optimistic race; under the row lock a "
-                            + "second confirm now waits and gets the 200 replay instead.",
-                    content = @Content(mediaType = "application/json", examples = {
-                            @ExampleObject(name = "Not PENDING (e.g. the sweep cancelled the hold)", value = EXAMPLE_NOT_PENDING),
-                            @ExampleObject(name = "Concurrent confirm", value = """
-                                    { "code": "409 CONFLICT", "message": "Booking already confirmed by a concurrent request", "data": null }
-                                    """)
-                    })),
+                            + "A concurrent confirm is not a 409: confirm waits for the row lock and then gets the "
+                            + "CONFIRMED replay (200).",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not PENDING (e.g. the sweep cancelled the hold)",
+                                    value = EXAMPLE_NOT_PENDING))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
                     description = "The id is not a UUID, the body is unreadable, or the amounts are refused",
                     content = @Content(mediaType = "application/json", examples = {
@@ -1557,6 +1600,7 @@ public class BookingController {
                             @ExampleObject(name = "Unreadable amount", value = """
                                     { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "cashAmount": "Must be a number." } }
                                     """),
+                            @ExampleObject(name = "Body is JSON but not one object (e.g. an array)", value = EXAMPLE_NOT_AN_OBJECT),
                             @ExampleObject(name = "Paying with points", value = """
                                     { "code": "400 BAD_REQUEST", "message": "Paying for tickets with loyalty points isn't available.", "data": null }
                                     """)

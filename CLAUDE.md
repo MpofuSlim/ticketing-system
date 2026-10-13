@@ -2242,13 +2242,29 @@ racing `[B,A]` deadlocked and the abort reached the buyer as a 500.
   `data.errorCode`. An unreadable body or a malformed id is now `400 "Validation
   failed"` keyed by the Jackson path (`seats[0].categoryId`) or the parameter, and
   an optimistic-lock loss is `409 CONCURRENT_UPDATE` everywhere — all three were
-  500s through the `RuntimeException` catch-all.
+  500s through the `RuntimeException` catch-all. Confirm's own optimistic-lock
+  catch and its "Booking already confirmed by a concurrent request" 409 are gone:
+  under the row lock a second confirm waits and gets the 200 replay.
+- **What the 400 says comes from the Jackson exception's TYPE**, so a custom
+  deserializer must fail through Jackson (`ctxt.handleWeirdStringValue` /
+  `handleUnexpectedToken`), never by letting a parse exception escape. The
+  `LocalDateTime` module (`UtcJsonTimeConfig`) let `DateTimeParseException` out,
+  Jackson wrapped it in a type-less `DatabindException`, and a bad `holdUntil`
+  read `"Invalid value."` where Swagger promised `"Must be an ISO-8601
+  date-time."`. A body that is JSON but not one object (`[]`, a bare string, a
+  second value after the object) is `body: "The request body must be a single
+  JSON object."`; only a syntax error is `"The request body is not valid JSON."`.
 - Pinned by `CategoryInventoryConcurrencyIT` (`[A,B]`/`[B,A]` × 200: all 201, no
   retry), `BookingRowLockPostgresIT` (each stock path leaves the counter row free
   while it waits for the booking; confirm against a row held elsewhere),
   `BookingExpirySweepPostgresIT`, `BookingClaimRetryPostgresIT` (a real 40P01 from
-  a trigger), `StockLedgerTest`, `StockPathsLockTheBookingFirstTest` and
-  `GlobalExceptionHandlerDispatchTest`.
+  a trigger), `StockLedgerTest`, `StockPathsLockTheBookingFirstTest`,
+  `GlobalExceptionHandlerDispatchTest` and `BookingErrorExamplesPostgresIT`. The
+  last compares the cancel / confirm / reverse / extend-hold Swagger example
+  constants STRICTLY against real responses through the app's own JSON mapper
+  (the standalone dispatch test has a default one), and drives extend-hold
+  against the sweep's real statements: without the sweep's `version` bump that
+  race is a 200 that writes the booking back to PENDING over the cancellation.
 
 ## Scan reports: `to` is widened server-side, and why
 
