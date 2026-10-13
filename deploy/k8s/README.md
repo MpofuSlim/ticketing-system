@@ -103,8 +103,9 @@ sudo nginx -t && sudo nginx -s reload
 
 Every per-IP rate limit in the gateway (anonymous calls, OTP, MFA, password
 reset, `/payments/innbucks`, device security, …) keys on the **`X-Real-IP`**
-header and trusts it as given (`ClientIpResolver`). nginx is what makes that
-safe, and it takes all three steps below, on **both** hosts.
+header and trusts it as given (`ClientIpResolver`); an IPv6 client is keyed by
+its /64. nginx is what makes that safe, and it takes all three steps below, on
+**both** hosts.
 `X-Forwarded-For` is never used: Cloudflare appends to whatever the caller
 sent, so its left-most entry is the caller's choice.
 
@@ -131,29 +132,61 @@ It writes one `set_real_ip_from <cidr>;` per Cloudflare range, then
 keeps its peer address, so nobody can choose `$remote_addr` by sending the
 header.
 
-**2. Overwrite both headers in every `location` that proxies to the gateway.**
-That is every `proxy_pass http://127.0.0.1:30080…` (on the production vhost:
-the `/foundry/` prefix location and the root-relative `location /v3/api-docs`
-the Swagger UI needs):
+**2. Give every `location` that proxies to the gateway its complete header
+set, with both headers overwritten.** That is every
+`proxy_pass http://127.0.0.1:30080…` (on the production vhost: the `/foundry/`
+prefix location and the root-relative `location /v3/api-docs` the Swagger UI
+needs). Two nginx rules make "just add two lines" wrong, so first see what each
+location sends today:
+
+```sh
+sudo nginx -T 2>/dev/null | grep -n -e 'server_name' -e 'location' -e proxy_pass \
+  -e proxy_set_header -e 'include'
+```
+
+- **nginx never de-duplicates `proxy_set_header`.** If the location already sets
+  `X-Real-IP` or `X-Forwarded-For`, or does `include proxy_params` (Ubuntu's
+  file sets `X-Real-IP $remote_addr` and
+  `X-Forwarded-For $proxy_add_x_forwarded_for`), adding the lines below sends
+  each header twice. **Delete** any existing `X-Real-IP` / `X-Forwarded-For`
+  line in the location, and replace `include proxy_params;` with the lines it
+  held, minus those two.
+- **A location that sets any `proxy_set_header` inherits none from `server` or
+  `http` level.** Today's location may set none and inherit `Host`,
+  `X-Forwarded-Proto` or `X-Forwarded-Host` from outside. Those stop arriving
+  the moment the two lines are added, and the gateway builds its public URLs
+  (Swagger, redirects) from them. **Copy** every outer `proxy_set_header` line
+  into the location, except `X-Real-IP` and `X-Forwarded-For`. Never add
+  `X-Forwarded-Prefix`, which makes every route 404 (`application.yaml`,
+  `PUBLIC_API_PREFIX`).
+
+The result, with the copied lines standing in for whatever the location had:
 
 ```nginx
 location /foundry/ {
     include snippets/cloudflare-real-ip.conf;
     proxy_pass http://127.0.0.1:30080/;
-    # ...this location's existing proxy_set_header lines stay...
-    proxy_set_header X-Real-IP       $remote_addr;
-    proxy_set_header X-Forwarded-For $remote_addr;   # OVERWRITE: never $proxy_add_x_forwarded_for
+    # Every header this location sends, and nothing inherited. Copied from
+    # the old location / server / proxy_params, minus X-Real-IP and XFF:
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Overwritten, set once each:
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $remote_addr;   # never $proxy_add_x_forwarded_for
 }
 ```
 ```sh
 sudo nginx -t && sudo nginx -s reload
 ```
 
+Re-run the listing above: each gateway location now shows exactly one
+`X-Real-IP` line, one `X-Forwarded-For` line and no `include proxy_params`.
+
 - `proxy_set_header` replaces a same-named header the caller sent, which is the
   point; `$proxy_add_x_forwarded_for` would keep the caller's chain.
-- nginx inherits `proxy_set_header` from an outer block **only if the location
-  sets none of its own**, so put both lines in each gateway location, not once
-  at `server` level.
+- The gateway reads `X-Real-IP` only. It tolerates the same value twice (one
+  client), but values that disagree are counted `invalid` and use the shared
+  bucket. One line per header is the only shape to rely on.
 - The `include` is location-level on purpose: `dtx.innbucks.co.zw` also serves
   other systems under other prefixes, and server-level `real_ip` would change
   their `$remote_addr` (and any `allow`/`deny` keyed on it) too. On a vhost that
@@ -214,10 +247,21 @@ kubectl -n ticketing exec redis-0 -- sh -c \
 ```
 
 Expect `request_rate_limiter.{event-service-route.ip:<your address>}.tokens` /
-`.timestamp` (an IPv6 address prints uncompressed, e.g. `2001:db8:0:0:0:0:0:1`)
-and **no** `198.51.100.x` key. An `...event-service-route.anonymous}` key means
-the gateway is not getting `X-Real-IP` (an older image, or step 2 missing); a
-`198.51.100.x` key means nginx is passing the caller's header through.
+`.timestamp` and **no** `198.51.100.x` key. An IPv6 client is keyed by its /64,
+printed uncompressed: `ip:2001:db8:1:2:0:0:0:0/64` (one subscriber's network,
+so rotating addresses inside it buys no new bucket).
+
+- An `...event-service-route.anonymous}` key with the new image means the
+  gateway is not getting one usable `X-Real-IP`. Read the fallback counter
+  above: `reason="absent"` is step 2 missing from a location; `reason="invalid"`
+  is two `X-Real-IP` lines that disagree, or one that is not an address. Check
+  with `sudo nginx -T | grep -n proxy_set_header` against step 2.
+- A `198.51.100.x` key means nginx is passing the caller's header through.
+
+Alert `GatewayClientIpFallback` (`prometheus/alerts.yaml`) raises a ticket if
+either fallback count keeps rising for 10 minutes, for example after a later
+vhost edit drops the line. It reaches the cell only through
+`scripts/apply-monitoring.sh` (§5).
 
 ## 4. Network segmentation (optional, OWASP A05)
 

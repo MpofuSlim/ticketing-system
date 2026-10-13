@@ -65,9 +65,10 @@ When adding a route:
 ## The client IP is the X-Real-IP nginx sets — never X-Forwarded-For
 
 **Every IP-keyed rate-limit key comes from the `gatewayRemoteAddressResolver`
-bean (`ClientIpResolver`), which reads `X-Real-IP`.** A new IP-keyed resolver
-uses that bean; it never reads `X-Forwarded-For` or the request's remote
-address itself.
+bean (`ClientIpResolver`), which reads `X-Real-IP`, through
+`RateLimiterConfig.ipKey`, which keys an IPv6 client by its /64.** A new
+IP-keyed resolver uses both. It never reads `X-Forwarded-For` or the request's
+remote address itself, and never keys on a full IPv6 address.
 
 - **Why not XFF.** `server.forward-headers-strategy: framework` rewrites the
   remote address from the LEFT-MOST XFF entry, which is the caller's choice
@@ -75,24 +76,49 @@ address itself.
   every request with any XFF fell into its resolver's one shared fallback
   bucket (`anonymous`, `anonymous-pre-auth`, `anonymous-payments-innbucks`), and
   `gateway.trusted-proxy-count` (removed) configured a header that was gone.
+- **Why an IPv6 client is keyed by its /64.** Cloudflare reaches IPv6 clients by
+  default, so `X-Real-IP` is often a v6 address. Anyone holding a routed /64 (a
+  VPS, many phones) can send each request from a new address in it, which keyed
+  per address is a new bucket per request: the XFF rotation again. A /64 is the
+  smallest prefix one subscriber holds. IPv4, and IPv4-mapped v6, stay keyed
+  whole (`ip:203.0.113.7`; v6 prints `ip:2001:db8:1:2:0:0:0:0/64`). Residual,
+  stated rather than hidden: whoever holds a /48 (free from IPv6 tunnel
+  brokers) still gets 65,536 buckets. A coarser prefix is not the fix, because
+  it would merge the carrier customers who each hold one /64 of a shared pool.
 - **Why X-Real-IP can be trusted:** host nginx takes `CF-Connecting-IP` only
   from Cloudflare peers (`real_ip`, `scripts/cloudflare-real-ip.sh`) and
   OVERWRITES `X-Real-IP` and XFF with `$remote_addr`
-  (`deploy/k8s/README.md` §3.1). That holds only while NodePort 30080 is
-  reachable from the host alone (security group; a host `INPUT` rule does not
-  stop NodePort traffic). **Deploy order: nginx on a host first, then the
-  gateway image there.**
+  (`deploy/k8s/README.md` §3.1). That holds only while nginx is the gateway's
+  only caller. On k3s, NodePort 30080 must be closed in the security group (a
+  host `INPUT` rule does not stop NodePort traffic). On compose, 18080 binds
+  `127.0.0.1` (Docker's DNAT skips `INPUT` too). Never point Cloudflare at the
+  gateway port: it passes a client's own `X-Real-IP` through.
+  **Deploy order: nginx on a host first, then the gateway image there.**
+- **nginx never de-duplicates `proxy_set_header`, and a location that sets one
+  inherits none.** `include proxy_params` plus the README's lines sends
+  `X-Real-IP` twice, and adding lines to a location that inherited `Host` /
+  `X-Forwarded-Proto` drops them. README §3.1 step 2 is the procedure. The
+  resolver accepts the same value twice (both lines are nginx's: a
+  `proxy_set_header` stops the caller's header of that name being passed on).
+  Values that disagree count as `invalid`.
 - **A literal, never a lookup.** The value is parsed as an IPv4/IPv6 literal
   (Netty `NetUtil`, address built from bytes). Never `InetAddress.getByName` on
   a header: it would resolve a caller-chosen name on the request path. Missing
   or not a literal → the exchange's remote address, which behind nginx is the
   unresolved XFF address → the shared fallback bucket, never a caller-chosen
-  key. `gateway.client_ip.fallback{reason}` counts both; behind an updated
-  nginx it stays flat.
-- **Backends never see XFF** (the transformer strips it and, with no
-  `trusted-proxies` set, SCG's `RemoveXForwardedHeadersFilter` removes it from
-  the proxied request). They do receive nginx's `X-Real-IP` unchanged.
-  Pinned by `ClientIpResolverTest` and `GatewayClientIpTest`.
+  key. `gateway.client_ip.fallback{reason}` counts both and is registered at 0.
+  Behind an updated nginx it stays flat; alert `GatewayClientIpFallback`
+  tickets a sustained rise.
+- **Backends never see XFF or `Forwarded`** (the transformer strips them and,
+  with no `trusted-proxies` set, SCG's `RemoveXForwardedHeadersFilter` removes
+  XFF from the proxied request). They do receive nginx's `X-Real-IP` unchanged.
+  `GatewayClientIpTest.aBackend_receivesTheRealIpUnchanged_andNoForwardedChain`
+  pins both through a stand-in backend, and fails if `trusted-proxies` is set.
+  **Consequence, pre-existing:** backend code that reads the left-most XFF
+  (`LoginRateLimiter`'s per-IP cap, `DeviceSecurityRequests.clientIp` and the
+  device OTP per-address ceiling, the staff-invite / internal-token / admin
+  audit IPs) gets the gateway pod's address, so every client shares one
+  counter. Moving those to `X-Real-IP` is their own change.
 
 ## Internal endpoints — three files must agree
 

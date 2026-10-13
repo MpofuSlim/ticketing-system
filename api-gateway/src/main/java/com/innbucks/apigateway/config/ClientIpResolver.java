@@ -52,8 +52,11 @@ import java.util.List;
  * what one subscriber holds: a VPS or a phone with a routed /64 can send every
  * request from a fresh address in it. Keyed per address, that is a new bucket
  * per request, the XFF rotation this class exists to stop. A /64 is also the
- * smallest prefix a network hands one subscriber, so it never merges two of
- * them. IPv4 is keyed per address, as before.
+ * smallest prefix a network normally hands one subscriber, so it seldom merges
+ * two of them (a host that gives each VPS one address of a shared /64 does,
+ * like a NAT on IPv4). A /48 holder still gets 65,536 buckets; a coarser prefix
+ * would merge carrier customers who each hold a /64 of one pool. IPv4 is keyed
+ * per address, as before.
  *
  * <p><b>Fallback.</b> A missing header (local dev, a curl to the NodePort from
  * the box) or a value that is not one literal falls back to the exchange's

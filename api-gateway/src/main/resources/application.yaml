@@ -181,11 +181,19 @@ spring:
             # staging's /auth/client-service, its OTP send/verify, Your devices
             # and the in-session step-up. It sends real OTPs, so it must not ride
             # the limiter-free /auth/** catch-all. Every call arrives FROM THE
-            # BROKER (a Firebase function), so the IP this key resolver sees is the
-            # broker's egress — this bucket is a whole-fleet brake, sized for all
-            # customers together, not a per-customer limit. The per-number,
-            # per-device and per-address OTP ceilings live in user-service
-            # (DeviceOtpService), keyed on the x-forwarded-for the broker forwards.
+            # BROKER (a Firebase function), so the key is the broker's egress
+            # address (X-Real-IP), never the customer's: this is a per-egress
+            # brake, not a per-customer limit. It is one bucket for all
+            # customers only while the broker leaves through ONE address (a
+            # static egress such as a Cloud NAT IP); with dynamic egress each
+            # address gets the whole budget. (Before the X-Real-IP fix every
+            # request here shared the one fallback bucket, so it was fleet-wide
+            # by accident.) Per-customer limits are user-service's
+            # (DeviceOtpService: per number, per device). Its per-ADDRESS
+            # ceiling reads the left-most X-Forwarded-For, which never reaches
+            # user-service (nginx overwrites XFF with the broker's address and
+            # the gateway strips it, GatewayClientIpTest), so it counts every
+            # customer against the gateway pod's address.
             # Fail-SAFE: an OTP surface must keep throttling when Redis is down.
             # MUST precede the /auth/** catch-all below.
             - id: auth-device-security-route
@@ -234,7 +242,13 @@ spring:
             # user-service (PartnerKeyAuthorizer; SecurityConfig permits the path so
             # the controller's check is the one that runs). IP-keyed and fail-safe
             # for the loyalty-partner-registration reason: a shared-key surface
-            # whose limiter is the only brake on guessing the key.
+            # whose limiter is the only brake on guessing the key. The budget is
+            # PER SOURCE ADDRESS (an IPv6 caller per /64): each partner egress,
+            # and each address probing the key, gets 50/s burst 200 of its own,
+            # so a prober can no longer drain the partners' budget (the old
+            # shared fallback bucket let it). The key's entropy, not this rate,
+            # is what makes guessing it infeasible; DeviceSecurityPartnerKeyProbing
+            # alerts on wrong keys.
             - id: device-security-partner-route
               uri: lb://user-service
               predicates:
@@ -647,7 +661,10 @@ spring:
             #
             # Rate: a legitimate caller makes one call per customer login, and a
             # bulk replay of an existing customer base is the only burst we
-            # expect — hence 5/s with burst 20, tunable per host.
+            # expect — hence 5/s with burst 20, tunable per host. The budget is
+            # PER SOURCE ADDRESS (an IPv6 caller per /64): a partner whose calls
+            # leave through several addresses gets it once per address, and so
+            # does each address guessing the key.
             - id: loyalty-partner-registration-route
               uri: lb://loyalty-service
               predicates:
