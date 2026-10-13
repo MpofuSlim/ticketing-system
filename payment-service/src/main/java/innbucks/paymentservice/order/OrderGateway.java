@@ -20,9 +20,10 @@ import java.time.Instant;
  *   <li>{@link #extendHold} makes the product-side hold (seat hold / stock
  *       hold) provably outlive the payment instrument the customer is about
  *       to be given: the rail's last payable instant + {@link #HOLD_SAFETY_MARGIN}.
- *       Each rail computes that instant ONCE, before the call, and persists
- *       the deadline it is derived from, so the hold and the ledger can never
- *       disagree about how long the instrument lives. A refusal means the
+ *       Each rail computes that instant before the call, from the same TTL
+ *       its ledger deadline uses (the code and EcoCash rails record the very
+ *       instant; the card rail stamps after the checkout exists, seconds
+ *       later, for its NOT_FOUND rule — inside the margin). A refusal means the
  *       order is dead and the adapter throws
  *       {@code InnbucksPaymentService.InvalidPaymentRequestException} BEFORE
  *       any money moves.</li>
@@ -59,9 +60,9 @@ public interface OrderGateway {
      * Extend the product-side hold to at least {@code payableUntil} +
      * {@link #HOLD_SAFETY_MARGIN}, so it outlives the instrument about to be
      * minted. Called BEFORE any ledger write or mint; a refusal throws with a
-     * customer-facing message and zero money moved — the caller never mints
-     * after a refusal, and an adapter never shortens the hold and reports
-     * success.
+     * customer-facing message and zero money moved, and the caller never
+     * mints after a refusal. (The marketplace and loyalty contracts cap one
+     * extension at 60 minutes; every rail's window is well inside that.)
      *
      * @param payableUntil the last instant the instrument can still be paid:
      *                     code TTL for an InnBucks code, prompt TTL + the
