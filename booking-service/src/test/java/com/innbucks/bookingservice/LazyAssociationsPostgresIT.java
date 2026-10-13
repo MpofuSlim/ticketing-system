@@ -357,10 +357,16 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         Booking c = confirmed.bookings.get(0);
         when(eventServiceClient.releaseAvailability(eq(confirmed.eventId), anyInt(), anyString()))
                 .thenReturn(ApiResult.ok(released(10)));
-        measure("PATCH /bookings/{id}/reverse", patch("/bookings/" + c.getId() + "/reverse")
-                        .header("Authorization", bearer(admin())),
-                r -> r.andExpect(jsonPath("$.data.status").value("CANCELLED"))
-                        .andExpect(jsonPath("$.data.items", hasSize(2))));
+        stats.clear();
+        mvc.perform(patch("/bookings/" + c.getId() + "/reverse").header("Authorization", bearer(admin())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.data.items", hasSize(2)));
+        // As for the cancel: the notice listener reads the booking after commit
+        // on its own thread, and that read is one of the six. Counting before
+        // its email lands races it (5 or 6, depending on the scheduler).
+        verify(email, timeout(10_000)).sendEmail(eq(confirmed.email), anyString(), anyString(), anyString());
+        measured.put("PATCH /bookings/{id}/reverse + async notice", stats.getPrepareStatementCount());
         verify(eventServiceClient).releaseAvailability(confirmed.eventId, 2, internalToken);
 
         // Since H2 extend-hold LOCKS the booking row before reading it, like
@@ -375,7 +381,7 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         // the version with the first read and loads the items. The rest is as
         // for the cancel: update booking, release the counter, the listener's
         // read.
-        assertThat(measured.get("PATCH /bookings/{id}/reverse")).isEqualTo(6);
+        assertThat(measured.get("PATCH /bookings/{id}/reverse + async notice")).isEqualTo(6);
     }
 
     @Test

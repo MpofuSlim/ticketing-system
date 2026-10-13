@@ -129,6 +129,7 @@ class SupportSearchServiceTest {
             "TRK-7K2M9Q4X8Z, query_not_supported, PARCEL",
             "INN-20260930-A1B2C3, query_not_supported, BOOKING_CONFIRMATION",
             "20260930-00012K, query_not_supported, TICKET_NUMBER",
+            "20261013-7KQ4M-9XZ2B, query_not_supported, TICKET_NUMBER",
             "TKZ-MKT-0A1B2C3D4E5F, query_not_supported, PAYMENT_REFERENCE"
     })
     @DisplayName("a refused query is logged by KIND only — never its text — and nothing is resolved")

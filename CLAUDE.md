@@ -1149,6 +1149,61 @@ organizer's bookings view from a list of MSISDNs into a guest list.
   event-change/cancel notifications — those still go to the purchaser only.
   Extending them is a separate decision (it multiplies SMS cost per booking).
 
+## Ticket numbers: format, entropy, and the collision retry (booking-service)
+
+**A ticket number is the QR payload the gate admits on — an entry credential —
+and `booking_items.ticket_number` is UNIQUE.** New tickets are
+`yyyyMMdd-XXXXX-XXXXX` (e.g. `20261013-7KQ4M-9XZ2B`): the UTC issue date, then ten
+Crockford base32 symbols (`0-9A-Z` minus I, L, O, U) from `SecureRandom`.
+`BookingReferences` is the ONLY place either booking reference is minted; the two
+ticket shapes are defined once, in common's `TicketNumbers`.
+
+- **Why 50 bits.** The legacy `yyyyMMdd-DDDDDL` held 2.6M values a day: about 179
+  clashing pairs on a 30,505-seat on-sale day, each one a failed checkout (it
+  flaked `CategoryInventoryConcurrencyIT`), and a guessed number admitted at
+  stadium scale with p ≈ 1%. At 2^50 a day, 1M tickets expect 4.4e-4 clashing
+  pairs, and a guess against 100k valid tickets admits with p ≈ 1e-10. Twenty
+  upper-case characters is exactly a version-1 QR at level M, so the code is no
+  denser than before (`QrCodeGeneratorTest`); lower case or a longer value jumps
+  to version 2.
+- **Why at least one letter.** Ten digits would make an 18-digit number once the
+  dashes go: DLP scanners in mail and messaging flag that as a card, and the
+  support search refuses card-shaped input. An all-digit draw (p ≈ 8.9e-6) is
+  drawn again.
+- **Legacy numbers stay valid forever** — they are rows and printed QRs. Nothing
+  at the gate parses a ticket: `/tickets/scan` and the QR endpoints look the value
+  up exactly as issued, so there is no shape check to update and none to add.
+  Anything that must RECOGNISE a ticket number (today only the support search)
+  uses `TicketNumbers`, which accepts both shapes. Never Crockford-alias
+  (O→0, I/L→1) a legacy value: its final letter can be any letter. A TYPED
+  number (`TicketNumbers.canonical`: dashes optional, any case) must also start
+  with a plausible `20yyMMdd` date. Every issued number does and no card number
+  does, so `4111 1111 1111 1111 AB` is never read as a ticket carrying a card's
+  digits. The issued shapes (`isCurrent` / `isLegacy`) keep `\d{8}`.
+- **A clash is retried, not a 500.** `BookingService.claimWithRetries`: a 23505 on
+  `uk_booking_items_ticket_number` or `uk_bookings_confirmation_number` — read
+  from the driver's own message first, Hibernate's parse second, because a batch
+  message starts with bound values a caller chose — rolled the whole attempt back,
+  stock claim included, so it runs again with fresh references, up to 3 times,
+  then `503 TRY_AGAIN`. Any other 23505 behaves as before. The deadlock budget
+  stays ONE retry and neither budget spends the other. Pinned against real
+  Postgres by `BookingReferenceCollisionPostgresIT`.
+- **Metric and alert.** `booking.claim.reference_collision{reference=ticket|confirmation}`
+  (both registered at 0; every clash counted) is kept OUT of
+  `booking.claim.retry`, which still reads as lock contention alone. Alert
+  `TicketNumberCollision` (ticket) fires on any ticket clash in 1h: at 50 bits it
+  means the generator regressed, and the same regression makes tickets guessable.
+- **The clashing value is never logged.** The WARN names the kind and the
+  attempt. booking-service's datasource sets pgjdbc `logServerErrorDetail=false`:
+  with the default, the clashing ticket number and every bound value (buyer and
+  attendee contacts) rode in the exception message Hibernate logs at WARN. Off,
+  Postgres' primary text, and so the constraint name, stays. The IT asserts the
+  value never reaches the log.
+- **Confirmation numbers are unchanged** (`INN-yyyyMMdd-` + six hex): people read
+  them out and type them at the gate (`GateLookupService`), so they stay short.
+  At 24 bits a day, b bookings expect about b²/33.5M clashes (27 at 30,000):
+  expected, retried, invisible to the buyer, and not alerted.
+
 ## A MERCHANT_ADMIN's token carries NO `merchantId` claim — the organization is the scope
 
 **Step 2 of the organizations plan removed `AuthService.resolveMerchantIdClaim`

@@ -88,7 +88,7 @@ public class TicketScanController {
                                               "message": "Scan result",
                                               "data": {
                                                 "status": "ALLOWED",
-                                                "ticketNumber": "20260619-48291X",
+                                                "ticketNumber": "20260619-7KQ4M-9XZ2B",
                                                 "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
                                                 "redeemedAt": "2026-06-19T19:42:11Z",
                                                 "redeemedByName": "Tariro Chikomo",
@@ -102,7 +102,7 @@ public class TicketScanController {
                                               "message": "Scan result",
                                               "data": {
                                                 "status": "ALREADY_REDEEMED",
-                                                "ticketNumber": "20260619-48291X",
+                                                "ticketNumber": "20260619-7KQ4M-9XZ2B",
                                                 "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
                                                 "redeemedAt": "2026-06-19T19:42:11Z",
                                                 "redeemedByName": "Tariro Chikomo",
@@ -116,7 +116,7 @@ public class TicketScanController {
                                               "message": "Scan result",
                                               "data": {
                                                 "status": "WRONG_ORGANIZER",
-                                                "ticketNumber": "20260619-48291X",
+                                                "ticketNumber": "20260619-7KQ4M-9XZ2B",
                                                 "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789"
                                               }
                                             }
@@ -137,7 +137,7 @@ public class TicketScanController {
                                               "message": "Scan result",
                                               "data": {
                                                 "status": "BOOKING_NOT_CONFIRMED",
-                                                "ticketNumber": "20260619-48291X",
+                                                "ticketNumber": "20260619-7KQ4M-9XZ2B",
                                                 "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789"
                                               }
                                             }
@@ -148,7 +148,7 @@ public class TicketScanController {
                                               "message": "Scan result",
                                               "data": {
                                                 "status": "WRONG_EVENT_DAY",
-                                                "ticketNumber": "20260619-48291X",
+                                                "ticketNumber": "20260619-7KQ4M-9XZ2B",
                                                 "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
                                                 "eventDate": "2026-06-19"
                                               }
@@ -234,7 +234,7 @@ public class TicketScanController {
                                                 "customerPhoneLast4": "****4567",
                                                 "tickets": [
                                                   {
-                                                    "ticketNumber": "20260901-48291X",
+                                                    "ticketNumber": "20260901-7KQ4M-9XZ2B",
                                                     "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
                                                     "categoryName": "VIP",
                                                     "holderName": "Tendai Ncube",
@@ -243,7 +243,7 @@ public class TicketScanController {
                                                     "redeemedByName": "Tariro Chikomo"
                                                   },
                                                   {
-                                                    "ticketNumber": "20260901-73015K",
+                                                    "ticketNumber": "20260901-K3D8P-5TV1A",
                                                     "bookingItemId": "0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
                                                     "categoryName": "VIP",
                                                     "holderName": "Rufaro Moyo",

@@ -134,6 +134,7 @@ class CategoryInventoryConcurrencyIT extends BookingStockPostgresTestBase {
         category(eventId, a, "Bay 12", 1000);
         category(eventId, b, "Bay 13", 1000);
         double retriesBefore = claimRetries("succeeded") + claimRetries("failed") + claimRetries("refused");
+        double ticketCollisionsBefore = referenceCollisions("ticket");
 
         int bookings = 200;
         ExecutorService pool = Executors.newFixedThreadPool(16);
@@ -170,6 +171,11 @@ class CategoryInventoryConcurrencyIT extends BookingStockPostgresTestBase {
         // not paper over them.
         assertThat(claimRetries("succeeded") + claimRetries("failed") + claimRetries("refused"))
                 .isEqualTo(retriesBefore);
+        // 400 tickets in one day: the legacy 2.6M-a-day space clashed here
+        // about one run in thirty (a 500, until clashes were retried). At 50
+        // bits a ticket clash is ~1e-10, so one here means the generator
+        // regressed, even though the retry would have hidden it from the 201s.
+        assertThat(referenceCollisions("ticket")).isEqualTo(ticketCollisionsBefore);
         jdbc.update("DELETE FROM booking_items WHERE booking_id IN (SELECT id FROM bookings WHERE event_id = ?)",
                 eventId);
         jdbc.update("DELETE FROM bookings WHERE event_id = ?", eventId);

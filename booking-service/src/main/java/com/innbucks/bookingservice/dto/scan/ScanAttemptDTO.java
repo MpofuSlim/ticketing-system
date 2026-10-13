@@ -29,7 +29,7 @@ public record ScanAttemptDTO(
                 description = "Outcome of the scan. One of ALLOWED, ALREADY_REDEEMED, WRONG_ORGANIZER, " +
                               "NOT_ASSIGNED_TO_EVENT, TICKET_NOT_FOUND, BOOKING_NOT_CONFIRMED.")
         String outcome,
-        @Schema(example = "20260619-48291X",
+        @Schema(example = "20260619-7KQ4M-9XZ2B",
                 description = "The ticket number that was scanned (echoed; could be a typo for the not-found case).")
         String ticketNumber,
         @Schema(example = "f1c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,

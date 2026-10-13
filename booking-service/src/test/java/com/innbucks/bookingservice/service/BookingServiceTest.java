@@ -16,6 +16,7 @@ import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
+import com.innbucks.common.ticket.TicketNumbers;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
@@ -479,9 +480,10 @@ class BookingServiceTest {
         long unique = resp.getItems().stream().map(i -> i.getTicketNumber()).distinct().count();
         assertEquals(resp.getItems().size(), unique, "ticket numbers should be unique");
 
-        // Format: YYYYMMDD-DDDDDL
-        Pattern ticketFormat = Pattern.compile("\\d{8}-\\d{5}[A-Z]");
-        assertTrue(resp.getItems().stream().allMatch(i -> ticketFormat.matcher(i.getTicketNumber()).matches()));
+        // Format: YYYYMMDD-XXXXX-XXXXX (Crockford base32, at least one letter);
+        // the legacy YYYYMMDD-DDDDDL is never issued again.
+        assertTrue(resp.getItems().stream().allMatch(i -> TicketNumbers.isCurrent(i.getTicketNumber())),
+                "unexpected ticket numbers: " + resp.getItems().stream().map(i -> i.getTicketNumber()).toList());
     }
 
     @Test
@@ -489,7 +491,7 @@ class BookingServiceTest {
         // Security regression guard for the SecureRandom swap. A ticket number
         // is the QR-code payload validated at the gate, so it must be
         // unpredictable. We can't assert "is a CSPRNG" directly, but we CAN
-        // assert the variable part (5 digits + 1 letter) spreads widely across
+        // assert the variable part (ten base32 symbols) spreads widely across
         // many generations — a regression to a constant, a fixed seed, or a
         // tiny cycle would collapse that spread and fail here.
         java.util.Set<String> variablePart = new java.util.HashSet<>();
@@ -502,9 +504,9 @@ class BookingServiceTest {
             // Strip the leading "YYYYMMDD-" date prefix; keep the random tail.
             variablePart.add(ticket.substring(ticket.indexOf('-') + 1));
         }
-        // 200 draws from a 2.6M space (10^5 * 26): collisions are vanishingly
-        // unlikely with a real CSPRNG. Anything under ~190 distinct values
-        // signals the randomness collapsed (constant, fixed seed, or tiny cycle).
+        // 200 draws from a 2^50 space: a repeat is vanishingly unlikely with a
+        // real CSPRNG. Anything under ~190 distinct values signals the
+        // randomness collapsed (constant, fixed seed, or tiny cycle).
         assertTrue(variablePart.size() >= 190,
                 "ticket randomness collapsed: only " + variablePart.size() + " distinct of 200");
     }

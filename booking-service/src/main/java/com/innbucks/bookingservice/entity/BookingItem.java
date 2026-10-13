@@ -47,7 +47,11 @@ public class BookingItem {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal priceAtBooking;
 
-    // e.g. 20260419-48291X — unique per seat
+    // The QR payload a gate scanner validates — an entry credential, unique
+    // per ticket. Minted by BookingReferences as yyyyMMdd-XXXXX-XXXXX (UTC
+    // date, ten Crockford base32 symbols, e.g. 20260419-7KQ4M-9XZ2B); tickets
+    // issued before that carry the legacy yyyyMMdd-DDDDDL (e.g. 20260419-48291X)
+    // and stay valid forever. Shapes: common's TicketNumbers.
     @Column(nullable = false, unique = true)
     private String ticketNumber;
 

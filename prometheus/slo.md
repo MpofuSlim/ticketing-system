@@ -466,6 +466,36 @@ proxy_set_header -e include` and compare every gateway `location` with
 run the §3.1 **Verify** steps. If nginx is correct, check that 30080 cannot be
 reached from outside the box (§3.1 step 3).
 
+### `TicketNumberCollision`
+
+**Trigger:** `booking_claim_reference_collision_total{reference="ticket"}` moved.
+A `POST /bookings` claim generated a ticket number that `booking_items` already
+held (`uk_booking_items_ticket_number`). The attempt rolled back, stock claim
+included, and ran again with fresh references: up to 3 times, then `503
+TRY_AGAIN`. A ticket number is the UTC date plus ten Crockford base32 symbols
+from `SecureRandom` (`BookingReferences`), 50 bits a day, so a million tickets in
+one day expect 4.4e-4 clashes. One clash is not bad luck. The generator has most
+likely regressed: fewer or narrower symbols, or randomness that repeats (a fixed
+seed, a non-cryptographic generator). Buyers are still served by the retry; the
+danger is that the same regression makes ticket numbers guessable, and a ticket
+number is the entry credential the gate admits on.
+
+`reference="confirmation"` moving is expected and not alerted. A confirmation
+number keeps its short `INN-yyyyMMdd-XXXXXX` shape because people type it at the
+gate: 24 bits a day, so b bookings in one day expect about b²/33.5M clashes (27 at
+30,000). Each one is retried with a fresh number and the buyer never sees it.
+Look only if it runs far above that, or if `TRY_AGAIN` 503s appear.
+
+**Action:** grep booking-service for `number collision`. Each line names the kind
+of reference and the retry, never the value: the ticket number is a credential,
+and the JDBC driver runs with `logServerErrorDetail=false` so the database error
+does not print it either. Then diff `BookingReferences` and `TicketNumbers`
+(common) between the running pin and the last good release: the alphabet must
+still be 32 symbols, the tail 10 symbols, and the Spring bean built on
+`SecureRandom`. If a change there is the cause, roll back to the previous pin
+(CLAUDE.md, "Rolling back") and fix forward. If the generator is unchanged, look
+for ticket numbers written outside it: a script or a migration inserting rows.
+
 ### `ExpirySkipping`
 
 **Trigger:** `booking_expiry_skipped_total` moved — booking-service's expiry

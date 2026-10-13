@@ -105,8 +105,13 @@ Removes one event. **If the last assignment is removed**, the team member revert
 
 **Auth:** EVENT_ORGANIZER **or** TEAM_MEMBER JWT. **Body:**
 ```json
-{ "ticketNumber": "20260502-12345A" }
+{ "ticketNumber": "20260502-3FQ7M-X9K2D" }
 ```
+`ticketNumber` is the QR payload. Tickets are issued as `yyyyMMdd-XXXXX-XXXXX`
+(upper-case letters and digits); tickets issued before that look like
+`20260502-12345A` (`yyyyMMdd-DDDDDL`) and stay valid. Send the value exactly as
+the scanner read it — no trimming, re-casing or format check on the client: the
+backend matches it as issued.
 **Response `200`** (`data`) — possible statuses (verbatim enum names):
 ```json
 { "status": "ALLOWED",                "ticketNumber": "…", "bookingItemId": "…", "redeemedAt": "…", "redeemedByName": "Tariro Chikomo" }

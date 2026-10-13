@@ -36,12 +36,16 @@ correctly calls that the **next** day, not the event's day.
   "message": "Scan result",
   "data": {
     "status": "WRONG_EVENT_DAY",
-    "ticketNumber": "20260619-48291X",
+    "ticketNumber": "20260619-7KQ4M-9XZ2B",
     "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
     "eventDate": "2026-06-19"
   }
 }
 ```
+
+`ticketNumber` echoes the scanned value. New tickets are `yyyyMMdd-XXXXX-XXXXX`;
+tickets issued before that are `yyyyMMdd-DDDDDL` (e.g. `20260619-48291X`) and stay
+valid — never validate the shape on the client.
 
 **The ticket is NOT redeemed.** It stays valid for its own day — this is a refusal, not a
 consumption. Do not present it as "ticket used".
