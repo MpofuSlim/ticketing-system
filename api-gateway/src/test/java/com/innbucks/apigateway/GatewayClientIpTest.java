@@ -1,7 +1,10 @@
 package com.innbucks.apigateway;
 
 import com.innbucks.apigateway.config.ClientIpResolver;
+import com.sun.net.httpserver.Headers;
+import com.sun.net.httpserver.HttpServer;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -15,11 +18,15 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,6 +37,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * IP-keyed resolver produced, so what is pinned is the key the limiter would
  * charge, for the header shapes the edge can deliver. {@code ClientIpResolverTest}
  * covers the parsing cases one by one.
+ *
+ * <p>A second route proxies to a stand-in backend, pinning what the services
+ * behind the gateway receive: nginx's {@code X-Real-IP} unchanged, and no
+ * {@code X-Forwarded-For} or {@code Forwarded} (the caller-chosen chain).
+ * Setting {@code trusted-proxies} would make the gateway forward an XFF built
+ * from the caller-chosen remote address, and this is the test that says so.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -38,6 +51,11 @@ class GatewayClientIpTest {
     private static final String DEFAULT_KEY = "X-Key-Default";
     private static final String PRE_AUTH_KEY = "X-Key-Pre-Auth";
     private static final String PAYMENTS_KEY = "X-Key-Payments";
+
+    /** The request headers the stand-in backend last received. */
+    private static final AtomicReference<Headers> BACKEND_SAW = new AtomicReference<>();
+
+    private static final HttpServer BACKEND = startBackend();
 
     @TestConfiguration
     static class KeyEchoRoute {
@@ -60,6 +78,8 @@ class GatewayClientIpTest {
                                         return exchange.getResponse().setComplete();
                                     })))
                             .uri("http://localhost:9"))
+                    .route("client-ip-proxy-test-route", r -> r.order(-1).path("/__client-ip-proxy/**")
+                            .uri("http://localhost:" + BACKEND.getAddress().getPort()))
                     .build();
         }
     }
@@ -71,6 +91,11 @@ class GatewayClientIpTest {
     MeterRegistry meterRegistry;
 
     private final HttpClient client = HttpClient.newHttpClient();
+
+    @AfterAll
+    static void stopBackend() {
+        BACKEND.stop(0);
+    }
 
     @Test
     void aSpoofedLeftMostXff_withTheSameRealIp_keepsEveryKey() throws Exception {
@@ -104,6 +129,47 @@ class GatewayClientIpTest {
     }
 
     @Test
+    void anIpv6Client_isKeyedByItsSlash64() throws Exception {
+        assertThat(keys("2001:db8:1:2::1", "6.6.6.6")).containsOnly("ip:2001:db8:1:2:0:0:0:0/64");
+        assertThat(keys("2001:db8:1:2:a1b2:c3d4:e5f6:789", null)).containsOnly("ip:2001:db8:1:2:0:0:0:0/64");
+        assertThat(keys("2001:db8:1:3::1", null)).containsOnly("ip:2001:db8:1:3:0:0:0:0/64");
+    }
+
+    @Test
+    void theSameRealIpSentTwice_isOneClient() throws Exception {
+        // nginx with `include proxy_params` plus its own X-Real-IP line sends
+        // two header lines with one value.
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create("http://localhost:" + port + "/__client-ip-test/otp"))
+                .header(ClientIpResolver.CLIENT_IP_HEADER, "203.0.113.7")
+                .header(ClientIpResolver.CLIENT_IP_HEADER, "203.0.113.7")
+                .GET().build();
+
+        HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
+
+        assertThat(response.headers().firstValue(PRE_AUTH_KEY)).hasValue("ip:203.0.113.7");
+        assertThat(response.headers().firstValue(DEFAULT_KEY)).hasValue("ip:203.0.113.7");
+    }
+
+    @Test
+    void aBackend_receivesTheRealIpUnchanged_andNoForwardedChain() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create("http://localhost:" + port + "/__client-ip-proxy/bookings"))
+                .header(ClientIpResolver.CLIENT_IP_HEADER, "203.0.113.7")
+                .header("X-Forwarded-For", "6.6.6.6, 172.70.1.1")
+                .header("Forwarded", "for=6.6.6.6")
+                .GET().build();
+
+        HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        Headers seen = BACKEND_SAW.get();
+        assertThat(seen.get(ClientIpResolver.CLIENT_IP_HEADER)).containsExactly("203.0.113.7");
+        assertThat(seen.containsKey("X-Forwarded-For")).isFalse();
+        assertThat(seen.containsKey("Forwarded")).isFalse();
+    }
+
+    @Test
     void theFallbackCounters_areRegisteredAtStartup() {
         assertThat(meterRegistry.find("gateway.client_ip.fallback").tag("reason", "absent").counter()).isNotNull();
         assertThat(meterRegistry.find("gateway.client_ip.fallback").tag("reason", "invalid").counter()).isNotNull();
@@ -125,5 +191,20 @@ class GatewayClientIpTest {
                 response.headers().firstValue(DEFAULT_KEY).orElseThrow(),
                 response.headers().firstValue(PRE_AUTH_KEY).orElseThrow(),
                 response.headers().firstValue(PAYMENTS_KEY).orElseThrow());
+    }
+
+    private static HttpServer startBackend() {
+        try {
+            HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+            server.createContext("/__client-ip-proxy/", exchange -> {
+                BACKEND_SAW.set(exchange.getRequestHeaders());
+                exchange.sendResponseHeaders(200, -1);
+                exchange.close();
+            });
+            server.start();
+            return server;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 }

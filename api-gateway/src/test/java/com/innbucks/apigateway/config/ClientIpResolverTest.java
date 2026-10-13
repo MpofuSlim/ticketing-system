@@ -14,6 +14,7 @@ import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.adapter.ForwardedHeaderTransformer;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.stream.Stream;
 
@@ -84,16 +85,66 @@ class ClientIpResolverTest {
     }
 
     @Test
-    void anIpv6Client_isKeyedByItsAddress_notByHowItIsSpelled() {
+    void anIpv6Client_isKeyedByItsNetwork_notByHowItIsSpelled() {
         KeyResolver keys = keyResolver("preAuthIpKeyResolver");
 
         String compressed = keys.resolve(edge("2001:db8::1", null)).block();
 
-        assertThat(compressed).isEqualTo("ip:2001:db8:0:0:0:0:0:1");
+        assertThat(compressed).isEqualTo("ip:2001:db8:0:0:0:0:0:0/64");
         assertThat(keys.resolve(edge("2001:0DB8:0:0:0:0:0:1", null)).block()).isEqualTo(compressed);
         assertThat(keys.resolve(edge("[2001:db8::1]", null)).block()).isEqualTo(compressed);
-        // An IPv4-mapped address is the IPv4 client, one bucket.
+        // An IPv4-mapped address is the IPv4 client, one bucket, keyed whole.
         assertThat(keys.resolve(edge("::ffff:203.0.113.7", null)).block()).isEqualTo("ip:203.0.113.7");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("ipKeyedResolvers")
+    void rotatingAddressesInsideOneSlash64_staysInOneBucket(String name, String fallbackKey) {
+        // A VPS or a phone with a routed /64 can send every request from a
+        // fresh address in it; per-address keys would be a bucket per request.
+        KeyResolver keys = keyResolver(name);
+
+        String first = keys.resolve(edge("2001:db8:1:2::1", null)).block();
+
+        assertThat(first).isEqualTo("ip:2001:db8:1:2:0:0:0:0/64");
+        assertThat(keys.resolve(edge("2001:db8:1:2:a1b2:c3d4:e5f6:789", null)).block()).isEqualTo(first);
+        assertThat(keys.resolve(edge("2001:db8:1:2:ffff:ffff:ffff:ffff", null)).block()).isEqualTo(first);
+        assertThat(keys.resolve(edge("2001:db8:1:2:8000::", "6.6.6.6, " + CLOUDFLARE_EDGE)).block())
+                .isEqualTo(first);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("ipKeyedResolvers")
+    void anotherSlash64_isAnotherBucket(String name, String fallbackKey) {
+        KeyResolver keys = keyResolver(name);
+
+        assertThat(keys.resolve(edge("2001:db8:1:3::1", null)).block()).isEqualTo("ip:2001:db8:1:3:0:0:0:0/64");
+        assertThat(keys.resolve(edge("2001:db8:1:2::1", null)).block()).isEqualTo("ip:2001:db8:1:2:0:0:0:0/64");
+        // One bit above the /64 boundary.
+        assertThat(keys.resolve(edge("2001:db8:1:2::1", null)).block())
+                .isNotEqualTo(keys.resolve(edge("2001:db8:1:1::1", null)).block());
+    }
+
+    @Test
+    void bucketAddress_keepsIpv4Whole_andCutsIpv6ToItsSlash64() throws Exception {
+        assertThat(ClientIpResolver.bucketAddress(InetAddress.getByName("203.0.113.7"))).isEqualTo("203.0.113.7");
+        assertThat(ClientIpResolver.bucketAddress(InetAddress.getByName("2001:db8:aa:bb:cc:dd:ee:ff")))
+                .isEqualTo("2001:db8:aa:bb:0:0:0:0/64");
+        // A scoped address (a local dev socket) is cut the same way.
+        assertThat(ClientIpResolver.bucketAddress(InetAddress.getByName("fe80::1%1")))
+                .isEqualTo("fe80:0:0:0:0:0:0:0/64");
+    }
+
+    @Test
+    void anIpv6SocketPeer_isKeyedByItsSlash64_too() {
+        // Local dev on an IPv6 loopback or LAN: the socket-peer fallback goes
+        // through the same key rule as the header.
+        MockServerHttpRequest request = MockServerHttpRequest.post("/auth/otp/send")
+                .remoteAddress(new InetSocketAddress("2001:db8:1:2::9", 51000))
+                .build();
+
+        assertThat(keyResolver("preAuthIpKeyResolver").resolve(transformed(request)).block())
+                .isEqualTo("ip:2001:db8:1:2:0:0:0:0/64");
     }
 
     // ------------------------------------------------------------ fallbacks
@@ -135,10 +186,49 @@ class ClientIpResolverTest {
     }
 
     @Test
-    void twoRealIpValues_areNotNginx_andFallBack() {
+    void twoRealIpValuesThatDisagree_areNotOneClient_andFallBack() {
         MockServerHttpRequest request = MockServerHttpRequest.get("/auth/otp/send")
                 .remoteAddress(NGINX_PEER)
                 .header(ClientIpResolver.CLIENT_IP_HEADER, "203.0.113.7", "198.51.100.20")
+                .build();
+
+        assertThat(resolver.resolve(transformed(request))).isEqualTo(NGINX_PEER);
+        assertThat(fallbacks("invalid")).isEqualTo(1.0);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("ipKeyedResolvers")
+    void theSameRealIpTwice_isOneClient(String name, String fallbackKey) {
+        // A location that does `include proxy_params` AND sets X-Real-IP itself:
+        // nginx sends both lines, each $remote_addr. Not a fallback.
+        MockServerHttpRequest request = MockServerHttpRequest.post("/auth/otp/send")
+                .remoteAddress(NGINX_PEER)
+                .header(ClientIpResolver.CLIENT_IP_HEADER, "203.0.113.7", "203.0.113.7")
+                .header("X-Forwarded-For", "6.6.6.6, " + CLOUDFLARE_EDGE + ", 203.0.113.7", "203.0.113.7")
+                .build();
+
+        assertThat(keyResolver(name).resolve(transformed(request)).block()).isEqualTo("ip:203.0.113.7");
+        assertThat(fallbacks("invalid")).isZero();
+        assertThat(fallbacks("absent")).isZero();
+    }
+
+    @Test
+    void theSameIpv6RealIpTwice_spelledTwoWays_isOneClient() {
+        MockServerHttpRequest request = MockServerHttpRequest.get("/auth/otp/send")
+                .remoteAddress(NGINX_PEER)
+                .header(ClientIpResolver.CLIENT_IP_HEADER, "2001:db8::1", "2001:0db8:0:0:0:0:0:1")
+                .build();
+
+        assertThat(keyResolver("preAuthIpKeyResolver").resolve(transformed(request)).block())
+                .isEqualTo("ip:2001:db8:0:0:0:0:0:0/64");
+        assertThat(fallbacks("invalid")).isZero();
+    }
+
+    @Test
+    void aRealIpRepeatedWithAnInvalidValue_fallsBack() {
+        MockServerHttpRequest request = MockServerHttpRequest.get("/auth/otp/send")
+                .remoteAddress(NGINX_PEER)
+                .header(ClientIpResolver.CLIENT_IP_HEADER, "203.0.113.7", "localhost")
                 .build();
 
         assertThat(resolver.resolve(transformed(request))).isEqualTo(NGINX_PEER);

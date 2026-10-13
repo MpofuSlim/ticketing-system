@@ -23,9 +23,10 @@ import java.time.Duration;
  * is available, which is a deliberately tight quota.
  *
  * <p>Every IP key comes from {@link #gatewayRemoteAddressResolver}, which reads
- * the nginx-set {@code X-Real-IP} ({@link ClientIpResolver}). A new IP-keyed
- * resolver must take its address from that bean too, never from
- * {@code X-Forwarded-For} or the request's remote address.
+ * the nginx-set {@code X-Real-IP} ({@link ClientIpResolver}), through
+ * {@link #ipKey}, which keys an IPv6 client by its /64. A new IP-keyed resolver
+ * must do both, never read {@code X-Forwarded-For} or the request's remote
+ * address, and never key on a full IPv6 address.
  */
 @Configuration
 public class RateLimiterConfig {
@@ -107,16 +108,17 @@ public class RateLimiterConfig {
     }
 
     /**
-     * {@code ip:<address>} for the client address, or {@code fallbackKey} when
-     * there is none. An UNRESOLVED address has none: that is what the
-     * forward-headers transformer builds from {@code X-Forwarded-For}, and it
-     * must never become a key of its own.
+     * {@code ip:<address>} for the client address (an IPv6 client by its /64,
+     * {@link ClientIpResolver#bucketAddress}), or {@code fallbackKey} when there
+     * is none. An UNRESOLVED address has none: that is what the forward-headers
+     * transformer builds from {@code X-Forwarded-For}, and it must never become
+     * a key of its own.
      */
     private static Mono<String> ipKey(RemoteAddressResolver resolver, ServerWebExchange exchange,
                                       String fallbackKey) {
         InetSocketAddress remote = resolver.resolve(exchange);
         if (remote != null && remote.getAddress() != null) {
-            return Mono.just("ip:" + remote.getAddress().getHostAddress());
+            return Mono.just("ip:" + ClientIpResolver.bucketAddress(remote.getAddress()));
         }
         return Mono.just(fallbackKey);
     }

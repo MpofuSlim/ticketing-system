@@ -6,9 +6,11 @@ import io.netty.util.NetUtil;
 import org.springframework.cloud.gateway.support.ipresolver.RemoteAddressResolver;
 import org.springframework.web.server.ServerWebExchange;
 
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -44,19 +46,39 @@ import java.util.List;
  * normalises the key: {@code 2001:db8::1} and {@code 2001:0db8:0:0::1} share a
  * bucket, and an IPv4-mapped IPv6 address keys as its IPv4 form.
  *
+ * <p><b>An IPv6 client is keyed by its /64</b> ({@link #bucketAddress}), not its
+ * full address. Cloudflare reaches IPv6 clients by default, so
+ * {@code CF-Connecting-IP} is often the client's own v6 address, and a /64 is
+ * what one subscriber holds: a VPS or a phone with a routed /64 can send every
+ * request from a fresh address in it. Keyed per address, that is a new bucket
+ * per request, the XFF rotation this class exists to stop. A /64 is also the
+ * smallest prefix a network hands one subscriber, so it never merges two of
+ * them. IPv4 is keyed per address, as before.
+ *
  * <p><b>Fallback.</b> A missing header (local dev, a curl to the NodePort from
- * the box) or anything that is not exactly one literal falls back to the
- * exchange's remote address. Behind nginx that is the transformer's unresolved
- * XFF address, which the key resolvers turn into their shared fallback bucket:
- * an nginx that has not been updated degrades to exactly the behaviour before
- * this class, never to a caller-chosen key. Behind an updated nginx neither case
+ * the box) or a value that is not one literal falls back to the exchange's
+ * remote address. Behind nginx that is the transformer's unresolved XFF
+ * address, which the key resolvers turn into their shared fallback bucket: an
+ * nginx that has not been updated degrades to exactly the behaviour before this
+ * class, never to a caller-chosen key. Behind an updated nginx neither case
  * happens, so {@code gateway.client_ip.fallback{reason="absent"|"invalid"}}
- * staying flat is the check that the header arrives.
+ * staying flat is the check that the header arrives (alert
+ * {@code GatewayClientIpFallback}).
+ *
+ * <p><b>The same value twice is one value.</b> nginx never de-duplicates
+ * {@code proxy_set_header}, so a location that also does {@code include
+ * proxy_params} (Ubuntu's sets {@code X-Real-IP $remote_addr} too) sends the
+ * header twice with one value. Both lines are nginx's: a {@code proxy_set_header}
+ * stops nginx passing on the caller's header of that name. So equal values are
+ * the client; values that disagree are not one client, and count as invalid.
  */
 public class ClientIpResolver implements RemoteAddressResolver {
 
     /** Set by the host nginx from {@code $remote_addr}; never by the caller. */
     public static final String CLIENT_IP_HEADER = "X-Real-IP";
+
+    /** The prefix an IPv6 client is keyed by: one subscriber's network. */
+    static final int IPV6_KEY_PREFIX_BITS = 64;
 
     static final String FALLBACK_METRIC = "gateway.client_ip.fallback";
 
@@ -76,13 +98,42 @@ public class ClientIpResolver implements RemoteAddressResolver {
             absent.increment();
             return exchange.getRequest().getRemoteAddress();
         }
-        // nginx sends exactly one value; two means it was not nginx.
-        InetAddress address = values.size() == 1 ? parseLiteral(values.get(0)) : null;
+        InetAddress address = oneLiteral(values);
         if (address == null) {
             invalid.increment();
             return exchange.getRequest().getRemoteAddress();
         }
         return new InetSocketAddress(address, 0);
+    }
+
+    /**
+     * What a rate-limit bucket is keyed on for {@code address}: an IPv4 address
+     * whole, an IPv6 address as its /64 network ({@code 2001:db8:1:2:0:0:0:0/64}).
+     * Every IP key in {@link RateLimiterConfig} goes through here.
+     */
+    public static String bucketAddress(InetAddress address) {
+        if (!(address instanceof Inet6Address)) {
+            return address.getHostAddress();
+        }
+        byte[] network = address.getAddress();
+        Arrays.fill(network, IPV6_KEY_PREFIX_BITS / 8, network.length, (byte) 0);
+        return fromBytes(network).getHostAddress() + "/" + IPV6_KEY_PREFIX_BITS;
+    }
+
+    /**
+     * The address every value names, or {@code null} when one of them is not a
+     * literal or two of them disagree.
+     */
+    static InetAddress oneLiteral(List<String> values) {
+        InetAddress address = null;
+        for (String value : values) {
+            InetAddress parsed = parseLiteral(value);
+            if (parsed == null || (address != null && !address.equals(parsed))) {
+                return null;
+            }
+            address = parsed;
+        }
+        return address;
     }
 
     /**
@@ -94,15 +145,18 @@ public class ClientIpResolver implements RemoteAddressResolver {
             return null;
         }
         byte[] bytes = NetUtil.createByteArrayFromIpAddressString(value);
-        if (bytes == null) {
-            return null;
-        }
+        return bytes == null ? null : fromBytes(bytes);
+    }
+
+    /**
+     * A 4- or 16-byte array as an address, never looked up; a mapped
+     * {@code ::ffff:a.b.c.d} comes back as its Inet4Address.
+     */
+    private static InetAddress fromBytes(byte[] bytes) {
         try {
-            // A 4- or 16-byte array is never looked up; a mapped
-            // ::ffff:a.b.c.d comes back as its Inet4Address.
             return InetAddress.getByAddress(bytes);
         } catch (UnknownHostException impossibleForAValidLength) {
-            return null;
+            throw new IllegalArgumentException("not an address length: " + bytes.length);
         }
     }
 
