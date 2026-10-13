@@ -1,7 +1,6 @@
 package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.entity.Booking;
-import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
@@ -16,9 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * Auto-cancels PENDING bookings whose seat hold has lapsed.
@@ -77,14 +73,8 @@ public class BookingExpirationService {
         }
     }
 
-    /** Return an expired booking's tickets to their per-category counters. */
+    /** Return an expired booking's tickets to their per-category counters, in the canonical order. */
     private void releaseInventory(Booking booking) {
-        if (booking.getItems() == null || booking.getItems().isEmpty()) {
-            return;
-        }
-        Map<UUID, Long> qtyByCategory = booking.getItems().stream()
-                .collect(Collectors.groupingBy(BookingItem::getCategoryId, Collectors.counting()));
-        qtyByCategory.forEach((categoryId, qty) ->
-                categoryInventoryRepository.release(categoryId, qty.intValue()));
+        new StockLedger(categoryInventoryRepository).release(booking);
     }
 }

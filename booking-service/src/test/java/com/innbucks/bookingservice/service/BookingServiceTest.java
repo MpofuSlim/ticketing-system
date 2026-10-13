@@ -593,7 +593,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         service.cancelBooking(id, "owner@example.com");
 
@@ -610,7 +610,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.CONFIRMED).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.cancelBooking(id, "owner@example.com"));
@@ -627,7 +627,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.CANCELLED).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.cancelBooking(id, "owner@example.com"));
@@ -643,7 +643,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.cancelBooking(id, "other@example.com"));
@@ -659,7 +659,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         service.confirmBooking(id);
 
@@ -683,7 +683,7 @@ class BookingServiceTest {
                 .confirmationNumber("INN-20260602-AB12CD")
                 .items(new ArrayList<>())
                 .build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         BookingResponseDTO resp = service.confirmBooking(id);
 
@@ -704,7 +704,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).status(Booking.BookingStatus.CANCELLED)
                 .userEmail("u@example.com").totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.confirmBooking(id));
         assertTrue(ex.getMessage().toLowerCase().contains("pending"));
@@ -740,7 +740,7 @@ class BookingServiceTest {
         Booking booking = Booking.builder().id(id).userEmail("u@example.com")
                 .confirmationNumber("INN-X").status(Booking.BookingStatus.PENDING)
                 .totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         service.confirmBooking(id);
 
@@ -768,7 +768,7 @@ class BookingServiceTest {
                 .totalAmount(BigDecimal.TEN)
                 .items(new ArrayList<>(List.of(new BookingItem(), new BookingItem(), new BookingItem())))
                 .build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         service.confirmBooking(id);
         service.confirmBooking(id); // replay — now CONFIRMED
@@ -818,7 +818,7 @@ class BookingServiceTest {
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
                 .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(3))
                 .build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         BookingResponseDTO resp = service.confirmBooking(id);
 
@@ -828,23 +828,71 @@ class BookingServiceTest {
     }
 
     @Test
-    void confirmBooking_rejectsWhenHoldHasAlreadyExpired() {
+    void confirmBooking_honoursALapsedHoldTheSweepHasNotCancelled() {
+        // Was confirmBooking_rejectsWhenHoldHasAlreadyExpired: a payment that
+        // landed a second after expiresAt was refused while the hold's tickets
+        // were still claimed, leaving the customer charged with no ticket. The
+        // tickets stay claimed until the sweep commits its cancellation, and
+        // the sweep takes the same row lock, so honouring the hold cannot
+        // oversell. Only a hold the sweep has CANCELLED is refused (below).
         BookingRepository bookingRepo = mock(BookingRepository.class);
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         BookingService service = newService(bookingRepo,
-                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class), publisher);
 
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("u@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
                 .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1)) // already past on the UTC clock confirmBooking reads
                 .build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
-        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.confirmBooking(id));
-        assertTrue(ex.getMessage().toLowerCase().contains("expired"));
-        // Booking stays PENDING — the expiration scheduler will pick it up.
-        assertEquals(Booking.BookingStatus.PENDING, booking.getStatus());
+        BookingResponseDTO resp = service.confirmBooking(id);
+
+        assertEquals(Booking.BookingStatus.CONFIRMED, resp.getStatus());
+        assertNull(booking.getExpiresAt());
+        verify(bookingRepo).save(booking);
+        verify(publisher).publishEvent(any(BookingDomainEvent.BookingConfirmed.class));
+    }
+
+    @Test
+    void confirmBooking_aHoldTheSweepAlreadyCancelled_isStillRefused() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        UUID id = UUID.randomUUID();
+        Booking swept = Booking.builder().id(id).userEmail("u@example.com")
+                .status(Booking.BookingStatus.CANCELLED).totalAmount(BigDecimal.TEN)
+                .build();
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(swept));
+
+        com.innbucks.bookingservice.exception.BookingConflictException ex = assertThrows(
+                com.innbucks.bookingservice.exception.BookingConflictException.class,
+                () -> service.confirmBooking(id));
+        assertEquals("Only pending bookings can be confirmed — this one isn't in that state.", ex.getMessage());
         verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
+    void confirmAndCancel_readTheBookingUnderItsRowLock_neverThroughTheUnlockableFetchJoin() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        UUID confirmId = UUID.randomUUID();
+        UUID cancelId = UUID.randomUUID();
+        when(bookingRepo.lockById(confirmId)).thenReturn(Optional.of(Booking.builder().id(confirmId)
+                .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build()));
+        when(bookingRepo.lockById(cancelId)).thenReturn(Optional.of(Booking.builder().id(cancelId)
+                .userEmail("u@example.com").status(Booking.BookingStatus.PENDING)
+                .totalAmount(BigDecimal.TEN).build()));
+
+        service.confirmBooking(confirmId);
+        service.cancelBooking(cancelId, "u@example.com");
+
+        verify(bookingRepo).lockById(confirmId);
+        verify(bookingRepo).lockById(cancelId);
+        verify(bookingRepo, never()).findByIdWithItems(any());
     }
 
     @Test
@@ -891,7 +939,7 @@ class BookingServiceTest {
                 () -> service.confirmBooking(UUID.randomUUID(), req));
         assertTrue(ex.getMessage().contains("cashAmount must be >= 0"),
                 "actual: " + ex.getMessage());
-        verify(bookingRepo, never()).findByIdWithItems(any(UUID.class));
+        verify(bookingRepo, never()).lockById(any(UUID.class));
         verify(bookingRepo, never()).save(any());
     }
 
@@ -909,7 +957,7 @@ class BookingServiceTest {
                 () -> service.confirmBooking(UUID.randomUUID(), req));
         assertTrue(ex.getMessage().contains("pointsToUse must be >= 0"),
                 "actual: " + ex.getMessage());
-        verify(bookingRepo, never()).findByIdWithItems(any(UUID.class));
+        verify(bookingRepo, never()).lockById(any(UUID.class));
         verify(bookingRepo, never()).save(any());
     }
 
@@ -928,7 +976,7 @@ class BookingServiceTest {
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
                 .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(5))
                 .build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         ConfirmBookingRequestDTO req = ConfirmBookingRequestDTO.builder()
                 .pointsToUse(new BigDecimal("100"))
@@ -953,7 +1001,7 @@ class BookingServiceTest {
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
                 .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(3))
                 .build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         service.cancelBooking(id, "u@example.com");
 
@@ -1249,7 +1297,7 @@ class BookingServiceTest {
         Booking booking = Booking.builder().id(id).userEmail("u@example.com")
                 .confirmationNumber("INN-X").status(Booking.BookingStatus.PENDING)
                 .totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         service.cancelBooking(id, "u@example.com");
 
@@ -1379,7 +1427,7 @@ class BookingServiceTest {
         for (int i = 0; i < itemCount; i++) {
             b.getItems().add(BookingItem.builder()
                     .seatId(UUID.randomUUID())
-                    .categoryId(UUID.randomUUID()) // releaseInventory groups by category
+                    .categoryId(UUID.randomUUID()) // StockLedger.release groups by category
                     .build());
         }
         return b;
@@ -1397,6 +1445,7 @@ class BookingServiceTest {
         BookingService service = newServiceWithEventClient(bookingRepo, publisher, eventClient);
         Booking booking = confirmedBookingWith(3); // 3 items → release 3
         when(bookingRepo.findByIdWithItems(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(booking.getId())).thenReturn(Optional.of(booking));
 
         service.reverseConfirmedBooking(booking.getId(), "admin@example.com");
 
@@ -1423,6 +1472,7 @@ class BookingServiceTest {
         Booking booking = confirmedBookingWith(2);
         booking.setAvailabilityReleased(true); // <- already released, but status still CONFIRMED
         when(bookingRepo.findByIdWithItems(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(booking.getId())).thenReturn(Optional.of(booking));
 
         service.reverseConfirmedBooking(booking.getId(), "admin@example.com");
 

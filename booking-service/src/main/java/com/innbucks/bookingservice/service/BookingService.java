@@ -3,9 +3,11 @@ package com.innbucks.bookingservice.service;
 import com.innbucks.bookingservice.cache.EventLookupCache;
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
+import com.innbucks.bookingservice.config.BookingMetrics;
 import com.innbucks.bookingservice.dto.*;
 import com.innbucks.bookingservice.entity.*;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
+import com.innbucks.bookingservice.exception.ApiProblemException;
 import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.exception.BookingConflictException;
 import com.innbucks.bookingservice.exception.DependencyUnavailableException;
@@ -13,8 +15,10 @@ import com.innbucks.bookingservice.exception.NotFoundException;
 import com.innbucks.bookingservice.util.MsisdnMasking;
 import com.innbucks.bookingservice.repository.*;
 import lombok.extern.slf4j.Slf4j;
+import org.hibernate.Hibernate;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +28,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.security.SecureRandom;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -37,6 +42,10 @@ public class BookingService {
     private final BookingRepository bookingRepository;
     private final BookingItemRepository bookingItemRepository;
     private final CategoryInventoryRepository categoryInventoryRepository;
+    // Built here from the inventory repository, not injected, so the many
+    // hand-built test instances keep their constructor (same reason as the
+    // event-lookup cache's setter below).
+    private final StockLedger stockLedger;
     private final SeatServiceClient seatServiceClient;
     private final ApplicationEventPublisher eventPublisher;
     private final QrCodeGenerator qrCodeGenerator;
@@ -44,6 +53,7 @@ public class BookingService {
     // null for the event client still work.
     private final ObjectProvider<EventServiceClient> eventClientProvider;
     private volatile EventLookupCache eventLookupCache;
+    private volatile BookingMetrics metrics;
     private final TransactionTemplate txTemplate;
     // Read-only twin for the list reads (see loadWithItems): the bookings and
     // their LAZY items are read inside it; mapping (QR rendering) and any
@@ -61,6 +71,15 @@ public class BookingService {
     // Fuzz tolerance for split-payment math: pointsToUse / redeemRate +
     // cashAmount must equal totalAmount within $0.01.
     private static final BigDecimal SPLIT_TOLERANCE = new BigDecimal("0.01");
+
+    // A deadlock (40P01) or serialization failure (40001) in the claim
+    // transaction rolled the whole attempt back, so running it again from the
+    // same resolved inputs is safe. Postgres picks one of the waiters as the
+    // victim; the survivor has committed by the time the victim retries.
+    private static final Set<String> RETRYABLE_SQL_STATES = Set.of("40P01", "40001");
+
+    /** {@code data.errorCode} of the 503 a claim answers when its retry fails the same way. */
+    public static final String TRY_AGAIN = "TRY_AGAIN";
 
     // Flat per-booking seat ceiling, applied identically to every customer.
     // This replaced a per-tier ladder (tier 2 -> 10, 3 -> 15, 4 -> 20, anything
@@ -97,6 +116,7 @@ public class BookingService {
         this.bookingRepository = bookingRepository;
         this.bookingItemRepository = bookingItemRepository;
         this.categoryInventoryRepository = categoryInventoryRepository;
+        this.stockLedger = new StockLedger(categoryInventoryRepository);
         this.seatServiceClient = seatServiceClient;
         this.eventPublisher = eventPublisher;
         this.qrCodeGenerator = qrCodeGenerator;
@@ -150,7 +170,12 @@ public class BookingService {
         // — each request entry may name its own attendee, and the ticket
         // issued for entry i must carry entry i's attendee, not be reshuffled
         // by category grouping.
-        Map<UUID, Integer> qtyByCategory = new LinkedHashMap<>();
+        //
+        // The quantities are keyed in the CANONICAL lock order (StockLedger),
+        // not the order the request named them: persistBooking claims in this
+        // map's order, and two bookings naming [A,B] and [B,A] used to lock the
+        // two counter rows in opposite orders and deadlock.
+        Map<UUID, Integer> qtyByCategory = StockLedger.byCategory();
         List<TicketSpec> ticketSpecs = new ArrayList<>(request.getSeats().size());
         for (CreateBookingRequestDTO.SeatItemRequest item : request.getSeats()) {
             qtyByCategory.merge(item.getCategoryId(), 1, Integer::sum);
@@ -179,13 +204,6 @@ public class BookingService {
             total = total.add(price.multiply(BigDecimal.valueOf(e.getValue())));
         }
 
-        String confirmationNumber = generateConfirmationNumber();
-
-        // Tickets are held for holdTtlMinutes; if no /confirm (= payment) lands
-        // by then, the expiration scheduler flips the booking to CANCELLED and
-        // releases the held tickets back to the category counter.
-        LocalDateTime expiresAt = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(holdTtlMinutes);
-
         // Capture the owning organizer's stable cross-service uuid so the
         // ticket scan path can authorize the redeemer (events.tenant_user_uuid
         // must equal the scanner's JWT organizerUuid) and loyalty earn/redeem
@@ -198,21 +216,95 @@ public class BookingService {
         EventLookupDTO eventLookup = lookupEvent(request.getEventId());
         UUID tenantUserUuid = eventLookup == null ? null : eventLookup.getTenantUserUuid();
 
-        Booking booking = Booking.builder()
-                .userEmail(userEmail)
-                .customerName(customerName)
-                .phoneNumber(phoneNumber)
-                .eventId(request.getEventId())
-                .tenantUserUuid(tenantUserUuid)
-                .confirmationNumber(confirmationNumber)
-                .status(Booking.BookingStatus.PENDING)
-                .totalAmount(total)
-                .expiresAt(expiresAt)
-                .build();
+        ClaimInputs inputs = new ClaimInputs(userEmail, customerName, phoneNumber, request.getEventId(),
+                tenantUserUuid, total, qtyByCategory, categoryById, ticketSpecs);
 
         // === Write phase — the ONLY place a DB connection is held. ===
-        return txTemplate.execute(status ->
-                persistBooking(booking, qtyByCategory, categoryById, ticketSpecs, userEmail));
+        return claimWithOneRetry(inputs);
+    }
+
+    /**
+     * Everything the claim transaction needs, resolved before it opens. A
+     * retry starts again from here, never from the entities the failed attempt
+     * built: those were saved into a rolled-back transaction, and saving the
+     * same {@link Booking} a second time fails as an optimistic-lock error.
+     */
+    private record ClaimInputs(String userEmail, String customerName, String phoneNumber, UUID eventId,
+                               UUID tenantUserUuid, BigDecimal total, Map<UUID, Integer> qtyByCategory,
+                               Map<UUID, CategoryLookupDTO> categoryById, List<TicketSpec> ticketSpecs) {
+    }
+
+    /**
+     * Runs the claim transaction, and once more if it failed with a deadlock
+     * or serialization failure. The canonical lock order should make that
+     * impossible; the retry is the backstop for a lock taken somewhere this
+     * service does not control. A second such failure is a 503 the caller can
+     * retry, not the 500 a deadlock used to be. Each attempt builds a fresh
+     * booking with a fresh confirmation number, hold and ticket numbers.
+     */
+    private BookingResponseDTO claimWithOneRetry(ClaimInputs inputs) {
+        try {
+            return claimOnce(inputs);
+        } catch (RuntimeException first) {
+            String sqlState = retryableSqlState(first);
+            if (sqlState == null) {
+                throw first;
+            }
+            log.warn("Claim transaction failed with SQLState {}, retrying once eventId={} categories={}",
+                    sqlState, inputs.eventId(), inputs.qtyByCategory().keySet());
+        }
+        try {
+            BookingResponseDTO created = claimOnce(inputs);
+            recordClaimRetry(BookingMetrics.ClaimRetryOutcome.SUCCEEDED);
+            return created;
+        } catch (RuntimeException second) {
+            String sqlState = retryableSqlState(second);
+            if (sqlState == null) {
+                recordClaimRetry(BookingMetrics.ClaimRetryOutcome.REFUSED);
+                throw second;
+            }
+            recordClaimRetry(BookingMetrics.ClaimRetryOutcome.FAILED);
+            log.warn("Claim retry failed with SQLState {} too, answering 503 eventId={} categories={}",
+                    sqlState, inputs.eventId(), inputs.qtyByCategory().keySet());
+            throw new ApiProblemException(HttpStatus.SERVICE_UNAVAILABLE, TRY_AGAIN,
+                    "We couldn't reserve your tickets just now. Please try again.");
+        }
+    }
+
+    private BookingResponseDTO claimOnce(ClaimInputs inputs) {
+        // Tickets are held for holdTtlMinutes; if no /confirm (= payment) lands
+        // by then, the expiration scheduler flips the booking to CANCELLED and
+        // releases the held tickets back to the category counter.
+        Booking booking = Booking.builder()
+                .userEmail(inputs.userEmail())
+                .customerName(inputs.customerName())
+                .phoneNumber(inputs.phoneNumber())
+                .eventId(inputs.eventId())
+                .tenantUserUuid(inputs.tenantUserUuid())
+                .confirmationNumber(generateConfirmationNumber())
+                .status(Booking.BookingStatus.PENDING)
+                .totalAmount(inputs.total())
+                .expiresAt(LocalDateTime.now(ZoneOffset.UTC).plusMinutes(holdTtlMinutes))
+                .build();
+        return txTemplate.execute(status -> persistBooking(booking, inputs.qtyByCategory(),
+                inputs.categoryById(), inputs.ticketSpecs(), inputs.userEmail()));
+    }
+
+    /** The SQLState that makes {@code ex} worth one retry (40P01 / 40001), else null. */
+    static String retryableSqlState(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof SQLException sql && RETRYABLE_SQL_STATES.contains(sql.getSQLState())) {
+                return sql.getSQLState();
+            }
+        }
+        return null;
+    }
+
+    private void recordClaimRetry(BookingMetrics.ClaimRetryOutcome outcome) {
+        BookingMetrics m = metrics;
+        if (m != null) {
+            m.claimRetry(outcome);
+        }
     }
 
     /**
@@ -242,7 +334,9 @@ public class BookingService {
      * transaction. Extracted from {@link #createBooking} so the DB connection
      * is acquired only for these writes — never across the upstream seat- and
      * event-service calls made during the resolution phase. Runs inside
-     * createBooking's {@code txTemplate.execute} callback.
+     * {@link #claimOnce}'s {@code txTemplate.execute} callback, once per
+     * attempt. {@code qtyByCategory} is in the canonical lock order, so the
+     * counter rows are claimed in it.
      */
     private BookingResponseDTO persistBooking(Booking booking,
                                               Map<UUID, Integer> qtyByCategory,
@@ -334,19 +428,21 @@ public class BookingService {
     }
 
     /**
-     * Return a cancelled/expired/reversed booking's tickets to their category
-     * counters. Idempotent on the normal paths because each booking transitions
-     * to CANCELLED exactly once (the status guards in cancel/expire/reverse),
-     * so release runs once per booking.
+     * The booking row's write lock, then its items, in the caller's
+     * transaction. The lock is taken before anything else so a path that goes
+     * on to release stock takes the booking row before any counter row (the
+     * order {@link StockLedger} documents). The items are one more query:
+     * {@code lockById} cannot fetch-join them (Postgres refuses FOR UPDATE on
+     * the nullable side of an outer join).
      */
-    private void releaseInventory(Booking booking) {
-        if (booking.getItems() == null || booking.getItems().isEmpty()) {
-            return;
-        }
-        Map<UUID, Long> qtyByCategory = booking.getItems().stream()
-                .collect(Collectors.groupingBy(BookingItem::getCategoryId, Collectors.counting()));
-        qtyByCategory.forEach((categoryId, qty) ->
-                categoryInventoryRepository.release(categoryId, qty.intValue()));
+    private Booking lockWithItems(UUID bookingId, String operation) {
+        Booking booking = bookingRepository.lockById(bookingId)
+                .orElseThrow(() -> {
+                    log.warn("{} failed, booking not found bookingId={}", operation, bookingId);
+                    return new NotFoundException("Booking not found");
+                });
+        Hibernate.initialize(booking.getItems());
+        return booking;
     }
 
     // Returns one DTO per booked seat in the category, regardless of booking
@@ -829,11 +925,7 @@ public class BookingService {
     @Transactional
     public BookingResponseDTO cancelBooking(UUID bookingId, String userEmail, boolean isAdmin) {
         log.info("Cancelling booking bookingId={} userEmail={} isAdmin={}", bookingId, userEmail, isAdmin);
-        Booking booking = bookingRepository.findByIdWithItems(bookingId)
-                .orElseThrow(() -> {
-                    log.warn("Cancel failed, booking not found bookingId={}", bookingId);
-                    return new NotFoundException("Booking not found");
-                });
+        Booking booking = lockWithItems(bookingId, "Cancel");
 
         if (!isAdmin && (booking.getUserEmail() == null || !booking.getUserEmail().equals(userEmail))) {
             log.warn("Cancel rejected, access denied bookingId={} requesterEmail={} ownerEmail={}",
@@ -859,8 +951,9 @@ public class BookingService {
 
         // Return the held tickets to their category counters. Runs once: a
         // booking can only transition PENDING -> CANCELLED here (the guards
-        // above reject an already-CANCELLED booking), so no double-release.
-        releaseInventory(booking);
+        // above reject an already-CANCELLED booking, read under the row lock),
+        // so no double-release.
+        stockLedger.release(booking);
 
         eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
 
@@ -890,11 +983,12 @@ public class BookingService {
      *       409 exactly as before) and remembers its {@code @Version};</li>
      *   <li>the release call runs with no transaction — on failure nothing has
      *       been written, as before;</li>
-     *   <li>one write transaction re-reads the booking and refuses with the
+     *   <li>one write transaction LOCKS the booking row (before any counter
+     *       row, the order {@link StockLedger} documents), refuses with the
      *       same {@code ObjectOptimisticLockingFailureException} the old
-     *       commit-time version check threw if ANY change landed since step 1,
-     *       then releases the category counters, sets the flag, flips to
-     *       CANCELLED and publishes {@code BookingCancelled}.</li>
+     *       commit-time version check threw if ANY change landed since step 1
+     *       (a 409 now), then releases the category counters, sets the flag,
+     *       flips to CANCELLED and publishes {@code BookingCancelled}.</li>
      * </ol>
      * The version check is what keeps this as strong as the single transaction
      * was: that one read the row without a lock too, and its only protection
@@ -941,16 +1035,19 @@ public class BookingService {
         }
 
         BookingResponseDTO reversed = txTemplate.execute(status -> {
-            Booking booking = bookingRepository.findByIdWithItems(bookingId)
+            Booking booking = bookingRepository.lockById(bookingId)
                     .orElseThrow(() -> new NotFoundException("Booking not found"));
             if (!Objects.equals(booking.getVersion(), snapshot.getVersion())) {
                 // Changed since the read above — the same refusal the old
-                // single transaction's version-checked UPDATE gave.
+                // single transaction's version-checked UPDATE gave. Compared
+                // under the row lock, so nothing can change it between this
+                // check and the write below.
                 log.warn("Reverse lost a race, booking changed during the release call bookingId={}", bookingId);
                 throw new ObjectOptimisticLockingFailureException(Booking.class, bookingId);
             }
+            Hibernate.initialize(booking.getItems());
             if (!booking.isAvailabilityReleased()) {
-                releaseInventory(booking);
+                stockLedger.release(booking);
                 booking.setAvailabilityReleased(true);
             }
             booking.setStatus(Booking.BookingStatus.CANCELLED);
@@ -1070,11 +1167,10 @@ public class BookingService {
             }
         }
 
-        Booking booking = bookingRepository.findByIdWithItems(bookingId)
-                .orElseThrow(() -> {
-                    log.warn("Confirm failed, booking not found bookingId={}", bookingId);
-                    return new NotFoundException("Booking not found");
-                });
+        // The row lock serialises confirm with the expiry sweep, a cancel and
+        // a second confirm: whoever holds it decides, and the others see what
+        // it decided once it commits.
+        Booking booking = lockWithItems(bookingId, "Confirm");
 
         // CONFIRMED: idempotent replay. payment-service's Idempotency-Key cache
         // holds the original response for 24h, but a retry that lands beyond
@@ -1088,21 +1184,25 @@ public class BookingService {
             return toDTO(booking);
         }
         // CANCELLED is still a real error — a CANCELLED booking can't be confirmed.
+        // That includes a hold the expiry sweep cancelled before this confirm
+        // took the row.
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
             log.warn("Confirm rejected, booking not pending bookingId={} status={}",
                     bookingId, booking.getStatus());
             throw new BookingConflictException("Only pending bookings can be confirmed — this one isn't in that state.");
         }
 
-        // Reject confirms that arrive after the seat hold has lapsed — the
-        // expiration scheduler may not have run yet, but the lock is gone.
+        // A hold whose expiresAt has passed but which is still PENDING is
+        // HONOURED. Its tickets stay claimed until the sweep commits the
+        // cancellation, and the sweep takes this same row lock (skipping a row
+        // that is held), so confirming here cannot oversell: either the sweep
+        // committed first and the check above refused, or this confirm holds
+        // the row and the sweep leaves it alone. Refusing it used to strand a
+        // customer who paid a few seconds late with money taken and no ticket.
         if (booking.getExpiresAt() != null
                 && booking.getExpiresAt().isBefore(LocalDateTime.now(ZoneOffset.UTC))) {
-            log.warn("Confirm rejected, hold expired bookingId={} expiredAt={}",
+            log.info("Confirming a lapsed hold the sweep has not cancelled bookingId={} expiredAt={}",
                     bookingId, booking.getExpiresAt());
-            throw new BookingConflictException(
-                    "Your seat reservation has expired. Please start a new booking and complete payment within "
-                            + holdTtlMinutes + " minutes.");
         }
 
         // Default to pure-cash if the caller didn't pass a payload. This
@@ -1177,6 +1277,12 @@ public class BookingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setEventLookupCache(EventLookupCache eventLookupCache) {
         this.eventLookupCache = eventLookupCache;
+    }
+
+    /** Setter for the same reason; without it the claim retry is simply not counted. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMetrics(BookingMetrics metrics) {
+        this.metrics = metrics;
     }
 
     private EventLookupDTO fetchEventLookup(UUID eventId) {

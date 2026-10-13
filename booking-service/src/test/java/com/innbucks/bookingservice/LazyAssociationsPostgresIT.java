@@ -310,9 +310,10 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         verify(whatsApp, timeout(10_000)).sendEventQrCode(eq("+263772000001"), anyString(), anyString());
         verify(email, timeout(10_000)).sendEmail(eq(f.email), anyString(), anyString(), anyString());
         measured.put("confirm + async delivery", stats.getPrepareStatementCount());
-        // select booking + items, update booking, and the listener's one
-        // fetch-join read after commit.
-        assertThat(stats.getPrepareStatementCount()).isEqualTo(3);
+        // lock the booking row, load its items (lockById cannot fetch-join
+        // them: Postgres refuses FOR UPDATE on an outer join), update the
+        // booking, and the listener's one fetch-join read after commit.
+        assertThat(stats.getPrepareStatementCount()).isEqualTo(4);
 
         stats.clear();
         mvc.perform(post("/bookings/" + b.getId() + "/resend-ticket").header("Authorization", bearer(admin())))
@@ -353,14 +354,16 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         verify(eventServiceClient).releaseAvailability(confirmed.eventId, 2, internalToken);
 
         assertThat(measured.get("PATCH /bookings/internal/{id}/extend-hold")).isEqualTo(2);
-        // select + items, update booking, release the counter, the listener's read.
-        assertThat(measured.get("PATCH /bookings/{id}/cancel + async notice")).isEqualTo(4);
-        // The reverse reads the booking + items TWICE: once in a read-only
-        // transaction before the event-service release (so no connection is
-        // held across it), and again in the write transaction after it, where
-        // its version is compared with the first read. The rest is as for the
-        // cancel: update booking, release the counter, the listener's read.
-        assertThat(measured.get("PATCH /bookings/{id}/reverse")).isEqualTo(5);
+        // lock the booking row, its items, update booking, release the
+        // counter, the listener's read.
+        assertThat(measured.get("PATCH /bookings/{id}/cancel + async notice")).isEqualTo(5);
+        // The reverse reads the booking + items in a read-only transaction
+        // before the event-service release (so no connection is held across
+        // it), then LOCKS the row in the write transaction after it, compares
+        // the version with the first read and loads the items. The rest is as
+        // for the cancel: update booking, release the counter, the listener's
+        // read.
+        assertThat(measured.get("PATCH /bookings/{id}/reverse")).isEqualTo(6);
     }
 
     @Test

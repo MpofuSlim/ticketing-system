@@ -1,7 +1,9 @@
 package com.innbucks.bookingservice.repository;
 
 import com.innbucks.bookingservice.entity.Booking;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -26,6 +28,17 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // bookings across events / over time, so this returns a list rather than
     // an Optional. See GET /bookings/phone/{phoneNumber}.
     List<Booking> findByPhoneNumberOrderByCreatedAtDesc(String phoneNumber);
+
+    // The booking row's write lock. Every path that changes a booking's stock
+    // takes it FIRST, before any category row (StockLedger has the order):
+    // confirm, cancel and the write phase of reverse. No fetch join and no
+    // DISTINCT, because Postgres refuses FOR UPDATE with DISTINCT and on the
+    // nullable side of an outer join, so findByIdWithItems cannot be locked.
+    // The caller loads the items afterwards in the same transaction (one
+    // query). Waits for a lock another transaction holds.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM Booking b WHERE b.id = :id")
+    Optional<Booking> lockById(@Param("id") UUID id);
 
     // PENDING bookings whose seat hold has lapsed. Used by the expiration
     // scheduler to auto-cancel them and publish BookingCancelled events.
@@ -87,8 +100,9 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // open-in-view is off, so every single-booking path that renders tickets
     // loads through here: the ticket delivery listener and the manual resend
     // (which read the items OUTSIDE any transaction — no connection is held
-    // across the WhatsApp/email calls), the by-id views, and the
-    // confirm/cancel/reverse/extend-hold writes. DISTINCT collapses the
+    // across the WhatsApp/email calls), the by-id views, the reverse's
+    // read-only first phase and extend-hold. Not the locking writes: see
+    // lockById. DISTINCT collapses the
     // fetch-join fan-out. Never add a fetch-joined collection to a PAGED
     // query: Hibernate would page in memory (HHH90003004).
     @Query("""

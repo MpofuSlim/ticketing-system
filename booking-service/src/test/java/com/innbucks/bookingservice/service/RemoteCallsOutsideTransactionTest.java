@@ -230,6 +230,10 @@ class RemoteCallsOutsideTransactionTest {
             record("read");
             return Optional.of(booking);
         });
+        when(bookingRepo.lockById(booking.getId())).thenAnswer(inv -> {
+            record("lock");
+            return Optional.of(booking);
+        });
         when(eventServiceClient.releaseAvailability(eq(booking.getEventId()), eq(1), any())).thenAnswer(inv -> {
             record("event-service");
             return ApiResult.ok("released", released());
@@ -248,7 +252,7 @@ class RemoteCallsOutsideTransactionTest {
         assertThat(result.getStatus()).isEqualTo(Booking.BookingStatus.CANCELLED);
         assertThat(booking.isAvailabilityReleased()).isTrue();
         assertThat(calls).containsExactly(
-                "read|true", "event-service|false", "read|true", "save|true", "publish|true");
+                "read|true", "event-service|false", "lock|true", "save|true", "publish|true");
         assertThat(txManager.readOnlyFlags()).containsExactly(true, false);
         assertThat(txManager.outcomes()).containsExactly(COMMITTED, COMMITTED);
     }
@@ -261,9 +265,8 @@ class RemoteCallsOutsideTransactionTest {
         asRead.setId(id);
         Booking asReReadAfterAConcurrentChange = confirmedBooking(4L);
         asReReadAfterAConcurrentChange.setId(id);
-        when(bookingRepo.findByIdWithItems(id))
-                .thenReturn(Optional.of(asRead))
-                .thenReturn(Optional.of(asReReadAfterAConcurrentChange));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(asRead));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(asReReadAfterAConcurrentChange));
         when(eventServiceClient.releaseAvailability(any(), anyInt(), any()))
                 .thenReturn(ApiResult.ok("released", released()));
 
