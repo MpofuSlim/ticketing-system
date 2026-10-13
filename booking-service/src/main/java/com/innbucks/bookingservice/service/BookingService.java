@@ -29,6 +29,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.security.SecureRandom;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -97,6 +98,21 @@ public class BookingService {
     // Spring overrides via @Value at runtime.
     @org.springframework.beans.factory.annotation.Value("${app.booking.hold-ttl-minutes:5}")
     private long holdTtlMinutes = 5;
+
+    // The absolute hold cap (D26): extend-hold refuses a hold that would run
+    // past created_at + this, so no payment instrument is minted for it.
+    // Without it a client re-minting codes could hold tickets for ever
+    // without paying. Refused, never clamped: a hold clamped short under a
+    // live instrument is a payment that lands with no ticket. Set through
+    // setMaxTotalHold below.
+    private Duration maxTotalHold = Duration.ofMinutes(60);
+
+    // Per-call sanity bound on extend-hold: a hold more than this far from
+    // NOW is refused. It sits above the longest rail (card, 33 min), so with
+    // the configured rails it never fires; when it does, a rail's TTL was
+    // raised without raising this (alert HoldExtensionRefused). Set through
+    // setMaxHoldExtension below.
+    private Duration maxHoldExtension = Duration.ofMinutes(45);
 
     // Shared secret passed to event-service on the internal
     // PATCH /events/{id}/availability/release call and the internal event
@@ -1095,47 +1111,111 @@ public class BookingService {
 
     /**
      * Extend a PENDING booking's seat hold to AT LEAST {@code holdUntil} —
-     * called S2S by payment-service the moment it is about to mint an InnBucks
-     * payment code, so the hold provably outlives the code the customer is
-     * shown (hold 5 min vs code 10 min was the paid-but-no-ticket gap: pay
-     * after the hold lapsed -> confirm refused -> money stuck in the ops
-     * queue). Never SHORTENS a hold (max of existing and requested).
+     * called S2S by payment-service just before it mints EVERY payment
+     * instrument (an InnBucks code, an EcoCash prompt, a card checkout), so
+     * the hold provably outlives what the customer is about to pay with. Never
+     * SHORTENS a hold: {@code expiresAt = max(expiresAt, holdUntil)}.
      *
-     * <p>Refuses (409) when the booking is not PENDING or the hold has already
-     * lapsed — the caller then refuses the payment BEFORE any money moves,
-     * which beats resurrecting a hold the sweeper may be cancelling (the
-     * optimistic @Version on Booking arbitrates any direct race).
+     * <p><b>The payment window.</b> The same call stamps
+     * {@code paymentOpenUntil = max(existing, holdUntil)}: because payment-service
+     * asks before every instrument, a stamp in the future reliably means "a
+     * payment may still land", which is what the customer cancel refuses on.
+     *
+     * <p><b>Two caps, both refusals, never clamps.</b> A 409 here makes
+     * payment-service refuse the payment before anything is minted, so the
+     * customer rebooks with no money moved. Clamping the hold and answering 200
+     * would let payment-service mint an instrument that outlives the hold —
+     * the paid-but-no-ticket hole these caps exist to keep closed.
+     * <ul>
+     *   <li>{@code holdUntil} more than {@code app.booking.max-hold-extension}
+     *       (PT45M) from now: a sanity bound above the longest rail (card, 33
+     *       min). Counted {@code max_per_call}, logged at WARN, alerted
+     *       ({@code HoldExtensionRefused}): a rail's TTL went up without this.
+     *       Checked first, because it is a property of the request alone: a
+     *       misconfigured rail on a booking that is also old must still show
+     *       up as the config fault it is.</li>
+     *   <li>{@code holdUntil} past {@code created_at +
+     *       app.booking.max-total-hold} (PT60M, D26): stops a hold being
+     *       renewed for ever by re-minting codes without paying. Counted
+     *       {@code max_total}.</li>
+     * </ul>
+     *
+     * <p>The booking row is locked first ({@link #lockWithItems}), so the
+     * extension serialises with the expiry sweep, a cancel and a confirm. A
+     * hold whose {@code expiresAt} has passed but which is still PENDING is
+     * extended: its tickets stay claimed until the sweep commits, and confirm
+     * honours it too. One the sweep has already cancelled is refused as not
+     * PENDING (409), as is a CONFIRMED one.
      */
     @Transactional
     public BookingResponseDTO extendHold(UUID bookingId, LocalDateTime holdUntil) {
         Objects.requireNonNull(holdUntil, "holdUntil");
-        Booking booking = bookingRepository.findByIdWithItems(bookingId)
-                .orElseThrow(() -> new NotFoundException("Booking not found"));
+        Booking booking = lockWithItems(bookingId, "Extend hold");
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
+            log.warn("Hold extension refused, booking not pending bookingId={} status={}",
+                    bookingId, booking.getStatus());
             throw new BookingConflictException(
                     "This booking's seat hold can no longer be extended — it's not in a PENDING state.");
         }
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        // Defence-in-depth on top of the DTO's @Future. Without this check an
-        // S2S caller passing a past timestamp would silently SHRINK the hold
-        // (the isBefore-guard below would then refuse to apply it, but the
-        // first-pass NPE / quiet-no-op shape is fragile — fail loudly instead).
-        // Bean validation runs only on the @Valid-bound controller call.
+        // Defence-in-depth on top of the DTO's @Future. Bean validation runs
+        // only on the @Valid-bound controller call; a past timestamp from any
+        // other caller is a bug to fail loudly on, not a quiet no-op.
         if (holdUntil.isBefore(now)) {
             throw new BadRequestException("holdUntil must be in the future.");
         }
-        if (booking.getExpiresAt() != null && booking.getExpiresAt().isBefore(now)) {
-            throw new BookingConflictException(
-                    "Your seat reservation has expired. Please start a new booking and complete payment within "
-                            + holdTtlMinutes + " minutes.");
+        LocalDateTime perCallBound = now.plus(maxHoldExtension);
+        if (holdUntil.isAfter(perCallBound)) {
+            log.warn("Hold extension refused, more than {} from now — has a payment rail's TTL been raised "
+                            + "above app.booking.max-hold-extension? bookingId={} holdUntil={} bound={}",
+                    maxHoldExtension, bookingId, holdUntil, perCallBound);
+            recordHoldExtensionRefused(BookingMetrics.HoldExtensionRefusal.MAX_PER_CALL);
+            throw holdNoLongerExtendable();
         }
+        // created_at is stamped by @PrePersist on every booking; a row without
+        // one cannot be measured against the cap, so it fails closed.
+        LocalDateTime totalCap = booking.getCreatedAt() == null ? null : booking.getCreatedAt().plus(maxTotalHold);
+        if (totalCap == null || holdUntil.isAfter(totalCap)) {
+            log.info("Hold extension refused, past {} from booking bookingId={} createdAt={} holdUntil={}",
+                    maxTotalHold, bookingId, booking.getCreatedAt(), holdUntil);
+            recordHoldExtensionRefused(BookingMetrics.HoldExtensionRefusal.MAX_TOTAL);
+            throw holdNoLongerExtendable();
+        }
+
+        boolean changed = false;
         if (booking.getExpiresAt() == null || booking.getExpiresAt().isBefore(holdUntil)) {
-            log.info("Extending seat hold bookingId={} from={} to={}",
-                    bookingId, booking.getExpiresAt(), holdUntil);
+            log.info("Extending seat hold bookingId={} from={} to={}{}", bookingId, booking.getExpiresAt(),
+                    holdUntil, booking.getExpiresAt() != null && booking.getExpiresAt().isBefore(now)
+                            ? " (the hold had lapsed; the sweep had not cancelled it)" : "");
             booking.setExpiresAt(holdUntil);
+            changed = true;
+        }
+        if (booking.getPaymentOpenUntil() == null || booking.getPaymentOpenUntil().isBefore(holdUntil)) {
+            booking.setPaymentOpenUntil(holdUntil);
+            changed = true;
+        }
+        if (changed) {
             booking = bookingRepository.save(booking);
         }
         return toDTO(booking);
+    }
+
+    /**
+     * The 409 every refused extension answers. payment-service maps a 409
+     * here to "Your booking has expired" and mints nothing; the wording is
+     * the one the lapsed-hold refusal always used.
+     */
+    private BookingConflictException holdNoLongerExtendable() {
+        return new BookingConflictException(
+                "Your seat reservation has expired. Please start a new booking and complete payment within "
+                        + holdTtlMinutes + " minutes.");
+    }
+
+    private void recordHoldExtensionRefused(BookingMetrics.HoldExtensionRefusal reason) {
+        BookingMetrics m = metrics;
+        if (m != null) {
+            m.holdExtensionRefused(reason);
+        }
     }
 
     // @Transactional here too: the call below is a SELF-invocation, which
@@ -1289,6 +1369,21 @@ public class BookingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setMetrics(BookingMetrics metrics) {
         this.metrics = metrics;
+    }
+
+    // The two hold caps are parsed here rather than injected as Duration: a
+    // @Value Duration needs Spring Boot's conversion service on the bean
+    // factory, which a context built without SpringApplication (several tests
+    // build one) does not have. Both ISO-8601 (PT60M) and the simple form
+    // (60m) are accepted, as for any Boot Duration property.
+    @org.springframework.beans.factory.annotation.Value("${app.booking.max-total-hold:PT60M}")
+    void setMaxTotalHold(String value) {
+        this.maxTotalHold = org.springframework.boot.convert.DurationStyle.detectAndParse(value);
+    }
+
+    @org.springframework.beans.factory.annotation.Value("${app.booking.max-hold-extension:PT45M}")
+    void setMaxHoldExtension(String value) {
+        this.maxHoldExtension = org.springframework.boot.convert.DurationStyle.detectAndParse(value);
     }
 
     private EventLookupDTO fetchEventLookup(UUID eventId) {

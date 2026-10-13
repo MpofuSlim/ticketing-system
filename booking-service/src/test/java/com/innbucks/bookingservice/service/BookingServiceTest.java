@@ -911,7 +911,7 @@ class BookingServiceTest {
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
                 .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(3))
                 .build();
-        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.extendHold(id, java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(1)));

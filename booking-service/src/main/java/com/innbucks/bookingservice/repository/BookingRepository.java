@@ -33,7 +33,8 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
 
     // The booking row's write lock. Every path that changes a booking's stock
     // takes it FIRST, before any category row (StockLedger has the order):
-    // confirm, cancel and the write phase of reverse. No fetch join and no
+    // confirm, cancel, extend-hold and the write phase of reverse. No fetch
+    // join and no
     // DISTINCT, because Postgres refuses FOR UPDATE with DISTINCT and on the
     // nullable side of an outer join, so findByIdWithItems cannot be locked.
     // The caller loads the items afterwards in the same transaction (one
@@ -143,9 +144,9 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // open-in-view is off, so every single-booking path that renders tickets
     // loads through here: the ticket delivery listener and the manual resend
     // (which read the items OUTSIDE any transaction — no connection is held
-    // across the WhatsApp/email calls), the by-id views, the reverse's
-    // read-only first phase and extend-hold. Not the locking writes: see
-    // lockById. DISTINCT collapses the
+    // across the WhatsApp/email calls), the by-id views and the reverse's
+    // read-only first phase. Not the locking writes: see lockById. DISTINCT
+    // collapses the
     // fetch-join fan-out. Never add a fetch-joined collection to a PAGED
     // query: Hibernate would page in memory (HHH90003004).
     @Query("""

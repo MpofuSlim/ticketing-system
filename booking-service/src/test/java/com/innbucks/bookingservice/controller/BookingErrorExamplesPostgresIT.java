@@ -26,8 +26,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_BAD_INTERNAL_TOKEN;
-import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_CONCURRENT_UPDATE;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_FORBIDDEN;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_HOLD_CAP_REACHED;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_HOLD_NOT_EXTENDABLE;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_INVALID_JWT;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_AN_OBJECT;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_FOUND;
@@ -47,11 +48,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>The extend-hold race is the one that matters most. payment-service
  * reads its 409 as "the booking expired, refuse the payment", where a 500
- * reads as an outage. That 409 depends on a chain no unit test covers: the
- * sweep's native UPDATE bumps {@code version}, extend-hold's version-checked
- * UPDATE then matches no row, Hibernate fails the commit, Spring translates
- * it, and the global handler answers {@code CONCURRENT_UPDATE}. Break any
- * link and the race goes back to a 500.
+ * reads as an outage. Since H2 extend-hold takes the booking row's lock before
+ * it reads, so against a sweep holding that row it waits, then reads what the
+ * sweep committed and refuses it as not PENDING. (Under H1 it read without a
+ * lock and lost at its version-checked UPDATE: {@code CONCURRENT_UPDATE}.)
+ * Without the lock that race is a 200 that writes the booking back to PENDING
+ * over the cancellation, or — without the sweep's version bump — a 500.
  */
 class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
 
@@ -78,7 +80,7 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
     // ---- extend-hold -------------------------------------------------------------
 
     @Test
-    void extendHold_thatTheExpirySweepCancelsUnderIt_is409ConcurrentUpdate() throws Exception {
+    void extendHold_thatTheExpirySweepCancelsUnderIt_waitsForTheRow_andIsTheDocumented409() throws Exception {
         Booking hold = seedBooking(Booking.BookingStatus.PENDING,
                 LocalDateTime.now(ZoneOffset.UTC).plusMinutes(1), category);
         CountDownLatch sweepHasTheRow = new CountDownLatch(1);
@@ -98,8 +100,8 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
         }));
         assertThat(sweepHasTheRow.await(10, TimeUnit.SECONDS)).isTrue();
 
-        // extend-hold reads the row (a plain read does not wait for the lock),
-        // finds it PENDING and not yet lapsed, and blocks at its UPDATE.
+        // extend-hold locks the row before it reads it, so it waits for the
+        // sweep rather than reading the PENDING row the sweep is cancelling.
         String holdUntil = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(10)
                 .truncatedTo(ChronoUnit.SECONDS) + "Z";
         Future<MvcResult> extend = caller.submit(() -> mvc.perform(
@@ -108,7 +110,7 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"holdUntil\":\"" + holdUntil + "\"}")).andReturn());
         awaitALockWaiter();
-        assertThat(extend.isDone()).as("extend-hold must be waiting at its UPDATE").isFalse();
+        assertThat(extend.isDone()).as("extend-hold must be waiting for the row lock").isFalse();
 
         sweepMayCommit.countDown();
         sweep.get(10, TimeUnit.SECONDS);
@@ -117,13 +119,33 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
         assertThat(result.getResponse().getStatus())
                 .as(result.getResponse().getContentAsString()).isEqualTo(409);
         assertThat(result.getResponse().getContentAsString()).as("the documented body")
-                .isEqualToIgnoringWhitespace(EXAMPLE_CONCURRENT_UPDATE);
+                .isEqualToIgnoringWhitespace(EXAMPLE_HOLD_NOT_EXTENDABLE);
 
         // The sweep's cancellation stands; extend-hold wrote nothing over it.
         assertThat(statusOf(hold.getId())).isEqualTo("CANCELLED");
         assertThat(jdbc.queryForObject("SELECT expires_at FROM bookings WHERE id = ?", LocalDateTime.class,
                 hold.getId())).isNull();
         assertThat(remaining(category)).as("released once, by the sweep").isEqualTo(6);
+    }
+
+    @Test
+    void extendHold_pastTheHoldCap_isTheDocumented409_andWritesNothing() throws Exception {
+        Booking hold = seedBooking(Booking.BookingStatus.PENDING,
+                LocalDateTime.now(ZoneOffset.UTC).plusMinutes(2), category);
+        jdbc.update("UPDATE bookings SET created_at = ? WHERE id = ?",
+                LocalDateTime.now(ZoneOffset.UTC).minusMinutes(50), hold.getId());
+
+        // 50 minutes old + a 13-minute code = past the 60-minute cap.
+        mvc.perform(patch("/bookings/internal/" + hold.getId() + "/extend-hold")
+                        .header("X-Internal-Token", internalToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"holdUntil\":\"" + LocalDateTime.now(ZoneOffset.UTC).plusMinutes(13)
+                                .truncatedTo(ChronoUnit.SECONDS) + "Z\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(content().json(EXAMPLE_HOLD_CAP_REACHED, JsonCompareMode.STRICT));
+
+        assertThat(jdbc.queryForObject("SELECT payment_open_until FROM bookings WHERE id = ?",
+                LocalDateTime.class, hold.getId())).isNull();
     }
 
     @Test

@@ -112,6 +112,13 @@ public class BookingController {
     static final String EXAMPLE_UNREADABLE_HOLD_UNTIL = """
             { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "holdUntil": "Must be an ISO-8601 date-time." } }
             """;
+    static final String EXAMPLE_HOLD_NOT_EXTENDABLE = """
+            { "code": "409 CONFLICT", "message": "This booking's seat hold can no longer be extended — it's not in a PENDING state.", "data": null }
+            """;
+    // The default 5-minute hold; the number is app.booking.hold-ttl-minutes.
+    static final String EXAMPLE_HOLD_CAP_REACHED = """
+            { "code": "409 CONFLICT", "message": "Your seat reservation has expired. Please start a new booking and complete payment within 5 minutes.", "data": null }
+            """;
 
     @PostMapping
     @Operation(summary = "Create booking", description = "Creates a new pending booking. The phone number is taken from the JWT when present, otherwise from the request body's `phoneNumber`. " +
@@ -773,17 +780,26 @@ public class BookingController {
     }
 
     /**
-     * S2S: payment-service extends the seat hold to outlive the InnBucks
-     * payment code it is about to mint (hold 5 min vs code 10 min was the
-     * paid-but-no-ticket gap). Same internal-token discipline as the GET
-     * above; 409 when the booking is no longer PENDING or the hold already
-     * lapsed — the caller refuses the payment before any money moves.
+     * S2S: payment-service extends the seat hold to outlive the payment
+     * instrument it is about to mint (hold 5 min vs code 10 min was the
+     * paid-but-no-ticket gap), and the call stamps the booking's payment
+     * window. Same internal-token discipline as the GET above; 409 when the
+     * booking is no longer PENDING or the hold asked for is past a cap — the
+     * caller refuses the payment before any money moves.
      */
     @org.springframework.web.bind.annotation.PatchMapping("/internal/{id}/extend-hold")
     @SecurityRequirements()
     @Operation(summary = "Extend seat hold (internal S2S)",
-            description = "payment-service calls this before minting a payment code so the hold provably "
-                    + "outlives the code. Never shortens a hold. Authenticated with the shared "
+            description = "payment-service calls this before minting EVERY payment instrument (InnBucks code, "
+                    + "EcoCash prompt, card checkout) so the hold provably outlives it. Locks the booking row. "
+                    + "Never shortens a hold (expiresAt = max(expiresAt, holdUntil)), and records the payment "
+                    + "window (paymentOpenUntil = max(paymentOpenUntil, holdUntil)), during which the customer "
+                    + "cancel is refused. A PENDING hold whose expiresAt has passed but which the expiry sweep "
+                    + "has not cancelled is extended.\n\n"
+                    + "Two caps, both REFUSED with a 409 and never clamped (a hold clamped short under a live "
+                    + "instrument is a payment that lands with no ticket): holdUntil more than "
+                    + "app.booking.max-hold-extension (PT45M) from now, and holdUntil past the booking's "
+                    + "createdAt + app.booking.max-total-hold (PT60M). Authenticated with the shared "
                     + "X-Internal-Token; denied at the gateway edge.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
@@ -811,16 +827,14 @@ public class BookingController {
                             @ExampleObject(name = "Body is JSON but not one object (e.g. an array)", value = EXAMPLE_NOT_AN_OBJECT)
                     })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
-                    description = "Booking not PENDING, hold already expired, or the expiry sweep cancelled it "
-                            + "while this call was extending it (CONCURRENT_UPDATE). Refuse the payment either way.",
+                    description = "Booking not PENDING (paid, or cancelled — by the expiry sweep too, which this "
+                            + "call waits for when it holds the row), or the hold asked for is past a cap: more "
+                            + "than 45 minutes from now, or past 60 minutes from the booking. Nothing was written; "
+                            + "refuse the payment either way.",
                     content = @Content(mediaType = "application/json", examples = {
-                            @ExampleObject(name = "Not PENDING", value = """
-                                    { "code": "409 CONFLICT", "message": "This booking's seat hold can no longer be extended — it's not in a PENDING state.", "data": null }
-                                    """),
-                            @ExampleObject(name = "Hold already expired", value = """
-                                    { "code": "409 CONFLICT", "message": "Your seat reservation has expired. Please start a new booking and complete payment within 5 minutes.", "data": null }
-                                    """),
-                            @ExampleObject(name = "Lost a race with the expiry sweep", value = EXAMPLE_CONCURRENT_UPDATE)
+                            @ExampleObject(name = "Not PENDING", value = EXAMPLE_HOLD_NOT_EXTENDABLE),
+                            @ExampleObject(name = "Past a hold cap (60 min from booking, or 45 min from now)",
+                                    value = EXAMPLE_HOLD_CAP_REACHED)
                     }))
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> extendHoldInternal(
