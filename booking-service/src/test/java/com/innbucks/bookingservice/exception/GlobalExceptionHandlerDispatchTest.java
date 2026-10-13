@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -45,6 +46,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 class GlobalExceptionHandlerDispatchTest {
 
+    private static final String INTERNAL_TOKEN = "dispatch-test-internal-token";
+
     private final BookingService bookingService = mock(BookingService.class);
     private MockMvc mvc;
 
@@ -72,6 +75,11 @@ class GlobalExceptionHandlerDispatchTest {
             throw new ObjectOptimisticLockingFailureException(Booking.class, UUID.randomUUID());
         }
 
+        @GetMapping("/probe/lost-race-untranslated")
+        String lostRaceUntranslated() {
+            throw new jakarta.persistence.OptimisticLockException("Row was updated or deleted by another transaction");
+        }
+
         @GetMapping("/probe/problem")
         String problem() {
             throw new ApiProblemException(HttpStatus.SERVICE_UNAVAILABLE, "TRY_AGAIN",
@@ -89,6 +97,7 @@ class GlobalExceptionHandlerDispatchTest {
     void setUp() {
         BookingController bookings = new BookingController(bookingService, mock(UserServiceClient.class),
                 mock(EventChangeNotificationService.class));
+        ReflectionTestUtils.setField(bookings, "expectedInternalToken", INTERNAL_TOKEN);
         mvc = MockMvcBuilders.standaloneSetup(new ProbeController(), bookings)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
@@ -135,6 +144,32 @@ class GlobalExceptionHandlerDispatchTest {
     }
 
     @Test
+    void wellFormedJsonOfTheWrongKind_isNotCalledInvalidJson() throws Exception {
+        // Valid JSON, but not the object the endpoint takes: the client has a
+        // shape to fix, not a syntax error. The value is never echoed.
+        for (String body : List.of("[]", "[{\"eventId\":\"%s\"}]".formatted(UUID.randomUUID()),
+                "\"+263771234567\"", "263771234567", "true",
+                // A second value after the object (Jackson 3 refuses trailing tokens).
+                "{\"eventId\":\"%s\"} {\"phone\":\"+263771234567\"}".formatted(UUID.randomUUID()))) {
+            mvc.perform(post("/probe").contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("Validation failed"))
+                    .andExpect(jsonPath("$.data.body").value("The request body must be a single JSON object."))
+                    .andExpect(result -> org.assertj.core.api.Assertions
+                            .assertThat(result.getResponse().getContentAsString()).doesNotContain("263771234567"));
+        }
+    }
+
+    @Test
+    void theRealConfirm_anArrayBody_isAShapeError_beforeTheServiceIsReached() throws Exception {
+        mvc.perform(patch("/bookings/internal/" + UUID.randomUUID() + "/confirm")
+                        .header("X-Internal-Token", "any").contentType(MediaType.APPLICATION_JSON).content("[]"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.body").value("The request body must be a single JSON object."));
+        verifyNoInteractions(bookingService);
+    }
+
+    @Test
     void theRealCreateBooking_badCategoryId_is400_beforeTheServiceIsReached() throws Exception {
         mvc.perform(post("/bookings").contentType(MediaType.APPLICATION_JSON).content("""
                         {"eventId":"%s","customerName":"Rufaro Moyo","phoneNumber":"+263771234567",
@@ -175,6 +210,26 @@ class GlobalExceptionHandlerDispatchTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("409 CONFLICT"))
                 .andExpect(jsonPath("$.data.errorCode").value("CONCURRENT_UPDATE"));
+
+        // The raw JPA exception, as an auto-flush raises it, is the same 409.
+        mvc.perform(get("/probe/lost-race-untranslated"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.data.errorCode").value("CONCURRENT_UPDATE"));
+    }
+
+    @Test
+    void theRealConfirm_losingARace_isTheGlobal409_notTheOldControllerLocalBody() throws Exception {
+        // Confirm's own catch is gone: under the row lock the race cannot
+        // happen, and if a lost race ever surfaces it gets the one shape every
+        // endpoint uses, not "Booking already confirmed by a concurrent request".
+        when(bookingService.confirmBooking(any(), any()))
+                .thenThrow(new jakarta.persistence.OptimisticLockException("lost"));
+        mvc.perform(patch("/bookings/internal/" + UUID.randomUUID() + "/confirm")
+                        .header("X-Internal-Token", INTERNAL_TOKEN))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.data.errorCode").value("CONCURRENT_UPDATE"))
+                .andExpect(jsonPath("$.message").value(
+                        "This booking was changed by another request at the same time. Please refresh it and try again."));
     }
 
     @Test

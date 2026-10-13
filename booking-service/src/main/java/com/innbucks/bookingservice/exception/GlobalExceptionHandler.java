@@ -104,9 +104,15 @@ public class GlobalExceptionHandler {
      * only path that caught it, in its controller; a reversal racing another
      * change and an extend-hold racing the expiry sweep were 500s. The request
      * is safe to retry after re-reading the booking.
+     *
+     * <p>Spring translates the failure when it surfaces through a repository
+     * or at commit; the raw JPA exception is listed too because a flush
+     * Hibernate triggers by itself (an auto-flush before an unrelated query)
+     * reaches the controller untranslated. Confirm's own catch covered both;
+     * this handler replaces it.
      */
-    @ExceptionHandler(OptimisticLockingFailureException.class)
-    public ResponseEntity<ApiResult<Map<String, Object>>> handleOptimisticLock(OptimisticLockingFailureException ex) {
+    @ExceptionHandler({OptimisticLockingFailureException.class, jakarta.persistence.OptimisticLockException.class})
+    public ResponseEntity<ApiResult<Map<String, Object>>> handleOptimisticLock(RuntimeException ex) {
         log.warn("Optimistic lock conflict: {}", ex.getClass().getSimpleName());
         return problem(new ApiProblemException(HttpStatus.CONFLICT, CONCURRENT_UPDATE,
                 "This booking was changed by another request at the same time. Please refresh it and try again."));
@@ -135,7 +141,8 @@ public class GlobalExceptionHandler {
     /**
      * {@code {"<jackson path>": "<what it must be>"}} for a body Jackson
      * rejected, or {@code {"body": …}} when the failure has no field: broken
-     * JSON, or no body at all.
+     * JSON, well-formed JSON of the wrong kind ({@code []}, a bare string or
+     * number, a second value after the object), or no body at all.
      */
     private static Map<String, String> unreadableFields(HttpMessageNotReadableException ex) {
         Map<String, String> fields = new LinkedHashMap<>();
@@ -147,6 +154,10 @@ public class GlobalExceptionHandler {
                     fields.put(path, describe(t));
                     return fields;
                 }
+                if (t instanceof tools.jackson.databind.exc.MismatchedInputException mismatch) {
+                    fields.put("body", wrongShape(mismatch.getTargetType()));
+                    return fields;
+                }
                 break;
             }
             if (t instanceof com.fasterxml.jackson.databind.JsonMappingException jackson) {
@@ -156,6 +167,10 @@ public class GlobalExceptionHandler {
                     fields.put(path, describe(t));
                     return fields;
                 }
+                if (t instanceof com.fasterxml.jackson.databind.exc.MismatchedInputException mismatch) {
+                    fields.put("body", wrongShape(mismatch.getTargetType()));
+                    return fields;
+                }
                 break;
             }
         }
@@ -163,6 +178,19 @@ public class GlobalExceptionHandler {
                 ? "A request body is required."
                 : "The request body is not valid JSON.");
         return fields;
+    }
+
+    /**
+     * The body parsed, but as the wrong kind of value: a mismatch with no
+     * field path is about the whole body. Telling that client its JSON is
+     * invalid sends them hunting for a syntax error that is not there.
+     * "Single" also covers a second value after the object, which Jackson 3
+     * refuses the same way (FAIL_ON_TRAILING_TOKENS).
+     */
+    private static String wrongShape(Class<?> rootType) {
+        return rootType != null && (Collection.class.isAssignableFrom(rootType) || rootType.isArray())
+                ? "The request body must be a single JSON array."
+                : "The request body must be a single JSON object.";
     }
 
     private record PathStep(String property, int index) {

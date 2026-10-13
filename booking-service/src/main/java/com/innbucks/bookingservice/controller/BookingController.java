@@ -1579,24 +1579,14 @@ public class BookingController {
         log.info("PATCH /bookings/{}/confirm pointsToUse={} cashAmount={}", id,
                 request == null ? null : request.getPointsToUse(),
                 request == null ? null : request.getCashAmount());
-        try {
-            return ResponseEntity.ok(ApiResult.ok("Booking confirmed successfully",
-                    bookingService.confirmBooking(id, request)));
-        } catch (org.springframework.orm.ObjectOptimisticLockingFailureException
-                | jakarta.persistence.OptimisticLockException ex) {
-            // Two confirms raced; the loser sees zero-row UPDATE. Surface as
-            // 409 so the caller (payment-service) knows the booking has
-            // already been confirmed by the other side of the race — same
-            // resolution as the optimistic-replay case in our idempotency
-            // contract.
-            log.warn("Optimistic-lock collision on PATCH /bookings/{}/confirm — booking already confirmed", id);
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(ApiResult.<BookingResponseDTO>builder()
-                            .code("409 CONFLICT")
-                            .message("Booking already confirmed by a concurrent request")
-                            .data(null)
-                            .build());
-        }
+        // No optimistic-lock catch here any more. Confirm holds the booking
+        // row lock from its read to its commit, so a second confirm waits and
+        // gets the CONFIRMED replay (200) instead of a zero-row UPDATE; the
+        // old "Booking already confirmed by a concurrent request" 409 cannot
+        // happen. If an optimistic failure ever does surface, the global
+        // handler answers it as every other endpoint does (409 CONCURRENT_UPDATE).
+        return ResponseEntity.ok(ApiResult.ok("Booking confirmed successfully",
+                bookingService.confirmBooking(id, request)));
     }
 
     @PostMapping("/internal/events/{eventId}/change-notification")
