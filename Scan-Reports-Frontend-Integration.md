@@ -120,7 +120,7 @@ endpoints also take `page` (default `0`) and `size` (default `20`, **max 100**).
         "id": "9b1f3c2e-6a47-4f7c-9d2b-1d6f0a1e5b91",
         "attemptedAt": "2026-09-09T08:10:22+02:00",
         "outcome": "ALLOWED",
-        "ticketNumber": "20260901-08642P",
+        "ticketNumber": "20260901-6WJ2N-4QE8S",
         "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
         "bookingId": "8d2c3e4a-1f5b-46a7-8c9d-0e1f2a3b4c5d",
         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
@@ -139,6 +139,10 @@ endpoints also take `page` (default `0`) and `size` (default `20`, **max 100**).
 
 Rows are **newest first**. `bookingItemId` / `bookingId` / `eventId` are `null`
 when the ticket lookup failed (i.e. `TICKET_NOT_FOUND`).
+
+`ticketNumber` is the value as scanned: `yyyyMMdd-XXXXX-XXXXX` for tickets issued
+now, `yyyyMMdd-DDDDDL` (e.g. `20260901-08642P`) for older ones, which stay valid —
+or whatever was typed, on a `TICKET_NOT_FOUND` row. Display it; never parse it.
 
 ### Stats response
 

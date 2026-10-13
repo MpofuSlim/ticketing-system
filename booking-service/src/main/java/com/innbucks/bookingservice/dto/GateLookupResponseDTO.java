@@ -58,7 +58,7 @@ public class GateLookupResponseDTO {
     @Schema(name = "GateLookupTicket")
     public static class Ticket {
 
-        @Schema(example = "20260901-48291X",
+        @Schema(example = "20260901-7KQ4M-9XZ2B",
                 description = "Send this to POST /tickets/scan to admit the holder.")
         private String ticketNumber;
 

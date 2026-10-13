@@ -155,7 +155,7 @@ public class BookingController {
                                             "rowLabel": "GA",
                                             "seatNumber": 1,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A",
+                                            "ticketNumber": "20260502-3FQ7M-X9K2D",
                                             "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)",
                                             "attendeeName": null
                                           },
@@ -166,7 +166,7 @@ public class BookingController {
                                             "rowLabel": "GA",
                                             "seatNumber": 2,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-67890B",
+                                            "ticketNumber": "20260502-8TN4W-2HC6R",
                                             "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)",
                                             "attendeeName": "Tendai Ncube",
                                             "attendeeEmail": "tendai@example.com",
@@ -212,10 +212,11 @@ public class BookingController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "503",
                     description = "Nothing was held; the same request can be sent again. TRY_AGAIN: the hold's database "
-                            + "transaction lost a deadlock (or serialization) race twice in a row. Without errorCode: "
-                            + "seat-service could not be asked for the category.",
+                            + "transaction lost a deadlock (or serialization) race twice in a row, or a ticket or "
+                            + "confirmation number it generated was already taken on every one of its retries. "
+                            + "Without errorCode: seat-service could not be asked for the category.",
                     content = @Content(mediaType = "application/json", examples = {
-                            @ExampleObject(name = "Hold lost a lock race twice (TRY_AGAIN)", value = """
+                            @ExampleObject(name = "Hold lost a lock race twice, or its references kept clashing (TRY_AGAIN)", value = """
                                     { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't reserve your tickets just now. Please try again.", "data": { "errorCode": "TRY_AGAIN" } }
                                     """),
                             @ExampleObject(name = "seat-service unavailable", value = """
@@ -391,7 +392,7 @@ public class BookingController {
                                               "rowLabel": "A",
                                               "seatNumber": 12,
                                               "priceAtBooking": 100.00,
-                                              "ticketNumber": "20260502-12345A",
+                                              "ticketNumber": "20260502-3FQ7M-X9K2D",
                                               "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                             },
                                             {
@@ -401,7 +402,7 @@ public class BookingController {
                                               "rowLabel": "A",
                                               "seatNumber": 13,
                                               "priceAtBooking": 100.00,
-                                              "ticketNumber": "20260502-12346B",
+                                              "ticketNumber": "20260502-8TN4W-2HC6R",
                                               "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                             }
                                           ],
@@ -450,7 +451,7 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A",
+                                            "ticketNumber": "20260502-3FQ7M-X9K2D",
                                             "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                           }
                                         ],
@@ -522,7 +523,7 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A",
+                                            "ticketNumber": "20260502-3FQ7M-X9K2D",
                                             "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                           }
                                         ],
@@ -643,7 +644,7 @@ public class BookingController {
                                               "rowLabel": "A",
                                               "seatNumber": 12,
                                               "priceAtBooking": 100.00,
-                                              "ticketNumber": "20260502-12345A",
+                                              "ticketNumber": "20260502-3FQ7M-X9K2D",
                                               "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                             }
                                           ],
@@ -916,7 +917,7 @@ public class BookingController {
                                           "categoryName": "VIP",
                                           "rowLabel": "GA",
                                           "seatNumber": 1,
-                                          "ticketNumber": "20260502-12345A",
+                                          "ticketNumber": "20260502-3FQ7M-X9K2D",
                                           "priceAtBooking": 100.00,
                                           "attendeeName": null,
                                           "attendeeEmail": null,
@@ -939,7 +940,7 @@ public class BookingController {
                                           "categoryName": "VIP",
                                           "rowLabel": "GA",
                                           "seatNumber": 2,
-                                          "ticketNumber": "20260502-67890B",
+                                          "ticketNumber": "20260502-8TN4W-2HC6R",
                                           "priceAtBooking": 100.00,
                                           "attendeeName": "Tendai Ncube",
                                           "attendeeEmail": "tendai@example.com",
@@ -1006,7 +1007,7 @@ public class BookingController {
                                           "categoryName": "VIP",
                                           "rowLabel": "GA",
                                           "seatNumber": 1,
-                                          "ticketNumber": "20260502-12345A",
+                                          "ticketNumber": "20260502-3FQ7M-X9K2D",
                                           "priceAtBooking": 100.00,
                                           "attendeeName": null,
                                           "attendeeEmail": null,
@@ -1029,7 +1030,7 @@ public class BookingController {
                                           "categoryName": "VIP",
                                           "rowLabel": "GA",
                                           "seatNumber": 2,
-                                          "ticketNumber": "20260502-67890B",
+                                          "ticketNumber": "20260502-8TN4W-2HC6R",
                                           "priceAtBooking": 100.00,
                                           "attendeeName": "Tendai Ncube",
                                           "attendeeEmail": "tendai@example.com",
@@ -1046,13 +1047,13 @@ public class BookingController {
                                           "phoneNumber": "+263773000000",
                                           "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                           "status": "PENDING",
-                                          "confirmationNumber": "INN-20260502-IJ56KL",
+                                          "confirmationNumber": "INN-20260502-1F56CA",
                                           "seatId": "33333333-4444-5555-6666-777777777777",
                                           "categoryId": "9e2c5b4f-2d1f-4a28-8b1c-2e5c8a7b6d22",
                                           "categoryName": "GA",
                                           "rowLabel": "GA",
                                           "seatNumber": 1,
-                                          "ticketNumber": "20260502-99999C",
+                                          "ticketNumber": "20260502-R5V9Z-0YB3G",
                                           "priceAtBooking": 60.00,
                                           "attendeeName": null,
                                           "attendeeEmail": null,
@@ -1228,7 +1229,7 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A",
+                                            "ticketNumber": "20260502-3FQ7M-X9K2D",
                                             "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                           }
                                         ],
@@ -1304,7 +1305,7 @@ public class BookingController {
                                               "rowLabel": "A",
                                               "seatNumber": 12,
                                               "priceAtBooking": 100.00,
-                                              "ticketNumber": "20260502-12345A",
+                                              "ticketNumber": "20260502-3FQ7M-X9K2D",
                                               "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                             }
                                           ],
@@ -1389,7 +1390,7 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A",
+                                            "ticketNumber": "20260502-3FQ7M-X9K2D",
                                             "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                           }
                                         ],
@@ -1485,7 +1486,7 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A",
+                                            "ticketNumber": "20260502-3FQ7M-X9K2D",
                                             "qrCode": "data:image/png;base64,...(truncated)"
                                           }
                                         ],
@@ -1569,7 +1570,7 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A",
+                                            "ticketNumber": "20260502-3FQ7M-X9K2D",
                                             "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                           }
                                         ],

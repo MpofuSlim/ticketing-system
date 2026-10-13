@@ -40,7 +40,7 @@ public class ScanTicketResponseDTO {
     @Schema(description = "Outcome of the scan.")
     private Status status;
 
-    @Schema(example = "20260619-48291X", description = "The ticket that was scanned (echoed back).")
+    @Schema(example = "20260619-7KQ4M-9XZ2B", description = "The ticket that was scanned (echoed back).")
     private String ticketNumber;
 
     @Schema(nullable = true, description = "Internal booking item id — included for any successful or " +

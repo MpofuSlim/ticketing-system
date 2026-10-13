@@ -413,7 +413,7 @@ public class TicketDeliveryService {
     /**
      * The attendee's variant of {@link #buildEventNameField}: ONE ticket, in
      * their name, with who booked it — same single-line rule.
-     * <pre>Harare Jazz Festival (ticket for Tendai Ncube, booked by Alice Moyo, booking INN-..., 20260502-12345A)</pre>
+     * <pre>Harare Jazz Festival (ticket for Tendai Ncube, booked by Alice Moyo, booking INN-..., 20260502-3FQ7M-X9K2D)</pre>
      */
     private String buildAttendeeEventNameField(Booking booking, BookingItem item, String eventTitle) {
         StringBuilder sb = new StringBuilder(eventTitle)
