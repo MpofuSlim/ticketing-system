@@ -2823,6 +2823,16 @@ it pins the four wire facts that are easy to get wrong. Non-negotiables:
   ("no payment for this checkout") is the NORMAL pre-submission answer and
   only counts as positively-unpaid once the checkout's 30-minute ceiling has
   passed.
+- **The order hold is sized BEFORE prepare; the ledger deadline is stamped
+  AFTER it.** The hold (`OrderGateway.extendHold`) must land before any
+  instrument exists, so it is sized from the call instant: checkout TTL +
+  grace + 3 min = 33 min. The row's `code_expires_at` is taken once the
+  checkout exists, because the `200.300.404` rule above closes the row at
+  that deadline + grace, and the gateway's ceiling runs from the checkout's
+  creation — a deadline reused from the hold instant would close the row
+  before the ceiling and orphan a payment made in between. The other two
+  rails record the instant the hold was sized from. Consequence: a prepare
+  that fails still leaves the order held for 33 minutes.
 - Credentials (`ZIMSWITCH_ENTITY_ID` / `ZIMSWITCH_ACCESS_TOKEN`) are
   env-only secrets; blank = rail disabled (503 on card attempts). The
   Bearer token can create checkouts against the merchant — same custody
