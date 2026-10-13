@@ -856,22 +856,26 @@ class BookingServiceTest {
     }
 
     @Test
-    void confirmBooking_aHoldTheSweepAlreadyCancelled_isStillRefused() {
+    void confirmBooking_aCancellationWithNoRecordedReason_isStillRefused() {
+        // Since H2 a hold the sweep cancelled (reason EXPIRED) is resurrected
+        // while its stock remains; a CANCELLED row with no reason (cancelled
+        // before V25) never is, and seat-service is not even asked.
         BookingRepository bookingRepo = mock(BookingRepository.class);
-        BookingService service = newService(bookingRepo,
-                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        SeatServiceClient seatClient = mock(SeatServiceClient.class);
+        BookingService service = newService(bookingRepo, mock(BookingItemRepository.class), seatClient);
 
         UUID id = UUID.randomUUID();
-        Booking swept = Booking.builder().id(id).userEmail("u@example.com")
+        Booking preV25 = Booking.builder().id(id).userEmail("u@example.com")
                 .status(Booking.BookingStatus.CANCELLED).totalAmount(BigDecimal.TEN)
                 .build();
-        when(bookingRepo.lockById(id)).thenReturn(Optional.of(swept));
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(preV25));
 
         com.innbucks.bookingservice.exception.BookingConflictException ex = assertThrows(
                 com.innbucks.bookingservice.exception.BookingConflictException.class,
                 () -> service.confirmBooking(id));
         assertEquals("Only pending bookings can be confirmed — this one isn't in that state.", ex.getMessage());
         verify(bookingRepo, never()).save(any());
+        verifyNoInteractions(seatClient);
     }
 
     @Test

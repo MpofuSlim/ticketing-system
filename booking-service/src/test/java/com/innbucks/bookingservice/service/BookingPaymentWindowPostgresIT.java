@@ -262,7 +262,11 @@ class BookingPaymentWindowPostgresIT extends BookingStockPostgresTestBase {
     }
 
     @Test
-    void aDeletedCategory_isRefused_andCounted() throws Exception {
+    void aCategorySeatServiceAnswersWithNoData_isRefused409_andCounted() throws Exception {
+        // The 409 branch for a category that is gone. In production a deleted
+        // category does not arrive this way: seat-service answers 404, the
+        // Feign fallback reports it as an outage, and the confirm is the 503
+        // of the next test (documented on the endpoint and in the runbook).
         Booking hold = seedBooking(Booking.BookingStatus.PENDING, lapsed(1), category);
         sweep.expirePending();
         when(seatServiceClient.getCategory(category)).thenReturn(ApiResult.ok((CategoryLookupDTO) null));
@@ -273,7 +277,9 @@ class BookingPaymentWindowPostgresIT extends BookingStockPostgresTestBase {
     }
 
     @Test
-    void seatServiceUnreachable_is503_retriedByPaymentService_andCounted() throws Exception {
+    void seatServiceUnreachable_orTheCategoryDeleted_is503_retriedByPaymentService_andCounted() throws Exception {
+        // What SeatServiceClientFallback throws for an outage AND for
+        // seat-service's 404 on a deleted category.
         Booking hold = seedBooking(Booking.BookingStatus.PENDING, lapsed(1), category);
         sweep.expirePending();
         when(seatServiceClient.getCategory(category))

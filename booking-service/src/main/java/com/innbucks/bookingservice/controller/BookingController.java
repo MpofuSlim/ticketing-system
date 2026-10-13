@@ -1589,9 +1589,13 @@ public class BookingController {
                           "available: seat-service is asked (with no transaction open) whether each category " +
                           "still exists, the tickets are re-claimed under the booking row's lock, and the " +
                           "booking is CONFIRMED (200) and its tickets sent. An admin reversal, or a booking " +
-                          "cancelled before this existed, is never resurrected (409). A deleted or sold-out " +
-                          "category is a 409, and seat-service unreachable a 503; payment-service keeps the " +
-                          "payment and retries either way.")
+                          "cancelled before this existed, is never resurrected (409). A category that has " +
+                          "sold out since is a 409. seat-service unreachable is a 503 — and so, today, is a " +
+                          "category the organizer has deleted: seat-service answers 404 for it, and " +
+                          "booking-service's seat-service client reports any failed lookup as an outage, so " +
+                          "a deleted category keeps answering 503 on every retry. payment-service keeps the " +
+                          "payment and retries in every case; a 503 that never clears for one booking is " +
+                          "the deleted category (ops: the ResurrectFailed runbook).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1638,14 +1642,17 @@ public class BookingController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
                     description = "The booking is CANCELLED and cannot come back: reversed by an admin, cancelled "
                             + "before cancel reasons were recorded, or resurrectable but one of its categories "
-                            + "has since been deleted or sold out (nothing was claimed). A concurrent confirm is "
-                            + "not a 409: confirm waits for the row lock and then gets the CONFIRMED replay (200).",
+                            + "has sold out since (nothing was claimed). A deleted category is NOT this 409 "
+                            + "today; it is the 503 below. A concurrent confirm is not a 409 either: confirm "
+                            + "waits for the row lock and then gets the CONFIRMED replay (200).",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Cannot be confirmed (e.g. an admin reversed it)",
                                     value = EXAMPLE_NOT_PENDING))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
                     description = "A cancelled booking would be resurrected, but seat-service could not be asked "
-                            + "whether its categories still exist. Nothing was written; retry.",
+                            + "whether its categories still exist — or one of them has been deleted (seat-service's "
+                            + "404 for it reaches booking-service as the same lookup failure). Nothing was "
+                            + "written; retry.",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "seat-service unavailable",
                                     value = EXAMPLE_SEAT_SERVICE_DOWN))),
