@@ -77,6 +77,22 @@ public class BookingController {
     @Value("${innbucks.country:ZW}")
     private String deploymentCountry;
 
+    // Swagger bodies several endpoints share — text blocks are compile-time
+    // constants, so an annotation can reference them. Each is exactly what
+    // GlobalExceptionHandler renders for the case.
+    private static final String EXAMPLE_BAD_ID = """
+            { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "id": "Must be a valid UUID." } }
+            """;
+    private static final String EXAMPLE_CONCURRENT_UPDATE = """
+            { "code": "409 CONFLICT", "message": "This booking was changed by another request at the same time. Please refresh it and try again.", "data": { "errorCode": "CONCURRENT_UPDATE" } }
+            """;
+    private static final String EXAMPLE_NOT_PENDING = """
+            { "code": "409 CONFLICT", "message": "Only pending bookings can be confirmed — this one isn't in that state.", "data": null }
+            """;
+    private static final String EXAMPLE_DEPENDENCY_DOWN = """
+            { "code": "503 SERVICE_UNAVAILABLE", "message": "We're having trouble reaching part of the system right now. Please try again in a moment.", "data": null }
+            """;
+
     @PostMapping
     @Operation(summary = "Create booking", description = "Creates a new pending booking. The phone number is taken from the JWT when present, otherwise from the request body's `phoneNumber`. " +
             "Open to every customer — registration tier does not gate booking. A flat per-booking seat ceiling (`app.booking.max-seats-per-booking`, default 20) applies equally to everyone.\n\n" +
@@ -158,6 +174,31 @@ public class BookingController {
                                     """),
                             @ExampleObject(name = "Bean validation (per-field)", value = """
                                     { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "seats[1].attendee.fullName": "Attendee full name is required", "seats[1].attendee.email": "Attendee email is not a valid email address" } }
+                                    """),
+                            @ExampleObject(name = "Unreadable field (an id that is not a UUID), keyed by its JSON path", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "seats[0].categoryId": "Must be a valid UUID." } }
+                                    """),
+                            @ExampleObject(name = "Body is not JSON", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "body": "The request body is not valid JSON." } }
+                                    """)
+                    })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "Not enough tickets left in a category the request names. Nothing was held.",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Sold out", value = """
+                            { "code": "409 CONFLICT", "message": "Not enough tickets left in \\"VIP\\". Please choose fewer tickets or a different category.", "data": null }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503",
+                    description = "Nothing was held; the same request can be sent again. TRY_AGAIN: the hold's database "
+                            + "transaction lost a deadlock (or serialization) race twice in a row. Without errorCode: "
+                            + "seat-service could not be asked for the category.",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Hold lost a lock race twice (TRY_AGAIN)", value = """
+                                    { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't reserve your tickets just now. Please try again.", "data": { "errorCode": "TRY_AGAIN" } }
+                                    """),
+                            @ExampleObject(name = "seat-service unavailable", value = """
+                                    { "code": "503 SERVICE_UNAVAILABLE", "message": "We're having trouble checking seat availability right now. Please try again in a moment.", "data": null }
                                     """)
                     }))
     })
@@ -399,6 +440,9 @@ public class BookingController {
                                     """)
                     )
             ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "The id is not a UUID",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Malformed id", value = EXAMPLE_BAD_ID))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Access denied"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found")
@@ -475,7 +519,10 @@ public class BookingController {
                                       "message": "Booking not found",
                                       "data": null
                                     }
-                                    """)))
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "The id is not a UUID",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Malformed id", value = EXAMPLE_BAD_ID)))
     })
     public ResponseEntity<ApiResult<PublicBookingResponseDTO>> getBookingByIdPublic(@PathVariable UUID id) {
         log.debug("GET /bookings/public/{} (public lookup)", id);
@@ -724,8 +771,26 @@ public class BookingController {
                     description = "Missing or invalid X-Internal-Token"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
                     description = "Booking not found"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "The id is not a UUID, or holdUntil is missing, unreadable or in the past",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Malformed id", value = EXAMPLE_BAD_ID),
+                            @ExampleObject(name = "Unreadable holdUntil", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "holdUntil": "Must be an ISO-8601 date-time." } }
+                                    """)
+                    })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
-                    description = "Booking not PENDING or hold already expired")
+                    description = "Booking not PENDING, hold already expired, or the expiry sweep cancelled it "
+                            + "while this call was extending it (CONCURRENT_UPDATE). Refuse the payment either way.",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Not PENDING", value = """
+                                    { "code": "409 CONFLICT", "message": "This booking's seat hold can no longer be extended — it's not in a PENDING state.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Hold already expired", value = """
+                                    { "code": "409 CONFLICT", "message": "Your seat reservation has expired. Please start a new booking and complete payment within 5 minutes.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Lost a race with the expiry sweep", value = EXAMPLE_CONCURRENT_UPDATE)
+                    }))
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> extendHoldInternal(
             @PathVariable UUID id,
@@ -1304,8 +1369,24 @@ public class BookingController {
                                     """)
                     )
             ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "The id is not a UUID",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Malformed id", value = EXAMPLE_BAD_ID))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Cannot cancel in current state")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "404 NOT_FOUND", "message": "Booking not found", "data": null }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "The booking is not PENDING (already paid, or already cancelled — "
+                    + "including by the expiry sweep)",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Already paid", value = """
+                                    { "code": "409 CONFLICT", "message": "We can't cancel this confirmed booking — payment has already been processed. Please contact support if you need a refund.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Already cancelled", value = """
+                                    { "code": "409 CONFLICT", "message": "This booking is already cancelled.", "data": null }
+                                    """)
+                    }))
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> cancelBooking(
             @PathVariable UUID id,
@@ -1379,10 +1460,25 @@ public class BookingController {
                                     """)
                     )
             ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Booking not CONFIRMED, or event-service release failed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "The id is not a UUID",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Malformed id", value = EXAMPLE_BAD_ID))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "The booking is not CONFIRMED, or it changed while event-service was releasing its "
+                            + "seats (CONCURRENT_UPDATE: nothing was written here; read it again and retry)",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Not CONFIRMED", value = """
+                                    { "code": "409 CONFLICT", "message": "This booking can't be reversed at its current stage. Only CONFIRMED bookings can be reversed.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Changed during the release", value = EXAMPLE_CONCURRENT_UPDATE)
+                    })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "event-service could not release the seats; nothing was written, retry the same call",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "event-service unavailable", value = EXAMPLE_DEPENDENCY_DOWN)))
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> reverseBooking(
             @PathVariable UUID id,
@@ -1399,7 +1495,12 @@ public class BookingController {
             description = "Marks a booking as confirmed — called by payment-service when a " +
                           "payment lands. Moved under /bookings/internal/** so the gateway's " +
                           "edge-deny rule blocks any public attempt (defence-in-depth on top " +
-                          "of the X-Internal-Token check below).")
+                          "of the X-Internal-Token check below).\n\n" +
+                          "Confirm locks the booking row, so it waits for a concurrent confirm, cancel or " +
+                          "expiry sweep and then acts on what that committed. A hold whose expiresAt has " +
+                          "passed but which is still PENDING is CONFIRMED (its tickets were never released); " +
+                          "one the sweep already cancelled is a 409. A repeated confirm of a CONFIRMED booking " +
+                          "returns it again (200).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1438,8 +1539,28 @@ public class BookingController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing or invalid X-Internal-Token"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "Concurrent confirm — another caller won the race; the booking is already CONFIRMED"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid booking state")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "The booking is not PENDING — cancelled by the customer or by the expiry sweep. "
+                            + "The concurrent-confirm body is kept for a lost optimistic race; under the row lock a "
+                            + "second confirm now waits and gets the 200 replay instead.",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Not PENDING (e.g. the sweep cancelled the hold)", value = EXAMPLE_NOT_PENDING),
+                            @ExampleObject(name = "Concurrent confirm", value = """
+                                    { "code": "409 CONFLICT", "message": "Booking already confirmed by a concurrent request", "data": null }
+                                    """)
+                    })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "The id is not a UUID, the body is unreadable, or the amounts are refused",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Malformed id", value = EXAMPLE_BAD_ID),
+                            @ExampleObject(name = "Unreadable amount", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "cashAmount": "Must be a number." } }
+                                    """),
+                            @ExampleObject(name = "Paying with points", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Paying for tickets with loyalty points isn't available.", "data": null }
+                                    """)
+                    }))
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> confirmBooking(
             @PathVariable UUID id,
