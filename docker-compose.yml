@@ -402,7 +402,13 @@ services:
       SWAGGER_USER: ${SWAGGER_USER:-admin}
       SWAGGER_PASSWORD: ${SWAGGER_PASSWORD:-}
     ports:
-      - "18080:8080"
+      # Loopback only, like every other port here: the host nginx is the one
+      # caller (proxy_pass http://127.0.0.1:18080). The gateway keys every
+      # per-IP rate limit on X-Real-IP and believes it from anyone who reaches
+      # this port, and Docker's DNAT skips the host's INPUT firewall, so a
+      # public bind would let any caller pick its own bucket
+      # (deploy/k8s/README.md §3.1).
+      - "127.0.0.1:18080:8080"
       - "127.0.0.1:19090:9090"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/actuator/health"]

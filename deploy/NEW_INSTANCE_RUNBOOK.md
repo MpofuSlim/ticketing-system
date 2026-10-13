@@ -28,9 +28,13 @@ admin.
   **≥ 16 GB RAM**, 4 vCPU, 40 GB+ disk.
 - **Firewall / security group:**
   - `22` (SSH) — your IP only
-  - `18080` (api-gateway — the public entrypoint) — from your edge / Cloudflare only
-  - **Nothing else.** Every other port (`5432`, `6379`, `8081–8086`, …)
-    is published on `127.0.0.1` only in `docker-compose.yml`; do not expose them.
+  - `80` / `443` (the host nginx, the public entrypoint) — from Cloudflare only
+  - **Nothing else, and never `18080`.** The api-gateway (`18080`) and every
+    other port (`5432`, `6379`, `8081–8086`, …) are published on `127.0.0.1`
+    only in `docker-compose.yml`; do not expose them. The gateway in particular
+    must be reachable from this host's nginx alone: it keys every per-IP rate
+    limit on the `X-Real-IP` header and believes it from any caller, and
+    Cloudflare passes a client's own `X-Real-IP` through unchanged.
 
 ## 2. Install Docker + the Compose v2 plugin
 
@@ -150,12 +154,15 @@ SMS/notification fallback path fails.
 ## 11. Cut traffic over
 
 1. Put your edge in front of the gateway:
-   **Cloudflare / nginx → `http://<NEW_HOST>:18080`**, terminating TLS as the
-   current host does. nginx needs the real-client-IP config in
-   `deploy/k8s/README.md` §3.1 (Cloudflare `real_ip`, and `X-Real-IP` /
-   `X-Forwarded-For` overwritten with `$remote_addr`), and `18080` must be
-   reachable from that nginx only, never from the internet: the gateway keys
-   every per-IP rate limit on `X-Real-IP` and believes it from any caller.
+   **Cloudflare → nginx on `<NEW_HOST>` → `http://127.0.0.1:18080`**,
+   terminating TLS in nginx as the current host does. Never point Cloudflare
+   (or anything else) at `:18080` directly: Cloudflare passes a client's own
+   `X-Real-IP` header through, and the gateway keys every per-IP rate limit on
+   it, so each request could pick its own bucket. nginx needs the
+   real-client-IP config in `deploy/k8s/README.md` §3.1, with the compose
+   upstream in place of `30080`: Cloudflare `real_ip`, and `X-Real-IP` /
+   `X-Forwarded-For` each set once to `$remote_addr`. Check from outside the
+   box that `nc -vz -w 5 <NEW_HOST public IP> 18080` times out or is refused.
 2. Validate against the new host directly first (temp subdomain or a `Host:`
    override) before touching production DNS.
 3. When green, **repoint the public hostname** (e.g. `dtx.innbucks.co.zw` /
@@ -219,7 +226,7 @@ heredoc already does this.)
 
 | Port (host) | Service | Exposure |
 |---|---|---|
-| `18080` | api-gateway (→ 8080) | **public** (front with edge/TLS) |
+| `18080` | api-gateway (→ 8080) | `127.0.0.1`; the host nginx is its only caller (Cloudflare → nginx → gateway) |
 | `8081–8086` | user / event / seat / booking / payment / loyalty | `127.0.0.1` |
 | `5432` / `6379` | Postgres / Redis | `127.0.0.1` |
 | `19090` | gateway management/actuator | `127.0.0.1` |
