@@ -99,4 +99,29 @@ class GlobalExceptionHandlerTest {
         assertFalse(resp.getBody().getMessage().toLowerCase().contains("duplicate"));
         assertFalse(resp.getBody().getMessage().toLowerCase().contains("constraint"));
     }
+
+    // ---- ApiProblemException ----
+
+    @Test
+    void apiProblem_rendersErrorCodeFirst_thenTheExtraInOrder() {
+        java.util.Map<String, Object> extra = new java.util.LinkedHashMap<>();
+        extra.put("seats[0].sectionId", "Sold out");
+        extra.put("limit", 6);
+        ResponseEntity<ApiResult<java.util.Map<String, Object>>> resp = new GlobalExceptionHandler()
+                .handleApiProblem(new ApiProblemException(HttpStatus.CONFLICT, "SEATS_UNAVAILABLE",
+                        "Some of the seats you picked are no longer available.", extra));
+        assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("409 CONFLICT", resp.getBody().getCode());
+        assertEquals(java.util.List.of("errorCode", "seats[0].sectionId", "limit"),
+                java.util.List.copyOf(resp.getBody().getData().keySet()));
+        assertEquals("SEATS_UNAVAILABLE", resp.getBody().getData().get("errorCode"));
+    }
+
+    @Test
+    void apiProblem_refusesAnExtraThatWouldOverrideItsErrorCode() {
+        assertThrows(IllegalArgumentException.class, () -> new ApiProblemException(HttpStatus.CONFLICT,
+                "SEATS_UNAVAILABLE", "msg", java.util.Map.of("errorCode", "SOMETHING_ELSE")));
+        assertThrows(IllegalArgumentException.class, () -> new ApiProblemException(HttpStatus.CONFLICT, " ", "msg"));
+    }
 }

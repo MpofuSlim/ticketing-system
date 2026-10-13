@@ -1881,7 +1881,11 @@ query per category under every seat query.
   13 → 1; gate lookup 2 → 1; scan 4 → 3; reminders (4 bookings) 14 → 6;
   event-change broadcast (4 bookings) 5 → 1; expiry sweep (5 holds, with their
   notices) 17 → 13; seat category listing 2 + one per category → 2. A new read
-  path that renders an association belongs in that IT.
+  path that renders an association belongs in that IT. (Since H1 the sweep
+  cancels each hold in a transaction of its own, so it is 1 + 5 per hold — 26
+  for five — and confirm / cancel / reverse lock the booking row before
+  reading its items, one statement more each: 4 / 5 / 6. See "Booking stock:
+  one lock order".)
 
 ## user-service fetch plan: what is lazy, what stays eager, and why
 
@@ -2190,6 +2194,77 @@ venue holds, and the guard is enforced at both writes that can create that state
 - **Legacy events already over-allocated** can only have capacity edited UP to at
   least the allocation — a partial correction still below it stays refused,
   because it is still an oversold event. The other way out is deleting categories.
+
+## Booking stock: one lock order, a per-booking expiry sweep (booking-service, H1)
+
+**Every path that changes booking stock takes the booking row first, then the
+`category_inventory` rows in ascending `category_id`.** Transactions that each
+take a subsequence of one global order cannot deadlock; before this, claims
+locked categories in request order and releases in `HashMap` order, so `[A,B]`
+racing `[B,A]` deadlocked and the abort reached the buyer as a 500.
+
+- **`StockLedger` is the order.** `StockLedger.byCategory()` keys a claim's
+  quantities; `StockLedger.release(booking)` is the ONE release (cancel,
+  reverse, sweep). "Ascending" is **Postgres' `uuid` order — unsigned bytes —
+  not `UUID.compareTo`**, which compares signed longs and disagrees for half of
+  all ids. Anything that later locks these rows from SQL (`ORDER BY
+  category_id … FOR UPDATE`) must agree with the Java side, so sort with
+  `StockLedger.CATEGORY_ORDER`, never a plain `TreeMap`.
+- **The booking row is locked before its items are read.**
+  `BookingRepository.lockById` (`PESSIMISTIC_WRITE`, no fetch join, no
+  `DISTINCT` — Postgres refuses `FOR UPDATE` on either) for confirm, customer
+  cancel and reverse's write phase (which re-compares `@Version` under the
+  lock); the items load in the same transaction, one statement more.
+  `findByIdWithItems` stays for unlocked reads and extend-hold.
+- **Confirm honours a lapsed hold that is still PENDING.** Its tickets stay
+  claimed until the sweep commits, and the sweep takes the same row lock, so it
+  cannot oversell. A hold the sweep already cancelled is still `409`.
+- **The expiry sweep runs ONE short transaction per booking**: candidates read
+  with no lock (`(expires_at, id)` keyset, 200 a page), then each one `FOR UPDATE
+  SKIP LOCKED`, re-checked, released through `StockLedger`, and moved to
+  CANCELLED by one native `UPDATE` that stamps `updated_at` (UTC, from Java) and
+  bumps `version`. A row another request holds is skipped, not waited for. A
+  booking whose transaction FAILS rolls back alone, is counted on
+  `booking.expiry.skipped` (alert `ExpirySkipping`) and stepped over, so it can
+  never block the holds behind it. The run stops after a short page or 25 s;
+  `lockAtLeastFor` is PT5S (PT15S stretched a 10 s poll to 20 s). **Never put a
+  transaction back around the whole run.** `BookingCancelled` is published inside
+  each booking's transaction; the listeners are `AFTER_COMMIT`, so a notice goes
+  out only for a committed cancellation (published outside a transaction it
+  would be dropped).
+- **The claim retries once on 40P01 / 40001**, from the resolved inputs with a
+  freshly built booking (a rolled-back entity cannot be saved again); a second
+  such failure is `503` `data.errorCode: TRY_AGAIN`. `booking.claim.retry
+  {outcome}` should stay at 0 — a non-zero means something takes these locks out
+  of order.
+- **`ApiProblemException(status, errorCode, message, extra)`** renders
+  `{code, message, data:{errorCode, …extra}}`; booking error codes go in
+  `data.errorCode`. An unreadable body or a malformed id is now `400 "Validation
+  failed"` keyed by the Jackson path (`seats[0].categoryId`) or the parameter, and
+  an optimistic-lock loss is `409 CONCURRENT_UPDATE` everywhere — all three were
+  500s through the `RuntimeException` catch-all. Confirm's own optimistic-lock
+  catch and its "Booking already confirmed by a concurrent request" 409 are gone:
+  under the row lock a second confirm waits and gets the 200 replay.
+- **What the 400 says comes from the Jackson exception's TYPE**, so a custom
+  deserializer must fail through Jackson (`ctxt.handleWeirdStringValue` /
+  `handleUnexpectedToken`), never by letting a parse exception escape. The
+  `LocalDateTime` module (`UtcJsonTimeConfig`) let `DateTimeParseException` out,
+  Jackson wrapped it in a type-less `DatabindException`, and a bad `holdUntil`
+  read `"Invalid value."` where Swagger promised `"Must be an ISO-8601
+  date-time."`. A body that is JSON but not one object (`[]`, a bare string, a
+  second value after the object) is `body: "The request body must be a single
+  JSON object."`; only a syntax error is `"The request body is not valid JSON."`.
+- Pinned by `CategoryInventoryConcurrencyIT` (`[A,B]`/`[B,A]` × 200: all 201, no
+  retry), `BookingRowLockPostgresIT` (each stock path leaves the counter row free
+  while it waits for the booking; confirm against a row held elsewhere),
+  `BookingExpirySweepPostgresIT`, `BookingClaimRetryPostgresIT` (a real 40P01 from
+  a trigger), `StockLedgerTest`, `StockPathsLockTheBookingFirstTest`,
+  `GlobalExceptionHandlerDispatchTest` and `BookingErrorExamplesPostgresIT`. The
+  last compares the cancel / confirm / reverse / extend-hold Swagger example
+  constants STRICTLY against real responses through the app's own JSON mapper
+  (the standalone dispatch test has a default one), and drives extend-hold
+  against the sweep's real statements: without the sweep's `version` bump that
+  race is a 200 that writes the booking back to PENDING over the cancellation.
 
 ## Scan reports: `to` is widened server-side, and why
 

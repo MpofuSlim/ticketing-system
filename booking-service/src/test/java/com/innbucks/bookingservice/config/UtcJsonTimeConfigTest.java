@@ -5,6 +5,8 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -13,6 +15,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Pins the UTC wire format: every serialized LocalDateTime carries the
@@ -95,6 +98,47 @@ class UtcJsonTimeConfigTest {
         LocalDateTime original = LocalDateTime.of(2026, 7, 27, 7, 19, 3);
         String wire = mapper.writeValueAsString(original);
         assertThat(mapper.readValue(wire, LocalDateTime.class)).isEqualTo(original);
+    }
+
+    // ---------------------------------------------------------------
+    // A value that is not a date-time fails the JACKSON way: a
+    // MismatchedInputException whose target type is LocalDateTime, keyed by
+    // the field's path. GlobalExceptionHandler reads that target type to say
+    // "Must be an ISO-8601 date-time." A bare DateTimeParseException out of
+    // the deserializer was wrapped in a plain DatabindException instead, and
+    // the caller read "Invalid value." — not what Swagger documents.
+    // ---------------------------------------------------------------
+
+    record Hold(LocalDateTime holdUntil) {
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\"tomorrow\"", "\"2026-13-45T25:00:00\"", "12", "{}", "[]", "true"})
+    void jackson3_anUnreadableValue_isAMismatchedInput_forLocalDateTime(String value) {
+        assertThatThrownBy(() -> mapper3.readValue("{\"holdUntil\":" + value + "}", Hold.class))
+                .isInstanceOfSatisfying(tools.jackson.databind.exc.MismatchedInputException.class, e -> {
+                    assertThat(e.getTargetType()).isEqualTo(LocalDateTime.class);
+                    assertThat(e.getPath()).extracting(tools.jackson.core.JacksonException.Reference::getPropertyName)
+                            .containsExactly("holdUntil");
+                });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\"tomorrow\"", "\"2026-13-45T25:00:00\"", "12", "{}", "[]", "true"})
+    void jackson2_anUnreadableValue_isAMismatchedInput_forLocalDateTime(String value) {
+        assertThatThrownBy(() -> mapper.readValue("{\"holdUntil\":" + value + "}", Hold.class))
+                .isInstanceOfSatisfying(com.fasterxml.jackson.databind.exc.MismatchedInputException.class, e -> {
+                    assertThat(e.getTargetType()).isEqualTo(LocalDateTime.class);
+                    assertThat(e.getPath()).extracting(
+                                    com.fasterxml.jackson.databind.JsonMappingException.Reference::getFieldName)
+                            .containsExactly("holdUntil");
+                });
+    }
+
+    @Test
+    void aBlankString_isStillNull_onBothStacks() throws Exception {
+        assertThat(mapper3.readValue("{\"holdUntil\":\" \"}", Hold.class).holdUntil()).isNull();
+        assertThat(mapper.readValue("{\"holdUntil\":\"\"}", Hold.class).holdUntil()).isNull();
     }
 
     // ---------------------------------------------------------------
