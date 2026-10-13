@@ -137,7 +137,7 @@ public class GlobalExceptionHandler {
      * rejected, or {@code {"body": …}} when the failure has no field: broken
      * JSON, or no body at all.
      */
-    static Map<String, String> unreadableFields(HttpMessageNotReadableException ex) {
+    private static Map<String, String> unreadableFields(HttpMessageNotReadableException ex) {
         Map<String, String> fields = new LinkedHashMap<>();
         for (Throwable t = ex.getCause(); t != null; t = t.getCause() == t ? null : t.getCause()) {
             if (t instanceof tools.jackson.core.JacksonException jackson) {
@@ -199,7 +199,7 @@ public class GlobalExceptionHandler {
     }
 
     /** What a value of {@code type} must look like, written for a person. Never echoes the input. */
-    static String expectation(Class<?> type) {
+    private static String expectation(Class<?> type) {
         if (type == null) {
             return "Invalid value.";
         }
