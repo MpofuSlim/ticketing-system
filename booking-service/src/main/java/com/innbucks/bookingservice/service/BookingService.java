@@ -89,6 +89,15 @@ public class BookingService {
     public static final String PAYMENT_IN_PROGRESS_MESSAGE = "A payment for this booking is still open. "
             + "If you don't complete it, the booking is released automatically.";
 
+    /**
+     * Confirm's refusal for a booking it cannot confirm: cancelled for good
+     * (an admin reversal, or before V25), or cancelled and not resurrectable
+     * right now (sold out, category deleted). payment-service reads any 409
+     * as "keep the payment and retry", so every one of them is this body.
+     */
+    static final String NOT_CONFIRMABLE_MESSAGE =
+            "Only pending bookings can be confirmed — this one isn't in that state.";
+
     // Flat per-booking seat ceiling, applied identically to every customer.
     // This replaced a per-tier ladder (tier 2 -> 10, 3 -> 15, 4 -> 20, anything
     // else -> 0, i.e. a hard block); the tier ladder is gone, so everyone now
@@ -1248,17 +1257,38 @@ public class BookingService {
         return left.getNano() > 0 ? left.getSeconds() + 1 : left.getSeconds();
     }
 
-    // @Transactional here too: the call below is a SELF-invocation, which
-    // bypasses the proxy, so without it this overload ran with no transaction
-    // at all — and a BookingConfirmed published outside a transaction is
-    // silently dropped by every AFTER_COMMIT listener (no tickets, no
-    // availability decrement). The controller calls the two-arg form.
-    @Transactional
     public BookingResponseDTO confirmBooking(UUID bookingId) {
         return confirmBooking(bookingId, null);
     }
 
-    @Transactional
+    /**
+     * Confirm a booking once its payment has landed (S2S, payment-service).
+     *
+     * <p><b>No method-level transaction.</b> A confirm that finds the booking
+     * cancelled may resurrect it, and resurrecting asks seat-service first —
+     * with no transaction open, so a pooled connection is never held across
+     * that call. Each phase therefore runs in a transaction of its own:
+     * <ol>
+     *   <li>under the booking row's lock: a PENDING booking is confirmed and
+     *       committed right there (one transaction, exactly as before); a
+     *       CONFIRMED one is replayed; a CANCELLED one whose
+     *       {@link Booking.CancelReason} is resurrectable is handed on, with
+     *       the tickets it needs; any other CANCELLED one is refused 409;</li>
+     *   <li>with no transaction: seat-service is asked whether each of those
+     *       categories still exists. A deleted one is refused (409);
+     *       seat-service unreachable is a 503. Either way payment-service
+     *       keeps the payment and retries the confirm;</li>
+     *   <li>under the booking row's lock again: the tickets are re-claimed
+     *       with the same guarded claim a new booking uses, in the canonical
+     *       category order ({@link StockLedger}), and the booking is
+     *       CONFIRMED. A claim that fails (sold out since) rolls the whole
+     *       thing back and answers 409. A booking another confirm resurrected
+     *       in the meantime is replayed.</li>
+     * </ol>
+     * Every phase publishes inside its transaction ({@code BookingConfirmed}
+     * listeners are {@code AFTER_COMMIT}, and drop an event published with
+     * none open).
+     */
     public BookingResponseDTO confirmBooking(UUID bookingId, ConfirmBookingRequestDTO confirmRequest) {
         log.info("Confirming booking bookingId={} pointsToUse={} cashAmount={}",
                 bookingId,
@@ -1283,6 +1313,42 @@ public class BookingService {
             }
         }
 
+        ConfirmStep step = Objects.requireNonNull(
+                txTemplate.execute(status -> confirmUnderLock(bookingId, confirmRequest)));
+        if (step.resurrection() == null) {
+            return step.response();
+        }
+        return resurrect(bookingId, confirmRequest, step.resurrection());
+    }
+
+    /**
+     * Phase 1 of a confirm: what the booking row says, under its lock. Either
+     * the confirm's answer, or a {@link Resurrection} still to attempt.
+     */
+    private record ConfirmStep(BookingResponseDTO response, Resurrection resurrection) {
+        static ConfirmStep answered(BookingResponseDTO response) {
+            return new ConfirmStep(response, null);
+        }
+    }
+
+    /**
+     * A cancelled booking a late payment may bring back: why it was
+     * cancelled, and its tickets per category in the canonical lock order.
+     * Record equality is what phase 3 re-checks against the locked row.
+     */
+    private record Resurrection(Booking.CancelReason reason, SortedMap<UUID, Integer> ticketsByCategory) {
+        static Resurrection of(Booking booking) {
+            SortedMap<UUID, Integer> tickets = StockLedger.byCategory();
+            if (booking.getItems() != null) {
+                for (BookingItem item : booking.getItems()) {
+                    tickets.merge(item.getCategoryId(), 1, Integer::sum);
+                }
+            }
+            return new Resurrection(booking.getCancelReason(), Collections.unmodifiableSortedMap(tickets));
+        }
+    }
+
+    private ConfirmStep confirmUnderLock(UUID bookingId, ConfirmBookingRequestDTO confirmRequest) {
         // The row lock serialises confirm with the expiry sweep, a cancel and
         // a second confirm: whoever holds it decides, and the others see what
         // it decided once it commits.
@@ -1297,30 +1363,154 @@ public class BookingService {
         // Returning the existing DTO is the correct retry semantics.
         if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
             log.info("Confirm idempotent replay (already CONFIRMED) bookingId={}", bookingId);
-            return toDTO(booking);
+            return ConfirmStep.answered(toDTO(booking));
         }
-        // CANCELLED is still a real error — a CANCELLED booking can't be confirmed.
-        // That includes a hold the expiry sweep cancelled before this confirm
-        // took the row.
+        // CANCELLED: the payment landed after the booking was cancelled — by
+        // the expiry sweep, the buyer, or an admin. The first two (and a buyer
+        // release) may come back if the stock is still there; refusing them
+        // leaves a buyer who paid with no ticket. An admin reversal never
+        // does, and neither does a booking cancelled before V25, whose reason
+        // nobody recorded.
+        if (booking.getStatus() == Booking.BookingStatus.CANCELLED) {
+            Booking.CancelReason reason = booking.getCancelReason();
+            if (reason != null && reason.resurrectable()) {
+                log.info("Confirm found a cancelled booking a late payment may resurrect bookingId={} reason={}",
+                        bookingId, reason);
+                return new ConfirmStep(null, Resurrection.of(booking));
+            }
+            log.warn("Confirm rejected, booking cancelled for good bookingId={} cancelReason={}",
+                    bookingId, reason);
+            throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
+        }
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
             log.warn("Confirm rejected, booking not pending bookingId={} status={}",
                     bookingId, booking.getStatus());
-            throw new BookingConflictException("Only pending bookings can be confirmed — this one isn't in that state.");
+            throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
         }
 
         // A hold whose expiresAt has passed but which is still PENDING is
         // HONOURED. Its tickets stay claimed until the sweep commits the
         // cancellation, and the sweep takes this same row lock (skipping a row
         // that is held), so confirming here cannot oversell: either the sweep
-        // committed first and the check above refused, or this confirm holds
-        // the row and the sweep leaves it alone. Refusing it used to strand a
-        // customer who paid a few seconds late with money taken and no ticket.
+        // committed first and the booking is CANCELLED above, or this confirm
+        // holds the row and the sweep leaves it alone. Refusing it used to
+        // strand a customer who paid a few seconds late with money taken and
+        // no ticket.
         if (booking.getExpiresAt() != null
                 && booking.getExpiresAt().isBefore(LocalDateTime.now(ZoneOffset.UTC))) {
             log.info("Confirming a lapsed hold the sweep has not cancelled bookingId={} expiredAt={}",
                     bookingId, booking.getExpiresAt());
         }
+        return ConfirmStep.answered(markConfirmed(booking, confirmRequest));
+    }
 
+    /**
+     * Phases 2 and 3 of a confirm (see {@link #confirmBooking}). Counted on
+     * {@code booking.confirm.resurrected{reason,outcome}}: {@code failed} for
+     * every refusal and error after the decision to try — the buyer has paid
+     * and has no ticket until a retry succeeds — and {@code succeeded} once
+     * the booking is CONFIRMED. A replay (another confirm got there first) is
+     * neither.
+     */
+    private BookingResponseDTO resurrect(UUID bookingId, ConfirmBookingRequestDTO confirmRequest,
+                                         Resurrection resurrection) {
+        Booking.CancelReason reason = resurrection.reason();
+        try {
+            requireCategoriesStillExist(bookingId, resurrection);
+            Resurrected result = Objects.requireNonNull(txTemplate.execute(status ->
+                    resurrectUnderLock(bookingId, confirmRequest, resurrection)));
+            if (!result.replay()) {
+                recordResurrect(reason, BookingMetrics.ResurrectOutcome.SUCCEEDED);
+            }
+            return result.response();
+        } catch (RuntimeException refused) {
+            recordResurrect(reason, BookingMetrics.ResurrectOutcome.FAILED);
+            throw refused;
+        }
+    }
+
+    private record Resurrected(BookingResponseDTO response, boolean replay) {
+    }
+
+    /**
+     * Phase 2: seat-service still lists every category the booking needs. No
+     * transaction is open (pinned by {@code RemoteCallsOutsideTransactionTest}).
+     * A category answered with no data is gone — refused 409, like any booking
+     * that cannot be confirmed.
+     *
+     * <p>Note what the Feign client makes of seat-service's own 404 for a
+     * soft-deleted category: its fallback discards the status and raises
+     * {@link com.innbucks.bookingservice.exception.SeatServiceUnavailableException},
+     * exactly as for an outage. That propagates as a 503, which payment-service
+     * also retries, and the refusal is counted the same way; telling "deleted"
+     * from "down" apart needs a fallback factory that keeps the status, a
+     * change to every seat-service call.
+     */
+    private void requireCategoriesStillExist(UUID bookingId, Resurrection resurrection) {
+        for (UUID categoryId : resurrection.ticketsByCategory().keySet()) {
+            ApiResult<CategoryLookupDTO> envelope = seatServiceClient.getCategory(categoryId);
+            if (envelope == null || envelope.getData() == null) {
+                log.warn("Resurrect refused, category no longer exists bookingId={} categoryId={} reason={}",
+                        bookingId, categoryId, resurrection.reason());
+                throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
+            }
+        }
+    }
+
+    /**
+     * Phase 3, under the booking row's lock: re-claim the tickets and confirm.
+     * Takes the booking row, then the counter rows in ascending category
+     * order — the global lock order — and touches nothing else. Uses confirm's
+     * guard (capacity only), not the claim's: the buyer has already paid.
+     */
+    private Resurrected resurrectUnderLock(UUID bookingId, ConfirmBookingRequestDTO confirmRequest,
+                                           Resurrection resurrection) {
+        Booking booking = lockWithItems(bookingId, "Confirm");
+        if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
+            log.info("Confirm idempotent replay (resurrected by a concurrent confirm) bookingId={}", bookingId);
+            return new Resurrected(toDTO(booking), true);
+        }
+        if (booking.getStatus() != Booking.BookingStatus.CANCELLED
+                || !resurrection.equals(Resurrection.of(booking))) {
+            // Nothing moves a cancelled booking but a resurrection, so this
+            // should not happen; if it does, the next retry starts afresh.
+            log.warn("Resurrect refused, booking changed since it was read bookingId={} status={} cancelReason={}",
+                    bookingId, booking.getStatus(), booking.getCancelReason());
+            throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
+        }
+        for (Map.Entry<UUID, Integer> tickets : resurrection.ticketsByCategory().entrySet()) {
+            // The counter row exists: this booking's own claim created or used
+            // it, and rows are never deleted. A missing one claims nothing and
+            // is refused, never seeded.
+            if (categoryInventoryRepository.tryClaim(tickets.getKey(), tickets.getValue()) == 0) {
+                log.warn("Resurrect refused, not enough tickets left bookingId={} categoryId={} qty={} reason={}",
+                        bookingId, tickets.getKey(), tickets.getValue(), resurrection.reason());
+                // Rolls back every claim made above for this booking.
+                throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
+            }
+        }
+        // CONFIRMED with its reason cleared: the row reads as if the payment
+        // had landed in time. The V5 trigger (sync_booking_items_is_active)
+        // re-activates the items on the CANCELLED -> CONFIRMED status change.
+        booking.setCancelReason(null);
+        BookingResponseDTO confirmed = markConfirmed(booking, confirmRequest);
+        log.info("Booking resurrected bookingId={} reason={} tickets={}",
+                bookingId, resurrection.reason(), resurrection.ticketsByCategory());
+        return new Resurrected(confirmed, false);
+    }
+
+    private void recordResurrect(Booking.CancelReason reason, BookingMetrics.ResurrectOutcome outcome) {
+        BookingMetrics m = metrics;
+        if (m != null) {
+            m.resurrected(reason, outcome);
+        }
+    }
+
+    /**
+     * The PENDING (or resurrected) booking becomes CONFIRMED, in the caller's
+     * transaction, under the row lock the caller holds.
+     */
+    private BookingResponseDTO markConfirmed(Booking booking, ConfirmBookingRequestDTO confirmRequest) {
         // Default to pure-cash if the caller didn't pass a payload. This
         // preserves the legacy contract where PATCH /confirm has no body.
         BigDecimal pointsToUse = confirmRequest == null || confirmRequest.getPointsToUse() == null
@@ -1340,12 +1530,14 @@ public class BookingService {
         // made here, inside this transaction — a pooled connection held across
         // a remote call for a best-effort mirror. It now runs AFTER COMMIT,
         // off this thread, from EventAvailabilityConsumeListener on the event
-        // below; publishing only here (never on the replay branch above) is
-        // what keeps it to one decrement per real confirmation.
+        // below; publishing only here (never on a replay) is what keeps it to
+        // one decrement per real confirmation. A resurrected booking was never
+        // decremented: only a confirm decrements, and the cancellation that
+        // preceded it was of an unpaid booking.
         eventPublisher.publishEvent(BookingDomainEvent.BookingConfirmed.of(booking));
 
         log.info("Booking confirmed bookingId={} userEmail={} pointsUsed={} cashAmount={}",
-                bookingId, booking.getUserEmail(), booking.getPointsUsed(), booking.getCashAmount());
+                booking.getId(), booking.getUserEmail(), booking.getPointsUsed(), booking.getCashAmount());
         return toDTO(booking);
     }
 

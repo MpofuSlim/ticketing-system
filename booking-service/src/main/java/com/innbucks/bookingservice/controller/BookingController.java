@@ -123,6 +123,9 @@ public class BookingController {
     static final String EXAMPLE_PAYMENT_IN_PROGRESS = """
             { "code": "409 CONFLICT", "message": "A payment for this booking is still open. If you don't complete it, the booking is released automatically.", "data": { "errorCode": "PAYMENT_IN_PROGRESS", "retryAfterSeconds": 742 } }
             """;
+    static final String EXAMPLE_SEAT_SERVICE_DOWN = """
+            { "code": "503 SERVICE_UNAVAILABLE", "message": "We're having trouble checking seat availability right now. Please try again in a moment.", "data": null }
+            """;
 
     @PostMapping
     @Operation(summary = "Create booking", description = "Creates a new pending booking. The phone number is taken from the JWT when present, otherwise from the request body's `phoneNumber`. " +
@@ -1579,9 +1582,16 @@ public class BookingController {
                           "of the X-Internal-Token check below).\n\n" +
                           "Confirm locks the booking row, so it waits for a concurrent confirm, cancel or " +
                           "expiry sweep and then acts on what that committed. A hold whose expiresAt has " +
-                          "passed but which is still PENDING is CONFIRMED (its tickets were never released); " +
-                          "one the sweep already cancelled is a 409. A repeated confirm of a CONFIRMED booking " +
-                          "returns it again (200).")
+                          "passed but which is still PENDING is CONFIRMED (its tickets were never released). " +
+                          "A repeated confirm of a CONFIRMED booking returns it again (200).\n\n" +
+                          "**A payment that lands on a CANCELLED booking resurrects it** when it was cancelled " +
+                          "by the expiry sweep, by the buyer, or by a buyer release, and its tickets are still " +
+                          "available: seat-service is asked (with no transaction open) whether each category " +
+                          "still exists, the tickets are re-claimed under the booking row's lock, and the " +
+                          "booking is CONFIRMED (200) and its tickets sent. An admin reversal, or a booking " +
+                          "cancelled before this existed, is never resurrected (409). A deleted or sold-out " +
+                          "category is a 409, and seat-service unreachable a 503; payment-service keeps the " +
+                          "payment and retries either way.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1626,12 +1636,19 @@ public class BookingController {
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Unknown booking", value = EXAMPLE_NOT_FOUND))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
-                    description = "The booking is not PENDING — cancelled by the customer or by the expiry sweep. "
-                            + "A concurrent confirm is not a 409: confirm waits for the row lock and then gets the "
-                            + "CONFIRMED replay (200).",
+                    description = "The booking is CANCELLED and cannot come back: reversed by an admin, cancelled "
+                            + "before cancel reasons were recorded, or resurrectable but one of its categories "
+                            + "has since been deleted or sold out (nothing was claimed). A concurrent confirm is "
+                            + "not a 409: confirm waits for the row lock and then gets the CONFIRMED replay (200).",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Not PENDING (e.g. the sweep cancelled the hold)",
+                            examples = @ExampleObject(name = "Cannot be confirmed (e.g. an admin reversed it)",
                                     value = EXAMPLE_NOT_PENDING))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "A cancelled booking would be resurrected, but seat-service could not be asked "
+                            + "whether its categories still exist. Nothing was written; retry.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "seat-service unavailable",
+                                    value = EXAMPLE_SEAT_SERVICE_DOWN))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
                     description = "The id is not a UUID, the body is unreadable, or the amounts are refused",
                     content = @Content(mediaType = "application/json", examples = {

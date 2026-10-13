@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.entity.Booking;
+import com.innbucks.bookingservice.exception.SeatServiceUnavailableException;
 import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
 import com.innbucks.bookingservice.service.StockLedger;
 import com.innbucks.bookingservice.testsupport.BookingStockPostgresTestBase;
@@ -32,16 +33,20 @@ import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_H
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_INVALID_JWT;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_AN_OBJECT;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_FOUND;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_PENDING;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_PAYMENT_IN_PROGRESS;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_SEAT_SERVICE_DOWN;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_UNREADABLE_HOLD_UNTIL;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The Swagger error examples of cancel, confirm, reverse and extend-hold,
+ * The Swagger error examples of cancel, confirm, reverse and extend-hold
+ * (H2 added the payment window, the hold caps and resurrect's),
  * compared STRICTLY against what the running service answers: the real
  * filter chain, the app's own JSON mapper (with its {@code LocalDateTime}
  * module, which the standalone dispatch test does not have) and real
@@ -266,6 +271,33 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"cashAmount\":\"ten\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.cashAmount").value("Must be a number."));
+    }
+
+    @Test
+    void confirm_ofABookingAnAdminReversed_isTheDocumented409() throws Exception {
+        Booking reversed = seedBooking(Booking.BookingStatus.CONFIRMED, null, category);
+        jdbc.update("UPDATE bookings SET status = 'CANCELLED', cancel_reason = 'ADMIN_REVERSED' WHERE id = ?",
+                reversed.getId());
+
+        mvc.perform(patch("/bookings/internal/" + reversed.getId() + "/confirm")
+                        .header("X-Internal-Token", internalToken))
+                .andExpect(status().isConflict())
+                .andExpect(content().json(EXAMPLE_NOT_PENDING, JsonCompareMode.STRICT));
+    }
+
+    @Test
+    void confirm_resurrectingWhileSeatServiceIsDown_isTheDocumented503() throws Exception {
+        Booking expired = seedBooking(Booking.BookingStatus.PENDING, null, category);
+        jdbc.update("UPDATE bookings SET status = 'CANCELLED', cancel_reason = 'EXPIRED' WHERE id = ?",
+                expired.getId());
+        when(seatServiceClient.getCategory(category)).thenThrow(new SeatServiceUnavailableException(
+                "seat-service is currently unavailable. Please retry the booking shortly."));
+
+        mvc.perform(patch("/bookings/internal/" + expired.getId() + "/confirm")
+                        .header("X-Internal-Token", internalToken))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(content().json(EXAMPLE_SEAT_SERVICE_DOWN, JsonCompareMode.STRICT));
+        assertThat(statusOf(expired.getId())).isEqualTo("CANCELLED");
     }
 
     @Test

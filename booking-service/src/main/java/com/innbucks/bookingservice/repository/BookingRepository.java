@@ -33,8 +33,8 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
 
     // The booking row's write lock. Every path that changes a booking's stock
     // takes it FIRST, before any category row (StockLedger has the order):
-    // confirm, cancel, extend-hold and the write phase of reverse. No fetch
-    // join and no
+    // confirm (and its resurrect phase), cancel, extend-hold and the write
+    // phase of reverse. No fetch join and no
     // DISTINCT, because Postgres refuses FOR UPDATE with DISTINCT and on the
     // nullable side of an outer join, so findByIdWithItems cannot be locked.
     // The caller loads the items afterwards in the same transaction (one
