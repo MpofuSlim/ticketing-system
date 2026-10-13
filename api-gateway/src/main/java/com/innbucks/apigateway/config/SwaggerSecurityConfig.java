@@ -23,9 +23,10 @@ import static org.springframework.security.config.Customizer.withDefaults;
 /**
  * Puts an HTTP Basic login in front of the aggregated Swagger UI so the API
  * surface isn't browsable by anyone who reaches the gateway. Only the gateway
- * is published publicly ({@code 0.0.0.0:18080}); every backend service binds
- * its own port to {@code 127.0.0.1}, so the gateway's Swagger is the only
- * publicly reachable copy and protecting it here is sufficient.
+ * is published through the edge (host nginx in front of NodePort 30080, or
+ * compose's {@code 127.0.0.1:18080}); every backend service binds its own port
+ * to {@code 127.0.0.1}, so the gateway's Swagger is the only publicly reachable
+ * copy and protecting it here is sufficient.
  *
  * <p>Scope is deliberately narrow — see {@link #SWAGGER_PATHS}. Only the UI,
  * its static assets, and the OpenAPI JSON the UI fetches through the gateway
