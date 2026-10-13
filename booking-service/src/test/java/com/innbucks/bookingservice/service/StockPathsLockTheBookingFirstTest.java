@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
+import com.innbucks.bookingservice.config.BookingMetrics;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
@@ -9,7 +10,9 @@ import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
+import com.innbucks.bookingservice.repository.ExpiryCandidate;
 import com.innbucks.bookingservice.testsupport.RecordingTransactionManager;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.springframework.beans.factory.ObjectProvider;
@@ -25,6 +28,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -80,6 +84,24 @@ class StockPathsLockTheBookingFirstTest {
         order.verify(bookingRepo).lockById(booking.getId());
         order.verify(inventory).release(LOW, 1);
         order.verify(inventory).release(HIGH, 2);
+    }
+
+    @Test
+    void expirySweep_locksTheBooking_thenReleasesInAscendingOrder() {
+        Booking booking = booking(Booking.BookingStatus.PENDING);
+        when(bookingRepo.findExpiryCandidates(any(), any()))
+                .thenReturn(List.of(new ExpiryCandidate(booking.getId(), booking.getExpiresAt())));
+        when(bookingRepo.lockByIdSkipLocked(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepo.markExpired(eq(booking.getId()), any())).thenReturn(1);
+
+        new BookingExpirationService(bookingRepo, inventory, mock(ApplicationEventPublisher.class), txManager,
+                new BookingMetrics(new SimpleMeterRegistry())).expirePending();
+
+        InOrder order = inOrder(bookingRepo, inventory);
+        order.verify(bookingRepo).lockByIdSkipLocked(booking.getId());
+        order.verify(inventory).release(LOW, 1);
+        order.verify(inventory).release(HIGH, 2);
+        order.verify(bookingRepo).markExpired(eq(booking.getId()), any());
     }
 
     @SuppressWarnings("unchecked")

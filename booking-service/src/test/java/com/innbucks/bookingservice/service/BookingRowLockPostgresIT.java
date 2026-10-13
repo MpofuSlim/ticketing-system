@@ -7,6 +7,8 @@ import com.innbucks.bookingservice.testsupport.BookingStockPostgresTestBase;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.util.AopTestUtils;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.sql.Connection;
@@ -35,13 +37,15 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  *   <li>confirm WAITS for a row someone else holds, then acts on what they
  *       committed: a hold the sweep cancelled is refused, a lapsed hold still
  *       PENDING is honoured;</li>
- *   <li>cancel and reverse take the booking row BEFORE any counter
- *       row — while they wait for the booking, the counter row is
+ *   <li>cancel, reverse and the sweep take the booking row BEFORE any counter
+ *       row — while they wait for (or skip) the booking, the counter row is
  *       provably free and unchanged. That is the first link of the global lock
  *       order, and the reason none of them can deadlock with a claim.</li>
  * </ul>
  */
 class BookingRowLockPostgresIT extends BookingStockPostgresTestBase {
+
+    @Autowired private BookingExpirationService expirationService;
 
     private final ExecutorService caller = Executors.newSingleThreadExecutor();
     private final UUID category = UUID.randomUUID();
@@ -160,6 +164,31 @@ class BookingRowLockPostgresIT extends BookingStockPostgresTestBase {
                     .as(result.getResponse().getContentAsString()).isEqualTo(200);
         }
         assertThat(statusOf(sold.getId())).isEqualTo("CANCELLED");
+        assertThat(remaining(category)).isEqualTo(6);
+    }
+
+    @Test
+    void sweep_skipsARowAnotherTransactionHolds_withoutTouchingItsStock() throws Exception {
+        UUID otherCategory = UUID.randomUUID();
+        category(UUID.randomUUID(), otherCategory, "General", 5);
+        Booking held = seedBooking(Booking.BookingStatus.PENDING, lapsed(2), category);
+        Booking free = seedBooking(Booking.BookingStatus.PENDING, lapsed(1), otherCategory);
+        BookingExpirationService sweep = AopTestUtils.getUltimateTargetObject(expirationService);
+        double skippedBefore = expirySkipped();
+
+        try (Connection other = lockBookingRowElsewhere(held.getId())) {
+            sweep.expirePending(); // SKIP LOCKED: returns without waiting
+
+            assertThat(statusOf(held.getId())).isEqualTo("PENDING");
+            assertThat(remaining(category)).as("the held booking's stock is untouched").isEqualTo(5);
+            assertThat(statusOf(free.getId())).isEqualTo("CANCELLED");
+            assertThat(remaining(otherCategory)).isEqualTo(6);
+            other.rollback();
+        }
+        assertThat(expirySkipped()).as("a locked row is not a failure").isEqualTo(skippedBefore);
+
+        sweep.expirePending(); // the next run takes it
+        assertThat(statusOf(held.getId())).isEqualTo("CANCELLED");
         assertThat(remaining(category)).isEqualTo(6);
     }
 }

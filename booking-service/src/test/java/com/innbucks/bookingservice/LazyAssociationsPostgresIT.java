@@ -130,7 +130,14 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
 
     private final UUID organizer = UUID.randomUUID();
 
-    private static final long EXPIRY_SWEEP_STATEMENTS = 13;
+    // One candidate scan, then per hold: the SKIP LOCKED row lock, its items,
+    // one counter release per category (one here), the status UPDATE, and the
+    // async listener's read of the booking. Five per hold (H1: one short
+    // transaction per booking; the old single-transaction sweep was 13 for
+    // five holds, but held every counter row it touched until the whole batch
+    // committed).
+    private static final int EXPIRY_HOLDS = 5;
+    private static final long EXPIRY_SWEEP_STATEMENTS = 1 + 5L * EXPIRY_HOLDS;
 
     /** Measured statement counts, printed at the end of each test for the record. */
     private final Map<String, Long> measured = new LinkedHashMap<>();
@@ -390,7 +397,7 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
 
     @Test
     void expirySweep_releasesEveryExpiredHold_inABoundedNumberOfStatements() {
-        Fixture f = seedEvent(5, Booking.BookingStatus.PENDING);
+        Fixture f = seedEvent(EXPIRY_HOLDS, Booking.BookingStatus.PENDING);
         jdbc.update("UPDATE bookings SET expires_at = ? WHERE event_id = ?",
                 LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1), f.eventId);
 
@@ -406,10 +413,9 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         verify(email, timeout(10_000).times(5)).sendEmail(eq(f.email), anyString(), anyString(), anyString());
         long sweep = stats.getPrepareStatementCount();
         measured.put("expirePending (5 holds, 10 tickets) + 5 async notices", sweep);
-        // The writes (status UPDATE, counter release) and the listeners' one
-        // booking read each are per hold by nature; the sweep's own reads are
-        // not: one SELECT of the holds and ONE batched items query for all
-        // five, where EAGER loaded each hold's items separately.
+        // Each hold is cancelled in a transaction of its own, so its lock and
+        // its items read are per hold, like its writes and its notice; what
+        // stays constant is the cost PER HOLD (no lazy load, no N+1 on top).
         assertThat(sweep).isEqualTo(EXPIRY_SWEEP_STATEMENTS);
     }
 

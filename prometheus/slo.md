@@ -442,3 +442,21 @@ removed, PIN set) failed on SMS and WhatsApp alike.
 **Action:** treat as an SMS-gateway plus WhatsApp-gateway incident (see the OTP
 delivery path). Nothing is retried: the decision log and the admin console remain
 the record of what happened to each phone.
+
+### `ExpirySkipping`
+
+**Trigger:** `booking_expiry_skipped_total` moved — booking-service's expiry
+sweep (`BookingExpirationService`) tried to cancel a lapsed PENDING hold and
+its transaction failed. The sweep cancels each hold in a transaction of its
+own, so the failure rolled back only that hold: its tickets stay claimed (they
+read as sold) and it stays PENDING, while every other lapsed hold is still
+cancelled. A hold skipped because a confirm or a cancel held its row is not
+counted.
+
+**Action:** grep booking-service for `Expiry sweep could not cancel` — each line
+names the booking and the exception. The same booking failing every run points
+at its data (a counter row the release cannot update, a constraint); many
+bookings failing at once points at the database (connectivity, pool,
+`lock_timeout`). Fix the cause; the next run retries every one of them. A
+paying customer is never blocked by it: confirm honours a lapsed hold that is
+still PENDING.

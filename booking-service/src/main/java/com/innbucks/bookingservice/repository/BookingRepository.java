@@ -2,8 +2,10 @@ package com.innbucks.bookingservice.repository;
 
 import com.innbucks.bookingservice.entity.Booking;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -40,15 +42,53 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     @Query("SELECT b FROM Booking b WHERE b.id = :id")
     Optional<Booking> lockById(@Param("id") UUID id);
 
-    // PENDING bookings whose seat hold has lapsed. Used by the expiration
-    // scheduler to auto-cancel them and publish BookingCancelled events.
+    // The expiry sweep's variant: a row another transaction holds (a confirm,
+    // a cancel, a reversal mid-write) is SKIPPED, not waited for, so the sweep
+    // never queues behind a buyer. Empty when the row is locked or gone; the
+    // next sweep picks it up if it is still due.
+    @Query(value = "SELECT * FROM bookings WHERE id = :id FOR UPDATE SKIP LOCKED", nativeQuery = true)
+    Optional<Booking> lockByIdSkipLocked(@Param("id") UUID id);
+
+    // The expiry sweep's candidates, read with NO lock: PENDING holds that
+    // lapsed before :now, oldest first, (expires_at, id) as a keyset cursor so
+    // a booking the sweep has to skip never stops it reaching the ones after
+    // it. Served by idx_bookings_pending_expires_at (V9). First page here,
+    // later pages from findExpiryCandidatesAfter.
     @Query("""
-        SELECT b FROM Booking b
+        SELECT new com.innbucks.bookingservice.repository.ExpiryCandidate(b.id, b.expiresAt)
+        FROM Booking b
         WHERE b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.PENDING
-          AND b.expiresAt IS NOT NULL
           AND b.expiresAt < :now
+        ORDER BY b.expiresAt, b.id
     """)
-    List<Booking> findExpiredPending(@Param("now") LocalDateTime now);
+    List<ExpiryCandidate> findExpiryCandidates(@Param("now") LocalDateTime now, Limit limit);
+
+    @Query("""
+        SELECT new com.innbucks.bookingservice.repository.ExpiryCandidate(b.id, b.expiresAt)
+        FROM Booking b
+        WHERE b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.PENDING
+          AND b.expiresAt < :now
+          AND (b.expiresAt > :afterExpiresAt OR (b.expiresAt = :afterExpiresAt AND b.id > :afterId))
+        ORDER BY b.expiresAt, b.id
+    """)
+    List<ExpiryCandidate> findExpiryCandidatesAfter(@Param("now") LocalDateTime now,
+                                                    @Param("afterExpiresAt") LocalDateTime afterExpiresAt,
+                                                    @Param("afterId") UUID afterId,
+                                                    Limit limit);
+
+    // The sweep's state change, as one bulk statement under the row lock the
+    // sweep already holds. Native, so no entity callback runs: it stamps
+    // updated_at itself (:now, bound from Java in UTC) and bumps version, so an
+    // optimistic writer that read the row before (extend-hold) loses with a
+    // 409 rather than writing PENDING back. Clears the persistence context so
+    // the locked entity, still PENDING in memory, can never be flushed over it.
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+        UPDATE bookings
+           SET status = 'CANCELLED', expires_at = NULL, updated_at = :now, version = version + 1
+         WHERE id = :id AND status = 'PENDING'
+    """, nativeQuery = true)
+    int markExpired(@Param("id") UUID id, @Param("now") LocalDateTime now);
 
     // EventReminderScheduler scan: which events still have CONFIRMED bookings
     // that were never considered for the pre-event reminder. Bounded by the
