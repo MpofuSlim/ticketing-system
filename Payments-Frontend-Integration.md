@@ -328,14 +328,26 @@ What the FE does with it:
   `expiresAt`. Never derive one from the other or from the rail on the
   client — the BE renders both, at the market offset like every other
   timestamp.
-- **Re-read the booking after `POST /payments` answers.** The `expiresAt`
-  you got from `POST /bookings` is stale once payment starts:
-  `GET /bookings/{id}` (or `GET /bookings/public/{id}`) returns the moved
-  value.
+- **Re-read the booking after `POST /payments` answers — whatever it
+  answers.** The `expiresAt` you got from `POST /bookings` is stale once
+  payment starts: `GET /bookings/{id}` (or `GET /bookings/public/{id}`)
+  returns the moved value.
+- **It moves even when the attempt then fails.** The hold is extended
+  *before* the instrument is minted — that order is what stops a paid
+  instrument landing on an expired booking — so an attempt that fails
+  after it has already moved `expiresAt` by its rail's window. For the card
+  that is the full 33 minutes, with nothing payable behind them, when the
+  gateway cannot start the checkout (`503` "Card payments are temporarily
+  unavailable; please try again shortly", `500` "Payment request was
+  rejected by the card gateway", or a `400` carrying the gateway's reason).
+  The same happens to the second of two near-simultaneous `POST /payments`
+  for one booking on different rails: it gets the first one's receipt, but
+  its own rail's hold has landed. The seats stay held for that window
+  either way; the customer can tap Pay again at once.
 - **It only ever moves forward.** A second attempt after the first one
   lapsed (a fresh Pay tap) pushes it out again from that moment; nothing
   shortens it.
-- **A hold that already lapsed refuses the payment, with nothing
+- **A hold booking-service won't extend refuses the payment, with nothing
   charged:**
 
   ```json
@@ -347,14 +359,26 @@ What the FE does with it:
   }
   ```
 
-  Send the customer back to rebook.
+  Send the customer back to rebook. Usually the hold has simply lapsed. But
+  booking-service also never holds a booking past **60 minutes from its
+  creation**, and it refuses — never shortens — a hold that would run past
+  that. So a late retry gets this same 409 while `GET /bookings/{id}` still
+  shows `PENDING` with a future `expiresAt` (an earlier attempt's hold):
+  with the default windows, a card attempt started more than 27 minutes
+  after the booking was created, a code attempt after 47, EcoCash after 50.
+  It is still a rebook; don't compute the cut-off on the client.
+- A `503` "We could not secure your booking right now; please try again
+  shortly" means booking-service could not be asked. Nothing was minted or
+  charged; retry the same request.
 - Marketplace and voucher orders get the same per-rail window on their own
   order expiry; a voucher till refuses cash while it runs, so a card
-  checkout now blocks cash for up to 33 minutes instead of 13.
+  checkout now blocks cash for up to 33 minutes instead of 13 — including
+  one the card gateway failed to start.
 
 Gotchas checklist:
 
 - [ ] Payment countdown from the instrument field; seat countdown from `expiresAt`.
-- [ ] Refresh the booking after `POST /payments` before showing `expiresAt`.
-- [ ] No client-side "+13 minutes" (or any per-rail arithmetic).
-- [ ] 409 "Your booking has expired" on `POST /payments` → rebook; nothing was charged.
+- [ ] Refresh the booking after every `POST /payments` answer, error included, before showing `expiresAt`.
+- [ ] No client-side "+13 minutes" (or any per-rail arithmetic, or the 60-minute cut-off).
+- [ ] 409 "Your booking has expired" on `POST /payments` → rebook, even if the booking still reads `PENDING`; nothing was charged.
+- [ ] 503 "We could not secure your booking…" → retry the same request.
