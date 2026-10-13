@@ -150,8 +150,12 @@ SMS/notification fallback path fails.
 ## 11. Cut traffic over
 
 1. Put your edge in front of the gateway:
-   **Cloudflare / nginx → `http://<NEW_HOST>:18080`** (the only externally
-   exposed port), terminating TLS as the current host does.
+   **Cloudflare / nginx → `http://<NEW_HOST>:18080`**, terminating TLS as the
+   current host does. nginx needs the real-client-IP config in
+   `deploy/k8s/README.md` §3.1 (Cloudflare `real_ip`, and `X-Real-IP` /
+   `X-Forwarded-For` overwritten with `$remote_addr`), and `18080` must be
+   reachable from that nginx only, never from the internet: the gateway keys
+   every per-IP rate limit on `X-Real-IP` and believes it from any caller.
 2. Validate against the new host directly first (temp subdomain or a `Host:`
    override) before touching production DNS.
 3. When green, **repoint the public hostname** (e.g. `dtx.innbucks.co.zw` /

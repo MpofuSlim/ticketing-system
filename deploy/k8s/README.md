@@ -99,6 +99,126 @@ proxy_pass http://127.0.0.1:30080;
 sudo nginx -t && sudo nginx -s reload
 ```
 
+### 3.1 The real client IP (both hosts)
+
+Every per-IP rate limit in the gateway (anonymous calls, OTP, MFA, password
+reset, `/payments/innbucks`, device security, …) keys on the **`X-Real-IP`**
+header and trusts it as given (`ClientIpResolver`). nginx is what makes that
+safe, and it takes all three steps below, on **both** hosts.
+`X-Forwarded-For` is never used: Cloudflare appends to whatever the caller
+sent, so its left-most entry is the caller's choice.
+
+**Order: nginx on a host first, then the api-gateway image on that host.**
+Until nginx overwrites `X-Real-IP`, a caller who sends one picks its own bucket.
+The nginx change is safe on its own with the older gateway, which ignores the
+header.
+
+**1. Trust `CF-Connecting-IP` from Cloudflare peers only.** Generate the
+snippet from Cloudflare's published lists (<https://www.cloudflare.com/ips-v4>,
+<https://www.cloudflare.com/ips-v6>); the script refuses anything that is not
+a list of CIDRs, runs `nginx -t`, reloads, and restores the previous file if the
+test fails:
+
+```sh
+cd ~/ticketing-system && git pull
+nginx -V 2>&1 | grep -o http_realip_module  # must print it (Ubuntu/Debian packages include it)
+./scripts/cloudflare-real-ip.sh --print     # review
+sudo ./scripts/cloudflare-real-ip.sh        # writes /etc/nginx/snippets/cloudflare-real-ip.conf
+```
+
+It writes one `set_real_ip_from <cidr>;` per Cloudflare range, then
+`real_ip_header CF-Connecting-IP;`. A request whose TCP peer is not Cloudflare
+keeps its peer address, so nobody can choose `$remote_addr` by sending the
+header.
+
+**2. Overwrite both headers in every `location` that proxies to the gateway.**
+That is every `proxy_pass http://127.0.0.1:30080…` (on the production vhost:
+the `/foundry/` prefix location and the root-relative `location /v3/api-docs`
+the Swagger UI needs):
+
+```nginx
+location /foundry/ {
+    include snippets/cloudflare-real-ip.conf;
+    proxy_pass http://127.0.0.1:30080/;
+    # ...this location's existing proxy_set_header lines stay...
+    proxy_set_header X-Real-IP       $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;   # OVERWRITE: never $proxy_add_x_forwarded_for
+}
+```
+```sh
+sudo nginx -t && sudo nginx -s reload
+```
+
+- `proxy_set_header` replaces a same-named header the caller sent, which is the
+  point; `$proxy_add_x_forwarded_for` would keep the caller's chain.
+- nginx inherits `proxy_set_header` from an outer block **only if the location
+  sets none of its own**, so put both lines in each gateway location, not once
+  at `server` level.
+- The `include` is location-level on purpose: `dtx.innbucks.co.zw` also serves
+  other systems under other prefixes, and server-level `real_ip` would change
+  their `$remote_addr` (and any `allow`/`deny` keyed on it) too. On a vhost that
+  serves only this system, include it once at `server` level instead.
+
+**3. NodePort 30080 is reachable from the host only.** The gateway believes
+`X-Real-IP` from anyone who can reach it, so the only caller must be the host's
+nginx.
+
+- **AWS security group:** inbound only `80`/`443` (Cloudflare) and `22`
+  (admins). Never `30080` or the NodePort range `30000-32767`, and not from the
+  VPC either.
+- A host firewall `INPUT` rule (ufw, iptables) does **not** do this: kube-proxy
+  DNATs NodePort traffic in `PREROUTING`, so it never passes `INPUT`. Use the
+  security group. (Belt and braces, in a maintenance window:
+  `kube-proxy-arg: ["nodeport-addresses=127.0.0.0/8"]` in
+  `/etc/rancher/k3s/config.yaml` plus `sudo systemctl restart k3s` limits every
+  NodePort to loopback; then re-check that `curl -s -o /dev/null -w '%{http_code}\n'
+  http://127.0.0.1:30080/events` still answers.)
+- Check from a machine **outside** the box (and outside the VPC):
+  `nc -vz -w 5 <host public IP> 30080` must time out or be refused.
+
+**Refreshing the Cloudflare ranges:** `sudo ./scripts/cloudflare-real-ip.sh`
+on both hosts every quarter and whenever Cloudflare announces a change. A stale
+list never lets a caller choose its key: a request from an unlisted edge keeps
+that edge's address, so its callers share one bucket (more 429s) until the
+refresh.
+
+**Verify** after the gateway image is deployed (step order above):
+
+```sh
+# On the box: the header arrives. Neither count may move with real traffic
+# (a curl to 127.0.0.1:30080 from the box has no X-Real-IP and counts as absent).
+kubectl -n ticketing port-forward deploy/api-gateway 19090:9090 >/dev/null &
+sleep 2; curl -s localhost:19090/actuator/prometheus | grep gateway_client_ip_fallback
+kill %1
+```
+
+From your own machine, through Cloudflare, a spoofed header must not change
+your key. Keep this running for ~30 s:
+
+```sh
+BASE=https://dtx.innbucks.co.zw/foundry     # production; use the staging host there
+curl -s https://www.cloudflare.com/cdn-cgi/trace | grep '^ip='   # your address as Cloudflare sees it
+for i in $(seq 1 60); do
+  curl -s -o /dev/null -w '%{http_code} ' \
+    -H "X-Forwarded-For: 198.51.100.$i" -H "X-Real-IP: 198.51.100.$i" "$BASE/events"
+  sleep 0.5
+done; echo
+```
+
+and meanwhile, on the box, list the anonymous `/events` buckets (the password
+stays inside the redis pod):
+
+```sh
+kubectl -n ticketing exec redis-0 -- sh -c \
+  'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli --scan --pattern "request_rate_limiter.{event-service-route.*"'
+```
+
+Expect `request_rate_limiter.{event-service-route.ip:<your address>}.tokens` /
+`.timestamp` (an IPv6 address prints uncompressed, e.g. `2001:db8:0:0:0:0:0:1`)
+and **no** `198.51.100.x` key. An `...event-service-route.anonymous}` key means
+the gateway is not getting `X-Real-IP` (an older image, or step 2 missing); a
+`198.51.100.x` key means nginx is passing the caller's header through.
+
 ## 4. Network segmentation (optional, OWASP A05)
 
 `deploy/k8s/optional/06-networkpolicy.yaml` locks the namespace down to
