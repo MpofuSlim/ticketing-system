@@ -6,6 +6,7 @@ import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.config.MarketTimeZone;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
+import com.innbucks.bookingservice.dto.CategoryLookupDTO;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.GateLookupResponseDTO;
 import com.innbucks.bookingservice.dto.ScanAccessDTO;
@@ -56,13 +57,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Pins WHERE the scan, gate-lookup and reversal paths make their remote calls:
- * never while a transaction is open. Each remote client's answer records
- * {@link RecordingTransactionManager#inTransaction()} at the moment it is
- * called, and each local write records it too, so a regression that puts a
- * method-level {@code @Transactional} back (or moves a call into a phase) fails
- * here rather than as a pool held hostage by a slow user-service or
- * event-service.
+ * Pins WHERE the scan, gate-lookup, reversal and resurrecting-confirm paths
+ * make their remote calls: never while a transaction is open. Each remote
+ * client's answer records {@link RecordingTransactionManager#inTransaction()}
+ * at the moment it is called, and each local write records it too, so a
+ * regression that puts a method-level {@code @Transactional} back (or moves a
+ * call into a phase) fails here rather than as a pool held hostage by a slow
+ * user-service, event-service or seat-service.
  *
  * <p>Real Postgres behaviour — committed rows, a lockable row during the call —
  * is pinned by {@code RemoteCallsOutsideTransactionsPostgresIT}.
@@ -77,6 +78,8 @@ class RemoteCallsOutsideTransactionTest {
     private final ScanAttemptRepository scanAttempts = mock(ScanAttemptRepository.class);
     private final UserServiceClient userServiceClient = mock(UserServiceClient.class);
     private final EventServiceClient eventServiceClient = mock(EventServiceClient.class);
+    private final SeatServiceClient seatServiceClient = mock(SeatServiceClient.class);
+    private final CategoryInventoryRepository inventory = mock(CategoryInventoryRepository.class);
 
     private final UUID organizer = UUID.randomUUID();
     private final UUID teamMember = UUID.randomUUID();
@@ -278,6 +281,67 @@ class RemoteCallsOutsideTransactionTest {
         assertThat(txManager.outcomes()).containsExactly(COMMITTED, ROLLED_BACK);
     }
 
+    // ---- resurrect on confirm ------------------------------------------------------
+
+    @Test
+    void resurrect_asksSeatServiceWithNoTransaction_thenClaimsAndConfirmsInOne() {
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        BookingService service = bookingService(publisher);
+        Booking booking = cancelledBooking(Booking.CancelReason.EXPIRED);
+        UUID category = booking.getItems().get(0).getCategoryId();
+        when(bookingRepo.lockById(booking.getId())).thenAnswer(inv -> {
+            record("lock");
+            return Optional.of(booking);
+        });
+        when(seatServiceClient.getCategory(category)).thenAnswer(inv -> {
+            record("seat-service");
+            return ApiResult.ok(CategoryLookupDTO.builder().seatCategoryId(category)
+                    .eventId(booking.getEventId()).name("General").totalSeats(10).build());
+        });
+        when(inventory.tryClaim(category, 1)).thenAnswer(inv -> {
+            record("claim");
+            return 1;
+        });
+        when(bookingRepo.save(any())).thenAnswer(inv -> {
+            record("save");
+            return inv.getArgument(0);
+        });
+        org.mockito.Mockito.doAnswer(inv -> {
+            record("publish");
+            return null;
+        }).when(publisher).publishEvent(any(BookingDomainEvent.BookingConfirmed.class));
+
+        var result = service.confirmBooking(booking.getId(), null);
+
+        assertThat(result.getStatus()).isEqualTo(Booking.BookingStatus.CONFIRMED);
+        // Phase 1 reads the cancelled row under its lock and commits nothing;
+        // seat-service is asked with no transaction open; phase 3 locks the row
+        // again and claims, saves and publishes in one transaction.
+        assertThat(calls).containsExactly(
+                "lock|true", "seat-service|false", "lock|true", "claim|true", "save|true", "publish|true");
+        assertThat(txManager.readOnlyFlags()).containsExactly(false, false);
+        assertThat(txManager.outcomes()).containsExactly(COMMITTED, COMMITTED);
+    }
+
+    @Test
+    void resurrect_seatServiceDown_writesNothing_andOpensNoSecondTransaction() {
+        BookingService service = bookingService(mock(ApplicationEventPublisher.class));
+        Booking booking = cancelledBooking(Booking.CancelReason.CUSTOMER_CANCELLED);
+        when(bookingRepo.lockById(booking.getId())).thenReturn(Optional.of(booking));
+        when(seatServiceClient.getCategory(any())).thenAnswer(inv -> {
+            record("seat-service");
+            throw new com.innbucks.bookingservice.exception.SeatServiceUnavailableException("down");
+        });
+
+        assertThatThrownBy(() -> service.confirmBooking(booking.getId(), null))
+                .isInstanceOf(com.innbucks.bookingservice.exception.SeatServiceUnavailableException.class);
+
+        assertThat(calls).containsExactly("seat-service|false");
+        verify(inventory, never()).tryClaim(any(), anyInt());
+        verify(bookingRepo, never()).save(any());
+        assertThat(txManager.outcomes()).containsExactly(COMMITTED);
+    }
+
     // ---- shape -----------------------------------------------------------------
 
     @Test
@@ -285,7 +349,10 @@ class RemoteCallsOutsideTransactionTest {
         for (Method m : new Method[] {
                 TicketScanService.class.getMethod("scan", String.class, String.class),
                 GateLookupService.class.getMethod("lookup", String.class),
-                BookingService.class.getMethod("reverseConfirmedBooking", UUID.class, String.class)}) {
+                BookingService.class.getMethod("reverseConfirmedBooking", UUID.class, String.class),
+                BookingService.class.getMethod("confirmBooking", UUID.class),
+                BookingService.class.getMethod("confirmBooking", UUID.class,
+                        com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO.class)}) {
             assertThat(m.isAnnotationPresent(Transactional.class))
                     .as("%s.%s must not be @Transactional — it makes a remote call",
                             m.getDeclaringClass().getSimpleName(), m.getName())
@@ -320,8 +387,8 @@ class RemoteCallsOutsideTransactionTest {
     private BookingService bookingService(ApplicationEventPublisher publisher) {
         ObjectProvider<EventServiceClient> events = mock(ObjectProvider.class);
         when(events.getIfAvailable()).thenReturn(eventServiceClient);
-        return new BookingService(bookingRepo, itemRepo, mock(CategoryInventoryRepository.class),
-                mock(SeatServiceClient.class), publisher, new QrCodeGenerator(), events,
+        return new BookingService(bookingRepo, itemRepo, inventory,
+                seatServiceClient, publisher, new QrCodeGenerator(), events,
                 txManager);
     }
 
@@ -354,6 +421,13 @@ class RemoteCallsOutsideTransactionTest {
                 .ticketNumber("T-1")
                 .categoryName("General")
                 .build());
+        return booking;
+    }
+
+    private Booking cancelledBooking(Booking.CancelReason reason) {
+        Booking booking = confirmedBooking(2L);
+        booking.setStatus(Booking.BookingStatus.CANCELLED);
+        booking.setCancelReason(reason);
         return booking;
     }
 

@@ -39,7 +39,9 @@ import java.util.UUID;
  *       {@code FOR UPDATE SKIP LOCKED} (a row a confirm or a cancel holds is
  *       left for the next run, never waited for), re-checked (still PENDING,
  *       still lapsed), its tickets released through {@link StockLedger} in the
- *       canonical order, and one bulk {@code UPDATE} moving it to CANCELLED.
+ *       canonical order, and one bulk {@code UPDATE} moving it to CANCELLED
+ *       with {@code cancel_reason = 'EXPIRED'} (V25: a payment that lands
+ *       late may resurrect it).
  *       So each transaction takes the booking row, then counter rows in
  *       ascending order, and commits before the next booking starts: no lock
  *       outlives its booking;</li>
@@ -174,7 +176,10 @@ public class BookingExpirationService {
                     log.warn("Expiry sweep found booking no longer PENDING at update bookingId={}", bookingId);
                     return Outcome.SKIPPED;
                 }
-                eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
+                // markExpired wrote the reason in SQL; the entity (detached by
+                // its clear) never saw it, so the event is told explicitly.
+                eventPublisher.publishEvent(
+                        BookingDomainEvent.BookingCancelled.of(booking, Booking.CancelReason.EXPIRED));
                 log.info("Booking auto-cancelled, hold expired bookingId={} userEmail={}",
                         booking.getId(), booking.getUserEmail());
                 return Outcome.EXPIRED;

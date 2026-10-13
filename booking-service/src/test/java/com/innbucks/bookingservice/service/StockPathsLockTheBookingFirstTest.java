@@ -5,6 +5,7 @@ import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.config.BookingMetrics;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
+import com.innbucks.bookingservice.dto.CategoryLookupDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
@@ -31,11 +32,12 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 /**
- * Every path that RETURNS stock takes the booking row's lock before it touches
- * a single counter row — the first link of the global lock order
+ * Every path that RETURNS stock — and resurrect, which takes it back — takes
+ * the booking row's lock before it touches a single counter row — the first link of the global lock order
  * ({@link StockLedger}). Taking a counter row first and the booking row second
  * is the shape that deadlocks against a path doing it the other way round, so
  * each path here is pinned to: lock the booking, then release, in ascending
@@ -53,6 +55,7 @@ class StockPathsLockTheBookingFirstTest {
     private final BookingRepository bookingRepo = mock(BookingRepository.class);
     private final CategoryInventoryRepository inventory = mock(CategoryInventoryRepository.class);
     private final EventServiceClient eventClient = mock(EventServiceClient.class);
+    private final SeatServiceClient seatClient = mock(SeatServiceClient.class);
     private final RecordingTransactionManager txManager = new RecordingTransactionManager();
 
     @Test
@@ -104,12 +107,30 @@ class StockPathsLockTheBookingFirstTest {
         order.verify(bookingRepo).markExpired(eq(booking.getId()), any());
     }
 
+    @Test
+    void resurrect_locksTheBooking_thenClaimsInAscendingOrder() {
+        Booking booking = booking(Booking.BookingStatus.CANCELLED);
+        booking.setCancelReason(Booking.CancelReason.EXPIRED);
+        when(bookingRepo.lockById(booking.getId())).thenReturn(Optional.of(booking));
+        when(seatClient.getCategory(any())).thenAnswer(inv -> ApiResult.ok(CategoryLookupDTO.builder()
+                .seatCategoryId(inv.getArgument(0)).name("Bay").totalSeats(10).build()));
+        when(inventory.tryClaim(any(), anyInt())).thenReturn(1);
+
+        bookingService().confirmBooking(booking.getId());
+
+        InOrder order = inOrder(bookingRepo, inventory);
+        // Phase 1 decides (no stock touched), phase 3 locks again for the claim.
+        order.verify(bookingRepo, times(2)).lockById(booking.getId());
+        order.verify(inventory).tryClaim(LOW, 1);
+        order.verify(inventory).tryClaim(HIGH, 2);
+    }
+
     @SuppressWarnings("unchecked")
     private BookingService bookingService() {
         ObjectProvider<EventServiceClient> events = mock(ObjectProvider.class);
         when(events.getIfAvailable()).thenReturn(eventClient);
         return new BookingService(bookingRepo, mock(BookingItemRepository.class), inventory,
-                mock(SeatServiceClient.class), mock(ApplicationEventPublisher.class), new QrCodeGenerator(),
+                seatClient, mock(ApplicationEventPublisher.class), new QrCodeGenerator(),
                 events, txManager);
     }
 

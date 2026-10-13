@@ -483,3 +483,90 @@ bookings failing at once points at the database (connectivity, pool,
 `lock_timeout`). Fix the cause; the next run retries every one of them. A
 paying customer is never blocked by it: confirm honours a lapsed hold that is
 still PENDING.
+
+### `ResurrectFailed`
+
+**Trigger:** `booking_confirm_resurrected_total{outcome="failed"}` moved. A
+payment confirmed a booking that had already been cancelled — its hold expired
+(`reason="expired"`), the buyer cancelled it (`customer_cancelled`) or released
+it (`buyer_released`) — and booking-service tried to bring it back, but could
+not re-claim its tickets. The customer has paid and has no ticket.
+payment-service keeps the payment `COMPLETED_UNCONFIRMED` and retries the
+confirm every minute, so the counter keeps moving until the booking is resolved
+(and `payment.payments.unconfirmed_retry{outcome=still_failing}` moves with it).
+
+**Action:** grep booking-service for `Resurrect refused` — each line names the
+booking and why:
+
+- `not enough tickets left` — the category sold out after the cancellation.
+  **Raising the category's capacity in seat-service does NOT help on its own:**
+  booking-service's counter (`category_inventory.remaining`, database
+  `booking_service`) is seeded from seat-service once, the first time the
+  category is booked, and after that only claims and releases move it. What
+  works:
+  - free a ticket through booking-service — cancel a PENDING hold or reverse a
+    CONFIRMED booking in that category. The release returns the ticket to the
+    counter and the next retry (within a minute) claims it, unless a new
+    booking claims it first;
+  - if the venue really has the room: raise the capacity in seat-service so the
+    two stay in step, THEN add the same number to the counter by hand, and
+    write down why in the incident:
+    `kubectl -n ticketing exec postgres-0 -- psql -U postgres -d booking_service -c "UPDATE category_inventory SET remaining = remaining + <n> WHERE category_id = '<category id>';"`
+    (a counter raised past what the venue holds oversells it);
+  - or refund the payment through the payment operator queue.
+- `category no longer exists` — seat-service answered 200 with no data for a
+  category; refund.
+- no `Resurrect refused` line, but `seat-service ... fallback engaged` — seat-
+  service could not be asked. **This is also how a DELETED category shows up**:
+  seat-service answers 404 for it, and the Feign fallback reports that exactly
+  like an outage, so the confirm is a 503 on every retry, for ever. If
+  seat-service is up and the same booking keeps failing, check
+  `GET /seat-categories/{id}` for each of its categories: a 404 there is a
+  deleted category (refund).
+
+An admin-reversed booking, or one cancelled before V25 (`cancel_reason` NULL),
+is never resurrected and never counted here; its payment sits in the payment
+operator queue as before.
+
+**Right after the V25 rollout, check once for NULL reasons written by the old
+pods.** For as long as an old booking-service pod runs beside a new one (the
+rolling update's surge, after the new pod has applied V25), the old pod's sweep
+and customer cancel write CANCELLED with `cancel_reason` NULL. Those are never
+resurrected — a buyer who pays late for one is refused as before H2, and nothing
+counts or alerts. List the paid-but-unconfirmed bookings, then the ones among
+them the old pods cancelled (both clocks are UTC on the cell):
+
+```sh
+kubectl -n ticketing exec postgres-0 -- psql -U postgres -d payment_service -At -c \
+  "SELECT order_ref FROM payment WHERE order_type = 'BOOKING' AND status = 'COMPLETED_UNCONFIRMED';"
+kubectl -n ticketing exec postgres-0 -- psql -U postgres -d booking_service -c \
+  "SELECT id, updated_at, cash_amount, availability_released FROM bookings
+    WHERE id IN (<ids from above>) AND status = 'CANCELLED' AND cancel_reason IS NULL
+      AND updated_at >= (SELECT installed_on FROM flyway_schema_history WHERE version = '25');"
+```
+
+A row there with `cash_amount` NULL was never confirmed, so it was an expiry or
+a buyer cancel, never a reversal (reversal is of a CONFIRMED booking, and every
+confirm sets `cash_amount`). To let the next retry resurrect it, give it the
+reason by hand and note it in the incident:
+`UPDATE bookings SET cancel_reason = 'EXPIRED', version = version + 1 WHERE id = '<id>' AND status = 'CANCELLED' AND cancel_reason IS NULL AND cash_amount IS NULL;`
+(`EXPIRED` and `CUSTOMER_CANCELLED` resurrect alike; the reason only labels the
+counter). Never set a reason on a row with `cash_amount` set: that is a refund.
+
+### `HoldExtensionRefused`
+
+**Trigger:** `booking_hold_extension_refused_total{reason="max_per_call"}` moved
+— payment-service asked booking-service to hold a booking more than
+`BOOKING_MAX_HOLD_EXTENSION` (default PT45M) from now. That bound sits above
+every rail's instrument (card checkout, the longest, is 33 minutes), so it only
+fires when a rail's TTL was raised without raising it. Every such payment was
+refused (409, "Your booking has expired") before anything was minted, so
+customers on that rail cannot pay at all.
+
+**Action:** grep booking-service for `Hold extension refused, more than` — the
+line shows the deadline asked for. Raise `BOOKING_MAX_HOLD_EXTENSION` above the
+rail's real payable deadline + 3 minutes (one key in the `cell-zw` ConfigMap,
+patched on its own, then roll booking-service), or lower the rail's TTL back.
+Never raise it past `BOOKING_MAX_TOTAL_HOLD` (PT60M): a hold cannot outlive the
+absolute cap anyway. `reason="max_total"` is not alerted: it is a buyer who
+kept starting payments for an hour, refused by design (D26).

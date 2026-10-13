@@ -2271,12 +2271,14 @@ racing `[B,A]` deadlocked and the abort reached the buyer as a 500.
 - **The booking row is locked before its items are read.**
   `BookingRepository.lockById` (`PESSIMISTIC_WRITE`, no fetch join, no
   `DISTINCT` — Postgres refuses `FOR UPDATE` on either) for confirm, customer
-  cancel and reverse's write phase (which re-compares `@Version` under the
-  lock); the items load in the same transaction, one statement more.
-  `findByIdWithItems` stays for unlocked reads and extend-hold.
+  cancel, extend-hold (since H2) and reverse's write phase (which re-compares
+  `@Version` under the lock); the items load in the same transaction, one
+  statement more. `findByIdWithItems` stays for unlocked reads.
 - **Confirm honours a lapsed hold that is still PENDING.** Its tickets stay
   claimed until the sweep commits, and the sweep takes the same row lock, so it
-  cannot oversell. A hold the sweep already cancelled is still `409`.
+  cannot oversell. A hold the sweep already cancelled is resurrected since H2
+  (below) while its stock remains; only a cancellation with a NULL reason or
+  `ADMIN_REVERSED` is refused `409` outright.
 - **The expiry sweep runs ONE short transaction per booking**: candidates read
   with no lock (`(expires_at, id)` keyset, 200 a page), then each one `FOR UPDATE
   SKIP LOCKED`, re-checked, released through `StockLedger`, and moved to
@@ -2321,8 +2323,98 @@ racing `[B,A]` deadlocked and the abort reached the buyer as a 500.
   last compares the cancel / confirm / reverse / extend-hold Swagger example
   constants STRICTLY against real responses through the app's own JSON mapper
   (the standalone dispatch test has a default one), and drives extend-hold
-  against the sweep's real statements: without the sweep's `version` bump that
-  race is a 200 that writes the booking back to PENDING over the cancellation.
+  against the sweep's real statements: extend-hold waits for the sweep's row
+  lock and refuses the cancelled booking (409 not PENDING); without the lock
+  that race is a 200 that writes the booking back to PENDING over the
+  cancellation.
+
+## Booking payment window, hold caps and resurrect (booking-service, H2, V25)
+
+**A payment can land after its booking was cancelled, and a cancel can land
+while a payment is open; V25 makes both visible.** `bookings.payment_open_until`
+is "a payment may still land until T"; `bookings.cancel_reason` is why a
+CANCELLED booking was cancelled (CHECK: `EXPIRED`, `CUSTOMER_CANCELLED`,
+`BUYER_RELEASED`, `ADMIN_REVERSED`; NULL on every pre-V25 row).
+
+- **Who writes the reason:** the sweep's `markExpired` (`EXPIRED`, in the SQL —
+  the event is told explicitly, the detached entity never sees it),
+  `cancelBooking` (`CUSTOMER_CANCELLED`, a SUPER_ADMIN's cancel of a PENDING
+  booking included: nobody has paid), `reverseConfirmedBooking`
+  (`ADMIN_REVERSED`), and P2-4's public release (`BUYER_RELEASED`, no writer
+  yet). A new reason needs a migration that widens the CHECK. Resurrectable or
+  not is decided in ONE place, `Booking.CancelReason.resurrectable()`.
+- **extend-hold locks the row first and stamps the window.** payment-service
+  calls it before minting EVERY instrument, so `payment_open_until =
+  max(existing, holdUntil)` reliably bounds a live payment; `expiresAt =
+  max(expiresAt, holdUntil)` as before. A lapsed hold the sweep has not cancelled
+  is now extendable (confirm honours it too).
+- **Two hold caps, REFUSED with the existing 409, never clamped**: `holdUntil`
+  more than `app.booking.max-hold-extension` (`BOOKING_MAX_HOLD_EXTENSION`, PT45M)
+  from now, then `holdUntil` past `created_at + app.booking.max-total-hold`
+  (`BOOKING_MAX_TOTAL_HOLD`, PT60M, D26; a row with no `created_at` fails
+  closed). payment-service maps the 409 to "Your booking has expired" and mints
+  nothing. **Never clamp-then-200**: a hold clamped short under a live
+  instrument is the paid-but-no-ticket hole. Per-call is checked first so a
+  misconfigured rail shows up as one even on an old booking.
+  `booking.hold.extension_refused{reason=max_per_call|max_total}`; alert
+  `HoldExtensionRefused` on `max_per_call` only (a rail TTL raised above the
+  bound — every payment on it is refused). Raise the bound with any rail TTL.
+- **The customer cancel is refused while `payment_open_until > now`**: 409
+  `data.errorCode: PAYMENT_IN_PROGRESS`, `data.retryAfterSeconds` (ceil). Checked
+  under the row lock, after the owner / CONFIRMED / CANCELLED checks. **Known
+  limitation (D24, documented, not fixed):** payment-service extends BEFORE it
+  mints, so a card prepare that then fails still stamps 33 minutes with no live
+  instrument, and the cancel is refused for up to 33 minutes. The fix is
+  payment-service telling booking when an attempt is final (v1.1).
+- **Resurrect on confirm.** A CANCELLED booking whose reason is `EXPIRED`,
+  `CUSTOMER_CANCELLED` or `BUYER_RELEASED` is CONFIRMED by a late payment when
+  stock remains; never `ADMIN_REVERSED`, never NULL. So confirm is **no longer
+  `@Transactional`**: phase 1 (row lock) confirms a PENDING booking exactly as
+  before or hands on a `Resurrection`; phase 2 asks seat-service whether each
+  category still exists **with no transaction open**
+  (`RemoteCallsOutsideTransactionTest`); phase 3 re-locks the row, re-checks it,
+  `tryClaim`s each category in `StockLedger` order (confirm's guard: capacity
+  only), clears the reason and confirms. Any failed claim rolls every claim back.
+  **The phase-3 re-check is the double-claim guard**: two confirms of one
+  payment (first confirm vs the one-minute retry, EcoCash notify vs poller) both
+  pass phase 1 while the row is CANCELLED, so phase 3 replays a row another
+  confirm resurrected (no claim, no second `BookingConfirmed`) and refuses one
+  that changed otherwise (resurrected, then reversed) — pinned by
+  `BookingResurrectRecheckTest` and two races in `BookingPaymentWindowPostgresIT`.
+  Sold out → 409 (the body confirm always answered for a cancelled booking);
+  seat-service unreachable → 503. payment-service keeps `COMPLETED_UNCONFIRMED`
+  and retries every minute either way. **A deleted category is a 503 too, not
+  the 409 the plan wanted**: the Feign fallback turns seat-service's 404 into
+  the same 503 as an outage (the 409 branch runs only for a 200 with no data),
+  so it retries for ever; Swagger and the runbook say how to tell. Telling them
+  apart needs a status-keeping fallback factory for every seat-service call.
+  **Raising a category's capacity in seat-service does NOT free a sold-out
+  resurrect**: `category_inventory.remaining` is seeded once and only claims and
+  releases move it. The V5 trigger re-activates the items
+  on CANCELLED → CONFIRMED (pinned against Postgres). `BookingConfirmed` fires as
+  for any confirm, so tickets go out and event-service's availability is
+  decremented once (a PENDING cancellation never released it).
+  `booking.confirm.resurrected{reason,outcome}` (6 series at 0); alert
+  `ResurrectFailed` on any `outcome="failed"`: a customer paid and has no ticket.
+- **The cancellation notice reads the reason** (`BookingCancelled.reason`, D16):
+  no notice for `BUYER_RELEASED`, none for `EXPIRED` when `payment_open_until`
+  is NULL (an on-sale abandons thousands of unpaid holds; each SMS costs money),
+  and none when the booking is CONFIRMED by the time the async listener reads it
+  (resurrected). Everything else is announced exactly as before.
+- **The rollout leaves two kinds of row H2 cannot help, both fail-closed.**
+  Payments started on the old image have `payment_open_until` NULL (no cancel
+  guard, no expiry notice). And for as long as an old pod runs beside a new one
+  (the rolling update's surge), its sweep and customer cancel write CANCELLED
+  with `cancel_reason` NULL, which is never resurrected. Right after the rollout,
+  check the bookings of `COMPLETED_UNCONFIRMED` booking payments for CANCELLED +
+  NULL reason + `updated_at` at or after V25's `installed_on`; the runbook
+  (`ResurrectFailed`) has the query and the hand fix.
+- Pinned by `BookingServiceExtendHoldTest`, `BookingPaymentWindowPostgresIT`
+  (every reason writer, the CHECK, guarded cancel, resurrect per reason and each
+  refusal, items re-activated, the expiry notice), `BookingCancelledNotificationListenerTest`,
+  `StockPathsLockTheBookingFirstTest`, `BookingMetricsTest` and the H2 examples
+  in `BookingErrorExamplesPostgresIT`. `LazyAssociationsPostgresIT`: extend-hold
+  is 3 statements (lock, items, update).
 
 ## Scan reports: `to` is widened server-side, and why
 

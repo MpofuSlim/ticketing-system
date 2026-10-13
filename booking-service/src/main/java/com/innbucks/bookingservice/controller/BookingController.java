@@ -112,6 +112,20 @@ public class BookingController {
     static final String EXAMPLE_UNREADABLE_HOLD_UNTIL = """
             { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "holdUntil": "Must be an ISO-8601 date-time." } }
             """;
+    static final String EXAMPLE_HOLD_NOT_EXTENDABLE = """
+            { "code": "409 CONFLICT", "message": "This booking's seat hold can no longer be extended — it's not in a PENDING state.", "data": null }
+            """;
+    // The default 5-minute hold; the number is app.booking.hold-ttl-minutes.
+    static final String EXAMPLE_HOLD_CAP_REACHED = """
+            { "code": "409 CONFLICT", "message": "Your seat reservation has expired. Please start a new booking and complete payment within 5 minutes.", "data": null }
+            """;
+    // retryAfterSeconds counts down to the booking's payment window; 742 is an example.
+    static final String EXAMPLE_PAYMENT_IN_PROGRESS = """
+            { "code": "409 CONFLICT", "message": "A payment for this booking is still open. If you don't complete it, the booking is released automatically.", "data": { "errorCode": "PAYMENT_IN_PROGRESS", "retryAfterSeconds": 742 } }
+            """;
+    static final String EXAMPLE_SEAT_SERVICE_DOWN = """
+            { "code": "503 SERVICE_UNAVAILABLE", "message": "We're having trouble checking seat availability right now. Please try again in a moment.", "data": null }
+            """;
 
     @PostMapping
     @Operation(summary = "Create booking", description = "Creates a new pending booking. The phone number is taken from the JWT when present, otherwise from the request body's `phoneNumber`. " +
@@ -773,17 +787,26 @@ public class BookingController {
     }
 
     /**
-     * S2S: payment-service extends the seat hold to outlive the InnBucks
-     * payment code it is about to mint (hold 5 min vs code 10 min was the
-     * paid-but-no-ticket gap). Same internal-token discipline as the GET
-     * above; 409 when the booking is no longer PENDING or the hold already
-     * lapsed — the caller refuses the payment before any money moves.
+     * S2S: payment-service extends the seat hold to outlive the payment
+     * instrument it is about to mint (hold 5 min vs code 10 min was the
+     * paid-but-no-ticket gap), and the call stamps the booking's payment
+     * window. Same internal-token discipline as the GET above; 409 when the
+     * booking is no longer PENDING or the hold asked for is past a cap — the
+     * caller refuses the payment before any money moves.
      */
     @org.springframework.web.bind.annotation.PatchMapping("/internal/{id}/extend-hold")
     @SecurityRequirements()
     @Operation(summary = "Extend seat hold (internal S2S)",
-            description = "payment-service calls this before minting a payment code so the hold provably "
-                    + "outlives the code. Never shortens a hold. Authenticated with the shared "
+            description = "payment-service calls this before minting EVERY payment instrument (InnBucks code, "
+                    + "EcoCash prompt, card checkout) so the hold provably outlives it. Locks the booking row. "
+                    + "Never shortens a hold (expiresAt = max(expiresAt, holdUntil)), and records the payment "
+                    + "window (paymentOpenUntil = max(paymentOpenUntil, holdUntil)), during which the customer "
+                    + "cancel is refused. A PENDING hold whose expiresAt has passed but which the expiry sweep "
+                    + "has not cancelled is extended.\n\n"
+                    + "Two caps, both REFUSED with a 409 and never clamped (a hold clamped short under a live "
+                    + "instrument is a payment that lands with no ticket): holdUntil more than "
+                    + "app.booking.max-hold-extension (PT45M) from now, and holdUntil past the booking's "
+                    + "createdAt + app.booking.max-total-hold (PT60M). Authenticated with the shared "
                     + "X-Internal-Token; denied at the gateway edge.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
@@ -811,16 +834,14 @@ public class BookingController {
                             @ExampleObject(name = "Body is JSON but not one object (e.g. an array)", value = EXAMPLE_NOT_AN_OBJECT)
                     })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
-                    description = "Booking not PENDING, hold already expired, or the expiry sweep cancelled it "
-                            + "while this call was extending it (CONCURRENT_UPDATE). Refuse the payment either way.",
+                    description = "Booking not PENDING (paid, or cancelled — by the expiry sweep too, which this "
+                            + "call waits for when it holds the row), or the hold asked for is past a cap: more "
+                            + "than 45 minutes from now, or past 60 minutes from the booking. Nothing was written; "
+                            + "refuse the payment either way.",
                     content = @Content(mediaType = "application/json", examples = {
-                            @ExampleObject(name = "Not PENDING", value = """
-                                    { "code": "409 CONFLICT", "message": "This booking's seat hold can no longer be extended — it's not in a PENDING state.", "data": null }
-                                    """),
-                            @ExampleObject(name = "Hold already expired", value = """
-                                    { "code": "409 CONFLICT", "message": "Your seat reservation has expired. Please start a new booking and complete payment within 5 minutes.", "data": null }
-                                    """),
-                            @ExampleObject(name = "Lost a race with the expiry sweep", value = EXAMPLE_CONCURRENT_UPDATE)
+                            @ExampleObject(name = "Not PENDING", value = EXAMPLE_HOLD_NOT_EXTENDABLE),
+                            @ExampleObject(name = "Past a hold cap (60 min from booking, or 45 min from now)",
+                                    value = EXAMPLE_HOLD_CAP_REACHED)
                     }))
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> extendHoldInternal(
@@ -1362,7 +1383,25 @@ public class BookingController {
     }
 
     @PatchMapping("/{id}/cancel")
-    @Operation(summary = "Cancel booking", description = "Cancels a booking before payment confirmation.")
+    @Operation(summary = "Cancel booking", description = """
+            Cancels a PENDING booking before payment confirmation and returns its tickets to sale. Only the
+            booking's owner or a SUPER_ADMIN may cancel it.
+
+            **Refused while a payment may still land** (409, `data.errorCode: PAYMENT_IN_PROGRESS`): every time
+            payment-service starts a payment it records how long that payment stays payable (code 13 min,
+            EcoCash 10 min, card 33 min, never past 60 min from the booking). Cancelling inside that window
+            would release tickets the payment is about to pay for. `data.retryAfterSeconds` is how long until
+            the window closes; until then the buyer can complete the payment, and if they don't, the booking
+            is released automatically when its hold expires.
+
+            **Known limitation:** payment-service records the window BEFORE it creates the instrument, so a
+            card checkout that then failed to start still blocks the cancel for up to 33 minutes, with no
+            live payment behind it. payment-service telling booking-service when an attempt has ended is the
+            planned fix (D24, v1.1).
+
+            A cancelled booking can still come back CONFIRMED if a payment for it lands afterwards and its
+            tickets are still available (see `PATCH /bookings/internal/{id}/confirm`).
+            """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1414,14 +1453,17 @@ public class BookingController {
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Unknown booking", value = EXAMPLE_NOT_FOUND))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "The booking is not PENDING (already paid, or already cancelled — "
-                    + "including by the expiry sweep)",
+                    + "including by the expiry sweep), or a payment for it may still land "
+                    + "(data.errorCode PAYMENT_IN_PROGRESS; retry after data.retryAfterSeconds, or let the hold "
+                    + "expire). Branch on data.errorCode, not on the message.",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Already paid", value = """
                                     { "code": "409 CONFLICT", "message": "We can't cancel this confirmed booking — payment has already been processed. Please contact support if you need a refund.", "data": null }
                                     """),
                             @ExampleObject(name = "Already cancelled", value = """
                                     { "code": "409 CONFLICT", "message": "This booking is already cancelled.", "data": null }
-                                    """)
+                                    """),
+                            @ExampleObject(name = "A payment is still open", value = EXAMPLE_PAYMENT_IN_PROGRESS)
                     }))
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> cancelBooking(
@@ -1540,9 +1582,20 @@ public class BookingController {
                           "of the X-Internal-Token check below).\n\n" +
                           "Confirm locks the booking row, so it waits for a concurrent confirm, cancel or " +
                           "expiry sweep and then acts on what that committed. A hold whose expiresAt has " +
-                          "passed but which is still PENDING is CONFIRMED (its tickets were never released); " +
-                          "one the sweep already cancelled is a 409. A repeated confirm of a CONFIRMED booking " +
-                          "returns it again (200).")
+                          "passed but which is still PENDING is CONFIRMED (its tickets were never released). " +
+                          "A repeated confirm of a CONFIRMED booking returns it again (200).\n\n" +
+                          "**A payment that lands on a CANCELLED booking resurrects it** when it was cancelled " +
+                          "by the expiry sweep, by the buyer, or by a buyer release, and its tickets are still " +
+                          "available: seat-service is asked (with no transaction open) whether each category " +
+                          "still exists, the tickets are re-claimed under the booking row's lock, and the " +
+                          "booking is CONFIRMED (200) and its tickets sent. An admin reversal, or a booking " +
+                          "cancelled before this existed, is never resurrected (409). A category that has " +
+                          "sold out since is a 409. seat-service unreachable is a 503 — and so, today, is a " +
+                          "category the organizer has deleted: seat-service answers 404 for it, and " +
+                          "booking-service's seat-service client reports any failed lookup as an outage, so " +
+                          "a deleted category keeps answering 503 on every retry. payment-service keeps the " +
+                          "payment and retries in every case; a 503 that never clears for one booking is " +
+                          "the deleted category (ops: the ResurrectFailed runbook).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1587,12 +1640,22 @@ public class BookingController {
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Unknown booking", value = EXAMPLE_NOT_FOUND))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
-                    description = "The booking is not PENDING — cancelled by the customer or by the expiry sweep. "
-                            + "A concurrent confirm is not a 409: confirm waits for the row lock and then gets the "
-                            + "CONFIRMED replay (200).",
+                    description = "The booking is CANCELLED and cannot come back: reversed by an admin, cancelled "
+                            + "before cancel reasons were recorded, or resurrectable but one of its categories "
+                            + "has sold out since (nothing was claimed). A deleted category is NOT this 409 "
+                            + "today; it is the 503 below. A concurrent confirm is not a 409 either: confirm "
+                            + "waits for the row lock and then gets the CONFIRMED replay (200).",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Not PENDING (e.g. the sweep cancelled the hold)",
+                            examples = @ExampleObject(name = "Cannot be confirmed (e.g. an admin reversed it)",
                                     value = EXAMPLE_NOT_PENDING))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "A cancelled booking would be resurrected, but seat-service could not be asked "
+                            + "whether its categories still exist — or one of them has been deleted (seat-service's "
+                            + "404 for it reaches booking-service as the same lookup failure). Nothing was "
+                            + "written; retry.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "seat-service unavailable",
+                                    value = EXAMPLE_SEAT_SERVICE_DOWN))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
                     description = "The id is not a UUID, the body is unreadable, or the amounts are refused",
                     content = @Content(mediaType = "application/json", examples = {

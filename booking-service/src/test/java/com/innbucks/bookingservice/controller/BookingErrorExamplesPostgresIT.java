@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.entity.Booking;
+import com.innbucks.bookingservice.exception.SeatServiceUnavailableException;
 import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
 import com.innbucks.bookingservice.service.StockLedger;
 import com.innbucks.bookingservice.testsupport.BookingStockPostgresTestBase;
@@ -26,20 +27,26 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_BAD_INTERNAL_TOKEN;
-import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_CONCURRENT_UPDATE;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_FORBIDDEN;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_HOLD_CAP_REACHED;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_HOLD_NOT_EXTENDABLE;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_INVALID_JWT;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_AN_OBJECT;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_FOUND;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_PENDING;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_PAYMENT_IN_PROGRESS;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_SEAT_SERVICE_DOWN;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_UNREADABLE_HOLD_UNTIL;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The Swagger error examples of cancel, confirm, reverse and extend-hold,
+ * The Swagger error examples of cancel, confirm, reverse and extend-hold
+ * (H2 added the payment window, the hold caps and resurrect's),
  * compared STRICTLY against what the running service answers: the real
  * filter chain, the app's own JSON mapper (with its {@code LocalDateTime}
  * module, which the standalone dispatch test does not have) and real
@@ -47,11 +54,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>The extend-hold race is the one that matters most. payment-service
  * reads its 409 as "the booking expired, refuse the payment", where a 500
- * reads as an outage. That 409 depends on a chain no unit test covers: the
- * sweep's native UPDATE bumps {@code version}, extend-hold's version-checked
- * UPDATE then matches no row, Hibernate fails the commit, Spring translates
- * it, and the global handler answers {@code CONCURRENT_UPDATE}. Break any
- * link and the race goes back to a 500.
+ * reads as an outage. Since H2 extend-hold takes the booking row's lock before
+ * it reads, so against a sweep holding that row it waits, then reads what the
+ * sweep committed and refuses it as not PENDING. (Under H1 it read without a
+ * lock and lost at its version-checked UPDATE: {@code CONCURRENT_UPDATE}.)
+ * Without the lock that race is a 200 that writes the booking back to PENDING
+ * over the cancellation, or — without the sweep's version bump — a 500.
  */
 class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
 
@@ -78,7 +86,7 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
     // ---- extend-hold -------------------------------------------------------------
 
     @Test
-    void extendHold_thatTheExpirySweepCancelsUnderIt_is409ConcurrentUpdate() throws Exception {
+    void extendHold_thatTheExpirySweepCancelsUnderIt_waitsForTheRow_andIsTheDocumented409() throws Exception {
         Booking hold = seedBooking(Booking.BookingStatus.PENDING,
                 LocalDateTime.now(ZoneOffset.UTC).plusMinutes(1), category);
         CountDownLatch sweepHasTheRow = new CountDownLatch(1);
@@ -98,8 +106,8 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
         }));
         assertThat(sweepHasTheRow.await(10, TimeUnit.SECONDS)).isTrue();
 
-        // extend-hold reads the row (a plain read does not wait for the lock),
-        // finds it PENDING and not yet lapsed, and blocks at its UPDATE.
+        // extend-hold locks the row before it reads it, so it waits for the
+        // sweep rather than reading the PENDING row the sweep is cancelling.
         String holdUntil = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(10)
                 .truncatedTo(ChronoUnit.SECONDS) + "Z";
         Future<MvcResult> extend = caller.submit(() -> mvc.perform(
@@ -108,7 +116,7 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"holdUntil\":\"" + holdUntil + "\"}")).andReturn());
         awaitALockWaiter();
-        assertThat(extend.isDone()).as("extend-hold must be waiting at its UPDATE").isFalse();
+        assertThat(extend.isDone()).as("extend-hold must be waiting for the row lock").isFalse();
 
         sweepMayCommit.countDown();
         sweep.get(10, TimeUnit.SECONDS);
@@ -117,13 +125,33 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
         assertThat(result.getResponse().getStatus())
                 .as(result.getResponse().getContentAsString()).isEqualTo(409);
         assertThat(result.getResponse().getContentAsString()).as("the documented body")
-                .isEqualToIgnoringWhitespace(EXAMPLE_CONCURRENT_UPDATE);
+                .isEqualToIgnoringWhitespace(EXAMPLE_HOLD_NOT_EXTENDABLE);
 
         // The sweep's cancellation stands; extend-hold wrote nothing over it.
         assertThat(statusOf(hold.getId())).isEqualTo("CANCELLED");
         assertThat(jdbc.queryForObject("SELECT expires_at FROM bookings WHERE id = ?", LocalDateTime.class,
                 hold.getId())).isNull();
         assertThat(remaining(category)).as("released once, by the sweep").isEqualTo(6);
+    }
+
+    @Test
+    void extendHold_pastTheHoldCap_isTheDocumented409_andWritesNothing() throws Exception {
+        Booking hold = seedBooking(Booking.BookingStatus.PENDING,
+                LocalDateTime.now(ZoneOffset.UTC).plusMinutes(2), category);
+        jdbc.update("UPDATE bookings SET created_at = ? WHERE id = ?",
+                LocalDateTime.now(ZoneOffset.UTC).minusMinutes(50), hold.getId());
+
+        // 50 minutes old + a 13-minute code = past the 60-minute cap.
+        mvc.perform(patch("/bookings/internal/" + hold.getId() + "/extend-hold")
+                        .header("X-Internal-Token", internalToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"holdUntil\":\"" + LocalDateTime.now(ZoneOffset.UTC).plusMinutes(13)
+                                .truncatedTo(ChronoUnit.SECONDS) + "Z\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(content().json(EXAMPLE_HOLD_CAP_REACHED, JsonCompareMode.STRICT));
+
+        assertThat(jdbc.queryForObject("SELECT payment_open_until FROM bookings WHERE id = ?",
+                LocalDateTime.class, hold.getId())).isNull();
     }
 
     @Test
@@ -193,6 +221,29 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
     }
 
     @Test
+    void cancel_whileAPaymentIsOpen_isTheDocumented409_withTheSecondsLeft() throws Exception {
+        Booking hold = seedBooking(Booking.BookingStatus.PENDING,
+                LocalDateTime.now(ZoneOffset.UTC).plusMinutes(15), category);
+        jdbc.update("UPDATE bookings SET payment_open_until = ? WHERE id = ?",
+                LocalDateTime.now(ZoneOffset.UTC).plusSeconds(742), hold.getId());
+
+        MvcResult result = mvc.perform(patch("/bookings/" + hold.getId() + "/cancel")
+                        .header("Authorization", bearer("buyer@example.com", List.of("CUSTOMER"), Map.of())))
+                .andExpect(status().isConflict())
+                .andReturn();
+
+        // The example's number is a countdown; everything else is exact.
+        Integer secondsLeft = com.jayway.jsonpath.JsonPath.read(result.getResponse().getContentAsString(),
+                "$.data.retryAfterSeconds");
+        assertThat(secondsLeft).isBetween(735, 742);
+        content().json(EXAMPLE_PAYMENT_IN_PROGRESS.replace("742", String.valueOf(secondsLeft)),
+                JsonCompareMode.STRICT).match(result);
+
+        assertThat(statusOf(hold.getId())).isEqualTo("PENDING");
+        assertThat(remaining(category)).isEqualTo(5);
+    }
+
+    @Test
     void cancel_withNoToken_andOfAnUnknownBooking_areTheDocumentedBodies() throws Exception {
         mvc.perform(patch("/bookings/" + UUID.randomUUID() + "/cancel"))
                 .andExpect(status().isUnauthorized())
@@ -220,6 +271,33 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"cashAmount\":\"ten\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.cashAmount").value("Must be a number."));
+    }
+
+    @Test
+    void confirm_ofABookingAnAdminReversed_isTheDocumented409() throws Exception {
+        Booking reversed = seedBooking(Booking.BookingStatus.CONFIRMED, null, category);
+        jdbc.update("UPDATE bookings SET status = 'CANCELLED', cancel_reason = 'ADMIN_REVERSED' WHERE id = ?",
+                reversed.getId());
+
+        mvc.perform(patch("/bookings/internal/" + reversed.getId() + "/confirm")
+                        .header("X-Internal-Token", internalToken))
+                .andExpect(status().isConflict())
+                .andExpect(content().json(EXAMPLE_NOT_PENDING, JsonCompareMode.STRICT));
+    }
+
+    @Test
+    void confirm_resurrectingWhileSeatServiceIsDown_isTheDocumented503() throws Exception {
+        Booking expired = seedBooking(Booking.BookingStatus.PENDING, null, category);
+        jdbc.update("UPDATE bookings SET status = 'CANCELLED', cancel_reason = 'EXPIRED' WHERE id = ?",
+                expired.getId());
+        when(seatServiceClient.getCategory(category)).thenThrow(new SeatServiceUnavailableException(
+                "seat-service is currently unavailable. Please retry the booking shortly."));
+
+        mvc.perform(patch("/bookings/internal/" + expired.getId() + "/confirm")
+                        .header("X-Internal-Token", internalToken))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(content().json(EXAMPLE_SEAT_SERVICE_DOWN, JsonCompareMode.STRICT));
+        assertThat(statusOf(expired.getId())).isEqualTo("CANCELLED");
     }
 
     @Test

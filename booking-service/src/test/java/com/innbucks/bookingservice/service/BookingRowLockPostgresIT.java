@@ -35,8 +35,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * from ANOTHER connection:
  * <ul>
  *   <li>confirm WAITS for a row someone else holds, then acts on what they
- *       committed: a hold the sweep cancelled is refused, a lapsed hold still
- *       PENDING is honoured;</li>
+ *       committed: a hold the sweep cancelled is resurrected (H2) — or
+ *       refused when no reason was recorded — and a lapsed hold still PENDING
+ *       is honoured;</li>
  *   <li>cancel, reverse and the sweep take the booking row BEFORE any counter
  *       row — while they wait for (or skip) the booking, the counter row is
  *       provably free and unchanged. That is the first link of the global lock
@@ -66,9 +67,41 @@ class BookingRowLockPostgresIT extends BookingStockPostgresTestBase {
     // ---- confirm --------------------------------------------------------------
 
     @Test
-    void confirm_waitsForTheRow_thenRefusesAHoldTheSweepCancelledMeanwhile() throws Exception {
+    void confirm_waitsForTheRow_thenResurrectsAHoldTheSweepCancelledMeanwhile() throws Exception {
+        // Since H2 the sweep records why (EXPIRED), and a payment that lands
+        // on an expired hold brings it back while its stock remains.
         Booking hold = seedBooking(Booking.BookingStatus.PENDING, lapsed(1), category);
 
+        MvcResult result = confirmWhileTheSweepCancels(hold, "'EXPIRED'");
+
+        assertThat(result.getResponse().getStatus())
+                .as(result.getResponse().getContentAsString()).isEqualTo(200);
+        assertThat(statusOf(hold.getId())).isEqualTo("CONFIRMED");
+        assertThat(remaining(category)).as("released by the sweep, claimed again by the resurrection").isEqualTo(5);
+    }
+
+    @Test
+    void confirm_waitsForTheRow_thenRefusesAHoldCancelledWithNoRecordedReason() throws Exception {
+        // The pre-V25 shape: a cancellation nobody gave a reason for is never
+        // resurrected.
+        Booking hold = seedBooking(Booking.BookingStatus.PENDING, lapsed(1), category);
+
+        MvcResult result = confirmWhileTheSweepCancels(hold, "NULL");
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(409);
+        assertThat(result.getResponse().getContentAsString())
+                .contains("Only pending bookings can be confirmed");
+        assertThat(statusOf(hold.getId())).isEqualTo("CANCELLED");
+        assertThat(remaining(category)).isEqualTo(6);
+    }
+
+    /**
+     * Holds the booking row from another connection, starts a confirm (which
+     * must wait for it), then commits what the sweep commits for the hold —
+     * the ticket back to stock and the row CANCELLED with {@code reasonSql} —
+     * and returns the confirm's answer.
+     */
+    private MvcResult confirmWhileTheSweepCancels(Booking hold, String reasonSql) throws Exception {
         try (Connection sweep = lockBookingRowElsewhere(hold.getId())) {
             Future<MvcResult> confirm = caller.submit(() -> mvc.perform(
                     patch("/bookings/internal/" + hold.getId() + "/confirm")
@@ -76,21 +109,20 @@ class BookingRowLockPostgresIT extends BookingStockPostgresTestBase {
             awaitALockWaiter();
             assertThat(confirm.isDone()).as("confirm must wait for the row, not read past it").isFalse();
 
-            // What the sweep commits for this hold while confirm waits.
-            try (PreparedStatement ps = sweep.prepareStatement("""
-                    UPDATE bookings SET status = 'CANCELLED', expires_at = NULL, version = version + 1
-                     WHERE id = ?""")) {
+            try (PreparedStatement ps = sweep.prepareStatement(
+                    "UPDATE category_inventory SET remaining = remaining + 1 WHERE category_id = ?")) {
+                ps.setObject(1, category);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = sweep.prepareStatement("UPDATE bookings SET status = 'CANCELLED', "
+                    + "cancel_reason = " + reasonSql + ", expires_at = NULL, version = version + 1 WHERE id = ?")) {
                 ps.setObject(1, hold.getId());
                 ps.executeUpdate();
             }
             sweep.commit();
 
-            MvcResult result = confirm.get(10, TimeUnit.SECONDS);
-            assertThat(result.getResponse().getStatus()).isEqualTo(409);
-            assertThat(result.getResponse().getContentAsString())
-                    .contains("Only pending bookings can be confirmed");
+            return confirm.get(10, TimeUnit.SECONDS);
         }
-        assertThat(statusOf(hold.getId())).isEqualTo("CANCELLED");
     }
 
     @Test
