@@ -1,5 +1,6 @@
 package com.innbucks.userservice.support;
 
+import com.innbucks.common.ticket.TicketNumbers;
 import com.innbucks.userservice.devicesecurity.SupportRefs;
 import com.innbucks.userservice.security.PermissionCatalog;
 import com.innbucks.userservice.util.MsisdnValidator;
@@ -27,7 +28,13 @@ import java.util.regex.Pattern;
  *   <li>{@code ^VCH-?[0-9A-F]{12}$} → voucher purchase order (same body shape as
  *       MKT — only the prefix tells them apart, T15)</li>
  *   <li>{@code ^INN-\d{8}-[0-9A-F]{6}$} → booking confirmation</li>
- *   <li>{@code ^\d{8}-\d{5}[A-Z]$} → ticket number</li>
+ *   <li>a ticket number of either shape, per {@link TicketNumbers#canonical}:
+ *       {@code yyyyMMdd-XXXXX-XXXXX} (Crockford base32, at least one letter —
+ *       issued now) or the legacy {@code yyyyMMdd-DDDDDL} (valid forever).
+ *       Read from the stripped input, not {@code s}: ASCII letters upper-cased,
+ *       spaces of every kind dropped, any dash variant read as {@code -}, each
+ *       dash optional; the value is the issued form. Its letter is what keeps
+ *       an 18-digit card number out of this row and in row 9's refusal</li>
  *   <li>{@code ^TKZ-[A-Z]{3,12}-[0-9A-F]{12}$} / {@code ^TKT-PMT-<uuid>$} → payment reference</li>
  *   <li>REFUSED {@code query_not_accepted}: {@code d} is 13–19 digits (a card or
  *       voucher number — also the shape marketplace's PHONE_SHAPE would take for
@@ -96,7 +103,6 @@ public final class SupportQueryClassifier {
     private static final Pattern TRK = Pattern.compile("^TRK-?[0-9A-Z]{10}$");
     private static final Pattern VCH = Pattern.compile("^VCH-?[0-9A-F]{12}$");
     private static final Pattern INN = Pattern.compile("^INN-\\d{8}-[0-9A-F]{6}$");
-    private static final Pattern TICKET = Pattern.compile("^\\d{8}-\\d{5}[A-Z]$");
     private static final Pattern TKZ = Pattern.compile("^TKZ-[A-Z]{3,12}-[0-9A-F]{12}$");
     private static final Pattern TKT_PMT = Pattern.compile(
             "^TKT-PMT-[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$");
@@ -141,7 +147,8 @@ public final class SupportQueryClassifier {
         if (TRK.matcher(s).matches()) return new Query(Kind.PARCEL, withDash(s, "TRK"));
         if (VCH.matcher(s).matches()) return new Query(Kind.VOUCHER_ORDER, withDash(s, "VCH"));
         if (INN.matcher(s).matches()) return new Query(Kind.BOOKING_CONFIRMATION, s);
-        if (TICKET.matcher(s).matches()) return new Query(Kind.TICKET_NUMBER, s);
+        Optional<String> ticket = TicketNumbers.canonical(input);
+        if (ticket.isPresent()) return new Query(Kind.TICKET_NUMBER, ticket.get());
         if (TKZ.matcher(s).matches() || TKT_PMT.matcher(s).matches()) {
             return new Query(Kind.PAYMENT_REFERENCE, s);
         }

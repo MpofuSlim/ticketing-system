@@ -78,11 +78,50 @@ class SupportQueryClassifierTest {
     void ticketingAndPaymentReferences() {
         assertThat(c("INN-20260930-A1B2C3")).isEqualTo(new Query(Kind.BOOKING_CONFIRMATION, "INN-20260930-A1B2C3"));
         assertThat(c("20260930-00012K")).isEqualTo(new Query(Kind.TICKET_NUMBER, "20260930-00012K"));
+        assertThat(c("20261013-7KQ4M-9XZ2B")).isEqualTo(new Query(Kind.TICKET_NUMBER, "20261013-7KQ4M-9XZ2B"));
         assertThat(c("TKZ-MKT-0A1B2C3D4E5F").kind()).isEqualTo(Kind.PAYMENT_REFERENCE);
         assertThat(c("TKZ-BOOKING-0A1B2C3D4E5F").kind()).isEqualTo(Kind.PAYMENT_REFERENCE);
         assertThat(c("TKT-PMT-9b2f4c1e-6a7d-4e0b-8c3f-2d5e1a7b9c40").kind()).isEqualTo(Kind.PAYMENT_REFERENCE);
         assertThat(SupportQueryClassifier.isMarketplacePaymentRef("TKZ-MKT-0A1B2C3D4E5F")).isTrue();
         assertThat(SupportQueryClassifier.isMarketplacePaymentRef("TKZ-BOOKING-0A1B2C3D4E5F")).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "20261013-7KQ4M-9XZ2B",
+            "20261013-7kq4m-9xz2b",            // lower case
+            "  20261013-7KQ4M-9XZ2B  ",        // pasted with spaces around
+            "20261013 7KQ4M 9XZ2B",            // read out in groups
+            "202610137KQ4M9XZ2B",              // no dashes
+            "20261013\u20137KQ4M\u20139XZ2B",   // en dashes from a document
+            "20261013\u00A07kq4m\u00A09xz2b"    // no-break spaces from a chat
+    })
+    @DisplayName("row 7: a current ticket number, however it was typed, is a TICKET_NUMBER in its issued form")
+    void currentTicketNumbers(String typed) {
+        assertThat(c(typed)).isEqualTo(new Query(Kind.TICKET_NUMBER, "20261013-7KQ4M-9XZ2B"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"20260930-00012K", "20260930-00012k", " 20260930-00012K ", "2026093000012K"})
+    @DisplayName("row 7: a legacy ticket number is still a TICKET_NUMBER")
+    void legacyTicketNumbers(String typed) {
+        assertThat(c(typed)).isEqualTo(new Query(Kind.TICKET_NUMBER, "20260930-00012K"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"20261013-12345-67890", "201610131234567890", "2026 1013 1234 5678 90"})
+    @DisplayName("row 7: the ticket shape without a letter is never issued — 18 digits stay row 9's card refusal")
+    void allDigitTicketShapesAreStillRefusedAsCards(String typed) {
+        assertThat(c(typed)).isEqualTo(new Query(Kind.NOT_ACCEPTED, null));
+    }
+
+    @Test
+    @DisplayName("row 7: I, L, O and U are never in a current ticket number, and none is read as another symbol")
+    void ticketShapesWithNonCrockfordLettersAreNotTickets() {
+        for (String typed : new String[] {"20261013-7KQ4M-9XZ2O", "20261013-7KQ4I-9XZ2B",
+                "20261013-7KQ4L-9XZ2B", "20261013-7KQ4U-9XZ2B"}) {
+            assertThat(c(typed).kind()).as(typed).isEqualTo(Kind.NOT_RECOGNISED);
+        }
     }
 
     @Test
