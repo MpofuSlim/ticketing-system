@@ -5,11 +5,11 @@ import innbucks.paymentservice.client.LoyaltyVoucherOrderClient.VoucherOrderExce
 import innbucks.paymentservice.client.LoyaltyVoucherOrderClient.VoucherOrderView;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.Instant;
 
 /**
  * {@link OrderGateway} for voucher purchase orders (InnRewards V47), backed by
@@ -24,10 +24,13 @@ import java.time.Duration;
  *       as {@code TKZ-VCH-<unique>} on the statement); narration
  *       {@code "Gift voucher <last 6 of ref>"}.</li>
  *   <li>{@link #extendHold}: {@code PATCH .../extend-expiry?minutes=N} with
- *       the same safety window the other products use (code TTL +
- *       {@link #HOLD_SAFETY_MARGIN}, rounded up, clamped to loyalty's 1..60
- *       contract). A refusal means the order lapsed — the console creates a
- *       fresh order with ZERO money moved.</li>
+ *       the same safety window the other products use (the rail's last
+ *       payable instant + {@link #HOLD_SAFETY_MARGIN}, as whole minutes from
+ *       now rounded up, clamped to loyalty's 1..60 contract). Loyalty stamps
+ *       the result as {@code electronic_payment_until} and refuses cash until
+ *       then, so the per-rail window is what keeps a till from taking cash
+ *       while a card checkout is still payable. A refusal means the order
+ *       lapsed — the console creates a fresh order with ZERO money moved.</li>
  *   <li>{@link #confirm}: {@code PATCH .../confirm-payment} with
  *       {@code {paymentRef, amountCents}}. A 200 means loyalty marked the
  *       order PAID <b>and issued the voucher</b> (recipient + sender WhatsApp
@@ -52,13 +55,9 @@ public class LoyaltyVoucherOrderGateway implements OrderGateway {
     private static final int MAX_EXTEND_MINUTES = 60;
 
     private final LoyaltyVoucherOrderClient client;
-    private final Duration codeTtl;
 
-    public LoyaltyVoucherOrderGateway(
-            LoyaltyVoucherOrderClient client,
-            @Value("${payments.innbucks.code.ttl:PT10M}") Duration codeTtl) {
+    public LoyaltyVoucherOrderGateway(LoyaltyVoucherOrderClient client) {
         this.client = client;
-        this.codeTtl = codeTtl;
     }
 
     @Override
@@ -93,9 +92,9 @@ public class LoyaltyVoucherOrderGateway implements OrderGateway {
     }
 
     @Override
-    public void extendHold(String orderRef) {
+    public void extendHold(String orderRef, Instant payableUntil) {
         try {
-            client.extendExpiry(orderRef, holdMinutes());
+            client.extendExpiry(orderRef, holdMinutes(payableUntil, Instant.now()));
         } catch (VoucherOrderException e) {
             if (e.getStatusCode() == 404 || e.getStatusCode() == 409 || e.getStatusCode() == 400) {
                 log.warn("[voucher-gateway] expiry extension refused orderRef={} status={} code={} — payment refused pre-mint: {}",
@@ -151,12 +150,12 @@ public class LoyaltyVoucherOrderGateway implements OrderGateway {
         }
     }
 
-    /** Same safety window as the other products — code TTL +
-     *  {@link #HOLD_SAFETY_MARGIN} in whole minutes, rounded UP, clamped to
-     *  loyalty's 1..60 contract. */
-    int holdMinutes() {
-        long seconds = codeTtl.plus(HOLD_SAFETY_MARGIN).getSeconds();
-        long minutes = (seconds + 59) / 60;
+    /** Same safety window as the other products — the rail's last payable
+     *  instant + {@link #HOLD_SAFETY_MARGIN}, in whole minutes from
+     *  {@code now}, rounded UP, clamped to loyalty's 1..60 contract. */
+    static int holdMinutes(Instant payableUntil, Instant now) {
+        long millis = Duration.between(now, payableUntil.plus(HOLD_SAFETY_MARGIN)).toMillis();
+        long minutes = Math.ceilDiv(millis, 60_000L);
         return (int) Math.max(MIN_EXTEND_MINUTES, Math.min(MAX_EXTEND_MINUTES, minutes));
     }
 

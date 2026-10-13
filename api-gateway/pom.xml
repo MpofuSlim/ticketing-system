@@ -21,6 +21,15 @@
             <artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
         </dependency>
 
+        <!-- ClientIpResolver parses the nginx-set X-Real-IP with Netty's
+             NetUtil, which accepts IPv4/IPv6 literals only and never resolves
+             a name. It arrives with reactor-netty anyway; declared because the
+             code uses it directly. Version from the netty-bom in the root pom. -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-common</artifactId>
+        </dependency>
+
         <!-- Service discovery: routes target lb://<service-name>, which Spring
              Cloud LoadBalancer resolves through the static discovery map in
              application.yaml (Kubernetes Service DNS). Eureka is retired; the

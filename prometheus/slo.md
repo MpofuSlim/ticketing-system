@@ -443,6 +443,29 @@ removed, PIN set) failed on SMS and WhatsApp alike.
 delivery path). Nothing is retried: the decision log and the admin console remain
 the record of what happened to each phone.
 
+### `GatewayClientIpFallback`
+
+**Trigger:** `gateway_client_ip_fallback_total{reason}` has risen for 10 minutes.
+The gateway keys every per-IP rate limit on the `X-Real-IP` header the host
+nginx sets (`ClientIpResolver`). Requests that fall back share one bucket per
+route (`anonymous`, `anonymous-pre-auth`, `anonymous-payments-innbucks`). The
+OTP, MFA, password-reset and `/payments/innbucks` limits then apply to everyone
+at once: one caller can drain them, and an on-sale gets mass 429s.
+
+- `reason="absent"`: requests arrive without `X-Real-IP`. Either nginx's gateway
+  `location` lost its `proxy_set_header X-Real-IP $remote_addr;` line, or
+  something other than that nginx is calling NodePort 30080 (a load test on the
+  box, or a NodePort reachable from outside).
+- `reason="invalid"`: `X-Real-IP` arrives but is not one IP address. It may hold
+  a hostname, or two values that disagree (a second `proxy_set_header X-Real-IP`
+  from an `include` or a server-level line with another variable).
+
+**Action:** on each host, run `sudo nginx -T | grep -n -e proxy_pass -e
+proxy_set_header -e include` and compare every gateway `location` with
+`deploy/k8s/README.md` §3.1 step 2. Fix it, run `nginx -t`, then reload. Then
+run the §3.1 **Verify** steps. If nginx is correct, check that 30080 cannot be
+reached from outside the box (§3.1 step 3).
+
 ### `ExpirySkipping`
 
 **Trigger:** `booking_expiry_skipped_total` moved — booking-service's expiry

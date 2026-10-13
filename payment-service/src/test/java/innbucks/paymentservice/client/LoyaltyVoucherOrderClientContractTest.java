@@ -93,7 +93,7 @@ class LoyaltyVoucherOrderClientContractTest {
 
     /** The gateway over the same client — for the snapshot + ConfirmOutcome cases. */
     private static LoyaltyVoucherOrderGateway gateway(int port) {
-        return new LoyaltyVoucherOrderGateway(client(port), Duration.ofMinutes(10));
+        return new LoyaltyVoucherOrderGateway(client(port));
     }
 
     // ---- fetch ------------------------------------------------------------
@@ -206,6 +206,25 @@ class LoyaltyVoucherOrderClientContractTest {
     }
 
     @Test
+    @DisplayName("extend-expiry via the gateway: a card checkout's 30-minute ceiling + 3 minutes goes out as ?minutes=33")
+    void extendExpiry_viaGateway_sendsTheRailsWindow() {
+        // Loyalty stamps this as electronic_payment_until and refuses cash
+        // until then. With the old code-sized 13, a till could take cash
+        // while the customer's card checkout stayed payable for 17 minutes.
+        wireMock.stubFor(patch(urlEqualTo(BASE + REF + "/extend-expiry?minutes=33"))
+                .willReturn(okJson("""
+                        {"orderRef":"VCH-4F9A1C22B7D3","status":"PENDING_PAYMENT","amount":5.0000,
+                         "currency":"USD","payerMsisdn":"+263782608767",
+                         "expiresAt":"2026-09-17T20:48:00Z","payable":true}
+                        """)));
+
+        gateway(wireMock.port()).extendHold(REF, Instant.now().plus(Duration.ofMinutes(30)));
+
+        wireMock.verify(patchRequestedFor(urlEqualTo(BASE + REF + "/extend-expiry?minutes=33"))
+                .withHeader("X-Internal-Token", equalTo(TOKEN)));
+    }
+
+    @Test
     @DisplayName("extend-expiry 409 ORDER_NOT_EXTENDABLE: gateway refuses the payment pre-mint with a 409")
     void extendExpiry_409_gatewayRefusesPreMint() {
         wireMock.stubFor(patch(urlMatching(BASE + REF + "/extend-expiry.*"))
@@ -215,7 +234,8 @@ class LoyaltyVoucherOrderClientContractTest {
                                 {"code":"ORDER_NOT_EXTENDABLE","message":"This purchase order is no longer awaiting payment."}
                                 """)));
 
-        assertThatThrownBy(() -> gateway(wireMock.port()).extendHold(REF))
+        assertThatThrownBy(() -> gateway(wireMock.port())
+                .extendHold(REF, Instant.now().plus(Duration.ofMinutes(10))))
                 .isInstanceOfSatisfying(InvalidPaymentRequestException.class,
                         e -> assertThat(e.getStatusCode()).isEqualTo(409));
     }

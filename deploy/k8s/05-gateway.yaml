@@ -1,5 +1,8 @@
 # API gateway. Exposed on a NodePort so the host nginx can front it
 # (nginx proxy_pass -> 127.0.0.1:30080), terminating TLS / Cloudflare as before.
+# 30080 must be reachable from the host ONLY: the gateway keys every per-IP
+# rate limit on the X-Real-IP nginx sets, and believes it from any caller
+# (README.md §3.1).
 # OWASP A05 workload hardening as per 03-user-service.yaml.
 ---
 apiVersion: v1

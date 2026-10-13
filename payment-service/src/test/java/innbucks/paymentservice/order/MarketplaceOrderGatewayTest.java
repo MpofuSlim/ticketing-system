@@ -20,7 +20,8 @@ import static org.mockito.Mockito.*;
  * marketplace is minor-units native — this gateway's conversion is the
  * identity), payable = PENDING_PAYMENT only, the fixed MKT settlement tag +
  * last-6 narration, and the extend-hold minutes derived from the SAME
- * TTL + safety-margin window the booking path uses.
+ * window the booking path uses: the rail's last payable instant + the
+ * safety margin.
  */
 class MarketplaceOrderGatewayTest {
 
@@ -32,7 +33,7 @@ class MarketplaceOrderGatewayTest {
     @BeforeEach
     void setUp() {
         client = mock(MarketplaceOrderClient.class);
-        gateway = new MarketplaceOrderGateway(client, Duration.ofMinutes(10));
+        gateway = new MarketplaceOrderGateway(client);
     }
 
     private static OrderView order(String status, long totalCents) {
@@ -83,20 +84,34 @@ class MarketplaceOrderGatewayTest {
     }
 
     @Test
-    void extendHold_usesTheBookingPathsSafetyWindow_roundedUpToMinutes() {
-        // ttl 10m + margin 3m = 13 minutes, same window the booking hold gets.
-        gateway.extendHold(REF);
+    void extendHold_sendsTheRailsPayableDeadlinePlusTheSafetyMargin() {
+        // The booking path's window, per rail: last payable instant + 3m.
+        // Code: 10m TTL -> 13.
+        gateway.extendHold(REF, Instant.now().plus(Duration.ofMinutes(10)));
         verify(client).extendExpiry(REF, 13);
+        // Card: the gateway's 30-minute ceiling (28m TTL + 2m grace) -> 33.
+        gateway.extendHold(REF, Instant.now().plus(Duration.ofMinutes(30)));
+        verify(client).extendExpiry(REF, 33);
+    }
 
-        // A ttl that isn't whole minutes rounds UP so the hold never
-        // undershoots the code.
-        MarketplaceOrderGateway odd = new MarketplaceOrderGateway(
-                client, Duration.ofMinutes(9).plusSeconds(30));
-        assertEquals(13, odd.holdMinutes());
+    @Test
+    void holdMinutes_perRail_roundedUp_andClampedToTheMarketplaceContract() {
+        Instant now = Instant.parse("2026-10-13T10:00:00Z");
+        // code 10m, EcoCash 5m prompt + 2m grace, card 28m checkout + 2m grace
+        assertEquals(13, MarketplaceOrderGateway.holdMinutes(now.plus(Duration.ofMinutes(10)), now));
+        assertEquals(10, MarketplaceOrderGateway.holdMinutes(now.plus(Duration.ofMinutes(7)), now));
+        assertEquals(33, MarketplaceOrderGateway.holdMinutes(now.plus(Duration.ofMinutes(30)), now));
+
+        // A window that isn't whole minutes rounds UP — even by a
+        // millisecond — so the hold never undershoots the instrument.
+        assertEquals(13, MarketplaceOrderGateway.holdMinutes(
+                now.plus(Duration.ofMinutes(9).plusSeconds(30)), now));
+        assertEquals(14, MarketplaceOrderGateway.holdMinutes(
+                now.plus(Duration.ofMinutes(10).plusMillis(1)), now));
 
         // Clamped to the marketplace's 1..60 extend-expiry contract.
-        MarketplaceOrderGateway huge = new MarketplaceOrderGateway(client, Duration.ofHours(3));
-        assertEquals(60, huge.holdMinutes());
+        assertEquals(60, MarketplaceOrderGateway.holdMinutes(now.plus(Duration.ofHours(3)), now));
+        assertEquals(1, MarketplaceOrderGateway.holdMinutes(now.minus(Duration.ofHours(1)), now));
     }
 
     @Test
@@ -105,7 +120,7 @@ class MarketplaceOrderGatewayTest {
                 .when(client).extendExpiry(eq(REF), anyInt());
 
         assertEquals(409, assertThrows(InvalidPaymentRequestException.class,
-                () -> gateway.extendHold(REF)).getStatusCode());
+                () -> gateway.extendHold(REF, Instant.now().plus(Duration.ofMinutes(10)))).getStatusCode());
     }
 
     @Test
@@ -114,7 +129,7 @@ class MarketplaceOrderGatewayTest {
                 .when(client).extendExpiry(eq(REF), anyInt());
 
         assertEquals(503, assertThrows(InvalidPaymentRequestException.class,
-                () -> gateway.extendHold(REF)).getStatusCode());
+                () -> gateway.extendHold(REF, Instant.now().plus(Duration.ofMinutes(10)))).getStatusCode());
     }
 
     @Test

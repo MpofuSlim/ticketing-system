@@ -94,9 +94,10 @@ public class BookingServiceClient {
 
     /**
      * Extend the booking's seat hold to at least {@code holdUntil} — called
-     * IMMEDIATELY before minting an InnBucks payment code so the hold provably
-     * outlives the code the customer is shown (the hold-5min/code-10min
-     * paid-but-no-ticket gap). 409/404 from booking-service means the booking
+     * IMMEDIATELY before minting any payment instrument (code, EcoCash prompt,
+     * card checkout) so the hold provably outlives what the customer is given
+     * (the hold-shorter-than-instrument paid-but-no-ticket gap; the rail sizes
+     * {@code holdUntil}). 409/404 from booking-service means the booking
      * is already expired/cancelled/confirmed: the caller refuses the payment
      * BEFORE any money moves.
      */
