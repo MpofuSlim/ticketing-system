@@ -17,7 +17,7 @@ public class BookingItemDTO {
     private String rowLabel;
     private Integer seatNumber;
     private BigDecimal priceAtBooking;
-    private String ticketNumber; // e.g. 20260419-48291X
+    private String ticketNumber; // e.g. 20260419-7KQ4M-9XZ2B (legacy tickets: 20260419-48291X)
 
     // Per-seat scan code. Base64 PNG wrapped as a data URI so the frontend
     // can render with `<img src={qrCode} />`. Encodes the ticketNumber.

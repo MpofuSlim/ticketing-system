@@ -27,11 +27,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.security.SecureRandom;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -54,19 +52,15 @@ public class BookingService {
     private final ObjectProvider<EventServiceClient> eventClientProvider;
     private volatile EventLookupCache eventLookupCache;
     private volatile BookingMetrics metrics;
+    // Ticket and confirmation numbers. A working default, replaced by the
+    // Spring bean through its setter, so hand-built test instances keep their
+    // constructor and still mint real (SecureRandom) references.
+    private volatile BookingReferences references = new BookingReferences();
     private final TransactionTemplate txTemplate;
     // Read-only twin for the list reads (see loadWithItems): the bookings and
     // their LAZY items are read inside it; mapping (QR rendering) and any
     // remote call run after it has closed.
     private final TransactionTemplate readTx;
-
-    // CSPRNG for ticket-number generation. A ticket number IS the QR-code
-    // payload a gate scanner validates, so it's an entry credential, not a
-    // cosmetic id — it must be unpredictable. java.util.Random is a 48-bit
-    // LCG whose entire future stream a holder of one ticket can reconstruct,
-    // letting them forge a neighbour's ticket. SecureRandom closes that.
-    // Static + thread-safe: one shared instance avoids per-call reseed cost.
-    private static final SecureRandom TICKET_RNG = new SecureRandom();
 
     // Fuzz tolerance for split-payment math: pointsToUse / redeemRate +
     // cashAmount must equal totalAmount within $0.01.
@@ -281,7 +275,7 @@ public class BookingService {
                 .phoneNumber(inputs.phoneNumber())
                 .eventId(inputs.eventId())
                 .tenantUserUuid(inputs.tenantUserUuid())
-                .confirmationNumber(generateConfirmationNumber())
+                .confirmationNumber(references.nextConfirmationNumber())
                 .status(Booking.BookingStatus.PENDING)
                 .totalAmount(inputs.total())
                 .expiresAt(LocalDateTime.now(ZoneOffset.UTC).plusMinutes(holdTtlMinutes))
@@ -398,7 +392,7 @@ public class BookingService {
                     .seatNumber(ticketIndex++)
                     .categoryName(category.getName())
                     .priceAtBooking(category.getPrice())
-                    .ticketNumber(generateTicketNumber())
+                    .ticketNumber(references.nextTicketNumber())
                     .attendeeName(spec.attendeeName())
                     .attendeeEmail(spec.attendeeEmail())
                     .attendeePhone(spec.attendeePhone())
@@ -1271,6 +1265,16 @@ public class BookingService {
     }
 
     /**
+     * The reference generator ({@link BookingReferences}). A setter for the
+     * same reason as the cache below; without it the instance's own default
+     * (SecureRandom, UTC clock) mints them.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setReferences(BookingReferences references) {
+        this.references = Objects.requireNonNull(references, "references");
+    }
+
+    /**
      * Setter, not a constructor argument, so the many hand-built instances in
      * tests keep their constructor; without it every lookup goes live.
      */
@@ -1300,44 +1304,6 @@ public class BookingService {
             log.warn("Failed to fetch event lookup eventId={} reason={}", eventId, ex.getMessage());
             return null;
         }
-    }
-
-    private String generateConfirmationNumber() {
-        String date = LocalDateTime.now(ZoneOffset.UTC)
-                .format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-        String random = UUID.randomUUID()
-                .toString()
-                .replace("-", "")
-                .substring(0, 6)
-                .toUpperCase();
-        return "INN-" + date + "-" + random;
-    }
-
-    /**
-     * Generates a unique ticket number per seat
-     * Format: 20260419-48291X
-     * — today's date
-     * — 5 random digits
-     * — 1 random uppercase letter
-     *
-     * <p>Randomness comes from {@link #TICKET_RNG} (SecureRandom), NOT
-     * {@code java.util.Random}: the value is embedded in the seat's QR code
-     * and validated at the gate, so a predictable stream would let a holder
-     * of one ticket forge an adjacent one. Format is unchanged — same wire
-     * shape the FE already renders.
-     */
-    private String generateTicketNumber() {
-        String date = LocalDateTime.now(ZoneOffset.UTC)
-                .format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-
-        StringBuilder digits = new StringBuilder();
-        for (int i = 0; i < 5; i++) {
-            digits.append(TICKET_RNG.nextInt(10));
-        }
-
-        char letter = (char) ('A' + TICKET_RNG.nextInt(26));
-
-        return date + "-" + digits + letter;
     }
 
     private BookingResponseDTO toDTO(Booking booking) {

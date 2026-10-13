@@ -2,16 +2,23 @@ package com.innbucks.bookingservice.service;
 
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.MultiFormatReader;
+import com.google.zxing.EncodeHintType;
 import com.google.zxing.NotFoundException;
 import com.google.zxing.Result;
 import com.google.zxing.client.j2se.BufferedImageLuminanceSource;
 import com.google.zxing.common.HybridBinarizer;
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
+import com.google.zxing.qrcode.decoder.Mode;
+import com.google.zxing.qrcode.encoder.Encoder;
+import com.google.zxing.qrcode.encoder.QRCode;
 import org.junit.jupiter.api.Test;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -73,6 +80,25 @@ class QrCodeGeneratorTest {
         Result decoded = new MultiFormatReader().decode(
                 new BinaryBitmap(new HybridBinarizer(new BufferedImageLuminanceSource(image))));
         assertEquals(payload, decoded.getText());
+    }
+
+    @Test
+    void aCurrentFormatTicketNumber_roundTrips_andStaysAVersion1Code() throws Exception {
+        // 20 upper-case characters from [0-9A-Z-] is exactly what a version-1
+        // QR holds at level M in alphanumeric mode: same 21x21 modules as a
+        // legacy number, so the printed and on-screen code is no denser. A
+        // lower-case or longer payload would jump to version 2.
+        for (String payload : new String[]{"20261013-7KQ4M-9XZ2B", "20261013-ZZZZZ-ZZZZZ"}) {
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(generator.toPngBytes(payload)));
+            Result decoded = new MultiFormatReader().decode(
+                    new BinaryBitmap(new HybridBinarizer(new BufferedImageLuminanceSource(image))));
+            assertEquals(payload, decoded.getText());
+
+            QRCode code = Encoder.encode(payload, ErrorCorrectionLevel.M,
+                    Map.of(EncodeHintType.CHARACTER_SET, StandardCharsets.UTF_8.name()));
+            assertEquals(Mode.ALPHANUMERIC, code.getMode(), payload);
+            assertEquals(1, code.getVersion().getVersionNumber(), payload);
+        }
     }
 
     @Test
