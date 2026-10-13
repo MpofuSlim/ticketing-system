@@ -946,6 +946,10 @@ public class BookingService {
         }
 
         booking.setStatus(Booking.BookingStatus.CANCELLED);
+        // A late payment may still resurrect it (CancelReason). A SUPER_ADMIN
+        // cancelling someone's PENDING booking here is recorded the same way:
+        // nobody has paid, so a payment that does land should get its ticket.
+        booking.setCancelReason(Booking.CancelReason.CUSTOMER_CANCELLED);
         booking.setExpiresAt(null); // hold no longer applicable
         bookingRepository.save(booking);
 
@@ -1051,6 +1055,8 @@ public class BookingService {
                 booking.setAvailabilityReleased(true);
             }
             booking.setStatus(Booking.BookingStatus.CANCELLED);
+            // Never resurrected: the money is being returned.
+            booking.setCancelReason(Booking.CancelReason.ADMIN_REVERSED);
             bookingRepository.save(booking);
 
             eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));

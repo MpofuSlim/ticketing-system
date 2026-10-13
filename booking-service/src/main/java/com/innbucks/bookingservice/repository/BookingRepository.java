@@ -82,10 +82,13 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // optimistic writer that read the row before (extend-hold) loses with a
     // 409 rather than writing PENDING back. Clears the persistence context so
     // the locked entity, still PENDING in memory, can never be flushed over it.
+    // Records the reason (V25): an expired hold may be resurrected by a payment
+    // that lands late.
     @Modifying(clearAutomatically = true)
     @Query(value = """
         UPDATE bookings
-           SET status = 'CANCELLED', expires_at = NULL, updated_at = :now, version = version + 1
+           SET status = 'CANCELLED', cancel_reason = 'EXPIRED', expires_at = NULL, updated_at = :now,
+               version = version + 1
          WHERE id = :id AND status = 'PENDING'
     """, nativeQuery = true)
     int markExpired(@Param("id") UUID id, @Param("now") LocalDateTime now);

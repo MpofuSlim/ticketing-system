@@ -398,8 +398,12 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
     @Test
     void expirySweep_releasesEveryExpiredHold_inABoundedNumberOfStatements() {
         Fixture f = seedEvent(EXPIRY_HOLDS, Booking.BookingStatus.PENDING);
-        jdbc.update("UPDATE bookings SET expires_at = ? WHERE event_id = ?",
-                LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1), f.eventId);
+        // A payment had been started on each (H2's payment window): an expired
+        // hold nobody tried to pay for is cancelled without a notice (D16),
+        // and the notices are part of what this measures.
+        jdbc.update("UPDATE bookings SET expires_at = ?, payment_open_until = ? WHERE event_id = ?",
+                LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1), LocalDateTime.now(ZoneOffset.UTC).minusMinutes(2),
+                f.eventId);
 
         stats.clear();
         expirationService.expirePending();
