@@ -460,3 +460,49 @@ bookings failing at once points at the database (connectivity, pool,
 `lock_timeout`). Fix the cause; the next run retries every one of them. A
 paying customer is never blocked by it: confirm honours a lapsed hold that is
 still PENDING.
+
+### `ResurrectFailed`
+
+**Trigger:** `booking_confirm_resurrected_total{outcome="failed"}` moved. A
+payment confirmed a booking that had already been cancelled — its hold expired
+(`reason="expired"`), the buyer cancelled it (`customer_cancelled`) or released
+it (`buyer_released`) — and booking-service tried to bring it back, but could
+not re-claim its tickets. The customer has paid and has no ticket.
+payment-service keeps the payment `COMPLETED_UNCONFIRMED` and retries the
+confirm every minute, so the counter keeps moving until the booking is resolved
+(and `payment.payments.unconfirmed_retry{outcome=still_failing}` moves with it).
+
+**Action:** grep booking-service for `Resurrect refused` — each line names the
+booking and why:
+
+- `not enough tickets left` — the category sold out after the cancellation.
+  Either free a ticket in that category (raise its capacity; the next retry
+  succeeds), or refund the payment through the payment operator queue.
+- `category no longer exists` — the organizer deleted the category; refund.
+- no `Resurrect refused` line, but `seat-service ... fallback engaged` — seat-
+  service could not be asked. The Feign fallback reports seat-service's own 404
+  for a deleted category the same way, so if seat-service is up and the same
+  booking keeps failing, check `GET /seat-categories/{id}` for each of its
+  categories: a 404 there is a deleted category (refund).
+
+An admin-reversed booking, or one cancelled before V25 (`cancel_reason` NULL),
+is never resurrected and never counted here; its payment sits in the payment
+operator queue as before.
+
+### `HoldExtensionRefused`
+
+**Trigger:** `booking_hold_extension_refused_total{reason="max_per_call"}` moved
+— payment-service asked booking-service to hold a booking more than
+`BOOKING_MAX_HOLD_EXTENSION` (default PT45M) from now. That bound sits above
+every rail's instrument (card checkout, the longest, is 33 minutes), so it only
+fires when a rail's TTL was raised without raising it. Every such payment was
+refused (409, "Your booking has expired") before anything was minted, so
+customers on that rail cannot pay at all.
+
+**Action:** grep booking-service for `Hold extension refused, more than` — the
+line shows the deadline asked for. Raise `BOOKING_MAX_HOLD_EXTENSION` above the
+rail's real payable deadline + 3 minutes (one key in the `cell-zw` ConfigMap,
+patched on its own, then roll booking-service), or lower the rail's TTL back.
+Never raise it past `BOOKING_MAX_TOTAL_HOLD` (PT60M): a hold cannot outlive the
+absolute cap anyway. `reason="max_total"` is not alerted: it is a buyer who
+kept starting payments for an hour, refused by design (D26).

@@ -488,11 +488,12 @@ groups:
           description: "{{ $value | humanize }} block/unlock/new-phone messages undelivered on every channel in 15m — customers are not being told what happened to their phones."
           runbook: "prometheus/slo.md#devicesecuritynotificationsundelivered"
 
-  # booking-service stock. booking.expiry.skipped counts lapsed holds whose
+  # booking-service stock and payment window. Every series here is registered
+  # at 0 at startup. booking.expiry.skipped counts lapsed holds whose
   # per-booking sweep transaction FAILED and rolled back (exported as
-  # booking_expiry_skipped_total, registered at 0 at startup). Each such hold
-  # keeps its tickets claimed until a run succeeds, so stock reads short; a
-  # hold merely locked by a confirm or a cancel is not counted. Expected 0.
+  # booking_expiry_skipped_total). Each such hold keeps its tickets claimed
+  # until a run succeeds, so stock reads short; a hold merely locked by a
+  # confirm or a cancel is not counted. Expected 0.
   - name: booking-stock
     interval: 30s
     rules:
@@ -506,6 +507,39 @@ groups:
           summary: "Expiry sweep is failing to cancel lapsed holds"
           description: "{{ $value | humanize }} lapsed holds failed to cancel in 15m. Their tickets stay claimed (shown as sold) until a sweep run succeeds."
           runbook: "prometheus/slo.md#expiryskipping"
+
+      # booking.confirm.resurrected{reason,outcome} (H2): a payment landed on a
+      # booking that had been cancelled (hold expired, buyer cancel, buyer
+      # release) and the confirm tried to bring it back. outcome="failed" means
+      # its tickets could not be re-claimed — sold out, category deleted, or
+      # seat-service unreachable — so a customer has PAID with no ticket for
+      # now. payment-service retries the confirm every minute, so one stuck
+      # booking keeps this firing until it is resolved.
+      - alert: ResurrectFailed
+        expr: sum(increase(booking_confirm_resurrected_total{outcome="failed"}[15m])) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "A paid booking could not be resurrected"
+          description: "{{ $value | humanize }} confirms of a cancelled-then-paid booking failed in 15m. The customer has paid and has no ticket until the confirm succeeds or the payment is refunded."
+          runbook: "prometheus/slo.md#resurrectfailed"
+
+      # booking.hold.extension_refused{reason} (H2). reason="max_total" is the
+      # 60-minute cap doing its job (a buyer re-minting codes for an hour) and is
+      # not alerted. reason="max_per_call" means payment-service asked for a hold
+      # more than app.booking.max-hold-extension (45 min) from now, above every
+      # configured rail: a rail's TTL was raised without raising the bound, and
+      # every payment on that rail is now refused before it is minted.
+      - alert: HoldExtensionRefused
+        expr: sum(increase(booking_hold_extension_refused_total{reason="max_per_call"}[15m])) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Hold extensions refused by the per-call bound"
+          description: "{{ $value | humanize }} extend-hold calls asked for more than BOOKING_MAX_HOLD_EXTENSION in 15m. Those payments were refused before minting; a payment rail's TTL is probably above the bound."
+          runbook: "prometheus/slo.md#holdextensionrefused"
 
   # A09 — payment money-movement integrity. Fed by payment-service PaymentMetrics
   # (payment.* counters, exported as payment_*_total). These were emitted but had
