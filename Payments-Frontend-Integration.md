@@ -12,8 +12,10 @@ binding, idempotency keys, session-supersession, gateway rate limits.
 > middleware, which has been removed; the frontend now calls Veengu
 > directly for those operations. What remains in this backend on
 > `/payments` is the **ticket/order payment** rail (`POST /payments`,
-> InnBucks 2D code and ZimSwitch card) plus `POST /payments/shop-checkout`
-> — see the payment-service Swagger for those.
+> InnBucks 2D code, EcoCash and ZimSwitch card) plus
+> `POST /payments/shop-checkout` — see the payment-service Swagger for
+> those. §4 covers the one cross-service effect of `POST /payments` the
+> Swagger can't show: it moves the booking's `expiresAt`.
 
 Base URL: the API gateway (`http://localhost:8080` in dev). All endpoints
 below assume that prefix unless noted.
@@ -294,3 +296,89 @@ money path is low-frequency by nature; anything north of 1 rps on it is
 anomalous.
 
 If you hit it, you get `HTTP 429` from the gateway. Back off and retry.
+
+---
+
+## 4. A booking's `expiresAt` moves when payment starts — by rail
+
+A new booking holds its seats until its `expiresAt` (a few minutes after
+creation; `BOOKING_HOLD_TTL_MINUTES`). Every payment instrument outlives
+that, so before `POST /payments` mints anything — code, EcoCash prompt or
+card checkout — payment-service pushes the booking's hold out to **the
+instrument's last payable instant + 3 minutes**. How far depends on the
+rail the customer picked:
+
+| `paymentRail` | Instrument deadline on the `POST /payments` response | Last payable instant | Booking `expiresAt` moves to at least |
+|---|---|---|---|
+| `INNBUCKS_CODE` (default) | `paymentCodeExpiresAt` = now + 10 min | now + 10 min | **now + 13 min** |
+| `ECOCASH` | `promptExpiresAt` = now + 5 min | now + 7 min (an approval in the 2 minutes after `promptExpiresAt` still confirms) | **now + 10 min** |
+| `ZIMSWITCH_CARD` | `checkoutExpiresAt` = now + 28 min | now + 30 min (the card gateway's own ceiling) | **now + 33 min** |
+
+"now" is when the `POST /payments` was handled. The minutes are the
+defaults (`PAYMENTS_CODE_TTL`, `ECOCASH_CHARGE_TTL`, `ZIMSWITCH_CHECKOUT_TTL`);
+the 3-minute margin is fixed. Until this change every rail moved the hold
+to now + 13 min, so a card paid after minute 13 of its 30-minute checkout
+could land on an expired booking.
+
+What the FE does with it:
+
+- **Two countdowns, two sources.** The payment screen counts down the
+  instrument's own field (`paymentCodeExpiresAt` / `promptExpiresAt` /
+  `checkoutExpiresAt`). A seat-hold countdown reads the booking's
+  `expiresAt`. Never derive one from the other or from the rail on the
+  client — the BE renders both, at the market offset like every other
+  timestamp.
+- **Re-read the booking after `POST /payments` answers — whatever it
+  answers.** The `expiresAt` you got from `POST /bookings` is stale once
+  payment starts: `GET /bookings/{id}` (or `GET /bookings/public/{id}`)
+  returns the moved value.
+- **It moves even when the attempt then fails.** The hold is extended
+  *before* the instrument is minted — that order is what stops a paid
+  instrument landing on an expired booking — so an attempt that fails
+  after it has already moved `expiresAt` by its rail's window. For the card
+  that is the full 33 minutes, with nothing payable behind them, when the
+  gateway cannot start the checkout (`503` "Card payments are temporarily
+  unavailable; please try again shortly", `500` "Payment request was
+  rejected by the card gateway", or a `400` carrying the gateway's reason).
+  The same happens to the second of two near-simultaneous `POST /payments`
+  for one booking on different rails: it gets the first one's receipt, but
+  its own rail's hold has landed. The seats stay held for that window
+  either way; the customer can tap Pay again at once.
+- **It only ever moves forward.** A second attempt after the first one
+  lapsed (a fresh Pay tap) pushes it out again from that moment; nothing
+  shortens it.
+- **A hold booking-service won't extend refuses the payment, with nothing
+  charged:**
+
+  ```json
+  HTTP/1.1 409 Conflict
+  {
+    "code": "409 CONFLICT",
+    "message": "Your booking has expired — please create a new booking and try again",
+    "data": null
+  }
+  ```
+
+  Send the customer back to rebook. Usually the hold has simply lapsed. But
+  booking-service also never holds a booking past **60 minutes from its
+  creation**, and it refuses — never shortens — a hold that would run past
+  that. So a late retry gets this same 409 while `GET /bookings/{id}` still
+  shows `PENDING` with a future `expiresAt` (an earlier attempt's hold):
+  with the default windows, a card attempt started more than 27 minutes
+  after the booking was created, a code attempt after 47, EcoCash after 50.
+  It is still a rebook; don't compute the cut-off on the client.
+- A `503` "We could not secure your booking right now; please try again
+  shortly" means booking-service could not be asked. Nothing was minted or
+  charged; retry the same request.
+- Marketplace and voucher orders get the same per-rail window on their own
+  order expiry; a voucher till refuses cash while it runs, so a card
+  checkout now blocks cash for up to 33 minutes instead of 13 — including
+  one the card gateway failed to start.
+
+Gotchas checklist:
+
+- [ ] Payment countdown from the instrument field; seat countdown from `expiresAt`.
+- [ ] Refresh the booking after every `POST /payments` answer, error included, before showing `expiresAt`.
+- [ ] No client-side "+13 minutes" (or any per-rail arithmetic, or the 60-minute cut-off).
+- [ ] 409 "Your booking has expired" on `POST /payments` → rebook, even if the booking still reads `PENDING`; nothing was charged.
+- [ ] 503 "We could not secure your booking…" → retry the same request.

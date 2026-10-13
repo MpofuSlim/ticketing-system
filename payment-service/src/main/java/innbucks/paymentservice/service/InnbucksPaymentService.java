@@ -39,8 +39,9 @@ import java.util.UUID;
  *   1. gateway.fetch(orderRef): amount (ALREADY in cents — the gateway is the
  *      product's single major↔minor conversion point), currency, payer
  *      msisdn, settlement tag + narration, payable flag
- *   2. gateway.extendHold(orderRef): the product-side hold provably outlives
- *      the code (TTL + safety margin) BEFORE any ledger write or mint
+ *   2. gateway.extendHold(orderRef, codeExpiresAt): the product-side hold
+ *      provably outlives the code (its expiry + safety margin) BEFORE any
+ *      ledger write or mint; the SAME expiry is what step 4 records
  *   3. Open a PENDING payment ledger row (REQUIRES_NEW commit)
  *   4. POST /api/code/generate (type=PAYMENT, amount in CENTS,
  *      reference = our paymentReference)
@@ -80,9 +81,9 @@ public class InnbucksPaymentService {
     private final CodePaymentResolutionService codePaymentResolutionService;
 
     /**
-     * How long the customer has to approve the code. Must stay comfortably
-     * UNDER the product hold window (each gateway extends its hold to TTL +
-     * {@link OrderGateway#HOLD_SAFETY_MARGIN}) so a paid code can still
+     * How long the customer has to approve the code — the code's last
+     * payable instant, which each gateway extends its hold past by
+     * {@link OrderGateway#HOLD_SAFETY_MARGIN} so a paid code can still
      * confirm its order; the InnBucks-side validity (~10 min per the doc's
      * samples) is the upper bound.
      */
@@ -161,10 +162,14 @@ public class InnbucksPaymentService {
         }
 
         // ---- Step 1.5: make the product hold outlive the code -----------------
-        // Extend BEFORE any ledger write or code mint; a refusal means the
-        // order is already expired/cancelled, so the customer re-orders with
-        // ZERO money moved. The gateway throws the customer-facing refusal.
-        gateway.extendHold(orderRef);
+        // The code's deadline is fixed ONCE, here: the hold is sized from it
+        // and step 4 records the same instant, so the ledger can never
+        // advertise a code the hold does not cover. Extend BEFORE any ledger
+        // write or code mint; a refusal means the order is already
+        // expired/cancelled, so the customer re-orders with ZERO money moved.
+        // The gateway throws the customer-facing refusal.
+        Instant expiresAt = Instant.now().plus(codeTtl);
+        gateway.extendHold(orderRef, expiresAt);
 
         // ---- Step 2: open PENDING ledger row ----------------------------------
         String paymentReference = SettlementReference.forTag(snapshot.settlementTag());
@@ -254,7 +259,6 @@ public class InnbucksPaymentService {
         // No out-of-band delivery: the FE renders the code + QR + countdown
         // from the response, so the customer sees them on the same screen
         // they tapped Pay from. A missing notification can never lose a code.
-        Instant expiresAt = Instant.now().plus(codeTtl);
         paymentRecordService.markTokenIssued(opened.getId(),
                 generated.code(), generated.authNumber(), generated.qrCodeBase64(), expiresAt);
 

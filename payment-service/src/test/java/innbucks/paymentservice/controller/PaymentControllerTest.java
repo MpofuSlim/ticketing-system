@@ -18,6 +18,9 @@ import innbucks.paymentservice.repository.PaymentRepository;
 import innbucks.paymentservice.service.InnbucksPaymentService;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
 import innbucks.paymentservice.service.PaymentRecordService;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -25,7 +28,11 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 
 import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -663,6 +670,125 @@ class PaymentControllerTest {
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
         assertEquals("Booking not found", resp.getBody().getMessage());
         assertNull(resp.getBody().getData());
+    }
+
+    /**
+     * Every failure example on POST /payments is a body the code really sends,
+     * and every hold or product-read failure the code sends is documented.
+     * Each failure below comes from the REAL gateway or client failing, through
+     * the REAL controller mapping — no message is restated here. A refused hold
+     * used to be documented as {@code 400 "Seat hold expired"}, which nothing
+     * sends: the gateways answer 409 (rebook, nothing charged) or 503 (retry),
+     * so a client built from Swagger missed its rebook branch.
+     */
+    @Test
+    void processPayment_swaggerFailureExamples_areTheBodiesTheCodeSends() throws Exception {
+        Map<Integer, Set<String>> documented = new HashMap<>();
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        ApiResponses responses = PaymentController.class
+                .getMethod("processPayment", PaymentRequest.class).getAnnotation(ApiResponses.class);
+        for (ApiResponse response : responses.value()) {
+            int status = Integer.parseInt(response.responseCode());
+            if (status < 400) continue;
+            for (ExampleObject example : response.content()[0].examples()) {
+                var body = json.readTree(example.value());
+                assertTrue(body.get("code").asText().startsWith(status + " "), example.name());
+                documented.computeIfAbsent(status, s -> new HashSet<>())
+                        .add(body.get("code").asText() + " | " + body.get("message").asText());
+            }
+        }
+
+        Map<Integer, Set<String>> sent = new HashMap<>();
+        // 400: the two order-identification refusals.
+        recordSent(sent, fixture().controller().processPayment(new PaymentRequest()));
+        PaymentRequest both = marketplacePayment("MKT-4F9A1C22B7D3");
+        both.setBookingId(UUID.randomUUID());
+        recordSent(sent, fixture().controller().processPayment(both));
+
+        // Booking: booking-service refusing the hold (any of its refusal
+        // statuses), failing it, and unreachable on the fetch.
+        UUID bookingId = UUID.randomUUID();
+        for (int refusal : new int[] {404, 409, 400, 500}) {
+            var bookings = mock(innbucks.paymentservice.client.BookingServiceClient.class);
+            doThrow(new BookingConfirmationException("booking-service says no", refusal))
+                    .when(bookings).extendHold(eq(bookingId), any());
+            var gateway = new innbucks.paymentservice.order.BookingOrderGateway(
+                    bookings, mock(innbucks.paymentservice.client.EventServiceClient.class), "USD");
+            recordSent(sent, payFailing(paymentFor(bookingId),
+                    () -> gateway.extendHold(bookingId.toString(), java.time.Instant.now())));
+        }
+        try (var pool = new innbucks.paymentservice.config.PooledHttpClient(
+                new innbucks.paymentservice.config.PooledHttpClientProperties())) {
+            var unreachable = new innbucks.paymentservice.client.BookingServiceClient(
+                    org.springframework.web.client.RestClient.builder(), "http://127.0.0.1:" + closedPort(),
+                    500, 500, "token", json, pool);
+            var gateway = new innbucks.paymentservice.order.BookingOrderGateway(
+                    unreachable, mock(innbucks.paymentservice.client.EventServiceClient.class), "USD");
+            recordSent(sent, payFailing(paymentFor(bookingId), () -> gateway.fetch(bookingId.toString())));
+        }
+
+        // Marketplace and voucher orders: the same three failures.
+        for (int status : new int[] {409, 500}) {
+            var market = mock(innbucks.paymentservice.client.MarketplaceOrderClient.class);
+            var marketError = new innbucks.paymentservice.client.MarketplaceOrderClient
+                    .MarketplaceOrderException("marketplace says no", status, "order_not_pending");
+            doThrow(marketError).when(market).extendExpiry(anyString(), anyInt());
+            when(market.getOrder(anyString())).thenThrow(marketError);
+            var marketGateway = new innbucks.paymentservice.order.MarketplaceOrderGateway(market);
+            recordSent(sent, payFailing(marketplacePayment("MKT-4F9A1C22B7D3"),
+                    () -> marketGateway.extendHold("MKT-4F9A1C22B7D3", java.time.Instant.now())));
+            recordSent(sent, payFailing(marketplacePayment("MKT-4F9A1C22B7D3"),
+                    () -> marketGateway.fetch("MKT-4F9A1C22B7D3")));
+
+            var vouchers = mock(innbucks.paymentservice.client.LoyaltyVoucherOrderClient.class);
+            var voucherError = new innbucks.paymentservice.client.LoyaltyVoucherOrderClient
+                    .VoucherOrderException("loyalty says no", status, "ORDER_NOT_PENDING");
+            doThrow(voucherError).when(vouchers).extendExpiry(anyString(), anyInt());
+            when(vouchers.getOrder(anyString())).thenThrow(voucherError);
+            var voucherGateway = new innbucks.paymentservice.order.LoyaltyVoucherOrderGateway(vouchers);
+            PaymentRequest voucherOrder = new PaymentRequest();
+            voucherOrder.setOrderType(OrderType.LOYALTY_VOUCHER);
+            voucherOrder.setOrderRef("VCH-4F9A1C22B7D3");
+            recordSent(sent, payFailing(voucherOrder,
+                    () -> voucherGateway.extendHold("VCH-4F9A1C22B7D3", java.time.Instant.now())));
+            recordSent(sent, payFailing(voucherOrder, () -> voucherGateway.fetch("VCH-4F9A1C22B7D3")));
+        }
+
+        assertEquals(Set.of(400, 409, 503), sent.keySet(), "every failure above is a 400, 409 or 503");
+        assertTrue(sent.get(400).containsAll(documented.get(400)),
+                "a 400 example nothing sends: " + diff(documented.get(400), sent.get(400)));
+        for (int status : new int[] {409, 503}) {
+            assertTrue(documented.get(status).containsAll(sent.get(status)),
+                    "sent but undocumented " + status + ": " + diff(sent.get(status), documented.get(status)));
+        }
+    }
+
+    /** Drives {@code failure} where the rail service would have run, through the real controller. */
+    private static ResponseEntity<ApiResult<PaymentResponse>> payFailing(PaymentRequest request, Runnable failure) {
+        Fixture f = fixture();
+        when(f.innbucks().processPayment(any(), anyString(), isNull(), isNull())).thenAnswer(inv -> {
+            failure.run();
+            throw new AssertionError("the failure did not throw");
+        });
+        return f.controller().processPayment(request);
+    }
+
+    private static void recordSent(Map<Integer, Set<String>> sent, ResponseEntity<ApiResult<PaymentResponse>> resp) {
+        assertNull(resp.getBody().getData());
+        sent.computeIfAbsent(resp.getStatusCode().value(), s -> new HashSet<>())
+                .add(resp.getBody().getCode() + " | " + resp.getBody().getMessage());
+    }
+
+    private static Set<String> diff(Set<String> a, Set<String> b) {
+        Set<String> d = new HashSet<>(a);
+        d.removeAll(b);
+        return d;
+    }
+
+    private static int closedPort() throws java.io.IOException {
+        try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+            return socket.getLocalPort();
+        }
     }
 
     private ShopCheckoutRequest cashAndPoints(UUID shopId) {
