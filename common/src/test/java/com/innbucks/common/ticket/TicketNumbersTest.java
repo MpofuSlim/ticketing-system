@@ -92,6 +92,46 @@ class TicketNumbersTest {
         assertThat(TicketNumbers.canonical(typed)).contains("20260930-00012K");
     }
 
+    @Test
+    void aTypedLegacyNumber_withAnyFinalLetter_canonicalisesToTheIssuedForm() {
+        // canonical() spells the legacy shape out a second time, so this pins it
+        // separately from isLegacy: narrowed to the Crockford set, every legacy
+        // ticket ending in I, L, O or U would stop being searchable.
+        for (char letter = 'A'; letter <= 'Z'; letter++) {
+            String issued = "20260930-00012" + letter;
+            char lower = Character.toLowerCase(letter);
+            assertThat(TicketNumbers.canonical(issued)).as(issued).contains(issued);
+            assertThat(TicketNumbers.canonical("20260930-00012" + lower)).as("lower %s", issued).contains(issued);
+            assertThat(TicketNumbers.canonical("2026093000012" + lower)).as("dashless %s", issued).contains(issued);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "4111 1111 1111 1111 AB",   // a Visa with two letters typed after it
+            "5500 0000 0000 0004 CV",   // a Mastercard, likewise
+            "2221 0000 0000 0009 AB",   // Mastercard's 2-series
+            "2200 0000 0000 0004 AB",   // Mir
+            "41111111111111111X",       // 17 digits and a letter: the current shape's length
+            "4111111111111X",           // a 13-digit card and a letter: the legacy shape's length
+            "41111111-11111-111AB",     // dashed exactly like a ticket, still no date
+            "20261301-7KQ4M-9XZ2B",     // month 13
+            "20261032-00012K",          // day 32
+            "19991013-7KQ4M-9XZ2B"      // never issued before this century
+    })
+    void aTypedNumberWhoseFirstEightDigitsAreNotAnIssueDate_hasNoCanonicalForm(String typed) {
+        assertThat(TicketNumbers.canonical(typed)).isEmpty();
+    }
+
+    @Test
+    void theDateCheck_isForTypedInputOnly_theIssuedShapesStayAsTheyWere() {
+        // Exactly-as-issued recognition never tightened: the legacy shape is still
+        // ^\d{8}-\d{5}[A-Z]$, so nothing issued can start being refused by it.
+        assertThat(TicketNumbers.LEGACY.pattern()).isEqualTo("^\\d{8}-\\d{5}[A-Z]$");
+        assertThat(TicketNumbers.isLegacy("41111111-11111X")).isTrue();
+        assertThat(TicketNumbers.canonical("41111111-11111X")).isEmpty();
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             "20261013-12345-67890",     // all digits

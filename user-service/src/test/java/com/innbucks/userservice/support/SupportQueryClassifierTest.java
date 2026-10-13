@@ -109,6 +109,31 @@ class SupportQueryClassifierTest {
     }
 
     @ParameterizedTest
+    @CsvSource({
+            "20260930-00012I, 20260930-00012I",
+            "20260930-00012l, 20260930-00012L",
+            "2026093000012O,  20260930-00012O",
+            "20260930 00012u, 20260930-00012U"
+    })
+    @DisplayName("row 7: a legacy ticket ending in I, L, O or U is still a TICKET_NUMBER — its letter is never Crockford-aliased")
+    void legacyTicketNumbersEndingInNonCrockfordLetters(String typed, String issued) {
+        assertThat(c(typed)).isEqualTo(new Query(Kind.TICKET_NUMBER, issued));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "4111 1111 1111 1111 AB",
+            "5500 0000 0000 0004 CV",
+            "41111111111111111X",
+            "4111111111111X",
+            "4111111111111111ab"
+    })
+    @DisplayName("row 7: a card number with letters typed after it is not a ticket — its digits are not an issue date")
+    void cardNumbersWithLettersAfterThemAreNotTickets(String typed) {
+        assertThat(c(typed)).isEqualTo(new Query(Kind.NOT_RECOGNISED, null));
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"20261013-12345-67890", "201610131234567890", "2026 1013 1234 5678 90"})
     @DisplayName("row 7: the ticket shape without a letter is never issued — 18 digits stay row 9's card refusal")
     void allDigitTicketShapesAreStillRefusedAsCards(String typed) {

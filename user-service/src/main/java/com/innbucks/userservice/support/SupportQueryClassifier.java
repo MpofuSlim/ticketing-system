@@ -33,8 +33,12 @@ import java.util.regex.Pattern;
  *       issued now) or the legacy {@code yyyyMMdd-DDDDDL} (valid forever).
  *       Read from the stripped input, not {@code s}: ASCII letters upper-cased,
  *       spaces of every kind dropped, any dash variant read as {@code -}, each
- *       dash optional; the value is the issued form. Its letter is what keeps
- *       an 18-digit card number out of this row and in row 9's refusal</li>
+ *       dash optional; the value is the issued form. Two things keep a card
+ *       number out of this row: the letter every ticket carries sends an
+ *       all-digit card to row 9's refusal, and the first eight digits must read
+ *       as a {@code 20yyMMdd} issue date, which no card number does, so a card
+ *       with letters typed after it ({@code 4111 1111 1111 1111 AB}) is not
+ *       read as a ticket either</li>
  *   <li>{@code ^TKZ-[A-Z]{3,12}-[0-9A-F]{12}$} / {@code ^TKT-PMT-<uuid>$} → payment reference</li>
  *   <li>REFUSED {@code query_not_accepted}: {@code d} is 13–19 digits (a card or
  *       voucher number — also the shape marketplace's PHONE_SHAPE would take for

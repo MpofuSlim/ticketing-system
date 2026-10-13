@@ -50,9 +50,23 @@ public final class TicketNumbers {
     /** The legacy shape, exactly as issued. */
     public static final Pattern LEGACY = Pattern.compile("^\\d{8}-\\d{5}[A-Z]$");
 
+    /**
+     * The date group a TYPED number must carry: a plausible {@code 20yyMMdd}.
+     * Every number ever issued starts with its UTC issue date, so this refuses
+     * no ticket. It is what keeps a card number with a letter or two typed after
+     * it out of {@link #canonical} once the dashes are optional:
+     * {@code 4111 1111 1111 1111 AB} would otherwise read as
+     * {@code 41111111-11111-111AB}, a "ticket" whose value is the card's digits.
+     * No live card scheme's numbers start with 20 (Mastercard's 2-series is
+     * 2221–2720, Mir's 2200–2204). {@link #CURRENT} and {@link #LEGACY} keep
+     * {@code \d{8}}: they describe the issued shapes, and nothing may start
+     * refusing one.
+     */
+    private static final String TYPED_DATE = "20\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])";
+
     /** Either shape with each dash optional, applied after {@link #canonical} has tidied the input. */
     private static final Pattern RELAXED = Pattern.compile(
-            "^(\\d{8})-?(?:(\\d{5}[A-Z])|(" + SYMBOL + "{5})-?(" + SYMBOL + "{5}))$");
+            "^(" + TYPED_DATE + ")-?(?:(\\d{5}[A-Z])|(" + SYMBOL + "{5})-?(" + SYMBOL + "{5}))$");
 
     /** Whitespace of every kind, the no-break spaces a paste carries included. */
     private static final Pattern SPACES = Pattern.compile("[\\s\\p{Z}]");
@@ -86,6 +100,8 @@ public final class TicketNumbers {
      * so {@code 20261013 7kq4m 9xz2b} is {@code 20261013-7KQ4M-9XZ2B}. No
      * symbol is substituted for another: a current-shape number holding I, L,
      * O or U is not one, and a legacy number's final letter may be any letter.
+     * The first eight digits must read as a {@code 20yyMMdd} date, which every
+     * issued number does and a card number never does (see {@code TYPED_DATE}).
      */
     public static Optional<String> canonical(String typed) {
         if (typed == null) {

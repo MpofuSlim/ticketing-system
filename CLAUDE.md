@@ -1175,7 +1175,11 @@ ticket shapes are defined once, in common's `TicketNumbers`.
   up exactly as issued, so there is no shape check to update and none to add.
   Anything that must RECOGNISE a ticket number (today only the support search)
   uses `TicketNumbers`, which accepts both shapes. Never Crockford-alias
-  (O→0, I/L→1) a legacy value: its final letter can be any letter.
+  (O→0, I/L→1) a legacy value: its final letter can be any letter. A TYPED
+  number (`TicketNumbers.canonical`: dashes optional, any case) must also start
+  with a plausible `20yyMMdd` date. Every issued number does and no card number
+  does, so `4111 1111 1111 1111 AB` is never read as a ticket carrying a card's
+  digits. The issued shapes (`isCurrent` / `isLegacy`) keep `\d{8}`.
 - **A clash is retried, not a 500.** `BookingService.claimWithRetries`: a 23505 on
   `uk_booking_items_ticket_number` or `uk_bookings_confirmation_number` — read
   from the driver's own message first, Hibernate's parse second, because a batch
