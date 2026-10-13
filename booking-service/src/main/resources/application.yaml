@@ -188,6 +188,16 @@ app:
     # this line is what lets the env var reach it — relaxed binding does not
     # map BOOKING_MAX_SEATS_PER_BOOKING onto app.booking.max-seats-per-booking.
     max-seats-per-booking: ${BOOKING_MAX_SEATS_PER_BOOKING:20}
+    # Hold caps on PATCH /bookings/internal/{id}/extend-hold (H2). Both REFUSE
+    # (409, so payment-service mints nothing); neither clamps. ISO-8601.
+    # max-total-hold: no hold may run past the booking's created_at + this
+    # (D26) — a client re-minting payment codes cannot hold tickets for ever.
+    # max-hold-extension: no hold may end more than this from now; it sits
+    # above the longest rail (card, 33 min), so raise it with any rail TTL
+    # (alert HoldExtensionRefused). Explicit lines, like the one above: relaxed
+    # binding does not reach these dashed names from the env vars.
+    max-total-hold: ${BOOKING_MAX_TOTAL_HOLD:PT60M}
+    max-hold-extension: ${BOOKING_MAX_HOLD_EXTENSION:PT45M}
     # Pre-event WhatsApp reminder (EventReminderScheduler): sent once per
     # CONFIRMED booking when its event starts within this window. Hourly cron.
     reminder-window-hours: ${BOOKING_REMINDER_WINDOW_HOURS:24}

@@ -29,6 +29,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.BatchUpdateException;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
@@ -89,6 +90,22 @@ public class BookingService {
     /** {@code data.errorCode} of the 503 a claim answers when its retry fails the same way. */
     public static final String TRY_AGAIN = "TRY_AGAIN";
 
+    /** {@code data.errorCode} of the 409 a cancel answers while a payment may still land. */
+    public static final String PAYMENT_IN_PROGRESS = "PAYMENT_IN_PROGRESS";
+
+    /** The cancel refusal's message; also the Swagger example's. */
+    public static final String PAYMENT_IN_PROGRESS_MESSAGE = "A payment for this booking is still open. "
+            + "If you don't complete it, the booking is released automatically.";
+
+    /**
+     * Confirm's refusal for a booking it cannot confirm: cancelled for good
+     * (an admin reversal, or before V25), or cancelled and not resurrectable
+     * right now (sold out, category deleted). payment-service reads any 409
+     * as "keep the payment and retry", so every one of them is this body.
+     */
+    static final String NOT_CONFIRMABLE_MESSAGE =
+            "Only pending bookings can be confirmed — this one isn't in that state.";
+
     // Flat per-booking seat ceiling, applied identically to every customer.
     // This replaced a per-tier ladder (tier 2 -> 10, 3 -> 15, 4 -> 20, anything
     // else -> 0, i.e. a hard block); the tier ladder is gone, so everyone now
@@ -105,6 +122,21 @@ public class BookingService {
     // Spring overrides via @Value at runtime.
     @org.springframework.beans.factory.annotation.Value("${app.booking.hold-ttl-minutes:5}")
     private long holdTtlMinutes = 5;
+
+    // The absolute hold cap (D26): extend-hold refuses a hold that would run
+    // past created_at + this, so no payment instrument is minted for it.
+    // Without it a client re-minting codes could hold tickets for ever
+    // without paying. Refused, never clamped: a hold clamped short under a
+    // live instrument is a payment that lands with no ticket. Set through
+    // setMaxTotalHold below.
+    private Duration maxTotalHold = Duration.ofMinutes(60);
+
+    // Per-call sanity bound on extend-hold: a hold more than this far from
+    // NOW is refused. It sits above the longest rail (card, 33 min), so with
+    // the configured rails it never fires; when it does, a rail's TTL was
+    // raised without raising this (alert HoldExtensionRefused). Set through
+    // setMaxHoldExtension below.
+    private Duration maxHoldExtension = Duration.ofMinutes(45);
 
     // Shared secret passed to event-service on the internal
     // PATCH /events/{id}/availability/release call and the internal event
@@ -1070,7 +1102,28 @@ public class BookingService {
             throw new BookingConflictException("This booking is already cancelled.");
         }
 
+        // A payment instrument may still be live (extend-hold stamped how long
+        // the last one stays payable). Cancelling now would release the
+        // tickets under it, and a payment landing afterwards is money taken
+        // with the stock gone. Refused until the window closes; the hold then
+        // expires by itself if nobody pays. Read under the row lock, which
+        // extend-hold takes too, so the stamp cannot move between this check
+        // and the write below.
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime paymentOpenUntil = booking.getPaymentOpenUntil();
+        if (paymentOpenUntil != null && paymentOpenUntil.isAfter(now)) {
+            long retryAfterSeconds = secondsUntil(now, paymentOpenUntil);
+            log.warn("Cancel rejected, a payment may still land bookingId={} paymentOpenUntil={} retryAfterSeconds={}",
+                    bookingId, paymentOpenUntil, retryAfterSeconds);
+            throw new ApiProblemException(HttpStatus.CONFLICT, PAYMENT_IN_PROGRESS, PAYMENT_IN_PROGRESS_MESSAGE,
+                    Map.of("retryAfterSeconds", retryAfterSeconds));
+        }
+
         booking.setStatus(Booking.BookingStatus.CANCELLED);
+        // A late payment may still resurrect it (CancelReason). A SUPER_ADMIN
+        // cancelling someone's PENDING booking here is recorded the same way:
+        // nobody has paid, so a payment that does land should get its ticket.
+        booking.setCancelReason(Booking.CancelReason.CUSTOMER_CANCELLED);
         booking.setExpiresAt(null); // hold no longer applicable
         bookingRepository.save(booking);
 
@@ -1176,6 +1229,8 @@ public class BookingService {
                 booking.setAvailabilityReleased(true);
             }
             booking.setStatus(Booking.BookingStatus.CANCELLED);
+            // Never resurrected: the money is being returned.
+            booking.setCancelReason(Booking.CancelReason.ADMIN_REVERSED);
             bookingRepository.save(booking);
 
             eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
@@ -1214,60 +1269,157 @@ public class BookingService {
 
     /**
      * Extend a PENDING booking's seat hold to AT LEAST {@code holdUntil} —
-     * called S2S by payment-service the moment it is about to mint an InnBucks
-     * payment code, so the hold provably outlives the code the customer is
-     * shown (hold 5 min vs code 10 min was the paid-but-no-ticket gap: pay
-     * after the hold lapsed -> confirm refused -> money stuck in the ops
-     * queue). Never SHORTENS a hold (max of existing and requested).
+     * called S2S by payment-service just before it mints EVERY payment
+     * instrument (an InnBucks code, an EcoCash prompt, a card checkout), so
+     * the hold provably outlives what the customer is about to pay with. Never
+     * SHORTENS a hold: {@code expiresAt = max(expiresAt, holdUntil)}.
      *
-     * <p>Refuses (409) when the booking is not PENDING or the hold has already
-     * lapsed — the caller then refuses the payment BEFORE any money moves,
-     * which beats resurrecting a hold the sweeper may be cancelling (the
-     * optimistic @Version on Booking arbitrates any direct race).
+     * <p><b>The payment window.</b> The same call stamps
+     * {@code paymentOpenUntil = max(existing, holdUntil)}: because payment-service
+     * asks before every instrument, a stamp in the future reliably means "a
+     * payment may still land", which is what the customer cancel refuses on.
+     *
+     * <p><b>Two caps, both refusals, never clamps.</b> A 409 here makes
+     * payment-service refuse the payment before anything is minted, so the
+     * customer rebooks with no money moved. Clamping the hold and answering 200
+     * would let payment-service mint an instrument that outlives the hold —
+     * the paid-but-no-ticket hole these caps exist to keep closed.
+     * <ul>
+     *   <li>{@code holdUntil} more than {@code app.booking.max-hold-extension}
+     *       (PT45M) from now: a sanity bound above the longest rail (card, 33
+     *       min). Counted {@code max_per_call}, logged at WARN, alerted
+     *       ({@code HoldExtensionRefused}): a rail's TTL went up without this.
+     *       Checked first, because it is a property of the request alone: a
+     *       misconfigured rail on a booking that is also old must still show
+     *       up as the config fault it is.</li>
+     *   <li>{@code holdUntil} past {@code created_at +
+     *       app.booking.max-total-hold} (PT60M, D26): stops a hold being
+     *       renewed for ever by re-minting codes without paying. Counted
+     *       {@code max_total}.</li>
+     * </ul>
+     *
+     * <p>The booking row is locked first ({@link #lockWithItems}), so the
+     * extension serialises with the expiry sweep, a cancel and a confirm. A
+     * hold whose {@code expiresAt} has passed but which is still PENDING is
+     * extended: its tickets stay claimed until the sweep commits, and confirm
+     * honours it too. One the sweep has already cancelled is refused as not
+     * PENDING (409), as is a CONFIRMED one.
      */
     @Transactional
     public BookingResponseDTO extendHold(UUID bookingId, LocalDateTime holdUntil) {
         Objects.requireNonNull(holdUntil, "holdUntil");
-        Booking booking = bookingRepository.findByIdWithItems(bookingId)
-                .orElseThrow(() -> new NotFoundException("Booking not found"));
+        Booking booking = lockWithItems(bookingId, "Extend hold");
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
+            log.warn("Hold extension refused, booking not pending bookingId={} status={}",
+                    bookingId, booking.getStatus());
             throw new BookingConflictException(
                     "This booking's seat hold can no longer be extended — it's not in a PENDING state.");
         }
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        // Defence-in-depth on top of the DTO's @Future. Without this check an
-        // S2S caller passing a past timestamp would silently SHRINK the hold
-        // (the isBefore-guard below would then refuse to apply it, but the
-        // first-pass NPE / quiet-no-op shape is fragile — fail loudly instead).
-        // Bean validation runs only on the @Valid-bound controller call.
+        // Defence-in-depth on top of the DTO's @Future. Bean validation runs
+        // only on the @Valid-bound controller call; a past timestamp from any
+        // other caller is a bug to fail loudly on, not a quiet no-op.
         if (holdUntil.isBefore(now)) {
             throw new BadRequestException("holdUntil must be in the future.");
         }
-        if (booking.getExpiresAt() != null && booking.getExpiresAt().isBefore(now)) {
-            throw new BookingConflictException(
-                    "Your seat reservation has expired. Please start a new booking and complete payment within "
-                            + holdTtlMinutes + " minutes.");
+        LocalDateTime perCallBound = now.plus(maxHoldExtension);
+        if (holdUntil.isAfter(perCallBound)) {
+            log.warn("Hold extension refused, more than {} from now — has a payment rail's TTL been raised "
+                            + "above app.booking.max-hold-extension? bookingId={} holdUntil={} bound={}",
+                    maxHoldExtension, bookingId, holdUntil, perCallBound);
+            recordHoldExtensionRefused(BookingMetrics.HoldExtensionRefusal.MAX_PER_CALL);
+            throw holdNoLongerExtendable();
         }
+        // created_at is stamped by @PrePersist on every booking; a row without
+        // one cannot be measured against the cap, so it fails closed.
+        LocalDateTime totalCap = booking.getCreatedAt() == null ? null : booking.getCreatedAt().plus(maxTotalHold);
+        if (totalCap == null || holdUntil.isAfter(totalCap)) {
+            log.info("Hold extension refused, past {} from booking bookingId={} createdAt={} holdUntil={}",
+                    maxTotalHold, bookingId, booking.getCreatedAt(), holdUntil);
+            recordHoldExtensionRefused(BookingMetrics.HoldExtensionRefusal.MAX_TOTAL);
+            throw holdNoLongerExtendable();
+        }
+
+        boolean changed = false;
         if (booking.getExpiresAt() == null || booking.getExpiresAt().isBefore(holdUntil)) {
-            log.info("Extending seat hold bookingId={} from={} to={}",
-                    bookingId, booking.getExpiresAt(), holdUntil);
+            log.info("Extending seat hold bookingId={} from={} to={}{}", bookingId, booking.getExpiresAt(),
+                    holdUntil, booking.getExpiresAt() != null && booking.getExpiresAt().isBefore(now)
+                            ? " (the hold had lapsed; the sweep had not cancelled it)" : "");
             booking.setExpiresAt(holdUntil);
+            changed = true;
+        }
+        if (booking.getPaymentOpenUntil() == null || booking.getPaymentOpenUntil().isBefore(holdUntil)) {
+            booking.setPaymentOpenUntil(holdUntil);
+            changed = true;
+        }
+        if (changed) {
             booking = bookingRepository.save(booking);
         }
         return toDTO(booking);
     }
 
-    // @Transactional here too: the call below is a SELF-invocation, which
-    // bypasses the proxy, so without it this overload ran with no transaction
-    // at all — and a BookingConfirmed published outside a transaction is
-    // silently dropped by every AFTER_COMMIT listener (no tickets, no
-    // availability decrement). The controller calls the two-arg form.
-    @Transactional
+    /**
+     * The 409 every refused extension answers. payment-service maps a 409
+     * here to "Your booking has expired" and mints nothing; the wording is
+     * the one the lapsed-hold refusal always used.
+     */
+    private BookingConflictException holdNoLongerExtendable() {
+        return new BookingConflictException(
+                "Your seat reservation has expired. Please start a new booking and complete payment within "
+                        + holdTtlMinutes + " minutes.");
+    }
+
+    private void recordHoldExtensionRefused(BookingMetrics.HoldExtensionRefusal reason) {
+        BookingMetrics m = metrics;
+        if (m != null) {
+            m.holdExtensionRefused(reason);
+        }
+    }
+
+    /** Whole seconds from {@code now} until {@code until}, rounded up (until is after now). */
+    static long secondsUntil(LocalDateTime now, LocalDateTime until) {
+        Duration left = Duration.between(now, until);
+        return left.getNano() > 0 ? left.getSeconds() + 1 : left.getSeconds();
+    }
+
     public BookingResponseDTO confirmBooking(UUID bookingId) {
         return confirmBooking(bookingId, null);
     }
 
-    @Transactional
+    /**
+     * Confirm a booking once its payment has landed (S2S, payment-service).
+     *
+     * <p><b>No method-level transaction.</b> A confirm that finds the booking
+     * cancelled may resurrect it, and resurrecting asks seat-service first —
+     * with no transaction open, so a pooled connection is never held across
+     * that call. Each phase therefore runs in a transaction of its own:
+     * <ol>
+     *   <li>under the booking row's lock: a PENDING booking is confirmed and
+     *       committed right there (one transaction, exactly as before); a
+     *       CONFIRMED one is replayed; a CANCELLED one whose
+     *       {@link Booking.CancelReason} is resurrectable is handed on, with
+     *       the tickets it needs; any other CANCELLED one is refused 409;</li>
+     *   <li>with no transaction: seat-service is asked whether each of those
+     *       categories still exists. One answered with no data is refused
+     *       (409); seat-service unreachable is a 503 — and so, today, is a
+     *       deleted category, whose 404 the Feign fallback reports as an
+     *       outage (see {@link #requireCategoriesStillExist}). Either way
+     *       payment-service keeps the payment and retries the confirm;</li>
+     *   <li>under the booking row's lock again: the tickets are re-claimed
+     *       with the same guarded claim a new booking uses, in the canonical
+     *       category order ({@link StockLedger}), and the booking is
+     *       CONFIRMED. A claim that fails (sold out since) rolls the whole
+     *       thing back and answers 409. A booking another confirm resurrected
+     *       in the meantime is replayed (no second claim, no second
+     *       {@code BookingConfirmed}); one that changed in any other way —
+     *       resurrected and then reversed — is refused 409 with nothing
+     *       claimed. Pinned by {@code BookingResurrectRecheckTest} and the two
+     *       races in {@code BookingPaymentWindowPostgresIT}.</li>
+     * </ol>
+     * Every phase publishes inside its transaction ({@code BookingConfirmed}
+     * listeners are {@code AFTER_COMMIT}, and drop an event published with
+     * none open).
+     */
     public BookingResponseDTO confirmBooking(UUID bookingId, ConfirmBookingRequestDTO confirmRequest) {
         log.info("Confirming booking bookingId={} pointsToUse={} cashAmount={}",
                 bookingId,
@@ -1292,6 +1444,42 @@ public class BookingService {
             }
         }
 
+        ConfirmStep step = Objects.requireNonNull(
+                txTemplate.execute(status -> confirmUnderLock(bookingId, confirmRequest)));
+        if (step.resurrection() == null) {
+            return step.response();
+        }
+        return resurrect(bookingId, confirmRequest, step.resurrection());
+    }
+
+    /**
+     * Phase 1 of a confirm: what the booking row says, under its lock. Either
+     * the confirm's answer, or a {@link Resurrection} still to attempt.
+     */
+    private record ConfirmStep(BookingResponseDTO response, Resurrection resurrection) {
+        static ConfirmStep answered(BookingResponseDTO response) {
+            return new ConfirmStep(response, null);
+        }
+    }
+
+    /**
+     * A cancelled booking a late payment may bring back: why it was
+     * cancelled, and its tickets per category in the canonical lock order.
+     * Record equality is what phase 3 re-checks against the locked row.
+     */
+    private record Resurrection(Booking.CancelReason reason, SortedMap<UUID, Integer> ticketsByCategory) {
+        static Resurrection of(Booking booking) {
+            SortedMap<UUID, Integer> tickets = StockLedger.byCategory();
+            if (booking.getItems() != null) {
+                for (BookingItem item : booking.getItems()) {
+                    tickets.merge(item.getCategoryId(), 1, Integer::sum);
+                }
+            }
+            return new Resurrection(booking.getCancelReason(), Collections.unmodifiableSortedMap(tickets));
+        }
+    }
+
+    private ConfirmStep confirmUnderLock(UUID bookingId, ConfirmBookingRequestDTO confirmRequest) {
         // The row lock serialises confirm with the expiry sweep, a cancel and
         // a second confirm: whoever holds it decides, and the others see what
         // it decided once it commits.
@@ -1306,30 +1494,156 @@ public class BookingService {
         // Returning the existing DTO is the correct retry semantics.
         if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
             log.info("Confirm idempotent replay (already CONFIRMED) bookingId={}", bookingId);
-            return toDTO(booking);
+            return ConfirmStep.answered(toDTO(booking));
         }
-        // CANCELLED is still a real error — a CANCELLED booking can't be confirmed.
-        // That includes a hold the expiry sweep cancelled before this confirm
-        // took the row.
+        // CANCELLED: the payment landed after the booking was cancelled — by
+        // the expiry sweep, the buyer, or an admin. The first two (and a buyer
+        // release) may come back if the stock is still there; refusing them
+        // leaves a buyer who paid with no ticket. An admin reversal never
+        // does, and neither does a booking cancelled before V25, whose reason
+        // nobody recorded.
+        if (booking.getStatus() == Booking.BookingStatus.CANCELLED) {
+            Booking.CancelReason reason = booking.getCancelReason();
+            if (reason != null && reason.resurrectable()) {
+                log.info("Confirm found a cancelled booking a late payment may resurrect bookingId={} reason={}",
+                        bookingId, reason);
+                return new ConfirmStep(null, Resurrection.of(booking));
+            }
+            log.warn("Confirm rejected, booking cancelled for good bookingId={} cancelReason={}",
+                    bookingId, reason);
+            throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
+        }
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
             log.warn("Confirm rejected, booking not pending bookingId={} status={}",
                     bookingId, booking.getStatus());
-            throw new BookingConflictException("Only pending bookings can be confirmed — this one isn't in that state.");
+            throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
         }
 
         // A hold whose expiresAt has passed but which is still PENDING is
         // HONOURED. Its tickets stay claimed until the sweep commits the
         // cancellation, and the sweep takes this same row lock (skipping a row
         // that is held), so confirming here cannot oversell: either the sweep
-        // committed first and the check above refused, or this confirm holds
-        // the row and the sweep leaves it alone. Refusing it used to strand a
-        // customer who paid a few seconds late with money taken and no ticket.
+        // committed first and the booking is CANCELLED above, or this confirm
+        // holds the row and the sweep leaves it alone. Refusing it used to
+        // strand a customer who paid a few seconds late with money taken and
+        // no ticket.
         if (booking.getExpiresAt() != null
                 && booking.getExpiresAt().isBefore(LocalDateTime.now(ZoneOffset.UTC))) {
             log.info("Confirming a lapsed hold the sweep has not cancelled bookingId={} expiredAt={}",
                     bookingId, booking.getExpiresAt());
         }
+        return ConfirmStep.answered(markConfirmed(booking, confirmRequest));
+    }
 
+    /**
+     * Phases 2 and 3 of a confirm (see {@link #confirmBooking}). Counted on
+     * {@code booking.confirm.resurrected{reason,outcome}}: {@code failed} for
+     * every refusal and error after the decision to try — the buyer has paid
+     * and has no ticket until a retry succeeds — and {@code succeeded} once
+     * the booking is CONFIRMED. A replay (another confirm got there first) is
+     * neither.
+     */
+    private BookingResponseDTO resurrect(UUID bookingId, ConfirmBookingRequestDTO confirmRequest,
+                                         Resurrection resurrection) {
+        Booking.CancelReason reason = resurrection.reason();
+        try {
+            requireCategoriesStillExist(bookingId, resurrection);
+            Resurrected result = Objects.requireNonNull(txTemplate.execute(status ->
+                    resurrectUnderLock(bookingId, confirmRequest, resurrection)));
+            if (!result.replay()) {
+                recordResurrect(reason, BookingMetrics.ResurrectOutcome.SUCCEEDED);
+            }
+            return result.response();
+        } catch (RuntimeException refused) {
+            recordResurrect(reason, BookingMetrics.ResurrectOutcome.FAILED);
+            throw refused;
+        }
+    }
+
+    private record Resurrected(BookingResponseDTO response, boolean replay) {
+    }
+
+    /**
+     * Phase 2: seat-service still lists every category the booking needs. No
+     * transaction is open (pinned by {@code RemoteCallsOutsideTransactionTest}).
+     * A category answered with no data is gone — refused 409, like any booking
+     * that cannot be confirmed.
+     *
+     * <p>Note what the Feign client makes of seat-service's own 404 for a
+     * soft-deleted category: its fallback discards the status and raises
+     * {@link com.innbucks.bookingservice.exception.SeatServiceUnavailableException},
+     * exactly as for an outage. That propagates as a 503, which payment-service
+     * also retries, and the refusal is counted the same way; telling "deleted"
+     * from "down" apart needs a fallback factory that keeps the status, a
+     * change to every seat-service call.
+     */
+    private void requireCategoriesStillExist(UUID bookingId, Resurrection resurrection) {
+        for (UUID categoryId : resurrection.ticketsByCategory().keySet()) {
+            ApiResult<CategoryLookupDTO> envelope = seatServiceClient.getCategory(categoryId);
+            if (envelope == null || envelope.getData() == null) {
+                log.warn("Resurrect refused, category no longer exists bookingId={} categoryId={} reason={}",
+                        bookingId, categoryId, resurrection.reason());
+                throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
+            }
+        }
+    }
+
+    /**
+     * Phase 3, under the booking row's lock: re-claim the tickets and confirm.
+     * Takes the booking row, then the counter rows in ascending category
+     * order — the global lock order — and touches nothing else. Uses confirm's
+     * guard (capacity only), not the claim's: the buyer has already paid.
+     */
+    private Resurrected resurrectUnderLock(UUID bookingId, ConfirmBookingRequestDTO confirmRequest,
+                                           Resurrection resurrection) {
+        Booking booking = lockWithItems(bookingId, "Confirm");
+        if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
+            log.info("Confirm idempotent replay (resurrected by a concurrent confirm) bookingId={}", bookingId);
+            return new Resurrected(toDTO(booking), true);
+        }
+        if (booking.getStatus() != Booking.BookingStatus.CANCELLED
+                || !resurrection.equals(Resurrection.of(booking))) {
+            // Changed since phase 1 read it: another confirm resurrected it
+            // and an admin reversed it (a refund) while this one asked
+            // seat-service. Claim nothing on a row phase 1 did not decide on;
+            // a retry starts afresh and is refused for the reversal.
+            log.warn("Resurrect refused, booking changed since it was read bookingId={} status={} cancelReason={}",
+                    bookingId, booking.getStatus(), booking.getCancelReason());
+            throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
+        }
+        for (Map.Entry<UUID, Integer> tickets : resurrection.ticketsByCategory().entrySet()) {
+            // The counter row exists: this booking's own claim created or used
+            // it, and rows are never deleted. A missing one claims nothing and
+            // is refused, never seeded.
+            if (categoryInventoryRepository.tryClaim(tickets.getKey(), tickets.getValue()) == 0) {
+                log.warn("Resurrect refused, not enough tickets left bookingId={} categoryId={} qty={} reason={}",
+                        bookingId, tickets.getKey(), tickets.getValue(), resurrection.reason());
+                // Rolls back every claim made above for this booking.
+                throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
+            }
+        }
+        // CONFIRMED with its reason cleared: the row reads as if the payment
+        // had landed in time. The V5 trigger (sync_booking_items_is_active)
+        // re-activates the items on the CANCELLED -> CONFIRMED status change.
+        booking.setCancelReason(null);
+        BookingResponseDTO confirmed = markConfirmed(booking, confirmRequest);
+        log.info("Booking resurrected bookingId={} reason={} tickets={}",
+                bookingId, resurrection.reason(), resurrection.ticketsByCategory());
+        return new Resurrected(confirmed, false);
+    }
+
+    private void recordResurrect(Booking.CancelReason reason, BookingMetrics.ResurrectOutcome outcome) {
+        BookingMetrics m = metrics;
+        if (m != null) {
+            m.resurrected(reason, outcome);
+        }
+    }
+
+    /**
+     * The PENDING (or resurrected) booking becomes CONFIRMED, in the caller's
+     * transaction, under the row lock the caller holds.
+     */
+    private BookingResponseDTO markConfirmed(Booking booking, ConfirmBookingRequestDTO confirmRequest) {
         // Default to pure-cash if the caller didn't pass a payload. This
         // preserves the legacy contract where PATCH /confirm has no body.
         BigDecimal pointsToUse = confirmRequest == null || confirmRequest.getPointsToUse() == null
@@ -1349,12 +1663,14 @@ public class BookingService {
         // made here, inside this transaction — a pooled connection held across
         // a remote call for a best-effort mirror. It now runs AFTER COMMIT,
         // off this thread, from EventAvailabilityConsumeListener on the event
-        // below; publishing only here (never on the replay branch above) is
-        // what keeps it to one decrement per real confirmation.
+        // below; publishing only here (never on a replay) is what keeps it to
+        // one decrement per real confirmation. A resurrected booking was never
+        // decremented: only a confirm decrements, and the cancellation that
+        // preceded it was of an unpaid booking.
         eventPublisher.publishEvent(BookingDomainEvent.BookingConfirmed.of(booking));
 
         log.info("Booking confirmed bookingId={} userEmail={} pointsUsed={} cashAmount={}",
-                bookingId, booking.getUserEmail(), booking.getPointsUsed(), booking.getCashAmount());
+                booking.getId(), booking.getUserEmail(), booking.getPointsUsed(), booking.getCashAmount());
         return toDTO(booking);
     }
 
@@ -1418,6 +1734,21 @@ public class BookingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setMetrics(BookingMetrics metrics) {
         this.metrics = metrics;
+    }
+
+    // The two hold caps are parsed here rather than injected as Duration: a
+    // @Value Duration needs Spring Boot's conversion service on the bean
+    // factory, which a context built without SpringApplication (several tests
+    // build one) does not have. Both ISO-8601 (PT60M) and the simple form
+    // (60m) are accepted, as for any Boot Duration property.
+    @org.springframework.beans.factory.annotation.Value("${app.booking.max-total-hold:PT60M}")
+    void setMaxTotalHold(String value) {
+        this.maxTotalHold = org.springframework.boot.convert.DurationStyle.detectAndParse(value);
+    }
+
+    @org.springframework.beans.factory.annotation.Value("${app.booking.max-hold-extension:PT45M}")
+    void setMaxHoldExtension(String value) {
+        this.maxHoldExtension = org.springframework.boot.convert.DurationStyle.detectAndParse(value);
     }
 
     private EventLookupDTO fetchEventLookup(UUID eventId) {

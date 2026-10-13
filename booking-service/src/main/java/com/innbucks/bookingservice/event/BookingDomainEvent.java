@@ -72,18 +72,34 @@ public sealed interface BookingDomainEvent
         }
     }
 
+    /**
+     * {@code reason} is why the booking was cancelled (V25). The cancellation
+     * notice reads it: a buyer release is not announced, and neither is an
+     * expired hold nobody started to pay for.
+     */
     record BookingCancelled(
             UUID bookingId,
             String userEmail,
             String confirmationNumber,
-            Instant occurredAt
+            Instant occurredAt,
+            Booking.CancelReason reason
     ) implements BookingDomainEvent {
+        /** For a booking whose {@code cancelReason} is set on the entity (cancel, reverse). */
         public static BookingCancelled of(Booking b) {
+            return of(b, b.getCancelReason());
+        }
+
+        /**
+         * For a cancellation written by a bulk statement that never touched
+         * the entity (the expiry sweep's {@code markExpired}).
+         */
+        public static BookingCancelled of(Booking b, Booking.CancelReason reason) {
             return new BookingCancelled(
                     b.getId(),
                     b.getUserEmail(),
                     b.getConfirmationNumber(),
-                    Instant.now());
+                    Instant.now(),
+                    reason);
         }
     }
 }

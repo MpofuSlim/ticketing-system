@@ -331,14 +331,17 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
 
     @Test
     void cancel_reverse_extendHold_renderTheirTickets() throws Exception {
-        Fixture pending = seedEvent(1, Booking.BookingStatus.PENDING);
-        Booking p = pending.bookings.get(0);
-
-        measure("PATCH /bookings/internal/{id}/extend-hold", patch("/bookings/internal/" + p.getId() + "/extend-hold")
+        // Extend-hold on a booking of its own: it opens a payment window, and
+        // the customer cancel below is refused while one is open.
+        Fixture extended = seedEvent(1, Booking.BookingStatus.PENDING);
+        Booking e = extended.bookings.get(0);
+        measure("PATCH /bookings/internal/{id}/extend-hold", patch("/bookings/internal/" + e.getId() + "/extend-hold")
                         .header("X-Internal-Token", internalToken).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"holdUntil\":\"" + LocalDateTime.now(ZoneOffset.UTC).plusMinutes(20) + "\"}"),
                 r -> r.andExpect(jsonPath("$.data.items", hasSize(2))));
 
+        Fixture pending = seedEvent(1, Booking.BookingStatus.PENDING);
+        Booking p = pending.bookings.get(0);
         stats.clear();
         mvc.perform(patch("/bookings/" + p.getId() + "/cancel").header("Authorization", bearer(customer(pending))))
                 .andExpect(status().isOk())
@@ -360,7 +363,9 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
                         .andExpect(jsonPath("$.data.items", hasSize(2))));
         verify(eventServiceClient).releaseAvailability(confirmed.eventId, 2, internalToken);
 
-        assertThat(measured.get("PATCH /bookings/internal/{id}/extend-hold")).isEqualTo(2);
+        // Since H2 extend-hold LOCKS the booking row before reading it, like
+        // confirm and cancel: lock, its items, update (hold + payment window).
+        assertThat(measured.get("PATCH /bookings/internal/{id}/extend-hold")).isEqualTo(3);
         // lock the booking row, its items, update booking, release the
         // counter, the listener's read.
         assertThat(measured.get("PATCH /bookings/{id}/cancel + async notice")).isEqualTo(5);
@@ -398,8 +403,12 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
     @Test
     void expirySweep_releasesEveryExpiredHold_inABoundedNumberOfStatements() {
         Fixture f = seedEvent(EXPIRY_HOLDS, Booking.BookingStatus.PENDING);
-        jdbc.update("UPDATE bookings SET expires_at = ? WHERE event_id = ?",
-                LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1), f.eventId);
+        // A payment had been started on each (H2's payment window): an expired
+        // hold nobody tried to pay for is cancelled without a notice (D16),
+        // and the notices are part of what this measures.
+        jdbc.update("UPDATE bookings SET expires_at = ?, payment_open_until = ? WHERE event_id = ?",
+                LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1), LocalDateTime.now(ZoneOffset.UTC).minusMinutes(2),
+                f.eventId);
 
         stats.clear();
         expirationService.expirePending();

@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -23,7 +25,10 @@ import static org.mockito.Mockito.*;
 /**
  * Pins the cancellation-notice contract: a plain-text email plus a phone
  * notice go out on BookingCancelled, with refund wording iff the booking was a
- * reversed CONFIRMED booking (availabilityReleased=true).
+ * reversed CONFIRMED booking (availabilityReleased=true). Not every
+ * cancellation is announced (D16): a buyer release never is, an expired hold
+ * only when a payment was started on it, and a booking a late payment has
+ * resurrected not at all.
  *
  * <p>The phone leg is SMS FIRST and WhatsApp only on SMS failure — never both,
  * since one cancellation should produce one message and each send is billable.
@@ -43,6 +48,10 @@ class BookingCancelledNotificationListenerTest {
                 new BookingCancelledNotificationListener(repo, email, sms, wa));
     }
 
+    /**
+     * A CANCELLED booking as its cancel path leaves it: a reversal (refund)
+     * is ADMIN_REVERSED, anything else here a customer cancel.
+     */
     private static Booking booking(String phone, String emailAddr, boolean availabilityReleased) {
         Booking b = new Booking();
         b.setId(UUID.randomUUID());
@@ -50,13 +59,112 @@ class BookingCancelledNotificationListenerTest {
         b.setUserEmail(emailAddr);
         b.setConfirmationNumber("INN-20260610-A1B2C3");
         b.setAvailabilityReleased(availabilityReleased);
+        b.setStatus(Booking.BookingStatus.CANCELLED);
+        b.setCancelReason(availabilityReleased
+                ? Booking.CancelReason.ADMIN_REVERSED : Booking.CancelReason.CUSTOMER_CANCELLED);
         return b;
     }
 
     private static BookingDomainEvent.BookingCancelled eventFor(Booking b) {
-        return new BookingDomainEvent.BookingCancelled(
-                b.getId(), b.getUserEmail(), b.getConfirmationNumber(), Instant.now());
+        return BookingDomainEvent.BookingCancelled.of(b);
     }
+
+    /** An expired hold: the sweep writes the reason in SQL and names it on the event. */
+    private static Booking expiredHold(LocalDateTime paymentOpenUntil) {
+        Booking b = booking("+263771234567", "rufaro@example.com", false);
+        b.setCancelReason(Booking.CancelReason.EXPIRED);
+        b.setPaymentOpenUntil(paymentOpenUntil);
+        return b;
+    }
+
+    // ---- which cancellations are announced (D16) ----------------------------------
+
+    @Test
+    void expiredHold_thatNobodyStartedToPay_isNotAnnounced() {
+        // Thousands of abandoned holds per on-sale, each notice billable, and
+        // the buyer walked away: they do not need telling.
+        Mocks m = mocks();
+        Booking b = expiredHold(null);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingCancelled(BookingDomainEvent.BookingCancelled.of(b, Booking.CancelReason.EXPIRED));
+
+        verifyNoInteractions(m.email(), m.sms(), m.wa());
+    }
+
+    @Test
+    void expiredHold_withAPaymentStarted_isStillAnnounced() {
+        // The buyer opened a payment and may be wondering where the tickets
+        // went: the notice is exactly as it always was.
+        Mocks m = mocks();
+        Booking b = expiredHold(LocalDateTime.now(ZoneOffset.UTC).minusMinutes(2));
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingCancelled(BookingDomainEvent.BookingCancelled.of(b, Booking.CancelReason.EXPIRED));
+
+        verify(m.email()).sendEmail(eq("rufaro@example.com"), anyString(), contains("released"), startsWith("CANCEL-"));
+        verify(m.sms()).sendSms(eq("+263771234567"), contains("released"), startsWith("CANCEL-"));
+    }
+
+    @Test
+    void buyerRelease_isNotAnnounced_andTheBookingIsNotEvenRead() {
+        Mocks m = mocks();
+        Booking b = booking("+263771234567", "rufaro@example.com", false);
+        b.setCancelReason(Booking.CancelReason.BUYER_RELEASED);
+
+        m.listener().onBookingCancelled(eventFor(b));
+
+        verifyNoInteractions(m.repo(), m.email(), m.sms(), m.wa());
+    }
+
+    @Test
+    void customerCancel_isAnnounced_whateverThePaymentWindow() {
+        // Only an EXPIRED hold looks at the payment window. A cancel the buyer
+        // asked for after their window closed is announced as it always was.
+        Mocks m = mocks();
+        Booking b = booking("+263771234567", "rufaro@example.com", false);
+        b.setPaymentOpenUntil(null);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingCancelled(eventFor(b));
+
+        assertThat(eventFor(b).reason()).isEqualTo(Booking.CancelReason.CUSTOMER_CANCELLED);
+        verify(m.email()).sendEmail(eq("rufaro@example.com"), anyString(), contains("released"), anyString());
+        verify(m.sms()).sendSms(eq("+263771234567"), contains("released"), anyString());
+    }
+
+    @Test
+    void adminReversal_isAnnounced_withTheRefundWording() {
+        Mocks m = mocks();
+        Booking b = booking("+263771234567", "rufaro@example.com", true);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingCancelled(eventFor(b));
+
+        assertThat(eventFor(b).reason()).isEqualTo(Booking.CancelReason.ADMIN_REVERSED);
+        verify(m.email()).sendEmail(eq("rufaro@example.com"), contains("refund in progress"), anyString(), anyString());
+        verify(m.sms()).sendSms(eq("+263771234567"), contains("refund"), anyString());
+    }
+
+    @Test
+    void aBookingResurrectedBeforeTheNoticeWentOut_isNotToldItWasCancelled() {
+        // The cancellation committed, then a late payment brought the booking
+        // back before this (async) listener read it. Its tickets are on their
+        // way; a "cancelled" message now would be wrong.
+        Mocks m = mocks();
+        Booking b = expiredHold(LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1));
+        BookingDomainEvent.BookingCancelled event = BookingDomainEvent.BookingCancelled.of(b,
+                Booking.CancelReason.EXPIRED);
+        b.setStatus(Booking.BookingStatus.CONFIRMED);
+        b.setCancelReason(null);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingCancelled(event);
+
+        verifyNoInteractions(m.email(), m.sms(), m.wa());
+    }
+
+    // ---- the notice itself ---------------------------------------------------------
 
     @Test
     void reversedBooking_sendsRefundWordedEmailAndSms() {
@@ -218,7 +326,7 @@ class BookingCancelledNotificationListenerTest {
         when(m.repo().findById(id)).thenReturn(Optional.empty());
 
         m.listener().onBookingCancelled(new BookingDomainEvent.BookingCancelled(
-                id, "gone@example.com", "INN-MISSING", Instant.now()));
+                id, "gone@example.com", "INN-MISSING", Instant.now(), Booking.CancelReason.CUSTOMER_CANCELLED));
 
         verifyNoInteractions(m.email(), m.sms(), m.wa());
     }

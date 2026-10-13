@@ -103,6 +103,24 @@ public class Booking {
     // hold model existed.
     private LocalDateTime expiresAt;
 
+    // The latest instant a payment for this booking may still land (V25).
+    // extend-hold stamps it with the deadline payment-service asks for before
+    // it mints each instrument, and never moves it earlier, so a value in the
+    // future means "a payment may be live": the customer cancel refuses while
+    // it holds (409 PAYMENT_IN_PROGRESS). NULL = no payment was ever started
+    // (and every pre-V25 row), which is what lets an expired hold that nobody
+    // tried to pay for be cancelled without a "cancelled" SMS. UTC.
+    @Column(name = "payment_open_until")
+    private LocalDateTime paymentOpenUntil;
+
+    // Why a CANCELLED booking was cancelled (V25, CHECK chk_bookings_cancel_reason).
+    // Decides whether a payment that lands afterwards may resurrect it — see
+    // CancelReason. NULL on every row cancelled before V25 (never resurrected)
+    // and on any booking that is not CANCELLED; a resurrection clears it.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cancel_reason", length = 20)
+    private CancelReason cancelReason;
+
     // When the DAY-OF pre-event reminder was sent (or consumed) for this
     // CONFIRMED booking. Set on the reminder attempt — success or failure —
     // so the hourly EventReminderScheduler never retries into spam; also set
@@ -143,5 +161,36 @@ public class Booking {
         PENDING,
         CONFIRMED,
         CANCELLED
+    }
+
+    /**
+     * Why a booking was cancelled. The values are the V25 CHECK's; a new one
+     * needs a migration that widens it. Whether a late payment may bring the
+     * booking back is decided here, in one place.
+     */
+    public enum CancelReason {
+        /** The expiry sweep cancelled a lapsed hold. */
+        EXPIRED(true),
+        /** The buyer (or a SUPER_ADMIN) cancelled a PENDING booking via {@code PATCH /bookings/{id}/cancel}. */
+        CUSTOMER_CANCELLED(true),
+        /** The buyer released an unpaid booking through the public release (P2-4). */
+        BUYER_RELEASED(true),
+        /** A SUPER_ADMIN reversed a CONFIRMED booking: the money is being returned, never resurrected. */
+        ADMIN_REVERSED(false);
+
+        private final boolean resurrectable;
+
+        CancelReason(boolean resurrectable) {
+            this.resurrectable = resurrectable;
+        }
+
+        /**
+         * True when a payment that confirms after this cancellation brings the
+         * booking back (stock permitting) rather than leaving the buyer paid
+         * with no ticket. A NULL reason (cancelled before V25) never does.
+         */
+        public boolean resurrectable() {
+            return resurrectable;
+        }
     }
 }
