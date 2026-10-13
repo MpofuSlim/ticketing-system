@@ -1275,15 +1275,21 @@ public class BookingService {
      *       {@link Booking.CancelReason} is resurrectable is handed on, with
      *       the tickets it needs; any other CANCELLED one is refused 409;</li>
      *   <li>with no transaction: seat-service is asked whether each of those
-     *       categories still exists. A deleted one is refused (409);
-     *       seat-service unreachable is a 503. Either way payment-service
-     *       keeps the payment and retries the confirm;</li>
+     *       categories still exists. One answered with no data is refused
+     *       (409); seat-service unreachable is a 503 — and so, today, is a
+     *       deleted category, whose 404 the Feign fallback reports as an
+     *       outage (see {@link #requireCategoriesStillExist}). Either way
+     *       payment-service keeps the payment and retries the confirm;</li>
      *   <li>under the booking row's lock again: the tickets are re-claimed
      *       with the same guarded claim a new booking uses, in the canonical
      *       category order ({@link StockLedger}), and the booking is
      *       CONFIRMED. A claim that fails (sold out since) rolls the whole
      *       thing back and answers 409. A booking another confirm resurrected
-     *       in the meantime is replayed.</li>
+     *       in the meantime is replayed (no second claim, no second
+     *       {@code BookingConfirmed}); one that changed in any other way —
+     *       resurrected and then reversed — is refused 409 with nothing
+     *       claimed. Pinned by {@code BookingResurrectRecheckTest} and the two
+     *       races in {@code BookingPaymentWindowPostgresIT}.</li>
      * </ol>
      * Every phase publishes inside its transaction ({@code BookingConfirmed}
      * listeners are {@code AFTER_COMMIT}, and drop an event published with
@@ -1472,8 +1478,10 @@ public class BookingService {
         }
         if (booking.getStatus() != Booking.BookingStatus.CANCELLED
                 || !resurrection.equals(Resurrection.of(booking))) {
-            // Nothing moves a cancelled booking but a resurrection, so this
-            // should not happen; if it does, the next retry starts afresh.
+            // Changed since phase 1 read it: another confirm resurrected it
+            // and an admin reversed it (a refund) while this one asked
+            // seat-service. Claim nothing on a row phase 1 did not decide on;
+            // a retry starts afresh and is refused for the reversal.
             log.warn("Resurrect refused, booking changed since it was read bookingId={} status={} cancelReason={}",
                     bookingId, booking.getStatus(), booking.getCancelReason());
             throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);

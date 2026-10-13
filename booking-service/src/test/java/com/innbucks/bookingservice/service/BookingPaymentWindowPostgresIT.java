@@ -14,13 +14,22 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.web.servlet.MvcResult;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -52,6 +61,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *       items through the V5 trigger, and is refused — claiming nothing — for
  *       an admin reversal, a pre-V25 NULL, a deleted category and a sold-out
  *       one;</li>
+ *   <li>two confirms of one cancelled booking resurrect it once (the other is
+ *       the replay), and a stale confirm cannot bring back a booking resurrected
+ *       and then reversed while it waited;</li>
  *   <li>the expiry notice goes out only when a payment had been started.</li>
  * </ul>
  */
@@ -301,6 +313,102 @@ class BookingPaymentWindowPostgresIT extends BookingStockPostgresTestBase {
         assertThat(remaining(HIGH)).isZero();
     }
 
+    // ---- two confirms of one cancelled booking ---------------------------------------------------
+
+    @Test
+    void twoConfirmsAtOnce_resurrectOnce_andTheOtherIsTheReplay() throws Exception {
+        // The first confirm after a late payment racing payment-service's
+        // one-minute retry. The barrier in seat-service's lookup (phase 2) lets
+        // neither go on until both are there, so both have read the booking
+        // CANCELLED in phase 1 and both reach phase 3, where they serialise on
+        // the row lock. Only the re-check there keeps the second from claiming
+        // the stock and publishing BookingConfirmed again.
+        Booking hold = seedBooking(Booking.BookingStatus.PENDING, lapsed(1), category);
+        sweep.expirePending();
+        assertCancelled(hold.getId(), "EXPIRED", 6);
+        CyclicBarrier bothInPhaseTwo = new CyclicBarrier(2);
+        when(seatServiceClient.getCategory(category)).thenAnswer(inv -> {
+            bothInPhaseTwo.await(10, TimeUnit.SECONDS);
+            return ApiResult.ok(lookup(category));
+        });
+        double succeededBefore = resurrected("expired", "succeeded");
+        double failedBefore = resurrected("expired", "failed");
+
+        ExecutorService confirms = Executors.newFixedThreadPool(2);
+        try {
+            Future<MvcResult> first = confirms.submit(() -> confirm(hold.getId()).andReturn());
+            Future<MvcResult> second = confirms.submit(() -> confirm(hold.getId()).andReturn());
+            for (MvcResult result : List.of(first.get(20, TimeUnit.SECONDS), second.get(20, TimeUnit.SECONDS))) {
+                assertThat(result.getResponse().getStatus())
+                        .as(result.getResponse().getContentAsString()).isEqualTo(200);
+                assertThat(result.getResponse().getContentAsString()).contains("\"status\":\"CONFIRMED\"");
+            }
+        } finally {
+            confirms.shutdownNow();
+        }
+
+        assertThat(statusOf(hold.getId())).isEqualTo("CONFIRMED");
+        assertThat(remaining(category)).as("claimed once, not twice").isEqualTo(5);
+        assertThat(resurrected("expired", "succeeded") - succeededBefore).isEqualTo(1);
+        assertThat(resurrected("expired", "failed") - failedBefore).isZero();
+        // BookingConfirmed published once: event-service's availability is
+        // decremented once (and the tickets sent once).
+        verify(eventServiceClient, timeout(5_000)).consumeAvailability(eq(hold.getEventId()), eq(1), anyString());
+        verify(eventServiceClient, after(500).times(1))
+                .consumeAvailability(eq(hold.getEventId()), anyInt(), anyString());
+    }
+
+    @Test
+    void aStaleConfirm_neverBringsBackABookingResurrectedAndThenReversedMeanwhile() throws Exception {
+        // One confirm stops in phase 2 having read CANCELLED(EXPIRED). Meanwhile
+        // another confirm resurrects the booking and an admin reverses it (the
+        // refund). When the stale one reaches phase 3 the booking is CANCELLED
+        // again — by a reversal — and must stay that way with nothing claimed.
+        Booking hold = seedBooking(Booking.BookingStatus.PENDING, lapsed(1), category);
+        sweep.expirePending();
+        CountDownLatch staleInPhaseTwo = new CountDownLatch(1);
+        CountDownLatch staleMayGoOn = new CountDownLatch(1);
+        AtomicInteger lookups = new AtomicInteger();
+        when(seatServiceClient.getCategory(category)).thenAnswer(inv -> {
+            if (lookups.getAndIncrement() == 0) {
+                staleInPhaseTwo.countDown();
+                assertThat(staleMayGoOn.await(10, TimeUnit.SECONDS)).isTrue();
+            }
+            return ApiResult.ok(lookup(category));
+        });
+        AvailabilityResponseDTO released = new AvailabilityResponseDTO();
+        released.setAvailableTickets(10);
+        when(eventServiceClient.releaseAvailability(any(), anyInt(), anyString()))
+                .thenReturn(ApiResult.ok(released));
+        double failedBefore = resurrected("expired", "failed");
+
+        ExecutorService staleCaller = Executors.newSingleThreadExecutor();
+        try {
+            Future<MvcResult> stale = staleCaller.submit(() -> confirm(hold.getId()).andReturn());
+            assertThat(staleInPhaseTwo.await(10, TimeUnit.SECONDS)).isTrue();
+
+            confirm(hold.getId()).andExpect(status().isOk());
+            assertThat(remaining(category)).isEqualTo(5);
+            mvc.perform(patch("/bookings/" + hold.getId() + "/reverse")
+                            .header("Authorization", bearer("admin@innbucks.co.zw", List.of("SUPER_ADMIN"), Map.of())))
+                    .andExpect(status().isOk());
+            assertCancelled(hold.getId(), "ADMIN_REVERSED", 6);
+
+            staleMayGoOn.countDown();
+            MvcResult result = stale.get(10, TimeUnit.SECONDS);
+            assertThat(result.getResponse().getStatus())
+                    .as(result.getResponse().getContentAsString()).isEqualTo(409);
+            assertThat(result.getResponse().getContentAsString()).contains(BookingService.NOT_CONFIRMABLE_MESSAGE);
+        } finally {
+            staleMayGoOn.countDown();
+            staleCaller.shutdownNow();
+        }
+
+        assertCancelled(hold.getId(), "ADMIN_REVERSED", 6);
+        assertThat(itemsActive(hold.getId())).containsOnly(false);
+        assertThat(resurrected("expired", "failed") - failedBefore).isEqualTo(1);
+    }
+
     // ---- the expiry notice (D16) -------------------------------------------------------------
 
     @Test
@@ -380,6 +488,11 @@ class BookingPaymentWindowPostgresIT extends BookingStockPostgresTestBase {
     private List<Boolean> itemsActive(UUID bookingId) {
         return jdbc.queryForList("SELECT is_active FROM booking_items WHERE booking_id = ? ORDER BY seat_number",
                 Boolean.class, bookingId);
+    }
+
+    private static CategoryLookupDTO lookup(UUID categoryId) {
+        return CategoryLookupDTO.builder().seatCategoryId(categoryId).name("General")
+                .price(new BigDecimal("10.00")).totalSeats(5).build();
     }
 
     private double resurrected(String reason, String outcome) {
