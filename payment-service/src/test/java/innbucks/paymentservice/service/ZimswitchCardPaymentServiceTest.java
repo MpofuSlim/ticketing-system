@@ -277,6 +277,118 @@ class ZimswitchCardPaymentServiceTest {
         verify(client, never()).prepareCheckout(anyString(), anyLong(), anyString());
     }
 
+    /** A healthy card rail over the given registry, for the startCheckout happy path. */
+    private ZimswitchCardPaymentService cardServiceOver(OrderGatewayRegistry registry) {
+        ZimswitchCardPaymentService s = new ZimswitchCardPaymentService(
+                records, client, properties, registry, resolution, metrics);
+        org.springframework.test.util.ReflectionTestUtils.setField(s, "cellCurrency", "USD");
+        when(client.canStartCheckout()).thenReturn(true);
+        when(client.isConfigured()).thenReturn(true);
+        when(records.openPending(any(Payment.class))).thenAnswer(inv -> {
+            Payment p = inv.getArgument(0);
+            p.setId(UUID.randomUUID());
+            p.setStatus(Payment.PaymentStatus.PENDING);
+            return p;
+        });
+        return s;
+    }
+
+    @Test
+    @DisplayName("the hold is sized from the checkout's 30-minute ceiling BEFORE the call; the ledger deadline is stamped after the checkout exists")
+    void startCheckout_holdCoversTheCeiling_ledgerDeadlineStampedAfterTheCheckoutExists() {
+        OrderGatewayRegistry registry = mock(OrderGatewayRegistry.class);
+        innbucks.paymentservice.order.OrderGateway gateway = mock(innbucks.paymentservice.order.OrderGateway.class);
+        when(registry.forType(innbucks.paymentservice.order.OrderType.BOOKING)).thenReturn(gateway);
+        String ref = UUID.randomUUID().toString();
+        when(gateway.fetch(ref)).thenReturn(new innbucks.paymentservice.order.OrderSnapshot(
+                ref, 9200, "USD", "+263771234567", "PINKRUN26", "Pink Run ticket", true));
+        ZimswitchCardPaymentService card = cardServiceOver(registry);
+        Instant[] checkoutCreatedAt = new Instant[1];
+        when(client.prepareCheckout(anyString(), anyLong(), anyString())).thenAnswer(inv -> {
+            checkoutCreatedAt[0] = Instant.now();
+            return new innbucks.paymentservice.client.CheckoutPreparation(true,
+                    "8a82944a4cc25ebf014cc2c782423202", "sha384-x", "000.200.100", "created", "ndc-1");
+        });
+
+        Instant before = Instant.now();
+        var outcome = card.startCheckout(innbucks.paymentservice.order.OrderType.BOOKING, ref);
+
+        org.mockito.ArgumentCaptor<Instant> payableUntil = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(gateway).extendHold(eq(ref), payableUntil.capture());
+        org.mockito.ArgumentCaptor<Instant> recorded = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(records).markCardCheckoutIssued(any(UUID.class), anyString(), anyString(), recorded.capture());
+        Duration ceiling = properties.getCheckoutTtl().plus(ZimswitchCardPaymentService.CHECKOUT_EXPIRY_GRACE);
+        assertThat(ceiling).isEqualTo(Duration.ofMinutes(30));
+
+        // The hold is sized from the 30-minute ceiling, fixed before the call.
+        assertThat(payableUntil.getValue()).isBetween(before.plus(ceiling), checkoutCreatedAt[0].plus(ceiling));
+        // The NOT_FOUND rule closes the row at deadline + grace, which must
+        // not fall before the gateway's own ceiling — that runs from the
+        // checkout's creation, so the stamp must postdate it.
+        assertThat(recorded.getValue().plus(ZimswitchCardPaymentService.CHECKOUT_EXPIRY_GRACE))
+                .isAfterOrEqualTo(checkoutCreatedAt[0].plus(ceiling));
+        // ... and the hold still covers that later stamp, by all but the
+        // call's own duration of the safety margin.
+        assertThat(recorded.getValue().plus(ZimswitchCardPaymentService.CHECKOUT_EXPIRY_GRACE))
+                .isBetween(payableUntil.getValue(),
+                        payableUntil.getValue().plus(innbucks.paymentservice.order.OrderGateway.HOLD_SAFETY_MARGIN));
+        assertThat(outcome.checkoutExpiresAt()).isEqualTo(recorded.getValue());
+        InOrder inOrder = inOrder(gateway, records, client);
+        inOrder.verify(gateway).extendHold(eq(ref), any(Instant.class));
+        inOrder.verify(records).openPending(any(Payment.class));
+        inOrder.verify(client).prepareCheckout(anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("through the real booking gateway, a card checkout holds the seats for now + 33 minutes (30-minute ceiling + 3m margin)")
+    void startCheckout_bookingSeatHold_isThirtyThreeMinutes() {
+        UUID bookingId = UUID.randomUUID();
+        innbucks.paymentservice.client.BookingServiceClient bookings =
+                mock(innbucks.paymentservice.client.BookingServiceClient.class);
+        innbucks.paymentservice.client.EventServiceClient events =
+                mock(innbucks.paymentservice.client.EventServiceClient.class);
+        when(events.getSettlementInfo(any())).thenReturn(java.util.Optional.empty());
+        when(bookings.getBooking(bookingId)).thenReturn(java.util.Map.of(
+                "totalAmount", new BigDecimal("92.00"), "currency", "USD", "phoneNumber", "+263771234567"));
+        ZimswitchCardPaymentService card = cardServiceOver(new OrderGatewayRegistry(java.util.List.of(
+                new innbucks.paymentservice.order.BookingOrderGateway(bookings, events, "USD"))));
+        when(client.prepareCheckout(anyString(), anyLong(), anyString())).thenReturn(
+                new innbucks.paymentservice.client.CheckoutPreparation(true,
+                        "8a82944a4cc25ebf014cc2c782423202", "sha384-x", "000.200.100", "created", "ndc-1"));
+
+        Instant before = Instant.now();
+        card.startCheckout(innbucks.paymentservice.order.OrderType.BOOKING, bookingId.toString());
+        Instant after = Instant.now();
+
+        org.mockito.ArgumentCaptor<Instant> hold = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(bookings).extendHold(eq(bookingId), hold.capture());
+        // A card paid after minute 13 used to be paid with no ticket.
+        assertThat(hold.getValue()).isBetween(
+                before.plus(Duration.ofMinutes(33)), after.plus(Duration.ofMinutes(33)));
+    }
+
+    @Test
+    @DisplayName("a refused hold mints nothing: no ledger row, no checkout")
+    void startCheckout_holdRefused_mintsNothing() {
+        OrderGatewayRegistry registry = mock(OrderGatewayRegistry.class);
+        innbucks.paymentservice.order.OrderGateway gateway = mock(innbucks.paymentservice.order.OrderGateway.class);
+        when(registry.forType(innbucks.paymentservice.order.OrderType.BOOKING)).thenReturn(gateway);
+        String ref = UUID.randomUUID().toString();
+        when(gateway.fetch(ref)).thenReturn(new innbucks.paymentservice.order.OrderSnapshot(
+                ref, 9200, "USD", "+263771234567", "PINKRUN26", "Pink Run ticket", true));
+        org.mockito.Mockito.doThrow(new InvalidPaymentRequestException(
+                        "Your booking has expired — please create a new booking and try again", 409))
+                .when(gateway).extendHold(eq(ref), any(Instant.class));
+        ZimswitchCardPaymentService card = cardServiceOver(registry);
+
+        assertThatThrownBy(() -> card.startCheckout(innbucks.paymentservice.order.OrderType.BOOKING, ref))
+                .isInstanceOfSatisfying(InvalidPaymentRequestException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(409));
+
+        verify(records, never()).openPending(any());
+        verify(client, never()).prepareCheckout(anyString(), anyLong(), anyString());
+    }
+
     @Test
     @DisplayName("HALF-PROVISIONED rail (credentials but no shopperResultUrl): 503 and NO payment slot burned")
     void startCheckout_halfProvisionedNeverClaimsTheSlot() {

@@ -356,12 +356,39 @@ class InnbucksPaymentServiceTest {
 
         Instant before = Instant.now();
         processBooking("+263770000001");
+        Instant after = Instant.now();
 
         org.mockito.ArgumentCaptor<Instant> until = org.mockito.ArgumentCaptor.forClass(Instant.class);
         verify(bookings).extendHold(eq(bookingId), until.capture());
-        // ttl(10m) + margin(3m) = hold must reach >= now+13m (small clock slack).
-        assertFalse(until.getValue().isBefore(before.plus(Duration.ofMinutes(13)).minusSeconds(5)),
+        // ttl(10m) + margin(3m): the seat hold reaches now + 13m.
+        assertFalse(until.getValue().isBefore(before.plus(Duration.ofMinutes(13))),
                 "hold must outlive the code by the safety margin");
+        assertFalse(until.getValue().isAfter(after.plus(Duration.ofMinutes(13))));
+    }
+
+    @Test
+    void codeExpiry_isFixedOnce_beforeTheHold_andTheLedgerRecordsTheSameInstant() {
+        when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
+                .thenReturn(approved("701285660", "1616800", 5000L));
+
+        InnbucksPaymentResponse resp = processBooking("+263770000001");
+
+        org.mockito.ArgumentCaptor<Instant> hold = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(bookings).extendHold(eq(bookingId), hold.capture());
+        org.mockito.ArgumentCaptor<Instant> recorded = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(records).markTokenIssued(any(UUID.class), anyString(), anyString(), anyString(), recorded.capture());
+        // The code's deadline is the instant the hold was sized from — not a
+        // second clock reading taken after the mint, which used to leave the
+        // recorded deadline later than the one the hold covered.
+        assertEquals(hold.getValue().minus(innbucks.paymentservice.order.OrderGateway.HOLD_SAFETY_MARGIN),
+                recorded.getValue());
+        assertEquals(java.time.LocalDateTime.ofInstant(recorded.getValue(), java.time.ZoneOffset.UTC),
+                resp.getPaymentCodeExpiresAt(), "the FE countdown shows that same deadline");
+        // ... and the hold is in place BEFORE the ledger row or the mint.
+        org.mockito.InOrder order = inOrder(bookings, records, innbucksApi);
+        order.verify(bookings).extendHold(eq(bookingId), any(Instant.class));
+        order.verify(records).openPending(any(Payment.class));
+        order.verify(innbucksApi).generatePaymentCode(anyString(), anyString(), anyLong());
     }
 
     @Test

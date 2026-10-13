@@ -135,6 +135,93 @@ class EcocashPaymentServiceTest {
     }
 
     @Test
+    @DisplayName("the prompt deadline is fixed ONCE, before the hold: the hold covers deadline + grace, the ledger records the same deadline")
+    void startCharge_promptDeadlineFixedBeforeTheHold_andRecordedUnchanged() {
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        when(client.canStartCharge()).thenReturn(true);
+        when(client.isConfigured()).thenReturn(true);
+        OrderGateway gateway = payableGateway();
+        Payment opened = openEcocashRow(null);
+        when(records.openPending(any(Payment.class))).thenReturn(opened);
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
+                .thenReturn(status(EcocashChargeStatus.Outcome.PENDING, "0.0", "3.00", "USD"));
+
+        Instant before = Instant.now();
+        var outcome = service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString());
+        Instant after = Instant.now();
+
+        org.mockito.ArgumentCaptor<Instant> payableUntil = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(gateway).extendHold(anyString(), payableUntil.capture());
+        org.mockito.ArgumentCaptor<Instant> recorded = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(records).markEcocashChargeIssued(eq(opened.getId()), anyString(), recorded.capture());
+        // The resolver still confirms an approval up to deadline + grace, so
+        // that is the prompt's last payable instant — and it is derived from
+        // the very instant the ledger records, not a second clock reading.
+        assertThat(payableUntil.getValue())
+                .isEqualTo(recorded.getValue().plus(EcocashPaymentService.PROMPT_EXPIRY_GRACE));
+        assertThat(outcome.promptExpiresAt()).isEqualTo(recorded.getValue());
+        assertThat(recorded.getValue()).isBetween(
+                before.plus(properties.getChargeTtl()), after.plus(properties.getChargeTtl()));
+        InOrder inOrder = inOrder(gateway, records, client);
+        inOrder.verify(gateway).extendHold(anyString(), any(Instant.class));
+        inOrder.verify(records).openPending(any(Payment.class));
+        inOrder.verify(client).charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("through the real booking gateway, an EcoCash prompt holds the seats for now + 10 minutes (5m prompt + 2m grace + 3m margin)")
+    void startCharge_bookingSeatHold_isTenMinutes() {
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        when(client.canStartCharge()).thenReturn(true);
+        when(client.isConfigured()).thenReturn(true);
+        UUID bookingId = UUID.randomUUID();
+        innbucks.paymentservice.client.BookingServiceClient bookings =
+                mock(innbucks.paymentservice.client.BookingServiceClient.class);
+        innbucks.paymentservice.client.EventServiceClient events =
+                mock(innbucks.paymentservice.client.EventServiceClient.class);
+        when(events.getSettlementInfo(any())).thenReturn(java.util.Optional.empty());
+        when(bookings.getBooking(bookingId)).thenReturn(java.util.Map.of(
+                "totalAmount", new BigDecimal("3.00"), "currency", "USD", "phoneNumber", "+263777222093"));
+        EcocashPaymentService overBookings = new EcocashPaymentService(records, client, properties,
+                new OrderGatewayRegistry(List.of(
+                        new innbucks.paymentservice.order.BookingOrderGateway(bookings, events, "USD"))),
+                resolution, metrics);
+        ReflectionTestUtils.setField(overBookings, "cellCurrency", "USD");
+        when(records.openPending(any(Payment.class))).thenReturn(openEcocashRow(null));
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
+                .thenReturn(status(EcocashChargeStatus.Outcome.PENDING, "0.0", "3.00", "USD"));
+
+        Instant before = Instant.now();
+        overBookings.startCharge(OrderType.BOOKING, bookingId.toString());
+        Instant after = Instant.now();
+
+        org.mockito.ArgumentCaptor<Instant> hold = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(bookings).extendHold(eq(bookingId), hold.capture());
+        assertThat(hold.getValue()).isBetween(
+                before.plus(Duration.ofMinutes(10)), after.plus(Duration.ofMinutes(10)));
+    }
+
+    @Test
+    @DisplayName("a refused hold pushes no prompt: no ledger row, no charge")
+    void startCharge_holdRefused_pushesNoPrompt() {
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        when(client.canStartCharge()).thenReturn(true);
+        when(client.isConfigured()).thenReturn(true);
+        OrderGateway gateway = payableGateway();
+        org.mockito.Mockito.doThrow(new InvalidPaymentRequestException(
+                        "Your booking has expired — please create a new booking and try again", 409))
+                .when(gateway).extendHold(anyString(), any(Instant.class));
+
+        assertThatThrownBy(() -> service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString()))
+                .isInstanceOf(InvalidPaymentRequestException.class)
+                .extracting("statusCode").isEqualTo(409);
+
+        verify(records, never()).openPending(any());
+        verify(records, never()).markEcocashChargeIssued(any(), anyString(), any());
+        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("ambiguous charge outcome: row stays open for the poller — never failed, never retried")
     void startCharge_ambiguousLeavesRowOpen() {
         properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
