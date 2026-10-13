@@ -516,6 +516,24 @@ groups:
     interval: 30s
     rules:
 
+      # booking.claim.reference_collision{reference} counts claim attempts
+      # rolled back because a reference they generated was already stored; the
+      # claim runs again with fresh ones (3 times, then 503 TRY_AGAIN). A
+      # ticket number carries 50 random bits a day (1M tickets in a day expect
+      # 4.4e-4 clashes), so ANY ticket clash means the generator regressed and
+      # ticket numbers, which are entry credentials, may be guessable.
+      # reference="confirmation" (24 bits a day) moves on big on-sale days by
+      # design and is not alerted.
+      - alert: TicketNumberCollision
+        expr: sum(increase(booking_claim_reference_collision_total{reference="ticket"}[1h])) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "A generated ticket number clashed with a stored one"
+          description: "{{ $value | humanize }} ticket-number clashes in 1h. At 50 random bits a day this should never happen: the generator has probably regressed (fewer symbols, or randomness that repeats). Each clash was retried, so checkouts are still served."
+          runbook: "prometheus/slo.md#ticketnumbercollision"
+
       - alert: ExpirySkipping
         expr: sum(increase(booking_expiry_skipped_total[15m])) > 0
         for: 0m

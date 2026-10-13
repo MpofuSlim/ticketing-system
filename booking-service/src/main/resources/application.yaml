@@ -14,6 +14,16 @@ spring:
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
       idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
+      # pgjdbc's default (true) writes a failed statement's BOUND VALUES and
+      # the server's "Detail: Key (...)=(...)" line into the exception message,
+      # which Hibernate logs at WARN and the RuntimeException handler at ERROR
+      # (to Sentry). For a unique violation on booking_items that is the
+      # clashing ticket number — an entry credential — plus the attendee's and
+      # buyer's contact details. Off, the message keeps Postgres' primary text
+      # ('violates unique constraint "uk_..."') and drops the values, so the
+      # claim's collision retry can still read the constraint name.
+      data-source-properties:
+        "[logServerErrorDetail]": false
 
   jpa:
     # Off: with Open Session in View on (Boot's default) every request holds a

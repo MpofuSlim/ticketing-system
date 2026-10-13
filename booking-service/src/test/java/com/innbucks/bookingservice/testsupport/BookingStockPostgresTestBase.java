@@ -239,6 +239,10 @@ public abstract class BookingStockPostgresTestBase extends PostgresIntegrationTe
         return meterRegistry.get(BookingMetrics.CLAIM_RETRY).tag("outcome", outcome).counter().count();
     }
 
+    protected double referenceCollisions(String reference) {
+        return meterRegistry.get(BookingMetrics.REFERENCE_COLLISION).tag("reference", reference).counter().count();
+    }
+
     protected double expirySkipped() {
         return meterRegistry.get(BookingMetrics.EXPIRY_SKIPPED).counter().count();
     }

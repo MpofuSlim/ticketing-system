@@ -27,6 +27,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.BatchUpdateException;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -65,6 +66,19 @@ public class BookingService {
     // Fuzz tolerance for split-payment math: pointsToUse / redeemRate +
     // cashAmount must equal totalAmount within $0.01.
     private static final BigDecimal SPLIT_TOLERANCE = new BigDecimal("0.01");
+
+    // A generated reference that clashed with one already stored (23505 on
+    // one of these two UNIQUE constraints, V1) rolled the whole attempt back,
+    // stock claim included, so the claim runs again with FRESH references.
+    // Bounded: at 50 bits a ticket clash is not expected to happen at all,
+    // and a confirmation clash four times in a row for one booking is
+    // (bookings that day / 16.7M)^4. Any other 23505 is not a clash of ours.
+    static final String TICKET_NUMBER_CONSTRAINT = "uk_booking_items_ticket_number";
+    static final String CONFIRMATION_NUMBER_CONSTRAINT = "uk_bookings_confirmation_number";
+    static final int MAX_COLLISION_RETRIES = 3;
+    private static final String UNIQUE_VIOLATION = "23505";
+    // Postgres' own wording; Hibernate's PostgreSQLDialect parses the same template.
+    private static final String UNIQUE_CONSTRAINT_TEMPLATE = "violates unique constraint \"";
 
     // A deadlock (40P01) or serialization failure (40001) in the claim
     // transaction rolled the whole attempt back, so running it again from the
@@ -214,7 +228,7 @@ public class BookingService {
                 tenantUserUuid, total, qtyByCategory, categoryById, ticketSpecs);
 
         // === Write phase — the ONLY place a DB connection is held. ===
-        return claimWithOneRetry(inputs);
+        return claimWithRetries(inputs);
     }
 
     /**
@@ -229,40 +243,80 @@ public class BookingService {
     }
 
     /**
-     * Runs the claim transaction, and once more if it failed with a deadlock
-     * or serialization failure. The canonical lock order should make that
-     * impossible; the retry is the backstop for a lock taken somewhere this
-     * service does not control. A second such failure is a 503 the caller can
-     * retry, not the 500 a deadlock used to be. Each attempt builds a fresh
-     * booking with a fresh confirmation number, hold and ticket numbers.
+     * Runs the claim transaction, retrying two kinds of failure that rolled
+     * the whole attempt back (stock claim included), each on its own budget:
+     *
+     * <ul>
+     *   <li><b>A deadlock or serialization failure</b> — run ONCE more. The
+     *       canonical lock order should make it impossible; the retry is the
+     *       backstop for a lock taken somewhere this service does not control.
+     *       A second one is a 503 the caller can retry, not the 500 a deadlock
+     *       used to be.</li>
+     *   <li><b>A generated reference that clashed</b> with one already stored
+     *       (a ticket or confirmation number, see {@link #collidedReference}) —
+     *       run again up to {@value #MAX_COLLISION_RETRIES} times, counted on
+     *       {@code booking.claim.reference_collision}. Exhausted, it is the same
+     *       503 TRY_AGAIN. A clash used to be a 500.</li>
+     * </ul>
+     *
+     * Neither budget spends the other. Every attempt builds a fresh booking
+     * with a fresh confirmation number, hold and ticket numbers. The logs name
+     * the kind of reference and the attempt, never a value: a ticket number is
+     * an entry credential.
      */
-    private BookingResponseDTO claimWithOneRetry(ClaimInputs inputs) {
-        try {
-            return claimOnce(inputs);
-        } catch (RuntimeException first) {
-            String sqlState = retryableSqlState(first);
-            if (sqlState == null) {
-                throw first;
+    private BookingResponseDTO claimWithRetries(ClaimInputs inputs) {
+        boolean deadlockRetried = false;
+        int collisionRetries = 0;
+        while (true) {
+            try {
+                BookingResponseDTO created = claimOnce(inputs);
+                if (deadlockRetried) {
+                    recordClaimRetry(BookingMetrics.ClaimRetryOutcome.SUCCEEDED);
+                }
+                return created;
+            } catch (RuntimeException failure) {
+                BookingMetrics.ReferenceKind collided = collidedReference(failure);
+                if (collided != null) {
+                    recordReferenceCollision(collided);
+                    if (collisionRetries < MAX_COLLISION_RETRIES) {
+                        collisionRetries++;
+                        log.warn("Claim hit a {} number collision, retrying with fresh references "
+                                        + "(collision retry {}/{}) eventId={}",
+                                collided.tag(), collisionRetries, MAX_COLLISION_RETRIES, inputs.eventId());
+                        continue;
+                    }
+                    if (deadlockRetried) {
+                        recordClaimRetry(BookingMetrics.ClaimRetryOutcome.REFUSED);
+                    }
+                    log.warn("Claim hit a {} number collision again after {} collision retries, answering 503 "
+                                    + "eventId={}",
+                            collided.tag(), MAX_COLLISION_RETRIES, inputs.eventId());
+                    throw tryAgain();
+                }
+                String sqlState = retryableSqlState(failure);
+                if (sqlState == null) {
+                    if (deadlockRetried) {
+                        recordClaimRetry(BookingMetrics.ClaimRetryOutcome.REFUSED);
+                    }
+                    throw failure;
+                }
+                if (!deadlockRetried) {
+                    deadlockRetried = true;
+                    log.warn("Claim transaction failed with SQLState {}, retrying once eventId={} categories={}",
+                            sqlState, inputs.eventId(), inputs.qtyByCategory().keySet());
+                    continue;
+                }
+                recordClaimRetry(BookingMetrics.ClaimRetryOutcome.FAILED);
+                log.warn("Claim retry failed with SQLState {} too, answering 503 eventId={} categories={}",
+                        sqlState, inputs.eventId(), inputs.qtyByCategory().keySet());
+                throw tryAgain();
             }
-            log.warn("Claim transaction failed with SQLState {}, retrying once eventId={} categories={}",
-                    sqlState, inputs.eventId(), inputs.qtyByCategory().keySet());
         }
-        try {
-            BookingResponseDTO created = claimOnce(inputs);
-            recordClaimRetry(BookingMetrics.ClaimRetryOutcome.SUCCEEDED);
-            return created;
-        } catch (RuntimeException second) {
-            String sqlState = retryableSqlState(second);
-            if (sqlState == null) {
-                recordClaimRetry(BookingMetrics.ClaimRetryOutcome.REFUSED);
-                throw second;
-            }
-            recordClaimRetry(BookingMetrics.ClaimRetryOutcome.FAILED);
-            log.warn("Claim retry failed with SQLState {} too, answering 503 eventId={} categories={}",
-                    sqlState, inputs.eventId(), inputs.qtyByCategory().keySet());
-            throw new ApiProblemException(HttpStatus.SERVICE_UNAVAILABLE, TRY_AGAIN,
-                    "We couldn't reserve your tickets just now. Please try again.");
-        }
+    }
+
+    private static ApiProblemException tryAgain() {
+        return new ApiProblemException(HttpStatus.SERVICE_UNAVAILABLE, TRY_AGAIN,
+                "We couldn't reserve your tickets just now. Please try again.");
     }
 
     private BookingResponseDTO claimOnce(ClaimInputs inputs) {
@@ -294,10 +348,85 @@ public class BookingService {
         return null;
     }
 
+    /**
+     * Which generated reference {@code ex} reports a clash of — a unique
+     * violation (23505) on {@value #TICKET_NUMBER_CONSTRAINT} or
+     * {@value #CONFIRMATION_NUMBER_CONSTRAINT} — else null, including for any
+     * other 23505. The constraint is read from the driver's own exception
+     * first (its message starts with Postgres' text; a batch wrapper's message
+     * starts with the statement, whose bound values a caller chose), then from
+     * Hibernate's parse of it. Walks the cause chain and each
+     * {@link SQLException#getNextException()}.
+     */
+    static BookingMetrics.ReferenceKind collidedReference(Throwable ex) {
+        String constraint = violatedUniqueConstraint(ex);
+        if (TICKET_NUMBER_CONSTRAINT.equalsIgnoreCase(constraint)) {
+            return BookingMetrics.ReferenceKind.TICKET;
+        }
+        if (CONFIRMATION_NUMBER_CONSTRAINT.equalsIgnoreCase(constraint)) {
+            return BookingMetrics.ReferenceKind.CONFIRMATION;
+        }
+        return null;
+    }
+
+    private static String violatedUniqueConstraint(Throwable ex) {
+        String fromHibernate = null;
+        Deque<Throwable> pending = new ArrayDeque<>();
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        if (ex != null) {
+            pending.add(ex);
+        }
+        while (!pending.isEmpty() && seen.size() < 32) {
+            Throwable t = pending.poll();
+            if (!seen.add(t)) {
+                continue;
+            }
+            if (t instanceof SQLException sql) {
+                if (!(sql instanceof BatchUpdateException) && UNIQUE_VIOLATION.equals(sql.getSQLState())) {
+                    String named = constraintNamedIn(sql.getMessage());
+                    if (named != null) {
+                        return named;
+                    }
+                }
+                if (sql.getNextException() != null) {
+                    pending.add(sql.getNextException());
+                }
+            }
+            if (fromHibernate == null && t instanceof org.hibernate.exception.ConstraintViolationException cve
+                    && UNIQUE_VIOLATION.equals(cve.getSQLState())) {
+                fromHibernate = cve.getConstraintName();
+            }
+            if (t.getCause() != null) {
+                pending.add(t.getCause());
+            }
+        }
+        return fromHibernate;
+    }
+
+    private static String constraintNamedIn(String message) {
+        if (message == null) {
+            return null;
+        }
+        int start = message.indexOf(UNIQUE_CONSTRAINT_TEMPLATE);
+        if (start < 0) {
+            return null;
+        }
+        start += UNIQUE_CONSTRAINT_TEMPLATE.length();
+        int end = message.indexOf('"', start);
+        return end < 0 ? null : message.substring(start, end);
+    }
+
     private void recordClaimRetry(BookingMetrics.ClaimRetryOutcome outcome) {
         BookingMetrics m = metrics;
         if (m != null) {
             m.claimRetry(outcome);
+        }
+    }
+
+    private void recordReferenceCollision(BookingMetrics.ReferenceKind kind) {
+        BookingMetrics m = metrics;
+        if (m != null) {
+            m.referenceCollision(kind);
         }
     }
 
