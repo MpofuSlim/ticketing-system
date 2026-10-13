@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.config;
 
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonSerializer;
@@ -74,6 +75,9 @@ public class UtcJsonTimeConfig {
     private static final DateTimeFormatter MARKET_WIRE =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX");
 
+    /** Jackson's message for an inbound string that is none of the accepted forms (never shown to a client). */
+    private static final String NOT_A_DATE_TIME = "not an ISO-8601 date-time";
+
     /**
      * Jackson 3 module — the one the HTTP message converter actually uses, and
      * therefore the only one that decides what a browser sees. Market rendering
@@ -125,20 +129,52 @@ public class UtcJsonTimeConfig {
         }
     }
 
+    /**
+     * Inbound {@code LocalDateTime} for the HTTP mapper.
+     *
+     * <p>A value that is not a date-time fails through Jackson's own
+     * reporting ({@code handleUnexpectedToken} for a number, boolean, object
+     * or array; {@code handleWeirdStringValue} for an unparseable string), so
+     * the error is a {@code MismatchedInputException} whose target type is
+     * {@code LocalDateTime}. That target type is what lets
+     * {@code GlobalExceptionHandler} answer {@code "Must be an ISO-8601
+     * date-time."} for the field. A bare {@code DateTimeParseException} thrown
+     * from here reached it wrapped in a plain {@code DatabindException}, which
+     * says nothing about the type, so the caller read {@code "Invalid value."}.
+     */
     static final class FlexibleUtcLocalDateTimeDeserializerJ3 extends tools.jackson.databind.ValueDeserializer<LocalDateTime> {
         @Override
         public LocalDateTime deserialize(tools.jackson.core.JsonParser p,
                                          tools.jackson.databind.DeserializationContext ctxt) {
+            if (!p.hasToken(tools.jackson.core.JsonToken.VALUE_STRING)) {
+                return (LocalDateTime) ctxt.handleUnexpectedToken(LocalDateTime.class, p);
+            }
             String value = p.getString();
             if (value == null || value.isBlank()) {
                 return null;
             }
+            LocalDateTime parsed = parseAsUtc(value);
+            return parsed != null ? parsed
+                    : (LocalDateTime) ctxt.handleWeirdStringValue(LocalDateTime.class, value, NOT_A_DATE_TIME);
+        }
+    }
+
+    /**
+     * The three accepted inbound forms, as the UTC wall-clock our
+     * {@code LocalDateTime} columns store: an offset-carrying value
+     * ({@code Z} or {@code ±HH:mm}) is normalized to UTC, a legacy zoneless
+     * value is taken as UTC already. {@code null} when it is neither.
+     */
+    private static LocalDateTime parseAsUtc(String value) {
+        try {
+            return OffsetDateTime.parse(value)
+                    .withOffsetSameInstant(ZoneOffset.UTC)
+                    .toLocalDateTime();
+        } catch (DateTimeParseException notOffset) {
             try {
-                return OffsetDateTime.parse(value)
-                        .withOffsetSameInstant(ZoneOffset.UTC)
-                        .toLocalDateTime();
-            } catch (DateTimeParseException ignored) {
                 return LocalDateTime.parse(value);
+            } catch (DateTimeParseException notZoneless) {
+                return null;
             }
         }
     }
@@ -151,22 +187,20 @@ public class UtcJsonTimeConfig {
         }
     }
 
+    /** The Jackson 2 twin of {@link FlexibleUtcLocalDateTimeDeserializerJ3}: same forms, same failures. */
     static final class FlexibleUtcLocalDateTimeDeserializer extends JsonDeserializer<LocalDateTime> {
         @Override
         public LocalDateTime deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+            if (!p.hasToken(JsonToken.VALUE_STRING)) {
+                return (LocalDateTime) ctxt.handleUnexpectedToken(LocalDateTime.class, p);
+            }
             String value = p.getText();
             if (value == null || value.isBlank()) {
                 return null;
             }
-            try {
-                // Offset-carrying form: normalize to the UTC wall-clock our
-                // LocalDateTime columns store ("Z" input is a no-op shift).
-                return OffsetDateTime.parse(value)
-                        .withOffsetSameInstant(ZoneOffset.UTC)
-                        .toLocalDateTime();
-            } catch (DateTimeParseException ignored) {
-                return LocalDateTime.parse(value);
-            }
+            LocalDateTime parsed = parseAsUtc(value);
+            return parsed != null ? parsed
+                    : (LocalDateTime) ctxt.handleWeirdStringValue(LocalDateTime.class, value, NOT_A_DATE_TIME);
         }
     }
 }

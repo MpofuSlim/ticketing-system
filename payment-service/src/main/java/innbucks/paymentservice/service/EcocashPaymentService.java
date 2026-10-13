@@ -38,8 +38,9 @@ import java.util.UUID;
  *
  * <pre>
  *   1. gateway.fetch(orderRef): amount in cents, currency, payer msisdn
- *   2. gateway.extendHold(orderRef): the product hold provably outlives the
- *      prompt BEFORE any ledger write or upstream call
+ *   2. gateway.extendHold(orderRef, promptExpiresAt + grace): the product
+ *      hold provably outlives the prompt's last payable instant BEFORE any
+ *      ledger write or upstream call; step 4 records the same deadline
  *   3. Open a PENDING ledger row WITH the clientCorrelator already on it
  *   4. markEcocashChargeIssued: PENDING -> TOKEN_ISSUED, BEFORE the upstream
  *      call — inverted vs the other rails, and load-bearing: the EIP
@@ -83,7 +84,9 @@ public class EcocashPaymentService {
     /**
      * Slack past the local prompt TTL before a still-pending/NOT_FOUND row
      * is closed — absorbs clock skew and a poll cycle's worth of lag, same
-     * constant discipline as the other two rails.
+     * constant discipline as the other two rails. A prompt approved inside
+     * it still confirms, so the prompt's last payable instant is deadline +
+     * this grace, and that is what the product hold is sized from.
      */
     static final Duration PROMPT_EXPIRY_GRACE = Duration.ofMinutes(2);
 
@@ -250,8 +253,11 @@ public class EcocashPaymentService {
         }
 
         // Product hold must outlive the prompt BEFORE any ledger write or
-        // upstream call.
-        gateway.extendHold(orderRef);
+        // upstream call. The deadline is fixed ONCE, here: the hold is sized
+        // from it (+ the resolver's grace, inside which an approval still
+        // confirms) and the TOKEN_ISSUED step below records the same instant.
+        Instant promptExpiresAt = Instant.now().plus(ecocashProperties.getChargeTtl());
+        gateway.extendHold(orderRef, promptExpiresAt.plus(PROMPT_EXPIRY_GRACE));
 
         String paymentReference = SettlementReference.forTag(snapshot.settlementTag());
         String clientCorrelator = mintCorrelator();
@@ -286,7 +292,6 @@ public class EcocashPaymentService {
         }
 
         // TOKEN_ISSUED BEFORE the upstream call — see the class javadoc.
-        Instant promptExpiresAt = Instant.now().plus(ecocashProperties.getChargeTtl());
         paymentRecordService.markEcocashChargeIssued(opened.getId(), clientCorrelator, promptExpiresAt);
 
         try {

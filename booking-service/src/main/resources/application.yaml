@@ -173,6 +173,11 @@ app:
   booking:
     hold-ttl-minutes: ${BOOKING_HOLD_TTL_MINUTES:5}
     expiration-poll-interval-ms: ${BOOKING_EXPIRATION_POLL_MS:30000}
+    # Flat per-booking ticket ceiling (the inventory-abuse guard on POST
+    # /bookings). BookingService has always read it with a default of 20;
+    # this line is what lets the env var reach it — relaxed binding does not
+    # map BOOKING_MAX_SEATS_PER_BOOKING onto app.booking.max-seats-per-booking.
+    max-seats-per-booking: ${BOOKING_MAX_SEATS_PER_BOOKING:20}
     # Pre-event WhatsApp reminder (EventReminderScheduler): sent once per
     # CONFIRMED booking when its event starts within this window. Hourly cron.
     reminder-window-hours: ${BOOKING_REMINDER_WINDOW_HOURS:24}

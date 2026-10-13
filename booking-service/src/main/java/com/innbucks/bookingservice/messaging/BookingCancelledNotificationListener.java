@@ -36,11 +36,12 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *
  * <p><b>Async, and deliberately NOT {@code @Transactional}</b> — same reason as
  * {@link BookingConfirmedNotificationListener}. The hold-expiry sweep
- * ({@code BookingExpirationService.expirePending}) cancels a whole batch in one
- * transaction every 30s, and on commit this listener ran once per expired
- * hold, back to back on the single scheduler thread — each one's email + SMS
- * round trips paid there while holding two pooled connections (the committed
- * one, plus the listener's {@code REQUIRES_NEW}).
+ * ({@code BookingExpirationService.expirePending}) cancels hold after hold on
+ * the single scheduler thread (one short transaction each), and a synchronous
+ * listener would pay every hold's email + SMS round trips there, holding two
+ * pooled connections each time (the committed one, plus the listener's
+ * {@code REQUIRES_NEW}) — which is what it did when the sweep still cancelled a
+ * whole batch in one transaction.
  * The read below is a single repository call; no connection is held while
  * sending.
  */

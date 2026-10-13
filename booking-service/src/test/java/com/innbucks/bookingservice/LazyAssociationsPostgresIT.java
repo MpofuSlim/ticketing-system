@@ -130,7 +130,14 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
 
     private final UUID organizer = UUID.randomUUID();
 
-    private static final long EXPIRY_SWEEP_STATEMENTS = 13;
+    // One candidate scan, then per hold: the SKIP LOCKED row lock, its items,
+    // one counter release per category (one here), the status UPDATE, and the
+    // async listener's read of the booking. Five per hold (H1: one short
+    // transaction per booking; the old single-transaction sweep was 13 for
+    // five holds, but held every counter row it touched until the whole batch
+    // committed).
+    private static final int EXPIRY_HOLDS = 5;
+    private static final long EXPIRY_SWEEP_STATEMENTS = 1 + 5L * EXPIRY_HOLDS;
 
     /** Measured statement counts, printed at the end of each test for the record. */
     private final Map<String, Long> measured = new LinkedHashMap<>();
@@ -310,9 +317,10 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         verify(whatsApp, timeout(10_000)).sendEventQrCode(eq("+263772000001"), anyString(), anyString());
         verify(email, timeout(10_000)).sendEmail(eq(f.email), anyString(), anyString(), anyString());
         measured.put("confirm + async delivery", stats.getPrepareStatementCount());
-        // select booking + items, update booking, and the listener's one
-        // fetch-join read after commit.
-        assertThat(stats.getPrepareStatementCount()).isEqualTo(3);
+        // lock the booking row, load its items (lockById cannot fetch-join
+        // them: Postgres refuses FOR UPDATE on an outer join), update the
+        // booking, and the listener's one fetch-join read after commit.
+        assertThat(stats.getPrepareStatementCount()).isEqualTo(4);
 
         stats.clear();
         mvc.perform(post("/bookings/" + b.getId() + "/resend-ticket").header("Authorization", bearer(admin())))
@@ -353,14 +361,16 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         verify(eventServiceClient).releaseAvailability(confirmed.eventId, 2, internalToken);
 
         assertThat(measured.get("PATCH /bookings/internal/{id}/extend-hold")).isEqualTo(2);
-        // select + items, update booking, release the counter, the listener's read.
-        assertThat(measured.get("PATCH /bookings/{id}/cancel + async notice")).isEqualTo(4);
-        // The reverse reads the booking + items TWICE: once in a read-only
-        // transaction before the event-service release (so no connection is
-        // held across it), and again in the write transaction after it, where
-        // its version is compared with the first read. The rest is as for the
-        // cancel: update booking, release the counter, the listener's read.
-        assertThat(measured.get("PATCH /bookings/{id}/reverse")).isEqualTo(5);
+        // lock the booking row, its items, update booking, release the
+        // counter, the listener's read.
+        assertThat(measured.get("PATCH /bookings/{id}/cancel + async notice")).isEqualTo(5);
+        // The reverse reads the booking + items in a read-only transaction
+        // before the event-service release (so no connection is held across
+        // it), then LOCKS the row in the write transaction after it, compares
+        // the version with the first read and loads the items. The rest is as
+        // for the cancel: update booking, release the counter, the listener's
+        // read.
+        assertThat(measured.get("PATCH /bookings/{id}/reverse")).isEqualTo(6);
     }
 
     @Test
@@ -387,7 +397,7 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
 
     @Test
     void expirySweep_releasesEveryExpiredHold_inABoundedNumberOfStatements() {
-        Fixture f = seedEvent(5, Booking.BookingStatus.PENDING);
+        Fixture f = seedEvent(EXPIRY_HOLDS, Booking.BookingStatus.PENDING);
         jdbc.update("UPDATE bookings SET expires_at = ? WHERE event_id = ?",
                 LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1), f.eventId);
 
@@ -403,10 +413,9 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         verify(email, timeout(10_000).times(5)).sendEmail(eq(f.email), anyString(), anyString(), anyString());
         long sweep = stats.getPrepareStatementCount();
         measured.put("expirePending (5 holds, 10 tickets) + 5 async notices", sweep);
-        // The writes (status UPDATE, counter release) and the listeners' one
-        // booking read each are per hold by nature; the sweep's own reads are
-        // not: one SELECT of the holds and ONE batched items query for all
-        // five, where EAGER loaded each hold's items separately.
+        // Each hold is cancelled in a transaction of its own, so its lock and
+        // its items read are per hold, like its writes and its notice; what
+        // stays constant is the cost PER HOLD (no lazy load, no N+1 on top).
         assertThat(sweep).isEqualTo(EXPIRY_SWEEP_STATEMENTS);
     }
 

@@ -37,7 +37,7 @@ class LoyaltyVoucherOrderGatewayTest {
     @BeforeEach
     void setUp() {
         client = mock(LoyaltyVoucherOrderClient.class);
-        gateway = new LoyaltyVoucherOrderGateway(client, Duration.ofMinutes(10));
+        gateway = new LoyaltyVoucherOrderGateway(client);
     }
 
     private static VoucherOrderView view(BigDecimal amount, boolean payable) {
@@ -89,11 +89,26 @@ class LoyaltyVoucherOrderGatewayTest {
     }
 
     @Test
-    void extendHold_usesTheFleetSafetyWindow_roundedUpToMinutes() {
-        // 10m code TTL + 3m safety margin = 13 minutes, same maths as the
-        // booking and marketplace gateways.
-        gateway.extendHold(REF);
+    void extendHold_sendsTheRailsPayableDeadlinePlusTheFleetSafetyMargin() {
+        // Same maths as the booking and marketplace gateways: the rail's last
+        // payable instant + 3m. Loyalty refuses cash until this window ends,
+        // so the card rail's 33 (not a code-sized 13) is what stops a till
+        // taking cash while the customer's card checkout is still payable.
+        gateway.extendHold(REF, Instant.now().plus(Duration.ofMinutes(10)));
         verify(client).extendExpiry(eq(REF), eq(13));
+        gateway.extendHold(REF, Instant.now().plus(Duration.ofMinutes(7)));
+        verify(client).extendExpiry(eq(REF), eq(10));
+        gateway.extendHold(REF, Instant.now().plus(Duration.ofMinutes(30)));
+        verify(client).extendExpiry(eq(REF), eq(33));
+    }
+
+    @Test
+    void holdMinutes_roundsUp_andIsClampedToLoyaltysContract() {
+        Instant now = Instant.parse("2026-10-13T10:00:00Z");
+        assertThat(LoyaltyVoucherOrderGateway.holdMinutes(
+                now.plus(Duration.ofMinutes(10).plusMillis(1)), now)).isEqualTo(14);
+        assertThat(LoyaltyVoucherOrderGateway.holdMinutes(now.plus(Duration.ofHours(3)), now)).isEqualTo(60);
+        assertThat(LoyaltyVoucherOrderGateway.holdMinutes(now.minus(Duration.ofHours(1)), now)).isEqualTo(1);
     }
 
     @Test
@@ -101,7 +116,7 @@ class LoyaltyVoucherOrderGatewayTest {
         doThrow(new VoucherOrderException("down", 503, "LOYALTY_UNREACHABLE"))
                 .when(client).extendExpiry(eq(REF), anyInt());
 
-        assertThatThrownBy(() -> gateway.extendHold(REF))
+        assertThatThrownBy(() -> gateway.extendHold(REF, Instant.now().plus(Duration.ofMinutes(10))))
                 .isInstanceOfSatisfying(InvalidPaymentRequestException.class,
                         e -> assertThat(e.getStatusCode()).isEqualTo(503));
     }

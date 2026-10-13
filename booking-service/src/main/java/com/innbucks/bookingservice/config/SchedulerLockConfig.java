@@ -17,10 +17,10 @@ import javax.sql.DataSource;
  * across replicas. Without this, every pod runs:
  *
  *   - {@link com.innbucks.bookingservice.service.BookingExpirationService}
- *     (every 30s, picks PENDING bookings whose seat-hold has expired and
- *     cancels them). Multiple pods means each candidate is processed N
- *     times — the per-row pessimistic lock in cancelBooking catches the
- *     duplicates but burns queries and creates lock contention.
+ *     (every 30s by default, cancels PENDING bookings whose seat-hold has
+ *     expired, one short transaction per booking). Multiple pods would each
+ *     scan every candidate — the per-row {@code FOR UPDATE SKIP LOCKED} makes
+ *     the duplicates harmless, but they burn queries.
  *
  * <p>defaultLockAtMostFor = PT5M is the fail-safe — a pod that dies mid-job
  * releases the lock after 5 minutes so the next tick proceeds. Each job

@@ -323,9 +323,9 @@ public class PaymentController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation error (order identification), a rejected payment (stub error "
-                            + "vocabulary: declines surface as 400 + reason), or the product service refused "
-                            + "the hold extension",
+                    description = "Validation error (order identification), or a rejected payment (stub error "
+                            + "vocabulary: declines surface as 400 + reason). A lapsed hold is never a 400 — "
+                            + "see 409",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "No order identified", value = """
@@ -339,13 +339,6 @@ public class PaymentController {
                                             {
                                               "code": "400 BAD_REQUEST",
                                               "message": "Provide exactly one of bookingId or orderType + orderRef — not both",
-                                              "data": null
-                                            }
-                                            """),
-                                    @ExampleObject(name = "Hold expired", value = """
-                                            {
-                                              "code": "400 BAD_REQUEST",
-                                              "message": "Seat hold expired",
                                               "data": null
                                             }
                                             """)
@@ -371,25 +364,76 @@ public class PaymentController {
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
                     description = "The order is not awaiting payment (already paid, cancelled or expired) "
-                            + "and no replayable payment row exists",
+                            + "and no replayable payment row exists; or its product service refused to "
+                            + "extend the hold before anything was minted — the booking/order has lapsed, "
+                            + "or can no longer be held for this rail's window. Nothing was charged: send "
+                            + "the customer back to rebook / re-order",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Not payable", value = """
-                                    {
-                                      "code": "409 CONFLICT",
-                                      "message": "This order is not awaiting payment — it may already be paid, cancelled or expired",
-                                      "data": null
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "Not payable", value = """
+                                            {
+                                              "code": "409 CONFLICT",
+                                              "message": "This order is not awaiting payment — it may already be paid, cancelled or expired",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Booking hold refused — rebook, nothing was charged", value = """
+                                            {
+                                              "code": "409 CONFLICT",
+                                              "message": "Your booking has expired — please create a new booking and try again",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Marketplace order hold refused", value = """
+                                            {
+                                              "code": "409 CONFLICT",
+                                              "message": "Your order has expired — please create a new order and try again",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Voucher order hold refused", value = """
+                                            {
+                                              "code": "409 CONFLICT",
+                                              "message": "This voucher order has expired — please create a new order and try again",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
-                    description = "The product service (booking-service / marketplace-service) is unreachable",
+                    description = "The product service (booking-service / marketplace-service / "
+                            + "loyalty-service) could not be read, or could not extend the hold before "
+                            + "anything was minted. Nothing was charged; retry the same request",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Downstream down", value = """
-                                    {
-                                      "code": "503 SERVICE_UNAVAILABLE",
-                                      "message": "Unable to reach booking-service to confirm the booking",
-                                      "data": null
-                                    }
-                                    """)))
+                            examples = {
+                                    @ExampleObject(name = "booking-service unreachable", value = """
+                                            {
+                                              "code": "503 SERVICE_UNAVAILABLE",
+                                              "message": "Unable to reach booking-service to fetch the booking",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Marketplace / voucher order unreachable", value = """
+                                            {
+                                              "code": "503 SERVICE_UNAVAILABLE",
+                                              "message": "We could not load your order right now; please try again shortly",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Booking hold could not be extended", value = """
+                                            {
+                                              "code": "503 SERVICE_UNAVAILABLE",
+                                              "message": "We could not secure your booking right now; please try again shortly",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Marketplace / voucher order hold could not be extended", value = """
+                                            {
+                                              "code": "503 SERVICE_UNAVAILABLE",
+                                              "message": "We could not secure your order right now; please try again shortly",
+                                              "data": null
+                                            }
+                                            """)
+                            }))
     })
     public ResponseEntity<ApiResult<PaymentResponse>> processPayment(
             @Valid @RequestBody PaymentRequest request
