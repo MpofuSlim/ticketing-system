@@ -3,6 +3,7 @@ package innbucks.paymentservice.order;
 import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.EventServiceClient;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
+import innbucks.paymentservice.service.RailPayableWindows;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -21,7 +22,7 @@ import static org.mockito.Mockito.*;
 /**
  * Pins the booking adapter as the SINGLE major→minor conversion point for
  * the booking product (decimal dollars → cents, sub-cent refused, never
- * rounded), plus the snapshot's settlement tag / narration / payer sourcing
+ * rounded), plus the snapshot's settlement tag / narration / payer sourcing,
  * the ConfirmOutcome mapping of booking-service's confirm statuses, and the
  * seat hold sized by the RAIL's last payable instant + the safety margin.
  */
@@ -137,16 +138,19 @@ class BookingOrderGatewayTest {
     }
 
     /**
-     * The seat hold per rail, with each rail's default last payable instant
-     * (the rail tests pin that each rail sends exactly this). A code-sized
-     * 13 minutes for every rail left a card paid after minute 13 of its
+     * The seat hold per rail. Each payable window is read from the rail's
+     * deployed TTL default + its own grace (not restated here), and the rail
+     * tests pin that each rail sends exactly that deadline. The holds are the
+     * published numbers — plan D2 and §4 of Payments-Frontend-Integration.md —
+     * so a TTL default changed without them fails here. A code-sized 13
+     * minutes for every rail left a card paid after minute 13 of its
      * 30-minute checkout with no ticket.
      */
     @Test
     void extendHold_perRail_holdOutlivesThePayableDeadlineByThreeMinutes() {
-        assertHoldFor(Duration.ofMinutes(10), Duration.ofMinutes(13));   // InnBucks code: 10m TTL
-        assertHoldFor(Duration.ofMinutes(5 + 2), Duration.ofMinutes(10)); // EcoCash: 5m prompt + 2m grace
-        assertHoldFor(Duration.ofMinutes(28 + 2), Duration.ofMinutes(33)); // card: 28m checkout + 2m grace
+        assertHoldFor(RailPayableWindows.innbucksCode(), Duration.ofMinutes(13)); // 10m code TTL
+        assertHoldFor(RailPayableWindows.ecocash(), Duration.ofMinutes(10));      // 5m prompt + 2m grace
+        assertHoldFor(RailPayableWindows.card(), Duration.ofMinutes(33));         // 28m checkout + 2m grace
     }
 
     private void assertHoldFor(Duration payableWindow, Duration expectedHold) {
