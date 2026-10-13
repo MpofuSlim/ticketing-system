@@ -32,6 +32,7 @@ import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_H
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_INVALID_JWT;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_AN_OBJECT;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_FOUND;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_PAYMENT_IN_PROGRESS;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_UNREADABLE_HOLD_UNTIL;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -209,6 +210,29 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
                         .header("Authorization", bearer("someone-else@example.com", List.of("CUSTOMER"), Map.of())))
                 .andExpect(status().isForbidden())
                 .andExpect(content().json(EXAMPLE_FORBIDDEN, JsonCompareMode.STRICT));
+
+        assertThat(statusOf(hold.getId())).isEqualTo("PENDING");
+        assertThat(remaining(category)).isEqualTo(5);
+    }
+
+    @Test
+    void cancel_whileAPaymentIsOpen_isTheDocumented409_withTheSecondsLeft() throws Exception {
+        Booking hold = seedBooking(Booking.BookingStatus.PENDING,
+                LocalDateTime.now(ZoneOffset.UTC).plusMinutes(15), category);
+        jdbc.update("UPDATE bookings SET payment_open_until = ? WHERE id = ?",
+                LocalDateTime.now(ZoneOffset.UTC).plusSeconds(742), hold.getId());
+
+        MvcResult result = mvc.perform(patch("/bookings/" + hold.getId() + "/cancel")
+                        .header("Authorization", bearer("buyer@example.com", List.of("CUSTOMER"), Map.of())))
+                .andExpect(status().isConflict())
+                .andReturn();
+
+        // The example's number is a countdown; everything else is exact.
+        Integer secondsLeft = com.jayway.jsonpath.JsonPath.read(result.getResponse().getContentAsString(),
+                "$.data.retryAfterSeconds");
+        assertThat(secondsLeft).isBetween(735, 742);
+        content().json(EXAMPLE_PAYMENT_IN_PROGRESS.replace("742", String.valueOf(secondsLeft)),
+                JsonCompareMode.STRICT).match(result);
 
         assertThat(statusOf(hold.getId())).isEqualTo("PENDING");
         assertThat(remaining(category)).isEqualTo(5);

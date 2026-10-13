@@ -82,6 +82,13 @@ public class BookingService {
     /** {@code data.errorCode} of the 503 a claim answers when its retry fails the same way. */
     public static final String TRY_AGAIN = "TRY_AGAIN";
 
+    /** {@code data.errorCode} of the 409 a cancel answers while a payment may still land. */
+    public static final String PAYMENT_IN_PROGRESS = "PAYMENT_IN_PROGRESS";
+
+    /** The cancel refusal's message; also the Swagger example's. */
+    public static final String PAYMENT_IN_PROGRESS_MESSAGE = "A payment for this booking is still open. "
+            + "If you don't complete it, the booking is released automatically.";
+
     // Flat per-booking seat ceiling, applied identically to every customer.
     // This replaced a per-tier ladder (tier 2 -> 10, 3 -> 15, 4 -> 20, anything
     // else -> 0, i.e. a hard block); the tier ladder is gone, so everyone now
@@ -961,6 +968,23 @@ public class BookingService {
             throw new BookingConflictException("This booking is already cancelled.");
         }
 
+        // A payment instrument may still be live (extend-hold stamped how long
+        // the last one stays payable). Cancelling now would release the
+        // tickets under it, and a payment landing afterwards is money taken
+        // with the stock gone. Refused until the window closes; the hold then
+        // expires by itself if nobody pays. Read under the row lock, which
+        // extend-hold takes too, so the stamp cannot move between this check
+        // and the write below.
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime paymentOpenUntil = booking.getPaymentOpenUntil();
+        if (paymentOpenUntil != null && paymentOpenUntil.isAfter(now)) {
+            long retryAfterSeconds = secondsUntil(now, paymentOpenUntil);
+            log.warn("Cancel rejected, a payment may still land bookingId={} paymentOpenUntil={} retryAfterSeconds={}",
+                    bookingId, paymentOpenUntil, retryAfterSeconds);
+            throw new ApiProblemException(HttpStatus.CONFLICT, PAYMENT_IN_PROGRESS, PAYMENT_IN_PROGRESS_MESSAGE,
+                    Map.of("retryAfterSeconds", retryAfterSeconds));
+        }
+
         booking.setStatus(Booking.BookingStatus.CANCELLED);
         // A late payment may still resurrect it (CancelReason). A SUPER_ADMIN
         // cancelling someone's PENDING booking here is recorded the same way:
@@ -1216,6 +1240,12 @@ public class BookingService {
         if (m != null) {
             m.holdExtensionRefused(reason);
         }
+    }
+
+    /** Whole seconds from {@code now} until {@code until}, rounded up (until is after now). */
+    static long secondsUntil(LocalDateTime now, LocalDateTime until) {
+        Duration left = Duration.between(now, until);
+        return left.getNano() > 0 ? left.getSeconds() + 1 : left.getSeconds();
     }
 
     // @Transactional here too: the call below is a SELF-invocation, which

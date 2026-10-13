@@ -119,6 +119,10 @@ public class BookingController {
     static final String EXAMPLE_HOLD_CAP_REACHED = """
             { "code": "409 CONFLICT", "message": "Your seat reservation has expired. Please start a new booking and complete payment within 5 minutes.", "data": null }
             """;
+    // retryAfterSeconds counts down to the booking's payment window; 742 is an example.
+    static final String EXAMPLE_PAYMENT_IN_PROGRESS = """
+            { "code": "409 CONFLICT", "message": "A payment for this booking is still open. If you don't complete it, the booking is released automatically.", "data": { "errorCode": "PAYMENT_IN_PROGRESS", "retryAfterSeconds": 742 } }
+            """;
 
     @PostMapping
     @Operation(summary = "Create booking", description = "Creates a new pending booking. The phone number is taken from the JWT when present, otherwise from the request body's `phoneNumber`. " +
@@ -1376,7 +1380,25 @@ public class BookingController {
     }
 
     @PatchMapping("/{id}/cancel")
-    @Operation(summary = "Cancel booking", description = "Cancels a booking before payment confirmation.")
+    @Operation(summary = "Cancel booking", description = """
+            Cancels a PENDING booking before payment confirmation and returns its tickets to sale. Only the
+            booking's owner or a SUPER_ADMIN may cancel it.
+
+            **Refused while a payment may still land** (409, `data.errorCode: PAYMENT_IN_PROGRESS`): every time
+            payment-service starts a payment it records how long that payment stays payable (code 13 min,
+            EcoCash 10 min, card 33 min, never past 60 min from the booking). Cancelling inside that window
+            would release tickets the payment is about to pay for. `data.retryAfterSeconds` is how long until
+            the window closes; until then the buyer can complete the payment, and if they don't, the booking
+            is released automatically when its hold expires.
+
+            **Known limitation:** payment-service records the window BEFORE it creates the instrument, so a
+            card checkout that then failed to start still blocks the cancel for up to 33 minutes, with no
+            live payment behind it. payment-service telling booking-service when an attempt has ended is the
+            planned fix (D24, v1.1).
+
+            A cancelled booking can still come back CONFIRMED if a payment for it lands afterwards and its
+            tickets are still available (see `PATCH /bookings/internal/{id}/confirm`).
+            """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1428,14 +1450,17 @@ public class BookingController {
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Unknown booking", value = EXAMPLE_NOT_FOUND))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "The booking is not PENDING (already paid, or already cancelled — "
-                    + "including by the expiry sweep)",
+                    + "including by the expiry sweep), or a payment for it may still land "
+                    + "(data.errorCode PAYMENT_IN_PROGRESS; retry after data.retryAfterSeconds, or let the hold "
+                    + "expire). Branch on data.errorCode, not on the message.",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Already paid", value = """
                                     { "code": "409 CONFLICT", "message": "We can't cancel this confirmed booking — payment has already been processed. Please contact support if you need a refund.", "data": null }
                                     """),
                             @ExampleObject(name = "Already cancelled", value = """
                                     { "code": "409 CONFLICT", "message": "This booking is already cancelled.", "data": null }
-                                    """)
+                                    """),
+                            @ExampleObject(name = "A payment is still open", value = EXAMPLE_PAYMENT_IN_PROGRESS)
                     }))
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> cancelBooking(
