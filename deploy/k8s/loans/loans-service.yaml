@@ -105,6 +105,11 @@ spec:
             - { name: SPRING_PROFILES_INCLUDE, value: "" }
             - { name: SPRING_APPLICATION_JSON, value: "{}" }
             - { name: SERVER_PORT, value: "8088" }
+            # The node this pod runs on. The GetMore simulator (staging only)
+            # refuses to start unless it equals GETMORE_SIMULATOR_ALLOWED_NODE,
+            # so a staging env file copied to another host never simulates. An
+            # explicit env entry wins over envFrom, so the Secret cannot set it.
+            - { name: NODE_NAME, valueFrom: { fieldRef: { fieldPath: spec.nodeName } } }
             # Its own database on the cell postgres, with the fleet's credentials.
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/loans_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
