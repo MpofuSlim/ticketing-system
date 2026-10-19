@@ -73,6 +73,7 @@ public class DeviceSupportService {
     private final DeviceOtpChallengeRepository challenges;
     private final DeviceSecurityEventRepository eventRepository;
     private final DeviceEnforcement enforcement;
+    private final NumberLock numberLock;
     private final DeviceOtpService otp;
     private final DeviceSecurityEventLog events;
     private final DeviceSecurityMessages messages;
@@ -84,7 +85,8 @@ public class DeviceSupportService {
 
     public DeviceSupportService(CustomerDeviceRepository devices, CustomerSecurityProfileRepository profiles,
                                 DeviceOtpChallengeRepository challenges, DeviceSecurityEventRepository eventRepository,
-                                DeviceEnforcement enforcement, DeviceOtpService otp, DeviceSecurityEventLog events,
+                                DeviceEnforcement enforcement, NumberLock numberLock, DeviceOtpService otp,
+                                DeviceSecurityEventLog events,
                                 DeviceSecurityMessages messages, AuditService auditService,
                                 DeviceSecurityProperties properties, ObjectMapper objectMapper,
                                 Clock deviceSecurityClock, @Value("${innbucks.country:ZW}") String deploymentCountry) {
@@ -93,6 +95,7 @@ public class DeviceSupportService {
         this.challenges = challenges;
         this.eventRepository = eventRepository;
         this.enforcement = enforcement;
+        this.numberLock = numberLock;
         this.otp = otp;
         this.events = events;
         this.messages = messages;
@@ -269,8 +272,9 @@ public class DeviceSupportService {
     public ProfileView setFraudFlag(String rawMsisdn, FraudFlagRequest req, String agent, AuditContext ctx) {
         String msisdn = normalise(rawMsisdn);
         LocalDateTime now = now();
-        profiles.insertIfAbsent(msisdn, now);
-        CustomerSecurityProfile p = profiles.findById(msisdn).orElseThrow();
+        // The number's lock first, as a bind takes it: a bind locks the profile then the
+        // phones, and this writes the profile then the phones too.
+        CustomerSecurityProfile p = numberLock.lock(msisdn, now, NumberLock.STAFF);
         boolean flag = Boolean.TRUE.equals(req.flagged());
         p.setFraudFlaggedAt(flag ? now : null);
         p.setFraudFlagNote(flag ? DeviceSecurityEventLog.truncate(req.note(), 1000) : null);
@@ -303,6 +307,8 @@ public class DeviceSupportService {
     @Transactional
     public int voidCodes(String rawMsisdn, String note, String agent, AuditContext ctx) {
         String msisdn = normalise(rawMsisdn);
+        // Behind any bind or code check on the number: it writes the number's codes too.
+        numberLock.lock(msisdn, now(), NumberLock.STAFF);
         int voided = otp.voidForNumber(msisdn);
         events.record(SecurityEventType.OTP_VOIDED, ActorType.SUPPORT, agent, msisdn, null,
                 b -> b.note(DeviceSecurityEventLog.truncate(note, 1000)).reason(String.valueOf(voided)));
@@ -350,7 +356,11 @@ public class DeviceSupportService {
                     + (d.coolingAt(now) ? " First confirmed on this phone in the last day (new-phone period ends "
                             + messages.time(d.getCoolingUntil(), now, false) + "); no lower limits apply." : "")
                     + sharedNote;
-            case NEW -> "This phone tried to sign in but was never confirmed. If the customer doesn't recognise it, "
+            case NEW -> DeviceEnforcement.REPLACED.equals(d.getStateReason())
+                    ? "Signed out earlier when another phone of this number signed in, and now asking for a code to "
+                    + "come back. Coming back signs the other phone out. If the customer isn't switching back to this "
+                    + "phone, block it (UNTIL_UNLOCKED)." + sharedNote
+                    : "This phone tried to sign in but was never confirmed. If the customer doesn't recognise it, "
                     + "block it (UNTIL_UNLOCKED)." + sharedNote;
             case PENDING_PIN -> "The code was confirmed; waiting for the PIN. If the customer has forgotten the PIN, "
                     + "direct them to PIN reset in the app." + sharedNote;
@@ -359,7 +369,12 @@ public class DeviceSupportService {
                     + ". If codes aren't arriving, check the counters and try the other channel." + sharedNote;
             case TEMP_BLOCKED -> tempBlockGuidance(d, until);
             case BANNED -> banGuidance(d, now);
-            case REVOKED -> "Removed from the account. Signing in on it again starts as a new phone, with a code.";
+            case REVOKED -> DeviceEnforcement.REPLACED.equals(d.getStateReason())
+                    ? "Signed out at " + messages.time(d.getStateChangedAt(), now, false) + " when another phone of "
+                    + "this number signed in (one phone per number). To use this phone again the customer signs in on "
+                    + "it with a code and then the PIN, which signs the other phone out. If they don't recognise the "
+                    + "phone that is signed in now, block that one (UNTIL_UNLOCKED)."
+                    : "Removed from the account. Signing in on it again starts as a new phone, with a code.";
         };
     }
 
@@ -370,7 +385,9 @@ public class DeviceSupportService {
             case "OTP_ATTEMPTS" -> "Paused" + lifts + " after too many wrong codes. You may unlock it now if the caller "
                     + "passes verification; the next sign-in still asks for a code.";
             case "VELOCITY" -> "Paused" + lifts + " after an unusual number of code requests — possibly someone else "
-                    + "trying this number. Verify the caller carefully before unlocking.";
+                    + "trying this number" + (properties.getTrust().isSingleDevice()
+                    ? ", or the customer switching between two phones (only one can be signed in at a time)" : "")
+                    + ". Verify the caller carefully before unlocking.";
             case "WRONG_PINS" -> "Paused" + lifts + ": a correct code was followed by wrong PINs until the PIN locked. "
                     + "Someone may hold the SIM but not the PIN. Verify carefully; suggest a PIN reset.";
             case "RISK" -> "Paused" + lifts + " because several risk signals fired at once (for example a new phone in "
@@ -436,7 +453,9 @@ public class DeviceSupportService {
             case DEVICE_TEMP_BLOCKED -> "Phone paused" + reason;
             case DEVICE_BANNED -> "Phone blocked" + reason;
             case DEVICE_UNLOCKED -> "Phone unlocked by " + e.getActorType();
-            case DEVICE_REVOKED -> "Phone removed by " + e.getActorType();
+            case DEVICE_REVOKED -> DeviceEnforcement.REPLACED.equals(e.getReason())
+                    ? "Signed out: another phone of this number signed in"
+                    : "Phone removed by " + e.getActorType();
             case DEVICE_TRUST_RESET -> "Phone reset to new by support";
             case BLOCK_LIFTED -> "Pause ended on its own" + reason;
             case INTEGRITY_HOLD_LIFTED -> "Security-check hold lifted";

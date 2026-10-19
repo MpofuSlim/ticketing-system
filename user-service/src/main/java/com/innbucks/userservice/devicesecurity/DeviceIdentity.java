@@ -69,8 +69,8 @@ public final class DeviceIdentity {
      * with it ("iPhone 15" rather than "Apple iPhone 15" is fine either way).
      */
     public static String shortLabel(String manufacturer, String model, String platform) {
-        String maker = capitalise(manufacturer);
-        String m = model == null ? "" : model.trim();
+        String maker = capitalise(oneLine(manufacturer));
+        String m = model == null ? "" : oneLine(model).trim();
         String label;
         if (m.isEmpty()) {
             label = maker.isEmpty() ? platformName(platform) + " phone" : maker + " phone";
@@ -88,12 +88,27 @@ public final class DeviceIdentity {
         String base = shortLabel(manufacturer, model, platform);
         String os = platformName(platform);
         if (os.isEmpty()) return base;
-        String v = osVersion == null ? "" : osVersion.trim();
+        String v = osVersion == null ? "" : oneLine(osVersion).trim();
         return truncate(base + " · " + os + (v.isEmpty() ? "" : " " + v), 120);
+    }
+
+    /**
+     * The app reports model, maker and OS version, so a label is the caller's text. A
+     * line break (or any control or line/paragraph separator) would cut a one-line
+     * message short — the WhatsApp sender drops everything after it, so a crafted model
+     * could hide "call InnBucks support" from a PHONE_REPLACED notice — or forge a line on
+     * a *569# menu; an invisible format character (a bidi override such as U+202E, a
+     * zero-width space) would make WhatsApp draw the rest of the message reversed. Each
+     * becomes a space and runs of spaces collapse, as {@code MfaService.cleanNote} does.
+     */
+    static String oneLine(String s) {
+        if (s == null) return null;
+        return s.replaceAll("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]", " ").replaceAll("\\s{2,}", " ");
     }
 
     private static String platformName(String platform) {
         if (platform == null) return "";
+        platform = oneLine(platform);
         return switch (platform.trim().toLowerCase(Locale.ROOT)) {
             case "android" -> "Android";
             case "ios" -> "iOS";

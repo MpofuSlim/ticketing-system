@@ -180,6 +180,20 @@ public class CustomerDevice {
         return otpVerifiedAt != null;
     }
 
+    /**
+     * Whether this phone proved the SIM with a code in THIS sign-in: it is
+     * PENDING_PIN and the code was verified no earlier than the move to PENDING_PIN.
+     * Exact because {@code verifyOtp} stamps {@code otpVerifiedAt} and the
+     * transition with one instant, while watch mode's {@code allow()} moves the
+     * state alone, so an old proof always predates it. A PIN re-issue only extends
+     * the grace and changes neither. One phone per number signs other phones out
+     * only on this proof, never on {@link #possessionVerified()}, which is sticky.
+     */
+    public boolean possessionProvedThisSignIn() {
+        return state == DeviceState.PENDING_PIN && otpVerifiedAt != null && stateChangedAt != null
+                && !otpVerifiedAt.isBefore(stateChangedAt);
+    }
+
     /** Whether the new-device cooling period is running at {@code now} (§8.6). */
     public boolean coolingAt(LocalDateTime now) {
         return coolingUntil != null && coolingUntil.isAfter(now);

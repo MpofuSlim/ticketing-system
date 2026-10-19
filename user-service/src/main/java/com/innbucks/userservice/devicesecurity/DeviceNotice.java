@@ -35,6 +35,12 @@ public record DeviceNotice(
         UNLOCKED_USSD,
         UNLOCKED_BY_SUPPORT,
         REVOKED,
-        PIN_SET
+        PIN_SET,
+        /**
+         * One phone per number: this phone bound and signed the number's other phone(s)
+         * out. Sent on EVERY channel, SMS first — the phone that just signed in chose the
+         * preferred one.
+         */
+        PHONE_REPLACED
     }
 }

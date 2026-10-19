@@ -93,10 +93,15 @@ public class CustomerDeviceService {
 
     public CustomerDevicesResponse list(Authentication auth, String headerInstallId) {
         String msisdn = callerMsisdn(auth);
-        String currentHash = headerInstallId == null || headerInstallId.isBlank() ? null
+        boolean onePhone = properties.getTrust().isSingleDevice();
+        String currentHash = onePhone
+                ? DeviceIdentity.hashInstallId(DeviceSignInService.requireHeaderInstallId(
+                        new DeviceSignInService.RequestMeta(null, headerInstallId, null, null)))
+                : headerInstallId == null || headerInstallId.isBlank() ? null
                 : DeviceIdentity.hashInstallId(headerInstallId);
         return tx.execute(s -> {
             LocalDateTime now = now();
+            if (onePhone) requireSignedInHere(msisdn, currentHash, now, true);
             List<CustomerDeviceView> out = new ArrayList<>();
             long trusted = 0;
             for (CustomerDevice d : devices.findByMsisdnOrderByLastSeenAtDesc(msisdn)) {
@@ -106,7 +111,7 @@ public class CustomerDeviceService {
                 // "Each bound device" (§5.6): an abandoned first attempt is noise, but the
                 // phone asking, and any blocked phone, are always shown.
                 if (d.getBoundAt() == null && !current && !d.getState().isStopped()) continue;
-                if (d.trustedAt(now)) trusted++;
+                if (enforcement.signedIn(d, now, false)) trusted++;
                 boolean wide = enforcement.activeWideBan(d.getInstallIdHash()).isPresent();
                 out.add(new CustomerDeviceView(d.getPublicId(), d.getLabel() == null
                         ? DeviceEnforcement.shortLabel(d) : d.getLabel(), d.getFirstSeenAt(), d.getLastSeenAt(),
@@ -132,9 +137,15 @@ public class CustomerDeviceService {
 
     // ---- DELETE /auth/devices/{deviceId} ---------------------------------------------
 
-    public String remove(Authentication auth, UUID deviceId) {
+    public String remove(Authentication auth, String headerInstallId, UUID deviceId) {
         String msisdn = callerMsisdn(auth);
+        boolean onePhone = properties.getTrust().isSingleDevice();
+        String callerHash = onePhone ? DeviceIdentity.hashInstallId(DeviceSignInService.requireHeaderInstallId(
+                new DeviceSignInService.RequestMeta(null, headerInstallId, null, null))) : null;
         return tx.execute(s -> {
+            // Removing needs the PIN as well as the SIM: a phone only in the grace after a code
+            // has proved the SIM alone.
+            if (onePhone) requireSignedInHere(msisdn, callerHash, now(), false);
             CustomerDevice d = devices.findByPublicIdAndMsisdn(deviceId, msisdn)
                     .filter(x -> x.getState() != DeviceState.REVOKED)
                     .orElseThrow(() -> new DeviceSecurityException(HttpStatus.NOT_FOUND, "device_not_found",
@@ -148,6 +159,19 @@ public class CustomerDeviceService {
                     "Removed by the customer in Your devices");
             return DeviceEnforcement.shortLabel(d);
         });
+    }
+
+    /**
+     * One phone per number: only the phone that is signed in manages the number's phones.
+     * The fleet session survives a phone being signed out by another (it is not DTX's), so
+     * without this a signed-out phone could list the new one and remove it with no code,
+     * over and over. The install id is never exposed, so a signed-out phone cannot borrow
+     * the signed-in one's.
+     */
+    private void requireSignedInHere(String msisdn, String installHash, LocalDateTime now, boolean withPinGrace) {
+        devices.findByMsisdnAndInstallIdHash(msisdn, installHash)
+                .filter(d -> enforcement.signedIn(d, now, withPinGrace))
+                .orElseThrow(DeviceSecurityException::deviceNotTrusted);
     }
 
     // ---- POST /auth/device/challenge (§5.5) ----------------------------------------
@@ -164,9 +188,8 @@ public class CustomerDeviceService {
         Result r = tx.execute(s -> {
             LocalDateTime now = now();
             CustomerDevice d = devices.findByMsisdnAndInstallIdHash(msisdn, hash)
-                    .filter(x -> x.trustedAt(now) || x.inPinGrace(now))
-                    .orElseThrow(() -> new DeviceSecurityException(HttpStatus.FORBIDDEN, "device_not_trusted",
-                            "This phone isn't signed in to your InnBucks. Please sign in again."));
+                    .filter(x -> enforcement.signedIn(x, now, true))
+                    .orElseThrow(DeviceSecurityException::deviceNotTrusted);
             CustomerSecurityProfile profile = profiles.findById(msisdn).orElse(null);
             boolean recentlyBound = d.getBoundAt() == null
                     || d.getBoundAt().isAfter(now.minus(properties.getTrust().getSessionStepUpWindow()));
@@ -217,16 +240,28 @@ public class CustomerDeviceService {
         if (!otp.msisdnOf(req.challengeId()).map(msisdn::equals).orElse(false)) {
             throw DeviceOtpService.gone(req.challengeId());
         }
-        VerifyOutcome v = tx.execute(s -> {
+        record Checked(VerifyOutcome outcome, boolean signedIn) {
+        }
+        Checked checked = tx.execute(s -> {
             VerifyOutcome outcome = otp.verify(req.challengeId(), req.otp(), hash, SESSION_PURPOSES, ActorType.CUSTOMER);
             if (outcome.status() == DeviceOtpService.VerifyStatus.VERIFIED) {
+                // The phone must still be signed in when the proof is minted: signed out by
+                // another phone (or blocked) after it asked, it gets no proof. The code is
+                // spent either way, so this commits and the refusal is thrown after.
+                LocalDateTime now = now();
+                if (devices.findByMsisdnAndInstallIdHash(msisdn, hash)
+                        .filter(x -> enforcement.signedIn(x, now, true)).isEmpty()) {
+                    return new Checked(outcome, false);
+                }
                 DeviceOtpChallenge c = outcome.challenge();
                 events.record(SecurityEventType.SESSION_STEP_UP_VERIFIED, ActorType.CUSTOMER, callerId(auth), msisdn,
                         null, b -> b.installIdHash(hash).reason(c.getSessionAction()).channel(
                                 c.getChannel() == null ? null : c.getChannel().name()));
             }
-            return outcome;
+            return new Checked(outcome, true);
         });
+        if (!checked.signedIn()) throw DeviceSecurityException.deviceNotTrusted();
+        VerifyOutcome v = checked.outcome();
         DeviceOtpChallenge c = v.challenge();
         switch (v.status()) {
             case VERIFIED -> {

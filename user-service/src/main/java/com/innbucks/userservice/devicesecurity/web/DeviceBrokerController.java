@@ -53,7 +53,10 @@ public class DeviceBrokerController {
                     PIN_ISSUE ticket). `SUCCESS` on a PENDING_PIN phone makes it TRUSTED and starts the 24-hour
                     new-phone cooling period; `LOCKED` after a correct OTP blocks the phone (someone holds the SIM but
                     not the PIN). Idempotent per ticket: a repeat report changes nothing and says `recorded: false`.
-                    Carries no PIN and no token. Header: `x-api-key` (broker).
+                    With one phone per number on, `SUCCESS` also signs the number's other phones out. A 503 means
+                    another sign-in for the number was being recorded at the same moment and nothing was recorded:
+                    report again (safe — idempotent per ticket). Carries no PIN and no token. Header: `x-api-key`
+                    (broker).
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Recorded",
@@ -71,6 +74,10 @@ public class DeviceBrokerController {
             @ApiResponse(responseCode = "404", description = "No such ticket",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "404 NOT_FOUND", "message": "No login ticket with that id.", "data": { "errorCode": "ticket_not_found", "ticketId": "tkt_3n8p1r5t7v9x2z4b6d8f0h2k4m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "Nothing was recorded; report again",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We can't complete this right now. Please try again shortly.", "data": { "errorCode": "temporarily_unavailable" } }
                             """)))
     })
     public ResponseEntity<ApiResult<LoginResultResponse>> loginResult(@RequestBody(required = false) LoginResultRequest body,
@@ -90,8 +97,10 @@ public class DeviceBrokerController {
                     ticket's signature and expiry, that its number equals the login's username, that its device equals
                     the request's x-device-id and that its purpose matches, then spends it — atomically, so a ticket
                     lifted from one phone can never authorise a second attempt. Forward only when `data.valid` is true.
-                    (The broker may instead verify the signature itself against the JWKS below, but single use can only
-                    be enforced here.) Header: `x-api-key` (broker).
+                    A ticket whose phone is no longer signed in — signed out by another phone of the number (one phone
+                    per number), blocked, or on a handset banned for every account — is refused `INVALID` and voided.
+                    (The broker may instead verify the signature itself against the JWKS below, but single use and that
+                    last check can only be enforced here.) Header: `x-api-key` (broker).
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "valid=true: forward; valid=false: refuse, and reason says why",

@@ -87,20 +87,25 @@ public class DeviceSecurityNotifier {
         LocalDateTime now = LocalDateTime.now(clock);
         List<OtpChannel> order = order(notice);
         String reference = "DTX-" + notice.type().name() + "-" + System.currentTimeMillis();
+        // A phone replacement goes out on every channel: the preferred one was chosen by
+        // the phone that just signed in, which is not necessarily the customer's.
+        boolean everyChannel = notice.type() == DeviceNotice.Type.PHONE_REPLACED;
+        boolean delivered = false;
         for (OtpChannel channel : order) {
             try {
                 deliver(notice.msisdn(), channel, messages.notice(notice, channel, now), reference);
                 metrics.notification(notice.type().name(), channel.name(), "sent");
                 log.info("Device-security notice {} sent via {} to {}", notice.type(), channel,
                         DeviceIdentity.logMask(notice.msisdn()));
-                return;
+                delivered = true;
+                if (!everyChannel) return;
             } catch (NotificationDeliveryException e) {
                 metrics.notification(notice.type().name(), channel.name(), "failed");
                 log.warn("Device-security notice {} via {} failed for {}: {}", notice.type(), channel,
                         DeviceIdentity.logMask(notice.msisdn()), e.getMessage());
             }
         }
-        metrics.notification(notice.type().name(), "all", "undelivered");
+        if (!delivered) metrics.notification(notice.type().name(), "all", "undelivered");
     }
 
     List<OtpChannel> order(DeviceNotice notice) {

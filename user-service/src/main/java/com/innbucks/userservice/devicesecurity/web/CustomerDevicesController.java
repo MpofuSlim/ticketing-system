@@ -56,7 +56,9 @@ public class CustomerDevicesController {
     @Operation(summary = "List my phones (§5.6)",
             description = "Each bound phone, the phone making the call (`current: true`) and any blocked phone. "
                     + "`status` is a plain-words line to print as-is. Never includes install ids, coordinates or "
-                    + "risk facts; `lastSeenNear` is a town name.")
+                    + "risk facts; `lastSeenNear` is a town name. With one phone per number on, only the phone that "
+                    + "is signed in may list the phones: send `x-device-id` (400 without it, 403 `device_not_trusted` "
+                    + "from a phone that was signed out).")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "The customer's phones",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -72,9 +74,17 @@ public class CustomerDevicesController {
                               }
                             }
                             """))),
+            @ApiResponse(responseCode = "400", description = "One phone per number on, and no x-device-id",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "400 BAD_REQUEST", "message": "The x-device-id header is required.", "data": { "errorCode": "invalid_request", "field": "x-device-id" } }
+                            """))),
             @ApiResponse(responseCode = "401", description = "No/invalid bearer, or missing/wrong broker x-api-key",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                            """))),
+            @ApiResponse(responseCode = "403", description = "One phone per number on, and this phone isn't the signed-in one",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "403 FORBIDDEN", "message": "This phone isn't signed in to your InnBucks. Please sign in again.", "data": { "errorCode": "device_not_trusted" } }
                             """)))
     })
     public ResponseEntity<ApiResult<CustomerDevicesResponse>> list(Authentication auth, HttpServletRequest request) {
@@ -89,11 +99,21 @@ public class CustomerDevicesController {
     @Operation(summary = "Remove a phone (§5.6)",
             description = "The phone's next silent renewal fails (within 15 minutes) and signing in on it again starts "
                     + "as a new phone, with a code. The customer is told by SMS/WhatsApp. A BLOCKED phone can't be "
-                    + "removed (that would dodge the block) — manage it on *569#.")
+                    + "removed (that would dodge the block) — manage it on *569#. With one phone per number on, only "
+                    + "the phone that is signed in may remove phones: send `x-device-id` (400 without it, 403 "
+                    + "`device_not_trusted` from a phone that was signed out).")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Removed",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "200 OK", "message": "Samsung SM-A155F was removed from your InnBucks.", "data": { "deviceId": "6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "removed": true } }
+                            """))),
+            @ApiResponse(responseCode = "400", description = "One phone per number on, and no x-device-id",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "400 BAD_REQUEST", "message": "The x-device-id header is required.", "data": { "errorCode": "invalid_request", "field": "x-device-id" } }
+                            """))),
+            @ApiResponse(responseCode = "403", description = "One phone per number on, and this phone isn't the signed-in one",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "403 FORBIDDEN", "message": "This phone isn't signed in to your InnBucks. Please sign in again.", "data": { "errorCode": "device_not_trusted" } }
                             """))),
             @ApiResponse(responseCode = "404", description = "Not one of this customer's phones",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -109,7 +129,7 @@ public class CustomerDevicesController {
                                                                            HttpServletRequest request) {
         signIn.requireEnabled();
         partnerKeys.require(PartnerKeyAuthorizer.Partner.BROKER, request);
-        String label = service.remove(auth, deviceId);
+        String label = service.remove(auth, request.getHeader(DeviceSecurityRequests.DEVICE_HEADER), deviceId);
         return ResponseEntity.ok(ApiResult.ok(label + " was removed from your InnBucks.",
                 java.util.Map.of("deviceId", deviceId, "removed", true)));
     }
@@ -177,7 +197,10 @@ public class CustomerDevicesController {
     @PreAuthorize("hasRole('CUSTOMER')")
     @Operation(summary = "In-session step-up: verify the code",
             description = "401 with attemptsLeft on a wrong code; 410 when the challenge is dead. On success, "
-                    + "`stepUpProof` is proof that this number re-proved possession on this phone just now.")
+                    + "`stepUpProof` is proof that this number re-proved possession on this phone just now. A correct "
+                    + "code from a phone that is no longer signed in (signed out by another phone of the number, "
+                    + "blocked, or on a handset banned for every account) is 403 `device_not_trusted`: the code is "
+                    + "spent and no proof is issued, so send the customer to sign in again.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Verified",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -186,6 +209,10 @@ public class CustomerDevicesController {
             @ApiResponse(responseCode = "401", description = "Wrong code",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "401 UNAUTHORIZED", "message": "That code isn't right. You have 2 attempts left.", "data": { "errorCode": "otp_incorrect", "challengeId": "chl_9d4f6h8k0m2p4r6t8v0x2z4b6c", "attemptsLeft": 2 } }
+                            """))),
+            @ApiResponse(responseCode = "403", description = "This phone is no longer signed in; the code was spent and no proof issued",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "403 FORBIDDEN", "message": "This phone isn't signed in to your InnBucks. Please sign in again.", "data": { "errorCode": "device_not_trusted" } }
                             """)))
     })
     public ResponseEntity<ApiResult<StepUpVerifyResponse>> verifyStepUp(
