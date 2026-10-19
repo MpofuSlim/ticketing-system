@@ -33,14 +33,18 @@ import com.innbucks.userservice.devicesecurity.repository.CustomerSecurityProfil
 import com.innbucks.userservice.devicesecurity.repository.DeviceLoginTicketRepository;
 import com.innbucks.userservice.devicesecurity.repository.DeviceSecurityEventRepository;
 import com.innbucks.userservice.devicesecurity.repository.SignInLocationRepository;
+import com.innbucks.userservice.devicesecurity.repository.TicketRef;
 import com.innbucks.userservice.util.MsisdnValidator;
 import io.jsonwebtoken.Claims;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.ConcurrencyFailureException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
@@ -89,24 +93,34 @@ public class DeviceSignInService {
 
     private enum Kind { TOKEN, OTP, TEMP_BLOCKED, BANNED, RATE_LIMITED }
 
+    /**
+     * @param signsOutOthers TOKEN only: the PIN about to be typed binds a phone that will
+     *                       sign out another phone the customer has been using (one phone
+     *                       per number), so the line says so
+     */
     private record Decided(Kind kind, CustomerDevice device, DeviceOtpChallenge challenge, List<OtpChannel> channels,
                            OtpChannel defaultChannel, String reason, String supportRef, LocalDateTime blockedUntil,
-                           boolean ussdUnlock, long retryAfter) {
+                           boolean ussdUnlock, long retryAfter, boolean signsOutOthers) {
         static Decided token(CustomerDevice d) {
-            return new Decided(Kind.TOKEN, d, null, null, null, null, null, null, false, 0);
+            return new Decided(Kind.TOKEN, d, null, null, null, null, null, null, false, 0, false);
         }
 
         static Decided banned(CustomerDevice d, String reason, boolean ussdUnlock, String ref) {
-            return new Decided(Kind.BANNED, d, null, null, null, reason, ref, null, ussdUnlock, 0);
+            return new Decided(Kind.BANNED, d, null, null, null, reason, ref, null, ussdUnlock, 0, false);
         }
 
         static Decided tempBlocked(CustomerDevice d) {
             return new Decided(Kind.TEMP_BLOCKED, d, null, null, null, d.getStateReason(), d.getSupportRef(),
-                    d.getBlockedUntil(), false, 0);
+                    d.getBlockedUntil(), false, 0, false);
         }
 
         static Decided rateLimited(long retryAfter) {
-            return new Decided(Kind.RATE_LIMITED, null, null, null, null, null, null, null, false, retryAfter);
+            return new Decided(Kind.RATE_LIMITED, null, null, null, null, null, null, null, false, retryAfter, false);
+        }
+
+        Decided signingOutOthers() {
+            return new Decided(kind, device, challenge, channels, defaultChannel, reason, supportRef, blockedUntil,
+                    ussdUnlock, retryAfter, true);
         }
 
         Decision decision() {
@@ -129,6 +143,7 @@ public class DeviceSignInService {
     private final RiskEngine engine;
     private final DeviceOtpService otp;
     private final DeviceEnforcement enforcement;
+    private final NumberLock numberLock;
     private final DeviceSecurityEventLog events;
     private final DeviceSecurityMetrics metrics;
     private final StagingClientServiceClient staging;
@@ -150,6 +165,7 @@ public class DeviceSignInService {
                                RiskEngine engine,
                                DeviceOtpService otp,
                                DeviceEnforcement enforcement,
+                               NumberLock numberLock,
                                DeviceSecurityEventLog events,
                                DeviceSecurityMetrics metrics,
                                StagingClientServiceClient staging,
@@ -170,6 +186,7 @@ public class DeviceSignInService {
         this.engine = engine;
         this.otp = otp;
         this.enforcement = enforcement;
+        this.numberLock = numberLock;
         this.events = events;
         this.metrics = metrics;
         this.staging = staging;
@@ -217,7 +234,7 @@ public class DeviceSignInService {
         return switch (d.kind()) {
             case TOKEN -> {
                 Answer<TokenDecision> token = issueToken(d.device(), msisdn, installId, installHash, purpose, context,
-                        false, meta.ip());
+                        false, meta.ip(), d.signsOutOthers() ? messages.tokenLineSigningOutOthers() : messages.tokenLine());
                 yield new Answer<>(token.body(), token.message());
             }
             case OTP -> new Answer<>(new OtpRequiredDecision(Decision.OTP_REQUIRED, d.challenge().getId(), d.channels(),
@@ -263,6 +280,11 @@ public class DeviceSignInService {
         RiskEngine.Assessment a = engine.assess(input(req, purpose, context, device, profile, threats, meta.appCheck(), now));
         touch(device, req, meta, now, true);
         Decided result = apply(a, device, profile, purpose, meta, req.requestId(), now);
+        // A PIN retry inside the grace that a fresh code opened: the bind it leads to still
+        // signs the number's other phone out, so the line still says so.
+        if (result.kind() == Kind.TOKEN && enforcement.wouldSignOutAPhoneInUse(device)) {
+            result = result.signingOutOthers();
+        }
         logDecision(result, a, device, msisdn, purpose, context, req, meta, null);
         return result;
     }
@@ -368,13 +390,16 @@ public class DeviceSignInService {
             device.transition(DeviceState.STEP_UP, reason.name(), ActorType.SYSTEM.name(), now);
             devices.save(device);
         } else if (device.getState() == DeviceState.REVOKED) {
-            device.transition(DeviceState.NEW, null, ActorType.SYSTEM.name(), now);
+            // A phone another phone of its number signed out keeps saying so while it asks
+            // for a code to come back: that is exactly when the customer calls support.
+            device.transition(DeviceState.NEW, DeviceEnforcement.REPLACED.equals(device.getStateReason())
+                    ? DeviceEnforcement.REPLACED : null, ActorType.SYSTEM.name(), now);
             devices.save(device);
         }
         List<OtpChannel> channels = otp.channels(device.getMsisdn());
         return new Decided(Kind.OTP, device, opened.challenge(), channels,
                 otp.defaultChannel(profile.getPreferredChannel(), channels), opened.challenge().getReason(),
-                null, null, false, 0);
+                null, null, false, 0, false);
     }
 
     /** TOKEN. A device that is neither trusted nor inside its PIN grace (watch mode only) is made PENDING_PIN. */
@@ -445,29 +470,36 @@ public class DeviceSignInService {
         requireEnabled();
         String installId = requireHeaderInstallId(meta);
         String installHash = DeviceIdentity.hashInstallId(installId);
-        record Verified(VerifyOutcome outcome, CustomerDevice device) {
+        record Verified(VerifyOutcome outcome, CustomerDevice device, boolean signsOutOthers) {
         }
         Verified v = tx.execute(s -> {
+            LocalDateTime now = now();
+            // The number's lock first, read by a scalar query so the challenge is loaded only
+            // under it: a bind that signs this phone out voids its codes, and this must not
+            // verify a copy read before that. Only a live challenge takes it.
+            CustomerSecurityProfile locked = otp.liveMsisdnOf(req.challengeId(), now)
+                    .map(m -> numberLock.lock(m, now, NumberLock.VERIFY)).orElse(null);
             VerifyOutcome outcome = otp.verify(req.challengeId(), req.otp(), installHash, SIGN_IN_CHALLENGE_PURPOSES,
                     ActorType.APP);
             DeviceOtpChallenge c = outcome.challenge();
-            if (c == null) return new Verified(outcome, null);
+            if (c == null) return new Verified(outcome, null, false);
             CustomerDevice device = devices.findById(c.getCustomerDeviceId()).orElse(null);
-            if (device == null) return new Verified(outcome, null);
-            LocalDateTime now = now();
+            if (device == null) return new Verified(outcome, null, false);
+            boolean signsOutOthers = false;
             switch (outcome.status()) {
                 case VERIFIED -> {
+                    // One instant for the move and the proof: possessionProvedThisSignIn() relies on it.
                     device.transition(DeviceState.PENDING_PIN, null, ActorType.APP.name(), now);
                     device.setPinGraceUntil(now.plus(properties.getTrust().getPendingPinGrace()));
                     device.setConsecutiveDeadChallenges(0);
                     device.setOtpVerifiedAt(now);
                     devices.save(device);
-                    CustomerSecurityProfile profile = profile(device.getMsisdn(), now);
-                    if (c.getChannel() != null) {
-                        profile.setPreferredChannel(c.getChannel());
-                        profile.setUpdatedAt(now);
-                        profiles.save(profile);
+                    if (c.getChannel() != null && locked != null) {
+                        locked.setPreferredChannel(c.getChannel());
+                        locked.setUpdatedAt(now);
+                        profiles.save(locked);
                     }
+                    signsOutOthers = enforcement.wouldSignOutAPhoneInUse(device);
                 }
                 case DEAD -> {
                     device.setConsecutiveDeadChallenges(device.getConsecutiveDeadChallenges() + 1);
@@ -483,14 +515,15 @@ public class DeviceSignInService {
                     // WRONG / GONE / NOT_SENT change nothing on the device.
                 }
             }
-            return new Verified(outcome, device);
+            return new Verified(outcome, device, signsOutOthers);
         });
 
         DeviceOtpChallenge c = v.outcome().challenge();
         switch (v.outcome().status()) {
             case VERIFIED -> {
                 return issueToken(v.device(), c.getMsisdn(), installId, installHash, c.getPurpose(),
-                        SignInContext.SIGN_IN, true, meta.ip());
+                        SignInContext.SIGN_IN, true, meta.ip(),
+                        v.signsOutOthers() ? messages.tokenLineSigningOutOthers() : messages.tokenLine());
             }
             case WRONG -> throw new DeviceSecurityException(HttpStatus.UNAUTHORIZED, "otp_incorrect",
                     "That code isn't right. You have " + c.getAttemptsLeft()
@@ -511,7 +544,7 @@ public class DeviceSignInService {
 
     private Answer<TokenDecision> issueToken(CustomerDevice device, String msisdn, String installId, String installHash,
                                              SignInPurpose purpose, SignInContext context, boolean otpVerified,
-                                             String ip) {
+                                             String ip, String line) {
         if (!signer.isConfigured()) {
             log.error("Device security cannot issue a TOKEN: device-security.ticket.private-key is not provisioned");
             throw DeviceSecurityException.tryAgainShortly();
@@ -553,49 +586,67 @@ public class DeviceSignInService {
         LimitsView limits = new LimitsView(false, null);
         TokenDecision body = new TokenDecision(Decision.TOKEN,
                 new ClientServiceTokenView(token.accessToken(), token.expiresAt()), ticket, trust, limits);
-        return new Answer<>(body, messages.tokenLine());
+        return new Answer<>(body, line);
     }
 
     // =====================================================================================
     // Broker: POST /device-security/broker/login-result (§5.4)
     // =====================================================================================
 
+    /**
+     * Records the broker's result, under the number's {@link NumberLock}: a successful
+     * login binds the phone, and with one phone per number the bind signs the number's
+     * other phones out, so two phones finishing together must queue rather than both win
+     * (the second finds its own ticket voided by the first's sign-out and binds nothing).
+     * A lock wait that runs out, a deadlock or a version clash with a writer that takes no
+     * lock (a USSD or call-center block) is retried once with fresh reads.
+     */
     public LoginResultResponse recordLoginResult(LoginResultRequest req) {
         requireEnabled();
         LoginOutcome outcome = LoginOutcome.valueOf(req.outcome());
-        LoginResultResponse response = tx.execute(s -> {
-            LocalDateTime now = now();
-            DeviceLoginTicket t = tickets.findById(req.ticketId()).orElse(null);
-            if (t == null) {
-                throw new DeviceSecurityException(HttpStatus.NOT_FOUND, "ticket_not_found",
-                        "No login ticket with that id.", Map.of("ticketId", req.ticketId()), null);
+        for (int attempt = 1; ; attempt++) {
+            try {
+                LoginResultResponse response = tx.execute(s -> recordLoginResultOnce(req, outcome));
+                if (response.recorded()) metrics.loginResult(outcome);
+                return response;
+            } catch (ConcurrencyFailureException e) {
+                if (attempt >= 2) throw e;
+                log.info("Login result for ticket {} clashed with a concurrent change ({}); retrying once",
+                        req.ticketId(), e.getClass().getSimpleName());
             }
-            CustomerDevice device = t.getCustomerDeviceId() == null ? null
-                    : devices.findById(t.getCustomerDeviceId()).orElse(null);
-            if (t.getOutcome() != null) {
-                return new LoginResultResponse(t.getJti(), t.getOutcome().name(), false,
-                        device == null ? null : device.getState().name());
-            }
-            t.setOutcome(outcome);
-            t.setOutcomeAt(now);
-            t.setStagingCode(DeviceSecurityEventLog.truncate(req.stagingCode(), 32));
-            tickets.save(t);
-            metrics.loginResult(outcome);
-            events.record(SecurityEventType.LOGIN_RESULT, ActorType.BROKER, null, t.getMsisdn(), device,
-                    b -> b.installIdHash(t.getInstallIdHash()).reason(outcome.name()).purpose(t.getPurpose().name())
-                            .context(t.getContext().name()).note(req.stagingCode() == null ? null
-                                    : "stagingCode " + DeviceSecurityEventLog.truncate(req.stagingCode(), 32)));
-            if (device != null && t.getVoidedAt() == null) {
-                applyLoginResult(t, device, outcome, now);
-            }
-            return new LoginResultResponse(t.getJti(), outcome.name(), true,
-                    device == null ? null : device.getState().name());
-        });
-        return response;
+        }
     }
 
-    private void applyLoginResult(DeviceLoginTicket t, CustomerDevice device, LoginOutcome outcome, LocalDateTime now) {
-        CustomerSecurityProfile profile = profile(t.getMsisdn(), now);
+    private LoginResultResponse recordLoginResultOnce(LoginResultRequest req, LoginOutcome outcome) {
+        LocalDateTime now = now();
+        TicketRef ref = tickets.findRef(req.ticketId()).orElseThrow(() -> new DeviceSecurityException(
+                HttpStatus.NOT_FOUND, "ticket_not_found", "No login ticket with that id.",
+                Map.of("ticketId", req.ticketId()), null));
+        CustomerSecurityProfile profile = numberLock.lock(ref.msisdn(), now, NumberLock.BROKER);
+        // A compare-and-set, not a load-and-save: it locks the ticket before any phone row,
+        // and never writes back a stale copy over a concurrent void.
+        int recorded = tickets.recordOutcome(req.ticketId(), outcome, now,
+                DeviceSecurityEventLog.truncate(req.stagingCode(), 32));
+        DeviceLoginTicket t = tickets.findById(req.ticketId()).orElseThrow();
+        CustomerDevice device = t.getCustomerDeviceId() == null ? null
+                : devices.findById(t.getCustomerDeviceId()).orElse(null);
+        if (recorded == 0) {
+            return new LoginResultResponse(t.getJti(), t.getOutcome().name(), false,
+                    device == null ? null : device.getState().name());
+        }
+        events.record(SecurityEventType.LOGIN_RESULT, ActorType.BROKER, null, t.getMsisdn(), device,
+                b -> b.installIdHash(t.getInstallIdHash()).reason(outcome.name()).purpose(t.getPurpose().name())
+                        .context(t.getContext().name()).note(req.stagingCode() == null ? null
+                                : "stagingCode " + DeviceSecurityEventLog.truncate(req.stagingCode(), 32)));
+        if (device != null && t.getVoidedAt() == null) {
+            applyLoginResult(t, device, profile, outcome, now);
+        }
+        return new LoginResultResponse(t.getJti(), outcome.name(), true,
+                device == null ? null : device.getState().name());
+    }
+
+    private void applyLoginResult(DeviceLoginTicket t, CustomerDevice device, CustomerSecurityProfile profile,
+                                  LoginOutcome outcome, LocalDateTime now) {
         switch (outcome) {
             case SUCCESS -> {
                 if (t.getPurpose() == SignInPurpose.PIN_ISSUE) {
@@ -611,6 +662,13 @@ public class DeviceSignInService {
                     }
                     publisher.publishEvent(new DeviceNotice(DeviceNotice.Type.PIN_SET, t.getMsisdn(),
                             DeviceEnforcement.shortLabel(device), now, null, null, profile.getPreferredChannel(), false));
+                    return;
+                }
+                if (enforcement.activeWideBan(device.getInstallIdHash()).isPresent()) {
+                    // Banned for every account after its ticket was issued: never trusted, and
+                    // never allowed to sign the number's other phones out.
+                    log.warn("Login result for a handset banned on every account not applied msisdn={} device={}",
+                            DeviceIdentity.logMask(t.getMsisdn()), device.getPublicId());
                     return;
                 }
                 if (device.getState() == DeviceState.PENDING_PIN) {
@@ -686,6 +744,13 @@ public class DeviceSignInService {
         }
         String failure = tx.execute(s -> {
             LocalDateTime now = now();
+            TicketRef ref = tickets.findRef(jti).orElse(null);
+            if (ref != null && !holderStillSignedIn(ref)) {
+                // Signed out by another phone, blocked, or banned on every account since the
+                // ticket was minted (a ticket minted just after a sign-out escapes its void).
+                tickets.voidUnspent(jti, now);
+                return SIGNED_OUT;
+            }
             if (tickets.redeem(jti, now) == 1) {
                 DeviceLoginTicket t = tickets.findById(jti).orElseThrow();
                 events.record(SecurityEventType.TICKET_REDEEMED, ActorType.BROKER, null, t.getMsisdn(), null,
@@ -695,18 +760,46 @@ public class DeviceSignInService {
             return tickets.findById(jti).map(t -> t.getVoidedAt() != null ? "INVALID"
                     : t.getRedeemedAt() != null ? "ALREADY_USED" : "EXPIRED").orElse("INVALID");
         });
+        if (SIGNED_OUT.equals(failure)) {
+            // The broker sees INVALID, the reason it already handles; the log says why.
+            return rejected(jti, purpose, "INVALID", req, "phone no longer signed in");
+        }
         if (failure != null) {
             return rejected(jti, purpose, failure, req);
         }
         return new TicketRedeemResponse(true, jti, purpose, null);
     }
 
+    /** Internal redeem outcome: the ticket's phone is no longer allowed to sign in. */
+    private static final String SIGNED_OUT = "SIGNED_OUT";
+
+    /**
+     * Whether the phone a ticket was minted for may still complete its login. Its STATE is
+     * read now — signed out by another phone (REVOKED, or NEW on its way back), stepped up,
+     * stopped, or a handset banned on every account all refuse — but its trust window and
+     * PIN grace are judged as they were when the ticket was minted, where every TOKEN leaves
+     * them open: a PIN typed in the last seconds of the grace, or of a trust window, must
+     * not cost the customer another code. A LOOKUP ticket names no phone and binds nothing.
+     */
+    private boolean holderStillSignedIn(TicketRef ref) {
+        if (enforcement.activeWideBan(ref.installIdHash()).isPresent()) return false;
+        if (ref.customerDeviceId() == null) return true;
+        return devices.findById(ref.customerDeviceId())
+                .map(d -> enforcement.signedIn(d, ref.issuedAt(), true)).orElse(false);
+    }
+
     private TicketRedeemResponse rejected(String jti, String purpose, String reason, TicketRedeemRequest req) {
+        return rejected(jti, purpose, reason, req, null);
+    }
+
+    private TicketRedeemResponse rejected(String jti, String purpose, String reason, TicketRedeemRequest req,
+                                          String why) {
         tx.executeWithoutResult(s -> events.record(SecurityEventType.TICKET_REJECTED, ActorType.BROKER, null,
                 MsisdnValidator.normalizeToE164(req.msisdn(), deploymentCountry).orElse(null), null,
                 b -> b.installIdHash(DeviceIdentity.hashInstallId(req.installId())).reason(reason).purpose(purpose)
-                        .note(jti == null ? null : "ticket " + jti)));
-        log.warn("Login ticket refused reason={} msisdn={}", reason, DeviceIdentity.logMask(req.msisdn()));
+                        .note(jti == null ? null : "ticket " + jti + (why == null ? "" : ": " + why))));
+        log.warn("Login ticket refused reason={}{} msisdn={}", reason, why == null ? "" : " (" + why + ")",
+                DeviceIdentity.logMask(req.msisdn()));
         return new TicketRedeemResponse(false, jti, purpose, reason);
     }
 
@@ -720,14 +813,24 @@ public class DeviceSignInService {
     // helpers
     // =====================================================================================
 
+    /**
+     * Remembers the channel the customer chose. Bookkeeping after the code has already
+     * gone out, so it never fails the send: under the number's lock (fresh read, no
+     * version clash with a bind), and any database failure is logged, not thrown.
+     */
     private void rememberChannel(OtpSendResponse sent) {
-        tx.executeWithoutResult(s -> otpChallengeMsisdn(sent.challengeId()).ifPresent(msisdn -> {
-            LocalDateTime now = now();
-            CustomerSecurityProfile p = profile(msisdn, now);
-            p.setPreferredChannel(sent.channel());
-            p.setUpdatedAt(now);
-            profiles.save(p);
-        }));
+        try {
+            tx.executeWithoutResult(s -> otpChallengeMsisdn(sent.challengeId()).ifPresent(msisdn -> {
+                LocalDateTime now = now();
+                CustomerSecurityProfile p = numberLock.lock(msisdn, now, NumberLock.CUSTOMER);
+                p.setPreferredChannel(sent.channel());
+                p.setUpdatedAt(now);
+                profiles.save(p);
+            }));
+        } catch (DataAccessException | TransactionException e) {
+            log.warn("Could not remember the OTP channel for challenge {}: {}", sent.challengeId(),
+                    e.getClass().getSimpleName());
+        }
     }
 
     private Optional<String> otpChallengeMsisdn(String challengeId) {
@@ -770,6 +873,11 @@ public class DeviceSignInService {
             features.put("verdict", a.verdict().name());
         }
         features.put("watchMode", a != null && returned != evaluated);
+        if (device != null && DeviceEnforcement.REPLACED.equals(device.getStateReason())) {
+            // A phone signed out by another phone of its number: lets the fraud desk tell
+            // phone switches from other first sign-ins.
+            features.put("replacedPhone", true);
+        }
         if (req.integrity() != null) {
             features.put("integritySource", req.integrity().source());
             if (req.integrity().threats() != null && !req.integrity().threats().isEmpty()) {

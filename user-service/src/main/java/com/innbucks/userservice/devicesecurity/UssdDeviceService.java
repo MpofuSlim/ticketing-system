@@ -181,13 +181,17 @@ public class UssdDeviceService {
     @Transactional
     public UssdDevicesResponse active(UssdDevicesRequest req) {
         String msisdn = normalise(req.msisdn());
+        LocalDateTime now = now();
         List<UssdDevice> out = new ArrayList<>();
         StringBuilder menu = new StringBuilder(messages.ussdChooseToBlock());
         int option = 0;
         for (CustomerDevice d : devices.findByMsisdnOrderByLastSeenAtDesc(msisdn)) {
             if (d.getState() == DeviceState.BANNED) continue;
             String label = DeviceEnforcement.shortLabel(d);
-            String menuLabel = messages.ussdActiveMenuLabel(label, d.getLastSeenAt());
+            // With one phone per number the menu lists the phone in the customer's hand beside
+            // the ones it signed out; mark it. Off, the menu reads as it always has.
+            String menuLabel = messages.ussdActiveMenuLabel(label, d.getLastSeenAt(),
+                    properties.getTrust().isSingleDevice() && enforcement.signedIn(d, now, false));
             option++;
             out.add(new UssdDevice(option, d.getPublicId(), label, d.getState().name(), d.getBlockedAt(),
                     d.getBlockedUntil(), true, menuLabel));

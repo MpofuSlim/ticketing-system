@@ -159,6 +159,15 @@ public class DeviceSecurityProperties {
          * Staging's PIN lock-out stays the authority on wrong PINs.
          */
         private Duration pendingPinGrace = Duration.ofMinutes(10);
+        /**
+         * One phone per number. On: a phone that proves the SIM with a code in this
+         * sign-in and then the PIN signs every other phone of the number out of
+         * InnBucks; to come back, a signed-out phone needs a code and the PIN, which
+         * signs this one out in turn. Needs {@code enforce.otp}: without a fresh code
+         * nothing is ever signed out. Off: several phones per number, capped only by
+         * {@link #maxTrustedDevices}.
+         */
+        private boolean singleDevice = false;
         /** More trusted devices than this = OTP, and the app shows the list to tidy. */
         private int maxTrustedDevices = 3;
         /** A device bound to more customers than this is the mule-farm pattern (§8.5, §17). */

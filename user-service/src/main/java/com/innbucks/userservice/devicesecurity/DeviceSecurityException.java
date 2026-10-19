@@ -63,6 +63,12 @@ public class DeviceSecurityException extends RuntimeException {
                 "We can't complete this right now. Please try again shortly.");
     }
 
+    /** The calling phone is not the number's signed-in phone (trusted, or in the PIN grace after a code). */
+    public static DeviceSecurityException deviceNotTrusted() {
+        return new DeviceSecurityException(HttpStatus.FORBIDDEN, "device_not_trusted",
+                "This phone isn't signed in to your InnBucks. Please sign in again.");
+    }
+
     public static DeviceSecurityException badRequest(String field, String message) {
         return new DeviceSecurityException(HttpStatus.BAD_REQUEST, "invalid_request", message,
                 field == null ? null : Map.of("field", field), null);

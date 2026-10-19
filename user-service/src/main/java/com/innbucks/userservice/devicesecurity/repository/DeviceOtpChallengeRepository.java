@@ -19,6 +19,18 @@ public interface DeviceOtpChallengeRepository extends JpaRepository<DeviceOtpCha
 
     List<DeviceOtpChallenge> findByMsisdnAndStatus(String msisdn, ChallengeStatus status);
 
+    /** The number a challenge belongs to, without loading (and caching) the challenge itself. */
+    @Query("select c.msisdn from DeviceOtpChallenge c where c.id = :id")
+    Optional<String> findMsisdnById(@Param("id") String id);
+
+    /** As {@link #findMsisdnById}, only while the challenge is still open and unexpired. */
+    @Query("""
+            select c.msisdn from DeviceOtpChallenge c
+            where c.id = :id and c.status = com.innbucks.userservice.devicesecurity.ChallengeStatus.OPEN
+              and c.expiresAt > :now
+            """)
+    Optional<String> findLiveMsisdnById(@Param("id") String id, @Param("now") LocalDateTime now);
+
     long countByMsisdnAndCreatedAtAfter(String msisdn, LocalDateTime since);
 
     long countByInstallIdHashAndCreatedAtAfter(String installIdHash, LocalDateTime since);

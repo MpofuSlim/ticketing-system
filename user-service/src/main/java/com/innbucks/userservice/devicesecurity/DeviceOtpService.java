@@ -232,7 +232,9 @@ public class DeviceOtpService {
         } else {
             try {
                 notifier.sendOtp(c.getMsisdn(), channel,
-                        messages.otp(p.code(), properties.getOtp().getCodeTtl().toMinutes(), channel),
+                        messages.otp(p.code(), properties.getOtp().getCodeTtl().toMinutes(), channel,
+                                properties.getTrust().isSingleDevice()
+                                        && DeviceSignInService.SIGN_IN_CHALLENGE_PURPOSES.contains(c.getPurpose())),
                         "DTX-OTP-" + c.getId());
             } catch (NotificationDeliveryException e) {
                 downUntil.put(channel, now().plus(properties.getOtp().getChannelDownFor()));
@@ -351,9 +353,11 @@ public class DeviceOtpService {
             metrics.fraudDeskAlert("otp_relay");
         }
         boolean match = sameDevice && constantTimeEquals(c.getCodeHash(), otpHasher.hash(code));
+        // Each outcome is flushed at once, so the challenge row is locked before the caller
+        // writes the phone — the order (codes, then phone) every block, ban and sign-out uses.
         if (match) {
             c.close(ChallengeStatus.VERIFIED, now);
-            challenges.save(c);
+            challenges.saveAndFlush(c);
             events.record(SecurityEventType.OTP_VERIFIED, actor, null, c.getMsisdn(), null,
                     b -> b.installIdHash(c.getInstallIdHash()).channel(name(c.getChannel()))
                             .purpose(c.getPurpose().name()).reason(c.getReason()));
@@ -363,23 +367,33 @@ public class DeviceOtpService {
         c.setAttemptsLeft(Math.max(0, c.getAttemptsLeft() - 1));
         if (c.getAttemptsLeft() == 0) {
             c.close(ChallengeStatus.DEAD, now);
-            challenges.save(c);
+            challenges.saveAndFlush(c);
             events.record(SecurityEventType.OTP_CHALLENGE_DEAD, actor, null, c.getMsisdn(), null,
                     b -> b.installIdHash(c.getInstallIdHash()).channel(name(c.getChannel())));
             metrics.otp("dead", c.getChannel());
             return new VerifyOutcome(VerifyStatus.DEAD, c);
         }
-        challenges.save(c);
+        challenges.saveAndFlush(c);
         events.record(SecurityEventType.OTP_WRONG, actor, null, c.getMsisdn(), null,
                 b -> b.installIdHash(c.getInstallIdHash()).channel(name(c.getChannel())));
         metrics.otp("wrong", c.getChannel());
         return new VerifyOutcome(VerifyStatus.WRONG, c);
     }
 
-    /** The number a challenge belongs to. */
+    /**
+     * The number a challenge belongs to. A scalar read: it leaves no challenge in the
+     * caller's persistence context, so a caller that then takes the {@link NumberLock}
+     * reads the challenge fresh.
+     */
     @Transactional(readOnly = true)
     public Optional<String> msisdnOf(String challengeId) {
-        return challenges.findById(challengeId).map(DeviceOtpChallenge::getMsisdn);
+        return challenges.findMsisdnById(challengeId);
+    }
+
+    /** As {@link #msisdnOf}, only for a challenge that is still open and unexpired. */
+    @Transactional(readOnly = true)
+    public Optional<String> liveMsisdnOf(String challengeId, LocalDateTime now) {
+        return challenges.findLiveMsisdnById(challengeId, now);
     }
 
     // ---- void ----------------------------------------------------------------------

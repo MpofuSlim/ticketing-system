@@ -59,6 +59,8 @@ public class DeviceSignInController {
                     * **BANNED** — show `message`; when `data.ussdUnlock` is true add a button that dials `data.ussdCode`.
 
                     `message` is the neutral line to display; `data.reason` is for logs only and must never be shown.
+                    With one phone per number on, a TOKEN for a phone that has just confirmed a code (a PIN retry)
+                    says so when the PIN will sign another phone of the number out.
                     Headers: `x-api-key` (broker), `x-device-id`, optional `x-innbucks-app-check`
                     (valid | absent | invalid) and `x-forwarded-for` (the phone's address).
                     """,
@@ -79,6 +81,19 @@ public class DeviceSignInController {
                                         "clientService": { "accessToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjbGllbnQtc2VydmljZSJ9.sig", "expiresAt": "2026-09-29T12:10:12+02:00" },
                                         "loginTicket": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImR0eC10aWNrZXQtMSJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTEyIn0.sig",
                                         "trust": { "deviceId": "0f8d2c3a-5b6e-4f71-8a9b-0c1d2e3f4a5b", "state": "TRUSTED", "trustedUntil": "2026-12-28T11:58:12+02:00", "newDevice": false },
+                                        "limits": { "cooling": false, "coolingUntil": null }
+                                      }
+                                    }
+                                    """),
+                            @ExampleObject(name = "TOKEN (PIN retry; another phone will be signed out)", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Enter your PIN to continue. Any other phone will be signed out of InnBucks.",
+                                      "data": {
+                                        "decision": "TOKEN",
+                                        "clientService": { "accessToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjbGllbnQtc2VydmljZSJ9.sig", "expiresAt": "2026-09-29T12:10:12+02:00" },
+                                        "loginTicket": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImR0eC10aWNrZXQtMSJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTEyIn0.sig",
+                                        "trust": { "deviceId": "0f8d2c3a-5b6e-4f71-8a9b-0c1d2e3f4a5b", "state": "PENDING_PIN", "trustedUntil": null, "newDevice": true },
                                         "limits": { "cooling": false, "coolingUntil": null }
                                       }
                                     }
@@ -218,10 +233,12 @@ public class DeviceSignInController {
                     PENDING_PIN; it becomes TRUSTED only when the broker reports a successful user login for the
                     ticket. A wrong code answers 401 with attemptsLeft; the attempt that uses the last one answers 410
                     and the customer starts again at /auth/client-service. Headers: `x-api-key`, `x-device-id`.
+                    With one phone per number on, `message` also warns when the PIN about to be typed signs another
+                    phone of the number out ("TOKEN (another phone will be signed out)"); show `message` as sent.
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Verified — the TOKEN decision",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                    content = @Content(mediaType = "application/json", examples = {@ExampleObject(name = "TOKEN", value = """
                             {
                               "code": "200 OK",
                               "message": "Enter your PIN to continue.",
@@ -233,7 +250,19 @@ public class DeviceSignInController {
                                 "limits": { "cooling": false, "coolingUntil": null }
                               }
                             }
-                            """))),
+                            """), @ExampleObject(name = "TOKEN (another phone will be signed out)", value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Enter your PIN to continue. Any other phone will be signed out of InnBucks.",
+                              "data": {
+                                "decision": "TOKEN",
+                                "clientService": { "accessToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjbGllbnQtc2VydmljZSJ9.sig", "expiresAt": "2026-09-29T12:10:12+02:00" },
+                                "loginTicket": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImR0eC10aWNrZXQtMSJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTEyIn0.sig",
+                                "trust": { "deviceId": "0f8d2c3a-5b6e-4f71-8a9b-0c1d2e3f4a5b", "state": "PENDING_PIN", "trustedUntil": null, "newDevice": true },
+                                "limits": { "cooling": false, "coolingUntil": null }
+                              }
+                            }
+                            """)})),
             @ApiResponse(responseCode = "401", description = "Wrong code",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "401 UNAUTHORIZED", "message": "That code isn't right. You have 2 attempts left.", "data": { "errorCode": "otp_incorrect", "challengeId": "chl_7k2m9q4t8v1x3z5b6c0d2f4g6h", "attemptsLeft": 2 } }
@@ -241,6 +270,10 @@ public class DeviceSignInController {
             @ApiResponse(responseCode = "410", description = "Out of attempts, expired, or already used — start again",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "410 GONE", "message": "That code isn't right, and it can no longer be used. Please start again.", "data": { "errorCode": "challenge_expired", "challengeId": "chl_7k2m9q4t8v1x3z5b6c0d2f4g6h", "attemptsLeft": 0 } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "Nothing happened (another sign-in for the number was being recorded); retry with the same code",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We can't complete this right now. Please try again shortly.", "data": { "errorCode": "temporarily_unavailable" } }
                             """)))
     })
     public ResponseEntity<ApiResult<TokenDecision>> verify(@RequestBody(required = false) OtpVerifyRequest body,

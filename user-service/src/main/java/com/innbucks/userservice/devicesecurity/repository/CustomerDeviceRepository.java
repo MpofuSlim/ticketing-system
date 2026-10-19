@@ -4,7 +4,9 @@ import com.innbucks.userservice.devicesecurity.DeviceState;
 import com.innbucks.userservice.devicesecurity.entity.CustomerDevice;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -50,6 +52,42 @@ public interface CustomerDeviceRepository extends JpaRepository<CustomerDevice, 
                        @Param("msisdn") String msisdn,
                        @Param("installIdHash") String installIdHash,
                        @Param("now") LocalDateTime now);
+
+    /**
+     * The number's other phones that one phone per number signs out when {@code keepId}
+     * binds: every row that is trusted, mid-sign-in or due a code. Never a NEW row (an
+     * attempt nobody confirmed), a REVOKED one, a stopped one (signing out would launder
+     * a block or ban) or one on a handset banned for every account.
+     */
+    @Query("""
+            select d from CustomerDevice d
+            where d.msisdn = :msisdn and d.id <> :keepId
+              and d.state in (com.innbucks.userservice.devicesecurity.DeviceState.PENDING_PIN,
+                              com.innbucks.userservice.devicesecurity.DeviceState.TRUSTED,
+                              com.innbucks.userservice.devicesecurity.DeviceState.STEP_UP)
+              and not exists (select 1 from DeviceWideBan w
+                              where w.installIdHash = d.installIdHash and w.liftedAt is null)
+            order by d.id
+            """)
+    List<CustomerDevice> findReplaceable(@Param("msisdn") String msisdn, @Param("keepId") Long keepId);
+
+    /** As {@link #findReplaceable}, ids only: nothing is loaded into the caller's persistence context. */
+    @Query("""
+            select d.id from CustomerDevice d
+            where d.msisdn = :msisdn and d.id <> :keepId
+              and d.state in (com.innbucks.userservice.devicesecurity.DeviceState.PENDING_PIN,
+                              com.innbucks.userservice.devicesecurity.DeviceState.TRUSTED,
+                              com.innbucks.userservice.devicesecurity.DeviceState.STEP_UP)
+              and not exists (select 1 from DeviceWideBan w
+                              where w.installIdHash = d.installIdHash and w.liftedAt is null)
+            order by d.id
+            """)
+    List<Long> findReplaceableIds(@Param("msisdn") String msisdn, @Param("keepId") Long keepId);
+
+    /** One phone, locked for the rest of the transaction. Load it with this FIRST, never after a plain read. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select d from CustomerDevice d where d.id = :id")
+    Optional<CustomerDevice> lockById(@Param("id") Long id);
 
     /**
      * Other customers this physical device has been bound to and not removed from —

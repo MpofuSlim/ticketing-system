@@ -202,6 +202,9 @@ device-security:
     fraud-flag-days: ${DEVICE_SECURITY_TRUST_FRAUD_FLAG_DAYS:30}
     cooling: ${DEVICE_SECURITY_COOLING:PT24H}
     pending-pin-grace: ${DEVICE_SECURITY_PENDING_PIN_GRACE:PT10M}
+    # One phone per number: a phone that proves the SIM (code) and then the PIN signs
+    # every other phone of the number out. Off by default; needs enforce.otp.
+    single-device: ${DEVICE_SECURITY_SINGLE_DEVICE:false}
     max-trusted-devices: ${DEVICE_SECURITY_MAX_TRUSTED_DEVICES:3}
     max-customers-per-device: ${DEVICE_SECURITY_MAX_CUSTOMERS_PER_DEVICE:2}
   risk:

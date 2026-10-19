@@ -49,10 +49,22 @@ public class DeviceSecurityMessages {
 
     /** The OTP itself. Never logged. */
     public String otp(String code, long minutes, OtpChannel channel) {
-        return channel == OtpChannel.SMS
-                ? "InnBucks code " + code + ". It expires in " + minutes + " minutes. Never share it, InnBucks will never ask for it."
-                : "InnBucks code: " + code + ". It expires in " + minutes + " minutes. Never share it — InnBucks will never ask for it.";
+        return otp(code, minutes, channel, false);
     }
+
+    /**
+     * The OTP, and with one phone per number on, what using it does: a customer reading
+     * the code out to a caller "from the bank" is signing their own phone out.
+     */
+    public String otp(String code, long minutes, OtpChannel channel, boolean signsOutOtherPhones) {
+        String warning = signsOutOtherPhones ? " Using it signs InnBucks out on any other phone." : "";
+        return channel == OtpChannel.SMS
+                ? "InnBucks code " + code + ". It expires in " + minutes + " minutes. Never share it, InnBucks will never ask for it." + warning
+                : "InnBucks code: " + code + ". It expires in " + minutes + " minutes. Never share it — InnBucks will never ask for it." + warning;
+    }
+
+    /** Longest phone label PHONE_REPLACED prints, so the SMS stays one 160-character segment. */
+    static final int REPLACED_LABEL_MAX = 58;
 
     public String notice(DeviceNotice n, OtpChannel channel, LocalDateTime nowUtc) {
         boolean sms = channel == OtpChannel.SMS;
@@ -78,6 +90,11 @@ public class DeviceSecurityMessages {
                     + ussd + " now.";
             case REVOKED -> "Your " + label + " was removed from your InnBucks. If this wasn't you, dial " + ussd + " now.";
             case PIN_SET -> "Your InnBucks PIN was just set. If this wasn't you, dial " + ussd + " now.";
+            // Never "your": after a SIM swap the phone named here is the swapper's.
+            case PHONE_REPLACED -> "InnBucks is now signed in only on " + clip(label, REPLACED_LABEL_MAX) + ", since "
+                    + time(n.at(), nowUtc, sms) + ". If this wasn't you, dial " + ussd + " now"
+                    + (sms ? "." : ", or call InnBucks support" + (supportPhone.isEmpty() ? "" : " on " + supportPhone)
+                    + " if your SIM isn't working.");
         };
     }
 
@@ -92,6 +109,15 @@ public class DeviceSecurityMessages {
      */
     public String tokenLine() {
         return "Enter your PIN to continue.";
+    }
+
+    /**
+     * The TOKEN line when, with one phone per number on, the PIN about to be typed will
+     * sign out a phone the customer has been using. Only after the SIM is proved: before
+     * that, saying so would tell anyone who knows the number whether it is signed in.
+     */
+    public String tokenLineSigningOutOthers() {
+        return "Enter your PIN to continue. Any other phone will be signed out of InnBucks.";
     }
 
     public String otpRequiredLine() {
@@ -176,6 +202,16 @@ public class DeviceSecurityMessages {
 
     /** "Samsung SM-A155F (last used 29 Sep)" — how an active phone is listed on the Block menu. */
     public String ussdActiveMenuLabel(String label, LocalDateTime lastSeenAt) {
+        return ussdActiveMenuLabel(label, lastSeenAt, false);
+    }
+
+    /**
+     * As above, but a phone that is signed in right now reads "Samsung SM-A155F (signed
+     * in)": with one phone per number, the menu otherwise lists the phone in the
+     * customer's hand beside the ones it signed out, and they look alike.
+     */
+    public String ussdActiveMenuLabel(String label, LocalDateTime lastSeenAt, boolean signedIn) {
+        if (signedIn) return label + " (signed in)";
         return lastSeenAt == null ? label : label + " (last used " + DAY.format(market(lastSeenAt)) + ")";
     }
 
@@ -199,6 +235,10 @@ public class DeviceSecurityMessages {
         String t = TIME.format(at);
         if (sms) t = t.replace(':', '.');
         return at.toLocalDate().equals(today) ? t : t + " on " + DAY.format(at);
+    }
+
+    private static String clip(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max).trim();
     }
 
     private ZonedDateTime market(LocalDateTime utc) {

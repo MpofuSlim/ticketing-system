@@ -20,10 +20,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Every state change that stops, frees, forgets or trusts a device — shared by
@@ -37,6 +39,13 @@ import java.util.Optional;
 @Component
 @Slf4j
 public class DeviceEnforcement {
+
+    /**
+     * {@code state_reason} of a phone signed out because another phone of its number
+     * bound (one phone per number). Kept through the phone's comeback (REVOKED → NEW)
+     * so support can still see why it is asking for a code.
+     */
+    public static final String REPLACED = "REPLACED";
 
     /** Where a temporary block or ban came from, for the log, the chain and the notice. */
     public record Actor(ActorType type, String id, String ussdSessionId, AuditContext auditContext) {
@@ -311,6 +320,16 @@ public class DeviceEnforcement {
      *       window after enforcement began.</li>
      * </ul>
      *
+     * <p><b>One phone per number</b> ({@code trust.single-device}): a phone that proved
+     * the SIM in THIS sign-in ({@link CustomerDevice#possessionProvedThisSignIn()}) also
+     * signs every other phone of the number out — see {@link #replaceOthers}. Old proof
+     * is not enough: with codes switched off, a handset that proved the SIM months ago
+     * would otherwise push the customer's current phone out on the PIN alone. When a
+     * phone that had been bound is signed out, the customer gets PHONE_REPLACED (on every
+     * channel) instead of NEW_DEVICE_BOUND.
+     *
+     * <p>Call it under the number's {@link NumberLock}.
+     *
      * @return true when this was the pair's first bind
      */
     @Transactional
@@ -320,6 +339,7 @@ public class DeviceEnforcement {
         int days = profile != null && profile.fraudFlagged() ? trust.getFraudFlagDays() : trust.getDays();
         boolean first = d.getBoundAt() == null;
         boolean proved = d.possessionVerified();
+        boolean replaces = trust.isSingleDevice() && d.possessionProvedThisSignIn();
         // A phone first bound provisionally and confirmed later is NOT announced when
         // the code arrives: it has been the customer's phone all along, and doing so
         // would message every watch-mode customer on the day OTP is switched on.
@@ -338,11 +358,92 @@ public class DeviceEnforcement {
         events.record(SecurityEventType.DEVICE_BOUND, ActorType.BROKER, null, d.getMsisdn(), d,
                 b -> b.reason(!proved ? (first ? "FIRST_BIND_PROVISIONAL" : "REBIND_PROVISIONAL")
                         : first ? "FIRST_BIND" : "REBIND"));
-        if (firstProved) {
+        boolean signedOutAPhoneInUse = replaces && replaceOthers(d, now);
+        if (signedOutAPhoneInUse) {
+            // Every channel, SMS first: the phone that just signed in chose the customer's
+            // preferred channel, and after a SIM swap the SMS reaches the swapper while
+            // WhatsApp may still reach the owner's handset.
+            publisher.publishEvent(new DeviceNotice(DeviceNotice.Type.PHONE_REPLACED, d.getMsisdn(), shortLabel(d),
+                    now, null, null, null, true));
+        } else if (firstProved) {
             publisher.publishEvent(new DeviceNotice(DeviceNotice.Type.NEW_DEVICE_BOUND, d.getMsisdn(), shortLabel(d),
                     now, null, null, profile == null ? null : profile.getPreferredChannel(), false));
         }
         return first;
+    }
+
+    /**
+     * One phone per number: signs every other phone of {@code keep}'s number out
+     * ({@link CustomerDeviceRepository#findReplaceable} says which). Each becomes REVOKED
+     * with reason {@link #REPLACED} and loses its trust, PIN grace, SIM proof, bind time
+     * and cooling — so coming back needs a code and the PIN, and is treated as a first
+     * bind (cooling, the session step-up window, the shared-device count) — and its open
+     * codes and unspent tickets die. No per-phone notice: the caller sends one.
+     *
+     * @return true when at least one of them had been bound (was the customer's phone,
+     *         not an attempt that never finished)
+     */
+    private boolean replaceOthers(CustomerDevice keep, LocalDateTime now) {
+        boolean inUse = false;
+        // A query, so the binding row is flushed first. Then, per phone: its codes and
+        // tickets, then the phone itself LOCKED and re-read — the order every path that
+        // stops a phone uses (children, then the phone). Locked rather than read and saved
+        // on its version: the signed-out phone renewing (it writes its row on every
+        // request) then waits and loses, instead of failing this bind, so a phone that
+        // keeps renewing can never keep the new one from binding.
+        for (Long id : devices.findReplaceableIds(keep.getMsisdn(), keep.getId())) {
+            cutOff(id, now);
+            CustomerDevice o = devices.lockById(id).orElse(null);
+            if (o == null || !REPLACEABLE.contains(o.getState()) || activeWideBan(o.getInstallIdHash()).isPresent()) {
+                continue; // blocked, removed or reset meanwhile: that path has already cut it off
+            }
+            inUse |= inUse(o);
+            o.transition(DeviceState.REVOKED, REPLACED, ActorType.SYSTEM.name(), now);
+            o.clearStop();
+            o.setTrustedUntil(null);
+            o.setPinGraceUntil(null);
+            o.setOtpVerifiedAt(null);
+            o.setBoundAt(null);
+            o.setCoolingUntil(null);
+            devices.save(o);
+            events.record(SecurityEventType.DEVICE_REVOKED, ActorType.SYSTEM, null, o.getMsisdn(), o,
+                    b -> b.reason(REPLACED).note("Signed out by phone " + keep.getPublicId()));
+            metrics.enforcement("replace", REPLACED, true, ActorType.SYSTEM.name());
+            log.info("Device replaced msisdn={} device={} by={}", DeviceIdentity.logMask(o.getMsisdn()),
+                    o.getPublicId(), keep.getPublicId());
+        }
+        return inUse;
+    }
+
+    /**
+     * Whether binding {@code keep} now would sign out a phone the customer had been using
+     * — the TOKEN line warns them before they type the PIN. Only meaningful under the
+     * number's {@link NumberLock}.
+     */
+    public boolean wouldSignOutAPhoneInUse(CustomerDevice keep) {
+        return properties.getTrust().isSingleDevice() && keep.possessionProvedThisSignIn()
+                && devices.findReplaceable(keep.getMsisdn(), keep.getId()).stream().anyMatch(DeviceEnforcement::inUse);
+    }
+
+    /** A phone that had been bound: signing it out is something the customer needs to hear about. */
+    static boolean inUse(CustomerDevice d) {
+        return d.getBoundAt() != null;
+    }
+
+    /** The states one phone per number signs out ({@link CustomerDeviceRepository#findReplaceable}). */
+    private static final Set<DeviceState> REPLACEABLE =
+            EnumSet.of(DeviceState.PENDING_PIN, DeviceState.TRUSTED, DeviceState.STEP_UP);
+
+    /**
+     * Whether this phone is the number's signed-in phone at {@code at}: trusted, or inside
+     * the PIN grace a code opened ({@code withPinGrace}), and not on a handset banned for
+     * every account. A device-wide ban cuts the handset's other rows off but leaves their
+     * state, so the state alone is not enough. The one test every "is it still signed in?"
+     * check uses — Your devices, the in-session step-up, ticket redeem — so they cannot drift.
+     */
+    public boolean signedIn(CustomerDevice d, LocalDateTime at, boolean withPinGrace) {
+        return (d.trustedAt(at) || (withPinGrace && d.inPinGrace(at)))
+                && activeWideBan(d.getInstallIdHash()).isEmpty();
     }
 
     // ---- lazy expiry ------------------------------------------------------------------
@@ -383,8 +484,12 @@ public class DeviceEnforcement {
 
     /** Kills the device's open codes and unspent tickets, so an in-flight sign-in cannot complete. */
     private void cutOff(CustomerDevice d, LocalDateTime now) {
-        challenges.voidOpenForDevice(d.getId(), now);
-        tickets.voidOpenForDevice(d.getId(), now);
+        cutOff(d.getId(), now);
+    }
+
+    private void cutOff(Long deviceId, LocalDateTime now) {
+        challenges.voidOpenForDevice(deviceId, now);
+        tickets.voidOpenForDevice(deviceId, now);
     }
 
     private void seal(AuditEventType type, Actor actor, CustomerDevice d, String reason, String ref,

@@ -66,11 +66,19 @@ public class DeviceSecurityProvisioningCheck {
                     + "mis-configured app build; clear it once the fixed build ships.", waived);
         }
         DeviceSecurityProperties.Enforce e = properties.getEnforce();
+        boolean singleDevice = properties.getTrust().isSingleDevice();
         if (!e.isOtp() && !e.isBlocks() && !e.isBans()) {
             log.warn("Device security is in WATCH MODE: every decision is logged but every caller gets TOKEN. "
-                    + "Flip DEVICE_SECURITY_ENFORCE_OTP, then _BLOCKS, then _BANS (contract §14).");
+                    + "Flip DEVICE_SECURITY_ENFORCE_OTP, then _BLOCKS, then _BANS (contract §14). singleDevice={}",
+                    singleDevice);
         } else {
-            log.info("Device security enforcing otp={} blocks={} bans={}", e.isOtp(), e.isBlocks(), e.isBans());
+            log.info("Device security enforcing otp={} blocks={} bans={} singleDevice={}", e.isOtp(), e.isBlocks(),
+                    e.isBans(), singleDevice);
+        }
+        if (singleDevice && !e.isOtp()) {
+            log.warn("DEVICE_SECURITY_SINGLE_DEVICE=true signs no phone out while DEVICE_SECURITY_ENFORCE_OTP=false: a "
+                    + "phone signs the number's other phones out only after proving the SIM with a code. Your devices "
+                    + "still answers only the signed-in phone (x-device-id).");
         }
         DeviceSecurityProperties.TestOtp t = properties.getTestOtp();
         if (t.isEnabled()) {

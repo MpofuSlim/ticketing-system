@@ -1678,6 +1678,97 @@ and blocks phones on `/device-security/ussd/**`; the call center works it from
   which kind it is, and put a standing one in `AMBIENT`. Pinned by
   `trustedPhone_standingConditions_neverAskAgain` and
   `trustedPhone_appCheckAbsent_signsInWithoutACode`.
+- **One phone per number** (`DEVICE_SECURITY_SINGLE_DEVICE`, committed `false`;
+  switched on per host). A phone that proves the SIM with a code IN THIS sign-in
+  and then the PIN signs every other phone of the number out when it binds
+  (`DeviceEnforcement.bind` → `replaceOthers`): REVOKED with reason `REPLACED`,
+  trust, PIN grace, SIM proof, `bound_at` and cooling cleared, open codes and
+  unspent tickets voided. To come back, a signed-out phone needs a code and the
+  PIN, and that signs the other one out in turn: replace, never refuse, so a
+  customer whose phone is lost can always move to a new one. The rules that
+  make it safe:
+  - **Only fresh proof replaces** (`CustomerDevice.possessionProvedThisSignIn`:
+    PENDING_PIN with `otp_verified_at` no earlier than the move to PENDING_PIN —
+    `verifyOtp` stamps both with one instant; keep it that way).
+    `possessionVerified()` is sticky, so with codes off an old handset holding an
+    old proof would otherwise push the current phone out on the PIN alone. Watch
+    mode and `ENFORCE_OTP=false` therefore never sign anything out (boot WARNs).
+  - **Never touched:** NEW (an attempt nobody finished), REVOKED, TEMP_BLOCKED and
+    BANNED rows (revoking would launder a block or ban), and any row on a handset
+    under a device-wide ban.
+  - **Clearing `bound_at` is deliberate:** a comeback is a first bind again
+    (cooling, the session step-up window, the shared-device count), and a
+    signed-out phone stays out of Your devices.
+  - **The customer is told on EVERY channel** (`PHONE_REPLACED`, SMS first): the
+    phone that just signed in chose the preferred channel. It never says "your"
+    about the new phone (after a SIM swap it is the swapper's), and the WhatsApp
+    copy names support because *569# needs the SIM. It replaces
+    `NEW_DEVICE_BOUND` only when a phone that had been bound was signed out.
+  - **Nothing warns before the SIM is proved.** OTP_REQUIRED keeps the neutral
+    line (anything else tells whoever knows the number whether it is signed in).
+    The code itself says "Using it signs InnBucks out on any other phone." (a
+    customer reading it to a fake agent signs their own phone out), and the TOKEN
+    after `/otp/verify`, or a PIN retry in the grace, says "Any other phone will be
+    signed out of InnBucks."
+  - **Only the signed-in phone manages phones.** The fleet session survives a
+    phone being signed out (it is not DTX's), so with the rule on `GET`/`DELETE
+    /auth/devices` need `x-device-id` naming the number's signed-in phone (400 /
+    403 `device_not_trusted`); otherwise a signed-out phone could remove the new
+    one, with no code, again and again. Listing accepts a phone in its PIN grace;
+    removing needs the PIN too (a phone only in the grace has proved the SIM
+    alone). "Signed in" is ONE test, `DeviceEnforcement.signedIn` — trusted (or in
+    the grace), and NOT on a handset under a device-wide ban, which cuts the
+    handset's other rows off but leaves their state — used by Your devices, the
+    in-session step-up (`verifyStepUp` mints no proof for a phone that is no longer
+    signed in, flag or no flag) and ticket redeem. Never re-derive it inline.
+  - **Redeem refuses a ticket whose phone is no longer signed in** (`INVALID`,
+    voided), flag or no flag: a ticket minted just after a sign-out escapes its
+    void, because `issueToken` mints outside the decision's transaction. The STATE
+    is read live; the trust window and PIN grace are judged as at the ticket's
+    `issued_at` — judged at redeem time, a PIN typed in the last seconds of the
+    grace cost the customer another code. A login result for a handset banned on
+    every account binds nothing.
+  - **The sign-out locks each phone it signs out** (`findReplaceableIds`, then
+    per phone: void its codes and tickets, `lockById` FOR UPDATE, re-check its
+    state) instead of saving a copy on its `@Version`: the signed-out phone writes
+    its own row on every renewal, so an optimistic sign-out could be failed by a
+    phone that keeps renewing. Children first, then the phone — the order every
+    block and ban uses.
+  - **The per-number lock** (`NumberLock`: the number's `customer_security_profiles`
+    row, `FOR UPDATE` with a `SET LOCAL lock_timeout`) is taken FIRST by the
+    broker's login result (2s, plus one retry on any `ConcurrencyFailureException`),
+    `/otp/verify` (500ms, live challenges only; `DeviceOtpService.verify` flushes
+    the challenge at once so it is locked before the phone), the channel
+    bookkeeping after a send (logged, never thrown — the code is already out), and
+    the call center's fraud flag and "cancel codes". Two phones finishing together queue; the second finds its ticket
+    voided and binds nothing. Read the msisdn with a SCALAR query before it
+    (`findRef`, `findMsisdnById`) — a managed entity is never refreshed by a lock —
+    and never call `profile()` inside a locked transaction. Order: profile, then
+    tickets/challenges, then phones; the outcome is a compare-and-set
+    (`recordOutcome`), never a save of a ticket read earlier (it has no
+    `@Version`, so a stale save would un-void it). **The sign-in decision takes
+    no lock on purpose**: it is unauthenticated (a burst on one number must not
+    queue the pool), and `touch()` plus the device's `@Version` already refuse a
+    decision made on a row a bind just changed (503, the app retries).
+  - **Phone labels are the app's text.** `DeviceIdentity.shortLabel`/`fullLabel`
+    turn every control, invisible format (bidi override, zero-width) or
+    line/paragraph separator character into a space: a line break in a crafted
+    model would cut a one-line notice short (WhatsApp drops the rest — including
+    "call InnBucks support") or forge a *569# menu line, and a U+202E would make
+    WhatsApp draw the rest reversed. With the rule on, the *569# Block menu marks
+    the signed-in phone "(signed in)" (by `signedIn`, so never a banned handset).
+  - **No migration and no sweep for numbers that already have several phones:**
+    they converge at their next fresh-proved bind, which trust expiry forces
+    within `trust.days` (90). `max-trusted-devices`, `TOO_MANY_DEVICES` and
+    `tidyUpSuggested` keep their meaning for those numbers and with the rule off.
+  - **Residuals, stated truthfully:** a signed-out phone keeps its STAGING session
+    until its next renewal (an app that never renews keeps it until staging ends
+    it); its fleet refresh family stays alive (CUSTOMER scope, no phone
+    management); a step-up proof minted before the sign-out lives its 5 minutes;
+    a broker that verifies tickets against the JWKS instead of redeeming skips
+    the redeem check; and switching phones back and forth spends codes, so a
+    customer doing it often meets the number's OTP ceiling (VELOCITY pause —
+    support's guidance says so).
 - **Permissions**: `device-security:read` / `:manage` / `:fraud`. Lifting a
   SHARED_DEVICE / CONFIRMED_FRAUD / SIM_SWAP / device-wide ban needs `:fraud` —
   checked in the service too, so the call center cannot undo the fraud desk on a
