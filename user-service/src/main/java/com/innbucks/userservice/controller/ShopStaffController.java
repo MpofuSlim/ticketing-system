@@ -432,12 +432,15 @@ public class ShopStaffController {
     }
 
     @GetMapping("/by-shop/{shopId}")
-    @PreAuthorize("hasAuthority('" + PermissionCatalog.SHOP_STAFF_MERCHANT_READ + "')")
+    @PreAuthorize("hasAnyAuthority('" + PermissionCatalog.SHOP_STAFF_MERCHANT_READ + "', '"
+            + PermissionCatalog.SHOP_STAFF_READ + "')")
     @Operation(
             summary = "List staff at a given shop",
-            description = "Returns every user attached to the supplied shop. The shop must belong to " +
-                          "the caller's merchant. MERCHANT_ADMINs use this to audit who's on each " +
-                          "shop floor."
+            description = "Returns every user attached to the supplied shop. A **MERCHANT_ADMIN** may " +
+                          "read any shop of a merchant they administer (to audit who's on each shop " +
+                          "floor); **SUPER_ADMIN** reads every shop. A **SHOP_ADMIN** may read only " +
+                          "its OWN shop — the same list as `GET /admin/shop-staff/mine` — and any " +
+                          "other shop, a sibling shop of the same merchant included, is a 403."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -480,7 +483,9 @@ public class ShopStaffController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "Shop not found in loyalty-service, or caller has no merchant binding",
+                    responseCode = "400", description = "Shop not found in loyalty-service (merchant admin / " +
+                                                        "SUPER_ADMIN only — for a shop admin, any shop other than " +
+                                                        "its own is a 403, whether or not it exists)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
@@ -490,15 +495,33 @@ public class ShopStaffController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Shop belongs to a different merchant, or caller is not a MERCHANT_ADMIN",
+                    responseCode = "403", description = "Shop belongs to a different merchant (merchant admin), " +
+                                                        "is not the caller's own shop (shop admin), or the caller " +
+                                                        "holds neither shop-staff permission",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
-                                    {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "Shop does not belong to your merchant",
-                                      "data": null
-                                    }
-                                    """)))
+                            examples = {
+                                    @ExampleObject(name = "Merchant admin: another merchant's shop", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "Shop does not belong to your merchant",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Shop admin: not their own shop", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "You can only view the staff of your own shop",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "No shop-staff permission", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "Forbidden - insufficient role",
+                                              "data": null
+                                            }
+                                            """)
+                            }))
     })
     public ResponseEntity<ApiResult<List<UserResponseDTO>>> listShopStaff(@PathVariable UUID shopId) {
         List<UserResponseDTO> data = shopStaffService.listForShop(shopId);

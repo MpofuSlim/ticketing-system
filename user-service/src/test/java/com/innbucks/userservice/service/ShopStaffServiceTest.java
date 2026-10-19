@@ -10,6 +10,7 @@ import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.OrganizationMemberRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthDetailsKeys;
+import com.innbucks.userservice.testsupport.BuiltInRoleRows;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -74,8 +75,20 @@ class ShopStaffServiceTest {
 
     private void authenticateAs(User caller) {
         SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken(caller.getEmail(), null));
+                new UsernamePasswordAuthenticationToken(caller.getEmail(), null, authoritiesOf(caller)));
         when(userRepository.findByEmail(caller.getEmail())).thenReturn(Optional.of(caller));
+    }
+
+    /** The permission authorities a fresh token for {@code caller}'s built-in
+     *  roles carries, as JwtFilter grants them (bare codes, from V35's grants as
+     *  mirrored by {@link BuiltInRoleRows}). listForShop reads them to decide
+     *  merchant-wide vs own-shop, so a test token must carry them. */
+    private static List<org.springframework.security.core.authority.SimpleGrantedAuthority> authoritiesOf(User caller) {
+        return caller.getRoles().stream()
+                .flatMap(r -> BuiltInRoleRows.GRANTS.getOrDefault(r, java.util.Set.of()).stream())
+                .distinct()
+                .map(org.springframework.security.core.authority.SimpleGrantedAuthority::new)
+                .toList();
     }
 
     private User merchantAdmin(UUID merchantId) {
@@ -374,7 +387,7 @@ class ShopStaffServiceTest {
      */
     private void authenticateInOrganization(User caller, OrganizationMember.Role role) {
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(caller.getEmail(), null);
+                new UsernamePasswordAuthenticationToken(caller.getEmail(), null, authoritiesOf(caller));
         auth.setDetails(new java.util.HashMap<>(java.util.Map.of(AuthDetailsKeys.ORGANIZATION_ID, ORG)));
         SecurityContextHolder.getContext().setAuthentication(auth);
         when(userRepository.findByEmail(caller.getEmail())).thenReturn(Optional.of(caller));
@@ -596,5 +609,106 @@ class ShopStaffServiceTest {
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
                         .isEqualTo(HttpStatus.FORBIDDEN));
         verifyNoInteractions(loyaltyServiceClient);
+    }
+
+    // --- GET /by-shop/{shopId} for a SHOP_ADMIN: its own shop, and only that --
+    // The console's Shop Users screen lists staff through by-shop for every
+    // role. A shop admin used to get "Forbidden - insufficient role" there after
+    // every till user it created (the create itself succeeded). It may now read
+    // its own shop; the merchant check below it would otherwise have admitted
+    // every sibling shop, because it folds the caller's loyaltyMerchantId in.
+
+    private User shopAdmin(UUID merchantId, UUID shopId) {
+        return User.builder().email("shopadmin@x.com")
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
+                .loyaltyMerchantId(merchantId).loyaltyShopId(shopId).build();
+    }
+
+    @Test
+    void listForShop_shopAdmin_ownShop_returnsItsStaff_withoutALoyaltyLookup() {
+        UUID merchantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        authenticateAs(shopAdmin(merchantId, shopId));
+        when(userRepository.findByLoyaltyShopId(shopId))
+                .thenReturn(List.of(shopUser(UUID.randomUUID(), merchantId, shopId)));
+
+        List<UserResponseDTO> staff = service.listForShop(shopId);
+
+        assertThat(staff).hasSize(1);
+        verifyNoInteractions(loyaltyServiceClient);
+    }
+
+    @Test
+    void listForShop_shopAdmin_siblingShopOfTheSameMerchant_isForbidden_andReadsNoStaff() {
+        UUID merchantId = UUID.randomUUID();
+        UUID ownShop = UUID.randomUUID();
+        UUID siblingShop = UUID.randomUUID();
+        authenticateAs(shopAdmin(merchantId, ownShop));
+
+        assertThatThrownBy(() -> service.listForShop(siblingShop))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> {
+                    ResponseStatusException rse = (ResponseStatusException) ex;
+                    assertThat(rse.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(rse.getReason()).isEqualTo("You can only view the staff of your own shop");
+                });
+        verify(userRepository, never()).findByLoyaltyShopId(any());
+        verifyNoInteractions(loyaltyServiceClient);
+    }
+
+    @Test
+    void listForShop_shopAdminWithNoShopBinding_isForbidden() {
+        authenticateAs(shopAdmin(UUID.randomUUID(), null));
+
+        assertThatThrownBy(() -> service.listForShop(UUID.randomUUID()))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verify(userRepository, never()).findByLoyaltyShopId(any());
+    }
+
+    @Test
+    void listForShop_customRoleHoldingMerchantRead_keepsTheMerchantCheck() {
+        UUID merchantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        User auditor = User.builder().email("auditor@x.com")
+                .roles(java.util.Set.of("SHOP_AUDITOR"))
+                .loyaltyMerchantId(merchantId).build();
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                auditor.getEmail(), null,
+                List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority(
+                        "shop-staff:merchant:read"))));
+        when(userRepository.findByEmail(auditor.getEmail())).thenReturn(Optional.of(auditor));
+        when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
+                new LoyaltyServiceClient.ShopLookupResponse(
+                        shopId.toString(), merchantId.toString(), "tenant-1", "ACTIVE")));
+        when(userRepository.findByLoyaltyShopId(shopId)).thenReturn(List.of());
+
+        assertThatCode(() -> service.listForShop(shopId)).doesNotThrowAnyException();
+        // It went through the merchant path (shop resolved in loyalty), not the
+        // own-shop path, which it would have failed: it has no loyaltyShopId.
+        verify(loyaltyServiceClient).findShop(shopId);
+    }
+
+    @Test
+    void listForShop_merchantAdminWhoseMerchantReadWasRemoved_isNoLongerMerchantWide() {
+        // An operator removed shop-staff:merchant:read from MERCHANT_ADMIN but kept
+        // shop-staff:read. The role NAME must not restore merchant-wide by-shop
+        // reads: built-in permissions are editable, and editing them is how an
+        // operator changes what the role can do.
+        UUID merchantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        User admin = merchantAdmin(merchantId);
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                admin.getEmail(), null,
+                List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("shop-staff:read"))));
+        when(userRepository.findByEmail(admin.getEmail())).thenReturn(Optional.of(admin));
+
+        assertThatThrownBy(() -> service.listForShop(shopId))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verifyNoInteractions(loyaltyServiceClient);
+        verify(userRepository, never()).findByLoyaltyShopId(any());
     }
 }
