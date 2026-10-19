@@ -91,10 +91,17 @@ class ShopStaffServiceTest {
                 .toList();
     }
 
-    private User merchantAdmin(UUID merchantId) {
-        return User.builder().email("merchant@x.com")
-                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
-                .loyaltyMerchantId(merchantId).build();
+    /**
+     * A merchant admin as production has them: NO stamped loyaltyMerchantId,
+     * authority = the merchants its session organization ({@link #ORG}) owns,
+     * which it runs as OWNER. Use it only where the merchant set is actually
+     * resolved (strict stubs).
+     */
+    private User asOrgMerchantAdmin(UUID... ownedMerchants) {
+        User admin = merchantAdminNoBinding("merchant@x.com");
+        authenticateInOrganization(admin, OrganizationMember.Role.OWNER);
+        when(loyaltyServiceClient.merchantIdsForOrganization(ORG)).thenReturn(List.of(ownedMerchants));
+        return admin;
     }
 
     private CreateShopAdminDTO shopAdminDto(UUID shopId) {
@@ -120,7 +127,7 @@ class ShopStaffServiceTest {
     void createShopAdmin_publishesOnboardingEvent_offTheRequestThread() {
         UUID shopId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
-        authenticateAs(merchantAdmin(merchantId));
+        asOrgMerchantAdmin(merchantId);
         stubShopAdminHappyPath(shopId, merchantId);
 
         UserResponseDTO result = service.createShopAdmin(shopAdminDto(shopId));
@@ -226,10 +233,10 @@ class ShopStaffServiceTest {
         UUID merchantId = UUID.randomUUID();
         UUID targetShopId = UUID.randomUUID();
         UUID targetUuid = UUID.randomUUID();
-        User caller = User.builder().id(1L).email("merchantadmin@x.com")
-                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
-                .loyaltyMerchantId(merchantId).build();
-        authenticateAs(caller);
+        // Scope from the ORGANIZATION. This used to compare a stamped
+        // loyaltyMerchantId on the caller, which a real merchant admin never
+        // has — so in production every merchant-admin reset was a 404.
+        asOrgMerchantAdmin(merchantId);
         User target = shopAdminTarget(targetUuid, merchantId, targetShopId);
         when(userRepository.findByUserUuid(targetUuid)).thenReturn(Optional.of(target));
         when(passwordEncoder.encode(any())).thenReturn("NEW_HASH");
@@ -291,10 +298,7 @@ class ShopStaffServiceTest {
         UUID callerMerchant = UUID.randomUUID();
         UUID otherMerchant = UUID.randomUUID();
         UUID targetUuid = UUID.randomUUID();
-        User caller = User.builder().id(1L).email("merchant@x.com")
-                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
-                .loyaltyMerchantId(callerMerchant).build();
-        authenticateAs(caller);
+        asOrgMerchantAdmin(callerMerchant);
         when(userRepository.findByUserUuid(targetUuid))
                 .thenReturn(Optional.of(shopUser(targetUuid, otherMerchant, UUID.randomUUID())));
 
@@ -311,7 +315,7 @@ class ShopStaffServiceTest {
         UUID shopId = UUID.randomUUID();
         UUID callerMerchant = UUID.randomUUID();
         UUID foreignMerchant = UUID.randomUUID();
-        authenticateAs(merchantAdmin(callerMerchant));
+        asOrgMerchantAdmin(callerMerchant);
         // The shop resolves to a DIFFERENT merchant than the caller's.
         when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
                 new LoyaltyServiceClient.ShopLookupResponse(
@@ -330,7 +334,7 @@ class ShopStaffServiceTest {
     void listForMerchant_rejectsForeignMerchant_andReadsNoStaff() {
         UUID callerMerchant = UUID.randomUUID();
         UUID foreignMerchant = UUID.randomUUID();
-        authenticateAs(merchantAdmin(callerMerchant));
+        asOrgMerchantAdmin(callerMerchant);
 
         assertThatThrownBy(() -> service.listForMerchant(foreignMerchant))
                 .isInstanceOf(ResponseStatusException.class)
@@ -342,7 +346,7 @@ class ShopStaffServiceTest {
     @Test
     void listForMerchant_returnsStaff_forOwnMerchant() {
         UUID merchantId = UUID.randomUUID();
-        authenticateAs(merchantAdmin(merchantId));
+        asOrgMerchantAdmin(merchantId);
         when(userRepository.findByLoyaltyMerchantId(merchantId)).thenReturn(List.of());
 
         assertThatCode(() -> service.listForMerchant(merchantId)).doesNotThrowAnyException();
@@ -354,7 +358,7 @@ class ShopStaffServiceTest {
         UUID shopId = UUID.randomUUID();
         UUID callerMerchant = UUID.randomUUID();
         UUID foreignMerchant = UUID.randomUUID();
-        authenticateAs(merchantAdmin(callerMerchant));
+        asOrgMerchantAdmin(callerMerchant);
         when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
                 new LoyaltyServiceClient.ShopLookupResponse(
                         shopId.toString(), foreignMerchant.toString(), "tenant-2", "ACTIVE")));
@@ -366,11 +370,12 @@ class ShopStaffServiceTest {
         verify(userRepository, never()).findByLoyaltyShopId(any());
     }
 
-    // --- Merchant-admin authority resolved by admin email (the actual fix) ----
+    // --- Merchant-admin authority resolved by ORGANIZATION ---------------------
     // Production shape: a MERCHANT_ADMIN carries NO loyaltyMerchantId on their
-    // JWT or User row — their merchant(s) are resolved from loyalty-service by
-    // admin email. Before the fix, every one of these returned 403 because the
-    // code read the (always-null) caller.getLoyaltyMerchantId().
+    // JWT or User row — their merchant(s) are the ones loyalty-service lists for
+    // the organization their session acts for, when they are its OWNER/ADMIN.
+    // Before that, every one of these returned 403 because the code read the
+    // (always-null) caller.getLoyaltyMerchantId().
 
     private static final UUID ORG = UUID.fromString("7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f");
 
@@ -615,8 +620,8 @@ class ShopStaffServiceTest {
     // The console's Shop Users screen lists staff through by-shop for every
     // role. A shop admin used to get "Forbidden - insufficient role" there after
     // every till user it created (the create itself succeeded). It may now read
-    // its own shop; the merchant check below it would otherwise have admitted
-    // every sibling shop, because it folds the caller's loyaltyMerchantId in.
+    // its own shop and only that: a shop admin is not merchant-wide, so it is
+    // pinned to its own shop and never reaches the merchant check.
 
     private User shopAdmin(UUID merchantId, UUID shopId) {
         return User.builder().email("shopadmin@x.com")
@@ -671,14 +676,21 @@ class ShopStaffServiceTest {
     void listForShop_customRoleHoldingMerchantRead_keepsTheMerchantCheck() {
         UUID merchantId = UUID.randomUUID();
         UUID shopId = UUID.randomUUID();
-        User auditor = User.builder().email("auditor@x.com")
-                .roles(java.util.Set.of("SHOP_AUDITOR"))
-                .loyaltyMerchantId(merchantId).build();
-        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+        // A runtime role holding the merchant-wide read, held by someone who runs
+        // ORG. Its merchant scope is the organization's, like a merchant admin's.
+        User auditor = User.builder().id(502L).email("auditor@x.com")
+                .roles(java.util.Set.of("SHOP_AUDITOR")).build();
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                 auditor.getEmail(), null,
                 List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority(
-                        "shop-staff:merchant:read"))));
+                        "shop-staff:merchant:read")));
+        auth.setDetails(new java.util.HashMap<>(java.util.Map.of(AuthDetailsKeys.ORGANIZATION_ID, ORG)));
+        SecurityContextHolder.getContext().setAuthentication(auth);
         when(userRepository.findByEmail(auditor.getEmail())).thenReturn(Optional.of(auditor));
+        when(organizationMembers.findByOrganizationIdAndUserId(ORG, 502L))
+                .thenReturn(Optional.of(OrganizationMember.builder()
+                        .organizationId(ORG).userId(502L).role(OrganizationMember.Role.ADMIN).build()));
+        when(loyaltyServiceClient.merchantIdsForOrganization(ORG)).thenReturn(List.of(merchantId));
         when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
                 new LoyaltyServiceClient.ShopLookupResponse(
                         shopId.toString(), merchantId.toString(), "tenant-1", "ACTIVE")));
@@ -696,9 +708,8 @@ class ShopStaffServiceTest {
         // shop-staff:read. The role NAME must not restore merchant-wide by-shop
         // reads: built-in permissions are editable, and editing them is how an
         // operator changes what the role can do.
-        UUID merchantId = UUID.randomUUID();
         UUID shopId = UUID.randomUUID();
-        User admin = merchantAdmin(merchantId);
+        User admin = merchantAdminNoBinding("merchant@x.com");
         SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
                 admin.getEmail(), null,
                 List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("shop-staff:read"))));
@@ -710,5 +721,232 @@ class ShopStaffServiceTest {
                         .isEqualTo(HttpStatus.FORBIDDEN));
         verifyNoInteractions(loyaltyServiceClient);
         verify(userRepository, never()).findByLoyaltyShopId(any());
+    }
+
+    // --- An account that is shop staff AND a merchant admin (two hats) ---------
+    // A cashier at the EMPLOYER's shop who got MERCHANT_ADMIN through an approved
+    // service request to run a business of their own (ORG). Its merchant-admin
+    // hat reaches ORG's merchants only; its row-stamped loyaltyMerchantId is the
+    // employer's and grants nothing as a merchant admin. It used to be folded
+    // into the merchant set, which let the cashier administer every shop of the
+    // employer: list its staff, create shop admins there, reset passwords.
+
+    private static final UUID EMPLOYER = UUID.fromString("e0000000-0000-4000-8000-000000000001");
+    private static final UUID OWN_BUSINESS = UUID.fromString("b0000000-0000-4000-8000-000000000002");
+    private static final UUID HOME_SHOP = UUID.fromString("5a000000-0000-4000-8000-000000000003");
+
+    /** Shop staff at {@link #HOME_SHOP} of {@link #EMPLOYER}, who also runs ORG as OWNER. */
+    private User twoHats(User.Role shopRole, UUID... orgMerchants) {
+        User caller = User.builder().id(601L).email("cashier@x.com")
+                .roles(User.roleNames(shopRole, User.Role.MERCHANT_ADMIN))
+                .loyaltyMerchantId(EMPLOYER).loyaltyShopId(HOME_SHOP).build();
+        authenticateInOrganization(caller, OrganizationMember.Role.OWNER);
+        when(loyaltyServiceClient.merchantIdsForOrganization(ORG)).thenReturn(List.of(orgMerchants));
+        return caller;
+    }
+
+    @Test
+    void twoHats_cashierWhoBecameMerchantAdmin_mine_neverListsTheEmployersStaff() {
+        twoHats(User.Role.SHOP_USER, OWN_BUSINESS);
+        when(userRepository.findByLoyaltyMerchantId(OWN_BUSINESS)).thenReturn(List.of());
+
+        assertThat(service.listForCallerShop()).isEmpty();
+
+        verify(userRepository, never()).findByLoyaltyMerchantId(EMPLOYER);
+        // A cashier is not a shop admin: no shop view comes with the till hat.
+        verify(userRepository, never()).findByLoyaltyShopId(any());
+    }
+
+    @Test
+    void twoHats_cannotListTheEmployersMerchant() {
+        twoHats(User.Role.SHOP_USER);
+
+        assertThatThrownBy(() -> service.listForMerchant(EMPLOYER))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verify(userRepository, never()).findByLoyaltyMerchantId(any());
+    }
+
+    @Test
+    void twoHats_cannotCreateAShopAdminAtTheEmployersShop() {
+        twoHats(User.Role.SHOP_USER, OWN_BUSINESS);
+        UUID employersShop = UUID.randomUUID();
+        when(loyaltyServiceClient.findShop(employersShop)).thenReturn(Optional.of(
+                new LoyaltyServiceClient.ShopLookupResponse(
+                        employersShop.toString(), EMPLOYER.toString(), "tenant-1", "ACTIVE")));
+
+        assertThatThrownBy(() -> service.createShopAdmin(shopAdminDto(employersShop)))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verify(userRepository, never()).save(any());
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void twoHats_cannotReadASiblingShopOfTheEmployer() {
+        twoHats(User.Role.SHOP_ADMIN, OWN_BUSINESS);
+        UUID siblingShop = UUID.randomUUID();
+        when(loyaltyServiceClient.findShop(siblingShop)).thenReturn(Optional.of(
+                new LoyaltyServiceClient.ShopLookupResponse(
+                        siblingShop.toString(), EMPLOYER.toString(), "tenant-1", "ACTIVE")));
+
+        assertThatThrownBy(() -> service.listForShop(siblingShop))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verify(userRepository, never()).findByLoyaltyShopId(any());
+    }
+
+    @Test
+    void twoHats_cannotResetTheEmployersStaff() {
+        twoHats(User.Role.SHOP_USER, OWN_BUSINESS);
+        UUID targetUuid = UUID.randomUUID();
+        when(userRepository.findByUserUuid(targetUuid))
+                .thenReturn(Optional.of(shopAdminTarget(targetUuid, EMPLOYER, UUID.randomUUID())));
+
+        assertThatThrownBy(() -> service.resetTemporaryPassword(targetUuid))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+        verify(passwordEncoder, never()).encode(any());
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void twoHats_aShopAdmin_keepsItsOwnShop_onEveryShopPath() {
+        // by-shop: its own shop, with no ownership lookup.
+        twoHats(User.Role.SHOP_ADMIN, OWN_BUSINESS);
+        User colleague = shopUser(UUID.randomUUID(), EMPLOYER, HOME_SHOP);
+        when(userRepository.findByLoyaltyShopId(HOME_SHOP)).thenReturn(List.of(colleague));
+
+        assertThat(service.listForShop(HOME_SHOP)).hasSize(1);
+        verify(loyaltyServiceClient, never()).findShop(any());
+
+        // /mine: its own business's staff plus its own shop — not the employer's.
+        when(userRepository.findByLoyaltyMerchantId(OWN_BUSINESS)).thenReturn(List.of());
+        assertThat(service.listForCallerShop()).extracting(UserResponseDTO::getUserUuid)
+                .containsExactly(colleague.getUserUuid());
+        verify(userRepository, never()).findByLoyaltyMerchantId(EMPLOYER);
+    }
+
+    @Test
+    void twoHats_aShopAdmin_stillResetsATillUserAtItsOwnShop() {
+        authenticateAs(User.builder().id(601L).email("cashier@x.com")
+                .roles(User.roleNames(User.Role.SHOP_ADMIN, User.Role.MERCHANT_ADMIN))
+                .loyaltyMerchantId(EMPLOYER).loyaltyShopId(HOME_SHOP).build());
+        UUID targetUuid = UUID.randomUUID();
+        User target = shopUser(targetUuid, EMPLOYER, HOME_SHOP);
+        when(userRepository.findByUserUuid(targetUuid)).thenReturn(Optional.of(target));
+        when(passwordEncoder.encode(any())).thenReturn("NEW_HASH");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        assertThat(service.resetTemporaryPassword(targetUuid).getUserUuid()).isEqualTo(targetUuid);
+        // The shop hat decides it; no merchant scope is resolved.
+        verifyNoInteractions(loyaltyServiceClient);
+    }
+
+    // --- Only a PLAIN shop-staff account is reset here ------------------------
+    // One that also runs a business (MERCHANT_ADMIN) or belongs to an
+    // organization holds authority its employer never granted; replacing its
+    // password would lock that business out. It resets its own. Each case resets
+    // a plain colleague first, so the refusal is the target rule, not a caller
+    // without scope.
+
+    private User shopUserWith(long id, UUID userUuid, User.Role... roles) {
+        return User.builder().id(id).userUuid(userUuid).email("staff" + id + "@pizza.co.zw")
+                .roles(User.roleNames(roles))
+                .loyaltyMerchantId(EMPLOYER).loyaltyShopId(HOME_SHOP)
+                .active(true).build();
+    }
+
+    private void assertResetRefused(UUID targetUuid) {
+        assertThatThrownBy(() -> service.resetTemporaryPassword(targetUuid))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    private void stubResetWrites() {
+        when(passwordEncoder.encode(any())).thenReturn("NEW_HASH");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    @Test
+    void reset_merchantHat_refusesShopStaffWhoAlsoRunABusiness() {
+        asOrgMerchantAdmin(EMPLOYER);
+        stubResetWrites();
+        UUID plainUuid = UUID.randomUUID();
+        when(userRepository.findByUserUuid(plainUuid))
+                .thenReturn(Optional.of(shopUserWith(80L, plainUuid, User.Role.SHOP_USER)));
+        assertThat(service.resetTemporaryPassword(plainUuid).getUserUuid()).isEqualTo(plainUuid);
+
+        UUID ownerUuid = UUID.randomUUID();
+        User owner = shopUserWith(81L, ownerUuid, User.Role.SHOP_USER, User.Role.MERCHANT_ADMIN);
+        when(userRepository.findByUserUuid(ownerUuid)).thenReturn(Optional.of(owner));
+
+        assertResetRefused(ownerUuid);
+        assertThat(owner.getPassword()).isNull();
+        verify(passwordEncoder, times(1)).encode(any());
+        verify(eventPublisher, times(1)).publishEvent(any(CredentialDeliveryRequested.class));
+    }
+
+    @Test
+    void reset_merchantHat_refusesShopStaffWhoBelongToAnOrganization() {
+        // An ADMIN colleague of some business has no extra role at all, yet is a
+        // merchant admin in loyalty — the membership is what makes it theirs.
+        asOrgMerchantAdmin(EMPLOYER);
+        stubResetWrites();
+        UUID plainUuid = UUID.randomUUID();
+        when(userRepository.findByUserUuid(plainUuid))
+                .thenReturn(Optional.of(shopUserWith(82L, plainUuid, User.Role.SHOP_ADMIN)));
+        assertThat(service.resetTemporaryPassword(plainUuid).getUserUuid()).isEqualTo(plainUuid);
+
+        UUID memberUuid = UUID.randomUUID();
+        User member = shopUserWith(83L, memberUuid, User.Role.SHOP_ADMIN);
+        when(userRepository.findByUserUuid(memberUuid)).thenReturn(Optional.of(member));
+        when(organizationMembers.existsByUserId(83L)).thenReturn(true);
+
+        assertResetRefused(memberUuid);
+        assertThat(member.getPassword()).isNull();
+        verify(passwordEncoder, times(1)).encode(any());
+    }
+
+    @Test
+    void reset_shopHat_refusesATillUserWhoAlsoRunsABusiness_butACustomerRoleIsFine() {
+        authenticateAs(User.builder().id(1L).email("shopadmin@x.com")
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
+                .loyaltyMerchantId(EMPLOYER).loyaltyShopId(HOME_SHOP).build());
+        stubResetWrites();
+        // A cashier who also shops is still plain shop staff.
+        UUID shopperUuid = UUID.randomUUID();
+        when(userRepository.findByUserUuid(shopperUuid)).thenReturn(Optional.of(
+                shopUserWith(84L, shopperUuid, User.Role.SHOP_USER, User.Role.CUSTOMER)));
+        assertThat(service.resetTemporaryPassword(shopperUuid).getUserUuid()).isEqualTo(shopperUuid);
+
+        UUID ownerUuid = UUID.randomUUID();
+        User owner = shopUserWith(85L, ownerUuid, User.Role.SHOP_USER, User.Role.MERCHANT_ADMIN);
+        when(userRepository.findByUserUuid(ownerUuid)).thenReturn(Optional.of(owner));
+
+        assertResetRefused(ownerUuid);
+        assertThat(owner.getPassword()).isNull();
+        verify(passwordEncoder, times(1)).encode(any());
+        verifyNoInteractions(loyaltyServiceClient);
+    }
+
+    @Test
+    void merchantAdminActingForNoOrganization_resetsNobody() {
+        User admin = merchantAdminNoBinding("merchant@x.com");
+        authenticateAs(admin);
+        UUID targetUuid = UUID.randomUUID();
+        when(userRepository.findByUserUuid(targetUuid))
+                .thenReturn(Optional.of(shopUser(targetUuid, UUID.randomUUID(), UUID.randomUUID())));
+
+        assertThatThrownBy(() -> service.resetTemporaryPassword(targetUuid))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+        verify(loyaltyServiceClient, never()).merchantIdsForOrganization(any());
     }
 }

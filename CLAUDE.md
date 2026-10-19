@@ -1234,6 +1234,29 @@ which loyalty (InnRewards V51) and marketplace-service each read directly.
   any miss is an empty set, and an empty set fails every ownership check
   closed. Pinned by `LoyaltyMerchantIdsByOrganizationContractTest` and
   `ShopStaffServiceTest`.
+- **In `ShopStaffService`, that organization is the ONLY source of a merchant
+  admin's merchant scope — a row-stamped `loyaltyMerchantId` never adds to it.**
+  The stamp says where a
+  shop-staff account WORKS. It used to be folded in "defensively", which made a
+  cashier who gained MERCHANT_ADMIN (a service-request approval to sell on the
+  marketplace) an administrator of every shop of their EMPLOYER's merchant:
+  `/mine`, `by-shop`, creating shop admins there with an email they chose,
+  resetting its staff's passwords. The shop hat is untouched: the shop-scoped
+  paths read `loyaltyShopId` directly, so such an account still sees and resets
+  its own shop when it is that shop's SHOP_ADMIN. Merchant-admin password
+  resets resolve the organization too — they compared the caller's stamp,
+  which a real merchant admin never has, so every one was a 404. They reach
+  only a PLAIN shop-staff account (no role beyond SHOP_ADMIN / SHOP_USER /
+  CUSTOMER, no organization membership); one that runs or works in a business
+  resets its own password. Pinned by the `twoHats_*` cases in
+  `ShopStaffServiceTest`.
+  **Still open in loyalty, not closed by this:** a two-hat account's token
+  still carries the shop claims (`merchantId`/`shopId` are minted for any
+  holder of a shop role), and InnRewards' `MerchantAuthz` checks that pin
+  BEFORE the organization, for any role. So a cashier who is OWNER/ADMIN of an
+  organization holding `loyalty` (any such owner can add them as a member) is a
+  loyalty merchant admin pinned to their EMPLOYER — free voucher issue there,
+  among others — and is refused on their own organization's merchants.
 - **Retired with the email binding:** `/users/internal/merchants/{id}/admins`
   (marketplace now calls `/users/internal/organizations/{id}/admins`) and
   `/users/internal/merchants/assigned` (backed loyalty's removed

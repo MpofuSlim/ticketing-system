@@ -54,8 +54,10 @@ public class ShopStaffController {
     @Operation(
             summary = "Onboard a SHOP_ADMIN under one of your shops",
             description = "Creates a new SHOP_ADMIN user attached to the supplied shopId. The shop " +
-                          "is resolved via loyalty-service and must belong to the caller's merchant " +
-                          "(taken from the caller's TenantProfile, not the request body). The new " +
+                          "is resolved via loyalty-service and must belong to a merchant the caller's " +
+                          "session ORGANIZATION owns (the caller must be its OWNER or ADMIN; a " +
+                          "merchant stamped on the caller's own account as shop staff never counts). " +
+                          "SUPER_ADMIN may name any shop. The new " +
                           "user is created with a randomly-generated one-time temporary password, " +
                           "delivered to them over email/SMS — they must rotate it via " +
                           "POST /auth/change-password on first login. " +
@@ -296,8 +298,10 @@ public class ShopStaffController {
             description = "Returns the shop staff the caller manages. For a **SHOP_ADMIN** this is " +
                           "every user (SHOP_ADMINs and SHOP_USERs) at their own shop. For a " +
                           "**MERCHANT_ADMIN** this is every SHOP_ADMIN and SHOP_USER across all shops " +
-                          "of every merchant they administer (resolved by their admin email), so a " +
-                          "merchant admin gets one 'my staff' view without needing a merchantId."
+                          "of every merchant their session ORGANIZATION owns (they must run it: OWNER " +
+                          "or ADMIN), so a merchant admin gets one 'my staff' view without needing a " +
+                          "merchantId. An account that is also a SHOP_ADMIN gets its own shop's staff " +
+                          "as well — never the rest of the merchant it works at."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -537,7 +541,11 @@ public class ShopStaffController {
                           "the original onboarding notification never reached them. " +
                           "Authorization is role-aware: a **SHOP_ADMIN** may reset SHOP_USERs at " +
                           "their own shop; a **MERCHANT_ADMIN** may reset both SHOP_ADMINs and " +
-                          "SHOP_USERs at their own merchant. Cross-shop / cross-merchant targets " +
+                          "SHOP_USERs at any merchant their session organization owns (they must be " +
+                          "its OWNER or ADMIN). Only a plain shop-staff account can be reset here: " +
+                          "one that also holds another role (e.g. MERCHANT_ADMIN of a business of " +
+                          "its own) or belongs to any organization resets its own password through " +
+                          "forgot-password. Cross-shop / cross-merchant targets, and those accounts, " +
                           "return 404 (we never disclose staff at other scopes). " +
                           "SUPER_ADMINs use the platform-wide " +
                           "`POST /admin/users/{id}/reset-temp-password` instead. " +

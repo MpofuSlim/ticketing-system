@@ -4,6 +4,7 @@ import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
 import com.innbucks.userservice.dto.CreateTeamMemberDTO;
 import com.innbucks.userservice.dto.CustomerTier2RegisterDTO;
+import com.innbucks.userservice.entity.OrganizationMember;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.exception.StaffPolicyException;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
@@ -15,6 +16,7 @@ import com.innbucks.userservice.repository.RoleRepository;
 import com.innbucks.userservice.repository.StaffProfileRepository;
 import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.security.AuthDetailsKeys;
 import com.innbucks.userservice.security.NationalIdHasher;
 import com.innbucks.userservice.testsupport.StaffDispatchHarness;
 import com.innbucks.userservice.testsupport.StaffFixtures;
@@ -30,6 +32,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -135,17 +138,26 @@ class ReservedDomainAtEveryEmailWriterTest {
         LoyaltyServiceClient loyalty = mock(LoyaltyServiceClient.class);
         @SuppressWarnings("unchecked")
         ObjectProvider<ShopStaffService> self = mock(ObjectProvider.class);
+        OrganizationMemberRepository members = mock(OrganizationMemberRepository.class);
         ShopStaffService service = new ShopStaffService(users, mock(PasswordEncoder.class), loyalty,
                 mock(ApplicationEventPublisher.class), mock(jakarta.validation.Validator.class), self,
-                mock(OrganizationMemberRepository.class), eligibility);
+                members, eligibility);
         ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
         UUID shopId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
+        // A merchant admin's scope is its session organization's merchants.
+        UUID organizationId = UUID.randomUUID();
         User merchantAdmin = User.builder().id(1L).email("merchant@shop.co.zw")
-                .roles(User.roleNames(User.Role.MERCHANT_ADMIN)).loyaltyMerchantId(merchantId).build();
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken(merchantAdmin.getEmail(), null));
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN)).build();
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(merchantAdmin.getEmail(), null);
+        auth.setDetails(new java.util.HashMap<>(java.util.Map.of(AuthDetailsKeys.ORGANIZATION_ID, organizationId)));
+        SecurityContextHolder.getContext().setAuthentication(auth);
         when(users.findByEmail(merchantAdmin.getEmail())).thenReturn(Optional.of(merchantAdmin));
+        when(members.findByOrganizationIdAndUserId(organizationId, merchantAdmin.getId()))
+                .thenReturn(Optional.of(OrganizationMember.builder().organizationId(organizationId)
+                        .userId(merchantAdmin.getId()).role(OrganizationMember.Role.OWNER).build()));
+        when(loyalty.merchantIdsForOrganization(organizationId)).thenReturn(List.of(merchantId));
         when(loyalty.findShop(shopId)).thenReturn(Optional.of(new LoyaltyServiceClient.ShopLookupResponse(
                 shopId.toString(), merchantId.toString(), "tenant-1", "ACTIVE")));
         when(users.existsByEmailIgnoreCase(anyString())).thenReturn(true);
