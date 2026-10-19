@@ -32,6 +32,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -39,9 +40,10 @@ import java.util.UUID;
  *
  * <ul>
  *   <li><b>SHOP_ADMIN</b> by a MERCHANT_ADMIN — caller supplies the target shopId in the body.
- *       The shop is resolved via loyalty-service to pick up its merchantId, which MUST match the
- *       caller's own {@code loyaltyMerchantId} (a MERCHANT_ADMIN can only provision staff into
- *       their own merchant's shops); the merchantId is then stamped on the new SHOP_ADMIN.</li>
+ *       The shop is resolved via loyalty-service to pick up its merchantId, which MUST be one of
+ *       the merchants the caller's session organization owns (a MERCHANT_ADMIN can only
+ *       provision staff into their own business's shops); the merchantId is then stamped on
+ *       the new SHOP_ADMIN.</li>
  *   <li><b>SHOP_USER</b> by a SHOP_ADMIN — shopId is pulled from the caller's User row, never
  *       from the body, so a SHOP_ADMIN can only create staff for their own shop.</li>
  * </ul>
@@ -328,11 +330,17 @@ public class ShopStaffService {
         // full headcount across them. Empty set => they own nothing yet => empty list.
         if (caller.hasRole(User.Role.MERCHANT_ADMIN)) {
             java.util.Set<UUID> merchantIds = resolveCallerMerchantIds(caller);
-            if (merchantIds.isEmpty()) {
-                return List.of();
+            java.util.stream.Stream<User> staff = merchantIds.stream()
+                    .flatMap(mid -> userRepository.findByLoyaltyMerchantId(mid).stream());
+            // An account that is ALSO a shop admin somewhere keeps that shop's
+            // view — its own shop, never the rest of its employer's merchant.
+            if (caller.hasRole(User.Role.SHOP_ADMIN) && caller.getLoyaltyShopId() != null) {
+                staff = java.util.stream.Stream.concat(staff,
+                        userRepository.findByLoyaltyShopId(caller.getLoyaltyShopId()).stream());
             }
-            return merchantIds.stream()
-                    .flatMap(mid -> userRepository.findByLoyaltyMerchantId(mid).stream())
+            java.util.Set<Object> seen = new java.util.HashSet<>();
+            return staff
+                    .filter(u -> seen.add(u.getUserUuid() != null ? u.getUserUuid() : u.getId()))
                     .map(UserResponseDTO::from)
                     .toList();
         }
@@ -357,20 +365,21 @@ public class ShopStaffService {
     @Transactional(readOnly = true)
     public List<UserResponseDTO> listForShop(UUID shopId) {
         User caller = requireCaller();
-        // A shop-scoped caller (SHOP_ADMIN) reads its OWN shop and nothing else.
-        // It must not fall through to the merchant check below: that check
-        // folds the caller's loyaltyMerchantId into its merchant set, so a shop
-        // admin would pass it for every sibling shop of its merchant. No loyalty
-        // lookup is needed — the shop is the caller's own — and a shop that is
-        // not theirs is the same 403 whether or not it exists.
-        if (!readsMerchantWide(caller)) {
-            UUID ownShop = caller.getLoyaltyShopId();
-            if (ownShop == null || !ownShop.equals(shopId)) {
-                throw forbidden("You can only view the staff of your own shop");
-            }
+        boolean merchantWide = readsMerchantWide(caller);
+        // The caller's OWN shop: a shop-scoped caller (SHOP_ADMIN), or an account
+        // that is a shop admin there AND a merchant admin of its own business.
+        // No loyalty lookup is needed — the shop is the caller's own.
+        UUID ownShop = caller.getLoyaltyShopId();
+        if (ownShop != null && ownShop.equals(shopId)
+                && (!merchantWide || caller.hasRole(User.Role.SHOP_ADMIN))) {
             return userRepository.findByLoyaltyShopId(shopId).stream()
                     .map(UserResponseDTO::from)
                     .toList();
+        }
+        // A shop-scoped caller reads its own shop and nothing else; a shop that
+        // is not theirs is the same 403 whether or not it exists.
+        if (!merchantWide) {
+            throw forbidden("You can only view the staff of your own shop");
         }
         // Scope to the caller's own merchant: a MERCHANT_ADMIN may only list the
         // staff of shops belonging to THEIR merchant. Resolve the shop, then
@@ -417,7 +426,8 @@ public class ShopStaffService {
      *   <li>A {@link User.Role#SHOP_ADMIN} may reset a {@link User.Role#SHOP_USER}
      *       at <b>their own shop</b> (matching {@code loyaltyShopId}).</li>
      *   <li>A {@link User.Role#MERCHANT_ADMIN} may reset either a SHOP_ADMIN or a
-     *       SHOP_USER at <b>their own merchant</b> (matching {@code loyaltyMerchantId}).</li>
+     *       SHOP_USER of any merchant <b>their session organization owns</b> — never
+     *       by the caller's own row-stamped {@code loyaltyMerchantId}.</li>
      * </ul>
      *
      * <p>Out-of-scope targets return 404 (don't disclose existence of staff at
@@ -466,26 +476,57 @@ public class ShopStaffService {
      * instead.
      */
     private boolean callerMayResetTarget(User caller, User target) {
-        if (caller.hasRole(User.Role.MERCHANT_ADMIN)) {
-            if (!target.hasRole(User.Role.SHOP_ADMIN) && !target.hasRole(User.Role.SHOP_USER)) {
-                return false;
-            }
-            UUID callerMerchant = caller.getLoyaltyMerchantId();
-            UUID targetMerchant = target.getLoyaltyMerchantId();
-            return callerMerchant != null && callerMerchant.equals(targetMerchant);
+        // Only a PLAIN shop-staff account is its employer's to reset. One that
+        // also runs or works in a business holds authority the employer never
+        // granted, and replacing its password would lock that business out.
+        if (!isPlainShopStaff(target)) {
+            return false;
         }
-        if (caller.hasRole(User.Role.SHOP_ADMIN)) {
-            if (!target.hasRole(User.Role.SHOP_USER)) {
-                // A SHOP_ADMIN can't reset a peer SHOP_ADMIN — only the
-                // MERCHANT_ADMIN above them can. Reset by the merchant
-                // admin keeps shop authority unambiguous.
-                return false;
-            }
+        // Each hat is checked on its own and either may allow it: an account can
+        // be a shop admin somewhere AND a merchant admin of its own business.
+        // The shop hat first — it needs no loyalty call.
+        //
+        // SHOP_ADMIN: a SHOP_USER at the caller's own shop. A SHOP_ADMIN can't
+        // reset a peer SHOP_ADMIN — only the MERCHANT_ADMIN above them can.
+        // Reset by the merchant admin keeps shop authority unambiguous.
+        if (caller.hasRole(User.Role.SHOP_ADMIN) && target.hasRole(User.Role.SHOP_USER)) {
             UUID callerShop = caller.getLoyaltyShopId();
-            UUID targetShop = target.getLoyaltyShopId();
-            return callerShop != null && callerShop.equals(targetShop);
+            if (callerShop != null && callerShop.equals(target.getLoyaltyShopId())) {
+                return true;
+            }
+        }
+        // MERCHANT_ADMIN: shop staff of a merchant the caller's ORGANIZATION owns.
+        // This used to compare the caller's own row-stamped loyaltyMerchantId,
+        // which a real merchant admin never has (so every reset was a 404) and
+        // a cashier who gained MERCHANT_ADMIN does have — their employer's.
+        if (caller.hasRole(User.Role.MERCHANT_ADMIN)
+                && (target.hasRole(User.Role.SHOP_ADMIN) || target.hasRole(User.Role.SHOP_USER))) {
+            UUID targetMerchant = target.getLoyaltyMerchantId();
+            return targetMerchant != null && resolveCallerMerchantIds(caller).contains(targetMerchant);
         }
         return false;
+    }
+
+    /** Roles a resettable shop-staff account may hold. CUSTOMER grants nothing
+     *  over anyone, so a cashier who also shops stays resettable. */
+    private static final Set<String> PLAIN_SHOP_STAFF_ROLES = Set.copyOf(User.roleNames(
+            User.Role.SHOP_ADMIN, User.Role.SHOP_USER, User.Role.CUSTOMER));
+
+    /**
+     * Holds a shop role, nothing beyond {@link #PLAIN_SHOP_STAFF_ROLES}, and no
+     * organization membership. A shop-staff account that gained MERCHANT_ADMIN
+     * (a business of its own) or joined an organization (an ADMIN colleague is a
+     * merchant admin in loyalty with no role at all) is someone else's account
+     * too; it resets its own password through forgot-password.
+     */
+    private boolean isPlainShopStaff(User target) {
+        if (!target.hasRole(User.Role.SHOP_ADMIN) && !target.hasRole(User.Role.SHOP_USER)) {
+            return false;
+        }
+        if (!PLAIN_SHOP_STAFF_ROLES.containsAll(target.getRoles())) {
+            return false;
+        }
+        return target.getId() != null && !organizationMembers.existsByUserId(target.getId());
     }
 
     private User buildStaff(String firstName, String middleName, String lastName,
@@ -619,8 +660,17 @@ public class ShopStaffService {
      * The set of merchants a caller administers: every loyalty merchant owned by
      * the organization their session acts for, provided they RUN that
      * organization (OWNER or ADMIN, read live — a demotion takes effect at once,
-     * not at the next refresh). Any {@code loyaltyMerchantId} on the row
-     * (defensive; normally only shop staff carry one) is folded in too.
+     * not at the next refresh). Nothing else.
+     *
+     * <p>In particular the row's {@code loyaltyMerchantId} is NOT folded in. It
+     * is stamped on shop staff and says where the account WORKS, not what it
+     * administers. It used to be folded in "defensively", and that is how a
+     * cashier who gained MERCHANT_ADMIN through an approved service request (to
+     * run a marketplace business of their own) administered every shop of their
+     * EMPLOYER's merchant: listed all its staff, created shop admins there with
+     * an email and phone of their choosing, and reset its staff's passwords.
+     * Their own shop hat is untouched — the shop-scoped paths read
+     * {@code loyaltyShopId} directly and never come through here.
      *
      * <p>This used to ask loyalty for the merchants bound to the caller's EMAIL
      * ({@code merchants.admin_email}). Ownership is the organization now, in
@@ -632,9 +682,6 @@ public class ShopStaffService {
      */
     private java.util.Set<UUID> resolveCallerMerchantIds(User caller) {
         java.util.Set<UUID> ids = new java.util.LinkedHashSet<>();
-        if (caller.getLoyaltyMerchantId() != null) {
-            ids.add(caller.getLoyaltyMerchantId());
-        }
         UUID organizationId = AuthenticatedCaller.organizationId(
                 SecurityContextHolder.getContext().getAuthentication());
         if (organizationId != null && runsOrganization(caller, organizationId)) {
