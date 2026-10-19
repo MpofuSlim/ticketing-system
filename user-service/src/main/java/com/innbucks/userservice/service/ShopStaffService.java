@@ -15,6 +15,7 @@ import com.innbucks.userservice.util.BootstrapAdminEmail;
 import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.security.AuthenticatedCaller;
+import com.innbucks.userservice.security.PermissionCatalog;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -356,6 +357,21 @@ public class ShopStaffService {
     @Transactional(readOnly = true)
     public List<UserResponseDTO> listForShop(UUID shopId) {
         User caller = requireCaller();
+        // A shop-scoped caller (SHOP_ADMIN) reads its OWN shop and nothing else.
+        // It must not fall through to the merchant check below: that check
+        // folds the caller's loyaltyMerchantId into its merchant set, so a shop
+        // admin would pass it for every sibling shop of its merchant. No loyalty
+        // lookup is needed — the shop is the caller's own — and a shop that is
+        // not theirs is the same 403 whether or not it exists.
+        if (!readsMerchantWide(caller)) {
+            UUID ownShop = caller.getLoyaltyShopId();
+            if (ownShop == null || !ownShop.equals(shopId)) {
+                throw forbidden("You can only view the staff of your own shop");
+            }
+            return userRepository.findByLoyaltyShopId(shopId).stream()
+                    .map(UserResponseDTO::from)
+                    .toList();
+        }
         // Scope to the caller's own merchant: a MERCHANT_ADMIN may only list the
         // staff of shops belonging to THEIR merchant. Resolve the shop, then
         // require its merchant to match the caller's — 403 otherwise (closes the
@@ -556,6 +572,26 @@ public class ShopStaffService {
      */
     private static boolean isPlatformOwner(User caller) {
         return caller.hasRole(User.Role.SUPER_ADMIN);
+    }
+
+    /**
+     * Whether {@link #listForShop} treats the caller as a merchant-wide reader
+     * (any shop of a merchant it administers) rather than a shop-scoped one (its
+     * own shop only). Merchant-wide: SUPER_ADMIN, or any caller holding
+     * {@code shop-staff:merchant:read} — the permission that has always gated
+     * the endpoint. Keyed on the permission, NOT on the MERCHANT_ADMIN role
+     * name, so an operator who removes that code from MERCHANT_ADMIN really
+     * does take merchant-wide by-shop reads away (a built-in's permissions are
+     * editable). Everyone else reached the endpoint through
+     * {@code shop-staff:read} and is pinned to its {@code loyaltyShopId}.
+     */
+    private static boolean readsMerchantWide(User caller) {
+        if (isPlatformOwner(caller)) {
+            return true;
+        }
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> PermissionCatalog.SHOP_STAFF_MERCHANT_READ.equals(a.getAuthority()));
     }
 
     /**
