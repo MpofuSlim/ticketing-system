@@ -129,6 +129,25 @@ spring:
                     # on an unauthenticated endpoint that mints sessions.
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # POS API key exchange (V51): a merchant's point-of-sale backend swaps
+            # its key for a cashier token. Exact path, POST only; IP-keyed and
+            # fail-SAFE like auth-exchange-route, because it is unauthenticated
+            # and session-minting: the per-IP cap is the only brake on guessing
+            # keys, and it must hold during a Redis outage.
+            - id: auth-pos-token-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/pos/token
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_POS_TOKEN_RATE_LIMIT_REPLENISH_PER_SECOND:5}
+                    redis-rate-limiter.burstCapacity: ${AUTH_POS_TOKEN_RATE_LIMIT_BURST_CAPACITY:20}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             # 2FA endpoints: rate-limit per-IP to bound TOTP/backup-code brute
             # force. Keyed by the hardcoded-IP preAuthIpKeyResolver — the default
             # gatewayKeyResolver keys on the raw unvalidated bearer, which a

@@ -6,6 +6,7 @@ import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.RefreshTokenService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -293,6 +294,18 @@ public class GlobalExceptionHandler {
         Map<String, String> data = new LinkedHashMap<>();
         data.put("errorCode", ex.getErrorCode());
         return ResponseEntity.status(ex.getStatus())
+                .body(ApiResult.of(ex.getStatus(), ex.getMessage(), data));
+    }
+
+    /** POS API key refusals (V51): issue, revoke and the key-for-token exchange. */
+    @ExceptionHandler(PosApiKeyException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handlePosApiKey(PosApiKeyException ex) {
+        log.info("POS API key request refused status={} errorCode={}",
+                ex.getStatus().value(), ex.getErrorCode());
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("errorCode", ex.getErrorCode());
+        return ResponseEntity.status(ex.getStatus())
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
                 .body(ApiResult.of(ex.getStatus(), ex.getMessage(), data));
     }
 

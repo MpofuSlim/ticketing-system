@@ -82,7 +82,9 @@ class PermissionCatalogScopeTest {
     void reservedToTheWildcard() {
         assertThat(PermissionCatalog.WILDCARD_RESERVED).containsExactlyInAnyOrder(
                 "roles:write", "users:roles:write",
-                "staff:read", "staff:create", "staff:manage", "organizations:manage");
+                "staff:read", "staff:create", "staff:manage", "organizations:manage",
+                // V51: a POS API key is a cashier credential with no person behind it.
+                "pos-keys:manage");
         // Every reserved code the catalog already defines is PLATFORM — a TENANT
         // code handing out authority would be a contradiction.
         for (String code : PermissionCatalog.WILDCARD_RESERVED) {

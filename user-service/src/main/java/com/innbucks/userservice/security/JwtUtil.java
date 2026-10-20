@@ -246,6 +246,11 @@ public class JwtUtil {
                 .compact();
     }
 
+    /** Lifetime of an access token in milliseconds ({@code jwt.expiration}). */
+    public long accessTokenTtlMillis() {
+        return expiration;
+    }
+
     public String extractType(String token) {
         return getClaims(token).get("type", String.class);
     }
