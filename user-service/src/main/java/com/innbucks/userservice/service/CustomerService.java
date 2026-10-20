@@ -88,6 +88,22 @@ public class CustomerService {
         this.tx = new TransactionTemplate(transactionManager);
     }
 
+
+    /** Optional: decides an adopted country's home cell (CELLS_ADOPTED_COUNTRIES).
+     *  Setter-injected so the plain-{@code new} unit tests are unchanged; absent
+     *  there, the home cell is the number's prefix, as it always was. */
+    private com.innbucks.userservice.cells.CellAffinityChecker cellAffinityChecker;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setCellAffinityChecker(com.innbucks.userservice.cells.CellAffinityChecker cellAffinityChecker) {
+        this.cellAffinityChecker = cellAffinityChecker;
+    }
+
+    private String homeCountryFor(String phone) {
+        return cellAffinityChecker != null ? cellAffinityChecker.homeCountryFor(phone)
+                : MsisdnCountryResolver.resolve(phone).orElse(deploymentCountry);
+    }
+
     /**
      * Tier 1 no longer creates a User or CustomerProfile. It stashes the phone + hashed password
      * in a pending_registrations row and fires an OTP. The account is materialised later by
@@ -110,7 +126,7 @@ public class CustomerService {
         // Resolve home_country from the now-canonical E.164 number (its country
         // code is guaranteed present); fall back to this cell's country. Matches
         // the uk_users_phone_country constraint tuple.
-        String homeCountry = MsisdnCountryResolver.resolve(phone).orElse(deploymentCountry);
+        String homeCountry = homeCountryFor(phone);
         if (userRepository.existsByPhoneNumberAndHomeCountry(phone, homeCountry)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone number already registered");
         }

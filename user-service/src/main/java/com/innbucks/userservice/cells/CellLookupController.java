@@ -40,6 +40,14 @@ public class CellLookupController {
 
     private final CellRegistry registry;
 
+    /** Optional, setter-injected so the plain-{@code new} test is unchanged. */
+    private CellAffinityChecker affinity;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setAffinity(CellAffinityChecker affinity) {
+        this.affinity = affinity;
+    }
+
     @GetMapping("/lookup")
     @Operation(
             summary = "Resolve the home cell for an MSISDN",
@@ -97,6 +105,9 @@ public class CellLookupController {
 
         return MsisdnCountryResolver.resolve(msisdn)
                 .map(String::toUpperCase)
+                // An adopted country (CELLS_ADOPTED_COUNTRIES) is homed in this
+                // cell: never point the app at a cell that does not exist.
+                .map(iso -> affinity != null && affinity.adopts(iso) ? affinity.deploymentCountry() : iso)
                 .map(iso -> {
                     String url = registry.baseUrlFor(iso).orElse(null);
                     HomeCellLookup payload = new HomeCellLookup(iso, url);

@@ -118,4 +118,62 @@ class CellAffinityCheckerTest {
                     assertThat(ex.getHomeBaseUrl()).isEqualTo("https://dtx.innbucks.co.ke");
                 });
     }
+
+    // --- CELLS_ADOPTED_COUNTRIES -------------------------------------------
+    // A Zimbabwean on a South African line, or a visitor using the Zim super
+    // app: with ZA adopted (and no ZA cell), the number is served here and its
+    // account is homed in ZW. Off by default, so nothing changes until it is set.
+
+    private CellAffinityChecker adopting(String registryJson, String adopted) {
+        CellRegistry registry = new CellRegistry(registryJson, mapper);
+        registry.parse();
+        CellAffinityChecker checker = new CellAffinityChecker("ZW", registry, adopted);
+        checker.describe();
+        return checker;
+    }
+
+    @Test
+    void adoptedCountry_isServedHere_andHomedInThisCell() {
+        CellAffinityChecker checker = adopting("{\"ZW\":\"https://dtx.innbucks.co.zw\"}", "za, ");
+
+        checker.requireDomesticMsisdn("+27832994054");
+        checker.requireDomesticIfMsisdn("+27832994054");
+        checker.requireDomesticCountry("ZA");
+        assertThat(checker.adopts("ZA")).isTrue();
+        assertThat(checker.homeCountryFor("+27832994054")).isEqualTo("ZW");
+    }
+
+    @Test
+    void byDefault_nothingIsAdopted_andTheDiallingCodeStillDecides() {
+        CellAffinityChecker checker = zwChecker("{\"ZW\":\"https://dtx.innbucks.co.zw\"}");
+
+        assertThat(checker.adopts("ZA")).isFalse();
+        assertThat(checker.homeCountryFor("+27832994054")).isEqualTo("ZA");
+        assertThat(checker.homeCountryFor("+263772123456")).isEqualTo("ZW");
+        assertThat(checker.homeCountryFor("+15551234567")).isEqualTo("ZW");
+        assertThatThrownBy(() -> checker.requireDomesticMsisdn("+27832994054"))
+                .isInstanceOf(WrongCellException.class);
+    }
+
+    @Test
+    void onlyListedCountriesAreAdopted() {
+        CellAffinityChecker checker = adopting("{}", "ZA");
+
+        assertThat(checker.homeCountryFor("+254712345678")).isEqualTo("KE");
+        assertThatThrownBy(() -> checker.requireDomesticMsisdn("+254712345678"))
+                .isInstanceOf(WrongCellException.class);
+    }
+
+    @Test
+    void aListedCountryWithACellOfItsOwn_isNeverAdopted() {
+        // Once a ZA cell exists, a stale listing must not keep its customers here.
+        CellAffinityChecker checker = adopting("{\"ZA\":\"https://dtx.innbucks.co.za\"}", "ZA");
+
+        assertThat(checker.adopts("ZA")).isFalse();
+        assertThat(checker.homeCountryFor("+27832994054")).isEqualTo("ZA");
+        assertThatThrownBy(() -> checker.requireDomesticMsisdn("+27832994054"))
+                .isInstanceOf(WrongCellException.class)
+                .asInstanceOf(throwable(WrongCellException.class))
+                .satisfies(ex -> assertThat(ex.getHomeBaseUrl()).isEqualTo("https://dtx.innbucks.co.za"));
+    }
 }

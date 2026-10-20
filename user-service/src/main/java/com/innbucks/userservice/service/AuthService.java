@@ -1554,7 +1554,10 @@ public class AuthService implements ApplicationEventPublisherAware {
                 new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
                 firstName, middleName, lastName, user.getTokenVersion(), country,
-                user.getUserUuid(), organizerUuid, user.isMustChangePassword(), orgScope);
+                user.getUserUuid(), organizerUuid, user.isMustChangePassword(), orgScope,
+                // The account's home cell, not its phone prefix: shop staff may
+                // hold any number (a South African till operator lives here).
+                user.getHomeCountry());
 
         return AuthResponseDTO.builder()
                 .token(newToken)

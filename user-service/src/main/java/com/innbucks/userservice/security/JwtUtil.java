@@ -311,6 +311,25 @@ public class JwtUtil {
                                 long tokenVersion, String country,
                                 UUID userUuid, UUID organizerUuid,
                                 boolean mustChangePassword, OrgScope org) {
+        return generateToken(email, roles, permissions, defaultServices, tier, verified, phoneNumber,
+                merchantId, shopId, firstName, middleName, lastName, tokenVersion, country,
+                userUuid, organizerUuid, mustChangePassword, org, null);
+    }
+
+    /**
+     * The canonical mint. {@code homeCountry} is the account's stored home cell
+     * ({@code users.home_country}) and, when present, is the {@code homeCountry}
+     * claim. Only when it is absent is the claim derived from the phone's dialling
+     * prefix, which is what the overloads above do.
+     */
+    public String generateToken(String email, Collection<String> roles, Collection<String> permissions,
+                                Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber,
+                                UUID merchantId, UUID shopId,
+                                String firstName, String middleName, String lastName,
+                                long tokenVersion, String country,
+                                UUID userUuid, UUID organizerUuid,
+                                boolean mustChangePassword, OrgScope org, String homeCountry) {
         List<String> roleList = roles == null ? List.of()
                 : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
         List<String> serviceList = defaultServices == null ? List.of()
@@ -368,18 +387,26 @@ public class JwtUtil {
         if (phoneNumber != null && !phoneNumber.isBlank()) {
             builder.claim("phoneNumber", phoneNumber);
         }
-        // homeCountry: ISO 3166-1 alpha-2 derived from the MSISDN dialling
-        // prefix. Purpose-built routing key for the eventual per-country
+        // homeCountry: ISO 3166-1 alpha-2 routing key for the per-country
         // cell architecture — completely separate from the legacy `country`
         // claim above (which is free-text account metadata from
-        // users.country, often blank for customers). Additive: every
-        // existing token consumer keeps reading `country`; new consumers
-        // that need the routing key read `homeCountry`. Resolver returns
-        // empty for unknown prefixes — we omit the claim rather than
-        // guess, because guessing on the auth path puts customers in the
-        // wrong cell.
-        MsisdnCountryResolver.resolve(phoneNumber)
-                .ifPresent(iso -> builder.claim("homeCountry", iso));
+        // users.country, often blank for customers). Every service answers
+        // 409 wrong_cell to a token whose homeCountry is not its own cell.
+        //
+        // It is the account's STORED home cell when the caller supplies one.
+        // That is where the account was created: a customer's from their
+        // number, while staff, shop staff and team members are stamped with
+        // this cell however foreign their phone is. Deriving it from the phone
+        // alone turned a till operator with a South African number into a
+        // "ZA" token that every loyalty call refused, though the account
+        // lives here. With no stored value (legacy callers), the prefix
+        // decides, and an unknown prefix omits the claim rather than guess.
+        String routedHome = homeCountry != null && !homeCountry.isBlank()
+                ? homeCountry.trim().toUpperCase(java.util.Locale.ROOT)
+                : MsisdnCountryResolver.resolve(phoneNumber).orElse(null);
+        if (routedHome != null) {
+            builder.claim("homeCountry", routedHome);
+        }
         if (merchantId != null) {
             builder.claim("merchantId", merchantId.toString());
         }
