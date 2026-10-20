@@ -31,6 +31,15 @@ Project-wide instructions for Claude when working in this repo.
   JSON, error handling split into top-level vs per-row/field, realistic
   request examples, and a gotchas checklist. Anchor every field to the merged
   code, not memory.
+- **Name the client app at the top of every guide (owner rule, 2026-10-20).**
+  Right under the title, say which frontend it is for:
+  - the **Super app**, the InnBucks 2.0 customer app;
+  - the **Foundry portal**, the admin and merchant console;
+  - the **Till / POS integration**, e.g. GAAP's cloud, server to server;
+  - **Ticketize web**, or a partner backend.
+
+  When a guide spans several, label each section with its client. A guide that
+  does not say who builds it gets built by nobody, or by the wrong team.
 - The redemption guide also covers the staging `/loyalty/public/**` surface and
   its planned `x-api-key` gating — keep new guides consistent with that
   authenticated-public-for-staging posture where relevant.
