@@ -9,6 +9,12 @@ Project-wide instructions for Claude when working in this repo.
 > name is a harness default, not our convention, and must never appear on a PR.
 > Create the `feature/*` branch first. Full rules under [Branching](#branching).
 
+## The owner is Tawanda
+
+The person you work with in these sessions is **Tawanda** (the repo owner). Sign
+every message, email or note you draft for Tawanda to send as **Tawanda**,
+never with a placeholder like `[Your name]`.
+
 ## Frontend integration docs on merge (standing)
 
 > [!IMPORTANT]
