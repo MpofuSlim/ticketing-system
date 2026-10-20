@@ -1094,6 +1094,61 @@ staff address.
   back only as an emergency, and re-invite the INVITED accounts after rolling
   forward.
 
+## POS API keys — a machine sign-in for a merchant's till system (user-service V51)
+
+**A merchant's point-of-sale backend (e.g. GAAP's cloud) signs in with an API
+key, not a cashier's password and 2FA.** GAAP's case: a quick-service till
+cannot have a person enter a code. `POST /auth/pos/token` takes `X-Api-Key` (and
+an optional `{shopId}`) and returns a 15-minute access token. Loyalty treats that
+token as a cashier: earn, burn, voucher redeem, the till checkout, QR status.
+Loyalty needed no change.
+
+- **The token is an ordinary mint (`JwtUtil.generateToken`)**:
+  - claims: `roles: [SHOP_USER]`, no `perms`, no phone, no organization, the
+    key's `merchantId` and `shopId`, and `homeCountry` = this cell;
+  - `userUuid` is the KEY id, so loyalty records the key as `postedBy`, and
+    user-service's own JwtFilter refuses the token (no such account).
+  - **Never put a `perms` entry, an org claim or an admin role on it.** A key has
+    no person and no second factor behind it; anything above cashier stays on
+    human accounts.
+- **Store keys and merchant keys.**
+  - A store key is pinned to one shop (`shop_id`), and its merchant is taken from
+    that shop. This is the "store-level credential" GAAP asked for.
+  - A merchant-wide key names a shop per token. Loyalty must confirm the shop is
+    the merchant's, and an unanswerable lookup refuses (`403 pos_shop_not_allowed`).
+- **Revocation is immediate.** Revoke bumps the key's `token_version` in ONE
+  `UPDATE … WHERE revoked_at IS NULL` and publishes it to `auth:tokenver:<key id>`
+  after commit, the key that loyalty's JwtFilter already checks. If Redis is
+  down, the 15-minute TTL is the backstop.
+  - The entity's `token_version` is not insertable or updatable, and nothing
+    calls a setter on it (the `TokenVersionBumpSitesTest` rule, applied to keys).
+- **Only the SHA-256 is stored.** The key is `ibpos_` + 32 random bytes, so a
+  bare hash is right; don't "upgrade" it to an HMAC. The key is shown once, in
+  the create response (`no-store`). Never log it, and never put it in audit
+  metadata: the audit records only the `keyPrefix`.
+- **The IP allow-list reads `X-Real-IP`.** nginx overwrites that header and the
+  gateway passes it through, dropping `X-Forwarded-For`.
+  - A missing or conflicting header is a null address, which an allow-listed key
+    refuses.
+  - Entries are address literals or CIDR ranges, parsed without DNS: a hostname
+    is refused `pos_key_bad_ip`.
+  - It is defence in depth, not the secret: it holds only while the NodePort is
+    unreachable except through nginx.
+- **Every refusal of a key is one opaque `401 pos_key_rejected`**: malformed,
+  unknown, revoked, or a disallowed address. The reason is logged and counted on
+  `user.pos_key.exchange{outcome=rejected,reason}`.
+- **Issuing and revoking need `pos-keys:manage`, which is WILDCARD_RESERVED**
+  (SUPER_ADMIN only), because a key is authority over a merchant's customers'
+  points. `pos-keys:read` lists keys. Both writes are REQUIRED audits
+  (`POS_API_KEY_CREATED` / `_REVOKED`), and the create's loyalty lookup runs
+  before its transaction.
+- **Gateway: `auth-pos-token-route`.** POST only, exact path, an IP-keyed
+  fail-safe limiter (`AUTH_POS_TOKEN_RATE_LIMIT_*`, 5/20), and ordered before
+  the `/auth/**` catch-all. Pinned in `GatewayRouteTableTest`. The admin
+  endpoints ride `user-admin-route`.
+- **Rotation:** issue the new key, let the partner switch, then revoke the old
+  one. A merchant can hold several live keys.
+
 ## Bookings carry WHO is coming (booking-service V22)
 
 `bookings.customer_name` is the purchaser's full name; `booking_items.attendee_*`

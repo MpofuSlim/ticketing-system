@@ -95,6 +95,16 @@ public final class PermissionCatalog {
     public static final String STAFF_MANAGE = "staff:manage";
 
     /**
+     * POS API keys (V51): the machine credential a merchant's point-of-sale
+     * backend swaps for a cashier-level token. Issuing or revoking one is
+     * {@code pos-keys:manage}, reserved to the wildcard ({@link #WILDCARD_RESERVED}):
+     * a key IS authority over a merchant's customers' points, with no person and
+     * no second factor behind it.
+     */
+    public static final String POS_KEYS_READ = "pos-keys:read";
+    public static final String POS_KEYS_MANAGE = "pos-keys:manage";
+
+    /**
      * DTX device security (V40) — the call center's and fraud desk's tools.
      * Three tiers on purpose: an agent who can look a caller up need not be able
      * to unlock their phone, and the call center must not be able to lift a
@@ -228,6 +238,10 @@ public final class PermissionCatalog {
                 entry(STAFF_READ, "View staff accounts and their audit history", Scope.PLATFORM),
                 entry(STAFF_CREATE, "Invite new staff, adopt existing staff, resend invites", Scope.PLATFORM),
                 entry(STAFF_MANAGE, "Deactivate and reactivate staff accounts", Scope.PLATFORM),
+                entry(POS_KEYS_READ, "List the POS API keys issued to merchants' point-of-sale systems",
+                        Scope.PLATFORM),
+                entry(POS_KEYS_MANAGE, "Issue and revoke POS API keys, which act as a cashier at a merchant",
+                        Scope.PLATFORM),
                 entry(DEVICE_SECURITY_READ,
                         "Look up a customer's phones, blocks, references and sign-in history", Scope.PLATFORM),
                 entry(DEVICE_SECURITY_MANAGE,
@@ -284,6 +298,8 @@ public final class PermissionCatalog {
      *       enforce them ({@code /admin/staff/**},
      *       {@code POST /admin/organizations/{id}/suspend}) existed, so no role
      *       could be handed them ahead of time.</li>
+     *   <li>{@code pos-keys:manage} — issuing a POS API key mints a credential
+     *       that acts as a cashier at a merchant with no person behind it.</li>
      * </ul>
      *
      * SUPER_ADMIN holds them through its wildcard. Only a reviewed migration can
@@ -291,7 +307,7 @@ public final class PermissionCatalog {
      */
     public static final Set<String> WILDCARD_RESERVED = Set.of(
             ROLES_WRITE, USERS_ROLES_WRITE,
-            STAFF_READ, STAFF_CREATE, STAFF_MANAGE, ORGANIZATIONS_MANAGE);
+            STAFF_READ, STAFF_CREATE, STAFF_MANAGE, ORGANIZATIONS_MANAGE, POS_KEYS_MANAGE);
 
     /** Every real permission — {@link #ALL} minus the wildcard. What {@code *} expands to. */
     public static Set<String> concrete() {

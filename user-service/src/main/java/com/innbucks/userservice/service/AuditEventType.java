@@ -238,6 +238,15 @@ public enum AuditEventType {
     ORGANIZATION_SUSPENDED,
 
     /**
+     * POS API keys (V51). A key acts as a cashier for a merchant with no person
+     * and no second factor behind it, so issuing and revoking one are changes to
+     * who can move value: written fail-closed ({@code recordRequired}). Target id
+     * is the key id; the key itself is never recorded.
+     */
+    POS_API_KEY_CREATED,
+    POS_API_KEY_REVOKED,
+
+    /**
      * Staff accounts (V44). Every one is a change to who holds platform
      * authority, so the SUCCESS rows are written fail-closed
      * ({@code AuditService.recordRequired}) as the transaction's last
