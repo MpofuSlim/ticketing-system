@@ -1250,13 +1250,15 @@ which loyalty (InnRewards V51) and marketplace-service each read directly.
   CUSTOMER, no organization membership); one that runs or works in a business
   resets its own password. Pinned by the `twoHats_*` cases in
   `ShopStaffServiceTest`.
-  **Still open in loyalty, not closed by this:** a two-hat account's token
+  **Loyalty's half is closed by InnRewards #193.** A two-hat account's token
   still carries the shop claims (`merchantId`/`shopId` are minted for any
-  holder of a shop role), and InnRewards' `MerchantAuthz` checks that pin
-  BEFORE the organization, for any role. So a cashier who is OWNER/ADMIN of an
-  organization holding `loyalty` (any such owner can add them as a member) is a
-  loyalty merchant admin pinned to their EMPLOYER — free voucher issue there,
-  among others — and is refused on their own organization's merchants.
+  holder of a shop role). Loyalty's `JwtFilter` now grants the organization's
+  merchant-admin hat to a token with ANY shop scope only when that organization
+  owns the pinned merchant (the employer promoted its own staff). Otherwise the
+  token is shop staff there and nothing more. Before #193, `MerchantAuthz`
+  checked the pin first, so such a cashier was a merchant admin pinned to their
+  EMPLOYER: free voucher issue there, and refused on their own organization's
+  merchants. Running a second business needs a second account.
 - **Retired with the email binding:** `/users/internal/merchants/{id}/admins`
   (marketplace now calls `/users/internal/organizations/{id}/admins`) and
   `/users/internal/merchants/assigned` (backed loyalty's removed
