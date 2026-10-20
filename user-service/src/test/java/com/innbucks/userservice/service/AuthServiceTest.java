@@ -306,7 +306,7 @@ class AuthServiceTest {
         // MERCHANT_ADMIN — JwtUtil emits no name claims for staff roles.
         when(jwt.generateToken(eq("u@example.com"), eq(List.of("MERCHANT_ADMIN")), any(),
                 eq(List.of("loyalty", "payments")), eq(4), eq(true), isNull(), isNull(), isNull(),
-                isNull(), isNull(), isNull(), anyLong(), isNull(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                isNull(), isNull(), isNull(), anyLong(), isNull(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -336,7 +336,7 @@ class AuthServiceTest {
         // This superadmin has no stored country, so the JWT country claim
         // defaults to Zimbabwe (see login_superAdminWithoutCountry_* below).
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong(), eq("Zimbabwe"), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), eq("Zimbabwe"), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
@@ -350,7 +350,7 @@ class AuthServiceTest {
         // Verify the JWT was issued with the expanded set covering every microservice.
         ArgumentCaptor<List<String>> servicesCaptor = ArgumentCaptor.forClass(List.class);
         verify(jwt).generateToken(any(), any(), any(), servicesCaptor.capture(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong(), eq("Zimbabwe"), any(), any(), anyBoolean(), any());
+                any(), any(), any(), anyLong(), eq("Zimbabwe"), any(), any(), anyBoolean(), any(), any());
         List<String> services = servicesCaptor.getValue();
         assertTrue(services.contains("events"));
         assertTrue(services.contains("seats"));
@@ -376,7 +376,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("admin@innbucks.co.zw")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
@@ -386,7 +386,7 @@ class AuthServiceTest {
 
         ArgumentCaptor<String> countryCaptor = ArgumentCaptor.forClass(String.class);
         verify(jwt).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), countryCaptor.capture(), any(), any(), anyBoolean(), any());
+                any(), any(), any(), anyLong(), countryCaptor.capture(), any(), any(), anyBoolean(), any(), any());
         assertEquals("Zimbabwe", countryCaptor.getValue(),
                 "SUPER_ADMIN with no stored country must default the JWT country claim to Zimbabwe");
     }
@@ -407,7 +407,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("admin-ke@innbucks.co.ke")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("admin-ke@innbucks.co.ke"); req.setPassword("pw");
@@ -417,7 +417,7 @@ class AuthServiceTest {
 
         ArgumentCaptor<String> countryCaptor = ArgumentCaptor.forClass(String.class);
         verify(jwt).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), countryCaptor.capture(), any(), any(), anyBoolean(), any());
+                any(), any(), any(), anyLong(), countryCaptor.capture(), any(), any(), anyBoolean(), any(), any());
         assertEquals("Kenya", countryCaptor.getValue(),
                 "An explicit country on a SUPER_ADMIN must NOT be overridden by the Zimbabwe default");
     }
@@ -441,7 +441,7 @@ class AuthServiceTest {
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(eq("+263777000099"), eq(List.of("CUSTOMER")), any(),
                 any(), eq(2), eq(false), eq("+263777000099"), isNull(), isNull(),
-                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         // Customer types the national/local form — login normalises it to the
@@ -455,6 +455,36 @@ class AuthServiceTest {
         assertEquals(List.of("CUSTOMER"), resp.getRoles());
         assertEquals(2, resp.getTier());
         assertEquals(Boolean.FALSE, resp.getVerified());
+    }
+
+    @Test
+    void login_mintsTheAccountsStoredHomeCell_notOneDerivedFromItsPhone() {
+        // Shop staff are stamped with this cell's country at creation whatever
+        // their phone is. The token must carry that, or a till operator with a
+        // South African number is refused 409 wrong_cell by every service.
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository customerRepo = mock(CustomerProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        User user = User.builder()
+                .id(8L).email("till@gaap.co.za")
+                .phoneNumber("+27832994054").homeCountry("ZW").password("hashed")
+                .roles(User.roleNames(User.Role.CUSTOMER))
+                .active(true).approved(true).mfaEnabled(false).build();
+        when(userRepo.findByEmail("till@gaap.co.za")).thenReturn(Optional.of(user));
+        when(customerRepo.findByUserId(8L)).thenReturn(Optional.of(CustomerProfile.builder()
+                .user(user).registrationTier(1).verified(false).build()));
+        when(encoder.matches("pw", "hashed")).thenReturn(true);
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("till@gaap.co.za"); req.setPassword("pw");
+        newService(userRepo, mock(TenantProfileRepository.class), customerRepo, encoder, jwt)
+                .login(req, null, com.innbucks.userservice.service.AuditContext.none());
+
+        verify(jwt).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), eq("+27832994054"), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), eq("ZW"));
     }
 
     @Test
@@ -555,7 +585,7 @@ class AuthServiceTest {
         when(encoder.matches(any(), any())).thenReturn(true);
         when(jwt.generateToken(eq("u@example.com"), eq(List.of("CUSTOMER")), any(),
                 any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -595,7 +625,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -612,7 +642,7 @@ class AuthServiceTest {
         // be rejected by JwtFilter on the next request.
         ArgumentCaptor<Long> versionCaptor = ArgumentCaptor.forClass(Long.class);
         verify(jwt).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), versionCaptor.capture(), isNull(), any(), any(), anyBoolean(), any());
+                any(), any(), any(), versionCaptor.capture(), isNull(), any(), any(), anyBoolean(), any(), any());
         assertEquals(8L, versionCaptor.getValue());
     }
 
@@ -643,7 +673,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         // The REAL bumper over the mocked repository: the password step's bump is
         // the atomic "only while still active" UPDATE, whose RETURNING value (8)
@@ -869,7 +899,7 @@ class AuthServiceTest {
         when(customerRepo.findByUserId(101L)).thenReturn(Optional.of(profile));
         when(encoder.matches("right", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
                 customerRepo, encoder, jwt).login(loginReq("right"), null, com.innbucks.userservice.service.AuditContext.none());
@@ -1002,7 +1032,7 @@ class AuthServiceTest {
         when(customerRepo.findByUserId(101L)).thenReturn(Optional.of(profile));
         when(encoder.matches("right", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         newService(userRepo, mock(TenantProfileRepository.class), customerRepo, encoder, jwt)
                 .login(loginReq("right"), null, com.innbucks.userservice.service.AuditContext.none());
@@ -1222,7 +1252,7 @@ class AuthServiceTest {
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaPolicy policy =
                 realMfaPolicy(); // real: system user on WEB → challenge
@@ -1337,7 +1367,7 @@ class AuthServiceTest {
         when(userRepo.findById(55L)).thenReturn(Optional.of(user));
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaTokenService tokenService =
                 mock(com.innbucks.userservice.security.MfaTokenService.class);
@@ -1430,7 +1460,7 @@ class AuthServiceTest {
         when(userRepo.findById(55L)).thenReturn(Optional.of(user));
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaTokenService tokenService =
                 mock(com.innbucks.userservice.security.MfaTokenService.class);
@@ -1470,7 +1500,7 @@ class AuthServiceTest {
         when(userRepo.incrementTokenVersionIfCurrent(55L, 5L)).thenReturn(6L);
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaTokenService tokenService =
                 mock(com.innbucks.userservice.security.MfaTokenService.class);
@@ -1493,7 +1523,7 @@ class AuthServiceTest {
         assertEquals("tok", resp.getToken());
         ArgumentCaptor<Long> minted = ArgumentCaptor.forClass(Long.class);
         verify(jwt).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), minted.capture(), any(), any(), any(), anyBoolean(), any());
+                any(), any(), any(), minted.capture(), any(), any(), any(), anyBoolean(), any(), any());
         assertEquals(6L, minted.getValue(), "the session is minted at the SPENT (bumped) version");
         verify(publisher).publishAfterCommit(user.getUserUuid(), 6L);
     }
@@ -1559,7 +1589,7 @@ class AuthServiceTest {
         when(userRepo.incrementTokenVersionIfCurrent(55L, 5L)).thenReturn(6L);
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaTokenService tokenService =
                 mock(com.innbucks.userservice.security.MfaTokenService.class);
@@ -1588,7 +1618,7 @@ class AuthServiceTest {
         order.verify(mfaService).completeEnrollment(55L, "472938");
         ArgumentCaptor<Long> minted = ArgumentCaptor.forClass(Long.class);
         order.verify(jwt).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), minted.capture(), any(), any(), any(), anyBoolean(), any());
+                any(), any(), any(), minted.capture(), any(), any(), any(), anyBoolean(), any(), any());
         assertEquals(6L, minted.getValue(), "minted at the version the ENROLLMENT token's spend produced");
         verify(publisher).publishAfterCommit(user.getUserUuid(), 6L);
         // No second, synthetic login token — the presented one is what gets spent.
@@ -1696,7 +1726,7 @@ class AuthServiceTest {
         when(userRepo.findById(55L)).thenReturn(Optional.of(user));
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaTokenService tokenService =
                 mock(com.innbucks.userservice.security.MfaTokenService.class);
@@ -1732,7 +1762,7 @@ class AuthServiceTest {
         when(userRepo.findById(55L)).thenReturn(Optional.of(user));
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaTokenService tokenService =
                 mock(com.innbucks.userservice.security.MfaTokenService.class);
@@ -1920,7 +1950,7 @@ class AuthServiceTest {
         when(refreshTokenService.rotate("rt", null))
                 .thenReturn(new RefreshTokenService.Rotation(teamMember(false), "rt2", false));
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         AuthResponseDTO resp = refreshOnlyService(refreshTokenService, jwt)
                 .refresh("rt", null, AuditContext.none());
@@ -1937,7 +1967,7 @@ class AuthServiceTest {
         when(refreshTokenService.rotate("rt", null))
                 .thenReturn(new RefreshTokenService.Rotation(mfaSystemUser(), "rt2", false));
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         AuthResponseDTO resp = refreshOnlyService(refreshTokenService, jwt)
                 .refresh("rt", null, AuditContext.none());
@@ -1961,7 +1991,7 @@ class AuthServiceTest {
         when(refreshTokenService.rotate("rt", null))
                 .thenReturn(new RefreshTokenService.Rotation(cashier, "rt2", true));
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
 
         AuthResponseDTO resp = refreshServiceWithOrganizationMembers(refreshTokenService, jwt, cashier.getId())
                 .refresh("rt", null, AuditContext.none());
@@ -1971,7 +2001,7 @@ class AuthServiceTest {
         org.mockito.ArgumentCaptor<java.util.Collection<String>> roles =
                 org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
         verify(jwt).generateToken(any(), roles.capture(), any(), any(), anyInt(), anyBoolean(), any(), any(),
-                any(), any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), isNull());
+                any(), any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), isNull(), any());
         assertEquals(java.util.List.of(User.Role.CUSTOMER.name()), java.util.List.copyOf(roles.getValue()));
     }
 
@@ -2068,7 +2098,7 @@ class AuthServiceTest {
         assertThrows(com.innbucks.userservice.exception.StaffInvitePendingException.class,
                 () -> svc.issueToken(user, "my-dev"));
         verify(jwt, never()).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(),
-                any(), any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any());
+                any(), any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any());
         verify(userRepo, never()).stampLastSignIn(anyLong(), any());
     }
 

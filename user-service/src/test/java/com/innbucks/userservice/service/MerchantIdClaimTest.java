@@ -141,7 +141,7 @@ class MerchantIdClaimTest {
         ArgumentCaptor<UUID> shopId = ArgumentCaptor.forClass(UUID.class);
         verify(jwt).generateToken(anyString(), any(), any(), any(), anyInt(), anyBoolean(),
                 any(), merchantId.capture(), shopId.capture(), any(), any(), any(), anyLong(), any(),
-                any(), any(), anyBoolean(), any());
+                any(), any(), anyBoolean(), any(), any());
         return new Scope(merchantId.getValue(), shopId.getValue());
     }
 }

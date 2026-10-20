@@ -138,6 +138,30 @@ class JwtUtilTest {
         assertNull(jwtUtil.extractHomeCountry(foreign));
     }
 
+    private String mint(String phone, String storedHomeCountry) {
+        return jwtUtil.generateToken("till@gaap.co.za", java.util.List.of("SHOP_USER"), java.util.List.of(),
+                java.util.List.of("loyalty"), 0, true, phone,
+                java.util.UUID.randomUUID(), java.util.UUID.randomUUID(), null, null, null, 1L, null,
+                java.util.UUID.randomUUID(), null, false, null, storedHomeCountry);
+    }
+
+    @Test
+    void generateToken_storedHomeCellWinsOverAForeignPhone() {
+        // A till operator created in this cell with a South African number:
+        // the account lives here, so its tokens must say ZW. Derived from the
+        // phone they said ZA, and every loyalty call was 409 wrong_cell.
+        assertEquals("ZW", jwtUtil.extractHomeCountry(mint("+27832994054", "ZW")));
+        assertEquals("ZW", jwtUtil.extractHomeCountry(mint("+15551234567", "zw")));
+        assertEquals("ZW", jwtUtil.extractHomeCountry(mint(null, "ZW")));
+    }
+
+    @Test
+    void generateToken_withNoStoredHomeCell_theDiallingPrefixStillDecides() {
+        assertEquals("ZA", jwtUtil.extractHomeCountry(mint("+27832994054", null)));
+        assertEquals("KE", jwtUtil.extractHomeCountry(mint("+254712345678", " ")));
+        assertNull(jwtUtil.extractHomeCountry(mint("+15551234567", null)));
+    }
+
     @Test
     void generateToken_roundTripsUserUuidAndOrganizerUuid() {
         // The two stable cross-service claims downstream services rely on
