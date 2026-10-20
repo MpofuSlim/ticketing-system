@@ -350,7 +350,8 @@ public class FederatedLoginService {
 
     /** Shaped exactly like OtpService.materializeOrRefreshLocalAccount, minus the chosen password. */
     private User createCustomer(String phone) {
-        String homeCountry = MsisdnCountryResolver.resolve(phone).orElse(deploymentCountry);
+        // This cell's country for an adopted country (CELLS_ADOPTED_COUNTRIES), else the prefix.
+        String homeCountry = cellAffinityChecker.homeCountryFor(phone);
         User user = User.builder()
                 .firstName("Customer")
                 .lastName("Pending")

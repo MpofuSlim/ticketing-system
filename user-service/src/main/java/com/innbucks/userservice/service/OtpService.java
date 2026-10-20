@@ -534,6 +534,21 @@ public class OtpService {
         return MsisdnValidator.normalizeToE164(phoneNumber, deploymentCountry).orElse(phoneNumber);
     }
 
+    /** Optional: decides an adopted country's home cell (CELLS_ADOPTED_COUNTRIES).
+     *  Setter-injected so the plain-{@code new} unit tests are unchanged; absent
+     *  there, the home cell is the number's prefix, as it always was. */
+    private com.innbucks.userservice.cells.CellAffinityChecker cellAffinityChecker;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setCellAffinityChecker(com.innbucks.userservice.cells.CellAffinityChecker cellAffinityChecker) {
+        this.cellAffinityChecker = cellAffinityChecker;
+    }
+
+    private String homeCountryFor(String phone) {
+        return cellAffinityChecker != null ? cellAffinityChecker.homeCountryFor(phone)
+                : MsisdnCountryResolver.resolve(phone).orElse(deploymentCountry);
+    }
+
     private boolean isDomesticMsisdn(String phoneNumber) {
         return MsisdnCountryResolver.resolve(phoneNumber)
                 .map(c -> c.equalsIgnoreCase(deploymentCountry))
@@ -590,8 +605,7 @@ public class OtpService {
             // foreign numbers fall back to the deployment country so the new
             // NOT NULL column is satisfied without rejecting any historical
             // registration shape.
-            String homeCountry = MsisdnCountryResolver.resolve(pending.getPhoneNumber())
-                    .orElse(deploymentCountry);
+            String homeCountry = homeCountryFor(pending.getPhoneNumber());
             User user = User.builder()
                     .firstName("Customer")
                     .lastName("Pending")

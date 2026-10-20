@@ -96,6 +96,8 @@ class FederatedLoginServiceTest {
         loyalty = mock(LoyaltyServiceClient.class);
         auditService = mock(AuditService.class);
         affinity = mock(CellAffinityChecker.class);
+        // The real prefix rule with nothing adopted: a +263 number homes in ZW.
+        when(affinity.homeCountryFor(any())).thenReturn("ZW");
     }
 
     private FederatedLoginService service(boolean enabled) {

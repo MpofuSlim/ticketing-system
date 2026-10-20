@@ -57,6 +57,22 @@ class CellLookupControllerTest {
     }
 
     @Test
+    void adoptedCountry_isHomedInThisCell_notSentToACellThatDoesNotExist() {
+        CellRegistry registry = new CellRegistry("{\"ZW\":\"https://dtx.innbucks.co.zw\"}", mapper);
+        registry.parse();
+        CellLookupController c = new CellLookupController(registry);
+        c.setAffinity(new CellAffinityChecker("ZW", registry, "ZA"));
+
+        ResponseEntity<ApiResult<CellLookupController.HomeCellLookup>> za = c.lookup("+27832994054");
+        assertThat(za.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(za.getBody().getData().homeCountry()).isEqualTo("ZW");
+        assertThat(za.getBody().getData().homeBaseUrl()).isEqualTo("https://dtx.innbucks.co.zw");
+
+        // Only the listed country is adopted.
+        assertThat(c.lookup("+254712345678").getBody().getData().homeCountry()).isEqualTo("KE");
+    }
+
+    @Test
     void unknownMsisdnPrefix_returns404() {
         // A US number isn't in any InnBucks market — 404, not 200 with null URL.
         CellLookupController c = controllerWith("{\"ZW\":\"https://dtx.innbucks.co.zw\"}");

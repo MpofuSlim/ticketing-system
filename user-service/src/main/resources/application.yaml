@@ -296,6 +296,10 @@ innbucks:
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
   cells:
     registry: ${INNBUCKS_CELLS_REGISTRY:{}}
+    # Countries with no cell of their own whose numbers this cell takes in as
+    # its own (comma-separated ISO codes, e.g. "ZA"). Empty = off: a number is
+    # homed by its dialling code, as before. See CellAffinityChecker.adopts.
+    adopted-countries: ${CELLS_ADOPTED_COUNTRIES:}
   auth-rate-limit:
     login:
       per-identifier-max: ${AUTH_LOGIN_PER_IDENTIFIER_MAX:5}
