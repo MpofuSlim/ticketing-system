@@ -57,8 +57,82 @@ public class StaffPolicyException extends RuntimeException {
                 TARGET_NOT_MANAGEABLE_MESSAGE, Map.of("reason", reason));
     }
 
-    /** {@code reason}: the target is the platform-owner account. */
+    /**
+     * {@code reason}: the target holds SUPER_ADMIN — the seeded owner or a
+     * deputy (V52). No admin endpoint acts on a SUPER_ADMIN account; the owner
+     * removes a deputy only by demoting it first.
+     */
     public static final String REASON_SUPER_ADMIN = "super_admin";
+    /**
+     * {@code reason}: the target is the SEEDED platform owner (V52), which nobody
+     * — the owner included — can demote or otherwise act on.
+     */
+    public static final String REASON_PLATFORM_OWNER = "platform_owner";
+
+    // ---------------------------------------------------------------------
+    // More than one SUPER_ADMIN (V52): only the seeded owner promotes and
+    // demotes. Messages are what the console shows and the Swagger examples
+    // quote; grep for the constant before changing one.
+    // ---------------------------------------------------------------------
+
+    public static final String PLATFORM_OWNER_ONLY = "platform_owner_only";
+    public static final String PLATFORM_OWNER_ONLY_MESSAGE =
+            "Only the platform owner can promote or demote a SUPER_ADMIN.";
+    public static final String ALREADY_SUPER_ADMIN = "already_super_admin";
+    public static final String ALREADY_SUPER_ADMIN_MESSAGE = "This account is already a SUPER_ADMIN.";
+    public static final String NOT_SUPER_ADMIN = "not_super_admin";
+    public static final String NOT_SUPER_ADMIN_MESSAGE = "This account is not a SUPER_ADMIN.";
+    public static final String MFA_NOT_ENROLLED = "mfa_not_enrolled";
+    public static final String MFA_NOT_ENROLLED_MESSAGE =
+            "This account hasn't set up two-step verification. They must sign in and set it up before they "
+                    + "can become a SUPER_ADMIN.";
+    public static final String SUPER_ADMIN_TARGET_INELIGIBLE = "super_admin_target_ineligible";
+    /** {@code reason} values beyond {@code StaffEligibility.Ineligibility}'s tags. */
+    public static final String REASON_ACCOUNT_INACTIVE = "account_inactive";
+    public static final String REASON_NOT_APPROVED = "not_approved";
+
+    /** 403 {@code platform_owner_only}: the caller is not the seeded platform owner. */
+    public static StaffPolicyException platformOwnerOnly() {
+        return new StaffPolicyException(HttpStatus.FORBIDDEN, PLATFORM_OWNER_ONLY, PLATFORM_OWNER_ONLY_MESSAGE,
+                Map.of());
+    }
+
+    public static StaffPolicyException alreadySuperAdmin() {
+        return new StaffPolicyException(HttpStatus.CONFLICT, ALREADY_SUPER_ADMIN, ALREADY_SUPER_ADMIN_MESSAGE,
+                Map.of());
+    }
+
+    public static StaffPolicyException notSuperAdmin() {
+        return new StaffPolicyException(HttpStatus.CONFLICT, NOT_SUPER_ADMIN, NOT_SUPER_ADMIN_MESSAGE, Map.of());
+    }
+
+    public static StaffPolicyException mfaNotEnrolled() {
+        return new StaffPolicyException(HttpStatus.CONFLICT, MFA_NOT_ENROLLED, MFA_NOT_ENROLLED_MESSAGE, Map.of());
+    }
+
+    /** 409 {@code super_admin_target_ineligible}, {@code data.reason}, one sentence per reason. */
+    public static StaffPolicyException superAdminTargetIneligible(String reason) {
+        return new StaffPolicyException(HttpStatus.CONFLICT, SUPER_ADMIN_TARGET_INELIGIBLE,
+                superAdminTargetIneligibleMessage(reason), Map.of("reason", reason));
+    }
+
+    public static String superAdminTargetIneligibleMessage(String reason) {
+        return switch (reason) {
+            case REASON_ACCOUNT_INACTIVE -> "Only an active account can become a SUPER_ADMIN.";
+            case REASON_NOT_APPROVED -> "Only an approved account can become a SUPER_ADMIN.";
+            case "off_domain" -> "Only an InnBucks staff account can become a SUPER_ADMIN: this email is not "
+                    + "a staff address.";
+            case "unverified" -> "Only an InnBucks staff account can become a SUPER_ADMIN: this account's "
+                    + "email has never been confirmed. Send them a staff invite first.";
+            case "no_profile" -> "Only an InnBucks staff account that has accepted its invite can become a "
+                    + "SUPER_ADMIN.";
+            case ADOPTION_HOLDS_NON_STAFF_ROLES -> "This account also holds business roles. Remove them with "
+                    + "PUT /admin/users/{id}/roles first.";
+            case ADOPTION_ORGANIZATION_MEMBER -> "This account still belongs to a business organization. "
+                    + "A SUPER_ADMIN can't belong to a business.";
+            default -> "This account can't become a SUPER_ADMIN.";
+        };
+    }
     /**
      * {@code reason}: the caller does not hold everything the thing they are
      * handing out (or the account they are acting on) holds.
