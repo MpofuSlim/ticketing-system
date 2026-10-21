@@ -53,6 +53,31 @@ public class DataInitializer implements CommandLineRunner {
     @Transactional
     public void run(String... args) {
         User existing = userRepository.findByEmail(adminEmail).orElse(null);
+
+        // V52: the platform owner is a property of ONE row, not of whatever
+        // address BOOTSTRAP_ADMIN_EMAIL names today. When another row already
+        // holds it (the address was rotated, or the owner's row moved), seeding
+        // or adopting here would mint a SUPER_ADMIN that the owner never
+        // promoted — the one thing only the owner may do. Refuse, leave every
+        // row as it is, and keep booting (fail closed for the privilege, never
+        // for the service).
+        User owner = userRepository.findByPlatformOwnerTrue().orElse(null);
+        if (owner != null && (existing == null || !owner.getId().equals(existing.getId()))) {
+            String refusal = "another account (userId=" + owner.getId() + ") is already the platform owner";
+            log.error("REFUSING to seed or adopt a SUPER_ADMIN at BOOTSTRAP_ADMIN_EMAIL '{}': {}. A second "
+                    + "SUPER_ADMIN is created only by the platform owner through POST /admin/super-admins/{userId}. "
+                    + "Point BOOTSTRAP_ADMIN_EMAIL back at the owner's address, then restart.", adminEmail, refusal);
+            if (auditService != null) {
+                auditService.recordFailure(
+                        com.innbucks.userservice.service.AuditEventType.BOOTSTRAP_ADMIN_SEED_REFUSED,
+                        null, com.innbucks.userservice.service.AuditService.ACTOR_TYPE_SYSTEM,
+                        adminEmail, com.innbucks.userservice.service.AuditService.TARGET_TYPE_USER,
+                        refusal, java.util.Map.of("email", adminEmail),
+                        com.innbucks.userservice.service.AuditContext.none());
+            }
+            return;
+        }
+
         if (existing == null) {
             String password = resolveSeedPassword();
             if (password == null) {
@@ -80,7 +105,9 @@ public class DataInitializer implements CommandLineRunner {
                     .mustChangePassword(true)
                     .build();
             userRepository.save(admin);
-            log.info("Super admin '{}' seeded; must change password on first login.", adminEmail);
+            stampPlatformOwner(admin);
+            log.info("Super admin '{}' seeded as the platform owner; must change password on first login.",
+                    adminEmail);
             if (auditService != null) {
                 auditService.recordSuccess(
                         com.innbucks.userservice.service.AuditEventType.BOOTSTRAP_ADMIN_CREATED,
@@ -172,6 +199,7 @@ public class DataInitializer implements CommandLineRunner {
             userRepository.save(existing);
             log.info("Super admin '{}' updated to current schema.", adminEmail);
         }
+        stampPlatformOwner(existing);
         if (granted) {
             log.warn("Granted SUPER_ADMIN to the pre-existing account at '{}' and flagged it to change password "
                     + "at next login.", adminEmail);
@@ -183,6 +211,25 @@ public class DataInitializer implements CommandLineRunner {
                         java.util.Map.of("email", adminEmail),
                         com.innbucks.userservice.service.AuditContext.none());
             }
+        }
+    }
+
+    /**
+     * Stamps {@code platform_owner} (V52) on the row this seeder just seeded or
+     * adopted — through {@link UserRepository#markPlatformOwner}, the column's
+     * one writer, which only ever stamps when no OTHER row holds the flag and
+     * never clears it anywhere. A no-op for a row that is already the owner.
+     */
+    private void stampPlatformOwner(User admin) {
+        if (admin.isPlatformOwner() || admin.getId() == null) {
+            return;
+        }
+        if (userRepository.markPlatformOwner(admin.getId()) == 1) {
+            log.info("Account userId={} at '{}' is now the platform owner.", admin.getId(), adminEmail);
+        } else {
+            log.error("Could not stamp the account at '{}' (userId={}) as the platform owner: another account "
+                    + "already is. It keeps SUPER_ADMIN but cannot promote or demote anyone.",
+                    adminEmail, admin.getId());
         }
     }
 

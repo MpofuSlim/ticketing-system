@@ -263,6 +263,26 @@ public class User {
     private long tokenVersion = 0;
 
     /**
+     * True on exactly one row at most: the SEEDED platform owner (V52), the
+     * SUPER_ADMIN that {@code DataInitializer} seeded or adopted at
+     * {@code BOOTSTRAP_ADMIN_EMAIL}. Only the owner may promote an account to
+     * SUPER_ADMIN or demote one ({@code PlatformOwnerGuard}); a deputy SUPER_ADMIN
+     * holds the same role and wildcard but not this flag. Nobody can act on the
+     * owner's account through the admin API.
+     *
+     * <p>Neither insertable nor updatable, and no setter: an entity save can
+     * never move ownership, stale or not. The ONE writer is
+     * {@code UserRepository.markPlatformOwner}, called only by
+     * {@code DataInitializer} (pinned by {@code PlatformOwnerWriterSitesTest}).
+     * The database backs it with {@code uq_users_platform_owner}, a partial
+     * unique index that admits a single TRUE row. Unit tests build an owner with
+     * the builder; a builder value is never persisted.
+     */
+    @Column(name = "platform_owner", nullable = false, insertable = false, updatable = false)
+    @Setter(AccessLevel.NONE)
+    private boolean platformOwner;
+
+    /**
      * Running count of consecutive wrong-password attempts. Bumped on
      * every failed /auth/login against this account; reset to 0 on a
      * successful login or when an expired {@link #lockedUntil} window
@@ -330,6 +350,15 @@ public class User {
      */
     public boolean hasRole(Role role) {
         return role != null && hasRole(role.name());
+    }
+
+    /**
+     * Whether this row is the seeded platform owner (V52) — Lombok's getter for
+     * {@link #platformOwner}, spelled out because callers read it as a question
+     * about the account, not a column.
+     */
+    public boolean isPlatformOwner() {
+        return platformOwner;
     }
 
     /** Whether the account holds this role name — built-in or operator-created. */

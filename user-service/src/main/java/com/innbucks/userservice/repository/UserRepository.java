@@ -185,6 +185,25 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Long deactivateAndIncrementTokenVersion(@Param("id") Long id);
 
     /**
+     * The ONE writer of {@code users.platform_owner} (V52): stamps the seeded
+     * owner, and only when no OTHER row holds the flag already — the guard and
+     * the write are one statement, so it can never move ownership from one row
+     * to another, and {@code uq_users_platform_owner} backs it in the database.
+     * Never clears the flag anywhere. Called only by {@code DataInitializer}
+     * ({@code PlatformOwnerWriterSitesTest}).
+     *
+     * @return 1 when the row is (now) the owner, 0 when another row already is
+     *         (or the id is unknown)
+     */
+    @Modifying(flushAutomatically = true)
+    @Query(value = "UPDATE users SET platform_owner = TRUE WHERE id = :id "
+            + "AND NOT EXISTS (SELECT 1 FROM users o WHERE o.platform_owner AND o.id <> :id)", nativeQuery = true)
+    int markPlatformOwner(@Param("id") Long id);
+
+    /** The seeded platform owner's row (V52), if one has been stamped. */
+    Optional<User> findByPlatformOwnerTrue();
+
+    /**
      * Stamp {@code credential_delivered_at} and nothing else.
      *
      * <p>Deliberately a targeted UPDATE rather than a
