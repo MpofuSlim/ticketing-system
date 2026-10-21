@@ -48,8 +48,10 @@ public class StaffPolicyException extends RuntimeException {
 
     /**
      * 403 {@code target_not_manageable}. {@code reason} says why —
-     * {@code super_admin}: the platform-owner account is never managed through
-     * the admin API; {@code exceeds_your_authority}: the account holds a
+     * {@code super_admin}: no SUPER_ADMIN account (the seeded owner or a deputy)
+     * is managed through the admin API; {@code platform_owner}: the seeded owner,
+     * which not even its own promote/demote endpoint may act on;
+     * {@code exceeds_your_authority}: the account holds a
      * permission the caller does not.
      */
     public static StaffPolicyException targetNotManageable(String reason) {
