@@ -278,10 +278,11 @@ public class MfaService {
      *
      * <ul>
      *   <li><b>Refuses a SUPER_ADMIN target</b> — 403 {@code target_not_manageable}
-     *       ({@code reason: super_admin}). Stripping the platform owner's second
-     *       factor is a takeover step, not a recovery; that account is managed
-     *       through {@code BOOTSTRAP_ADMIN_PASSWORD} only, the same rule
-     *       {@code setActive} and {@code setRoles} already apply.</li>
+     *       ({@code reason: super_admin}) — the seeded owner and every deputy
+     *       (V52) alike. Stripping a SUPER_ADMIN's second factor is a takeover
+     *       step, not a recovery, and every SUPER_ADMIN holds the wildcard, so
+     *       the authority check below would let one SUPER_ADMIN do it to another;
+     *       the same rule {@code setActive} and {@code setRoles} apply.</li>
      *   <li><b>Refuses a target holding a permission, or a NAMED staff role, the
      *       caller does not</b> — 403 {@code target_not_manageable} ({@code reason:
      *       exceeds_your_authority}), read from the caller's live roles

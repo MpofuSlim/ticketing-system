@@ -166,6 +166,35 @@ public class StaffEligibility {
         return Optional.empty();
     }
 
+    /**
+     * Why {@code user} may not be PROMOTED to SUPER_ADMIN (V52), or empty when it
+     * may. A deputy SUPER_ADMIN is always an InnBucks staff account with its own
+     * invite-redeemed credentials — never a merchant, organizer or customer
+     * account — so, in order:
+     * {@code account_inactive}, {@code not_approved}, then this class's
+     * {@link Ineligibility} tags ({@code off_domain}, {@code unverified},
+     * {@code no_profile}), then {@code holds_non_staff_roles} and
+     * {@code organization_member} (the adoption vocabulary). The caller has
+     * already refused a current SUPER_ADMIN, which {@link #ineligibility} would
+     * otherwise wave through.
+     *
+     * <p>503 {@code staff_domains_unconfigured} on a cell naming no staff
+     * domain: with none, nobody is a staff account and the answer would be a
+     * misleading {@code off_domain}.
+     */
+    public Optional<String> superAdminPromotionBlocker(User user) {
+        emailPolicy.requireConfigured();
+        if (!user.isActive()) return Optional.of(StaffPolicyException.REASON_ACCOUNT_INACTIVE);
+        if (!user.isApproved()) return Optional.of(StaffPolicyException.REASON_NOT_APPROVED);
+        Optional<Ineligibility> why = ineligibility(user);
+        if (why.isPresent()) return Optional.of(why.get().tag());
+        if (!roleGrantGuard.nonStaffRoles(user).isEmpty()) {
+            return Optional.of(StaffPolicyException.ADOPTION_HOLDS_NON_STAFF_ROLES);
+        }
+        if (hasActiveOrganization(user)) return Optional.of(StaffPolicyException.ADOPTION_ORGANIZATION_MEMBER);
+        return Optional.empty();
+    }
+
     // ------------------------------------------------------------------
     // Guards (each refusal audited, then thrown)
     // ------------------------------------------------------------------

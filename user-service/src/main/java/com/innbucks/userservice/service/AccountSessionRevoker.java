@@ -122,7 +122,22 @@ public class AccountSessionRevoker {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public Revocation sweepOnReactivation(User user) {
-        return endSessions(user, tokenVersionBumper.bump(user), "reactivation");
+        return signOutEverywhere(user, "reactivation");
+    }
+
+    /**
+     * Signs an ACTIVE account out everywhere without deactivating it: bump
+     * {@code token_version} (published after commit), revoke every refresh
+     * family, clear device trust and delete live reset codes. For a change of
+     * authority that every open session must pick up through a fresh sign-in —
+     * a SUPER_ADMIN promotion or demotion (V52) — and the shared core of
+     * {@link #sweepOnReactivation}.
+     *
+     * @param reason a short machine-readable tag for the log line
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Revocation signOutEverywhere(User user, String reason) {
+        return endSessions(user, tokenVersionBumper.bump(user), reason);
     }
 
     private Revocation endSessions(User user, long version, String reason) {

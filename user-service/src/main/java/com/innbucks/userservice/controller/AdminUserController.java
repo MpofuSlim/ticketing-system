@@ -65,8 +65,8 @@ public class AdminUserController {
                     row only — it is never sent to the user. The body may be omitted entirely.
 
                     **Refuses a SUPER_ADMIN target** with `403 target_not_manageable` (`reason:
-                    super_admin`): the platform-owner account is managed only through
-                    `BOOTSTRAP_ADMIN_PASSWORD`.
+                    super_admin`) — the seeded platform owner and every deputy alike, so no SUPER_ADMIN
+                    can open up another's second factor.
 
                     **Refuses a target holding any permission the caller does not, or a platform staff
                     built-in (`PRODUCT_*`, `CALL_CENTER_*`, `FRAUD_DESK`) the caller does not hold
@@ -163,8 +163,8 @@ public class AdminUserController {
                     "accounts. Omit to return all status values.\n\n" +
                     "Pass `?includeCustomers=true` to opt back in to the customer-only population (e.g. " +
                     "for support triage). Defaults to `false`.\n\n" +
-                    "**Order** (the same on every load, whatever the filters): platform owners — accounts " +
-                    "holding `SUPER_ADMIN` — first, then everyone else. Within each group, alphabetical by " +
+                    "**Order** (the same on every load, whatever the filters): accounts holding " +
+                    "`SUPER_ADMIN` — the seeded platform owner and any deputies — first, then everyone else. Within each group, alphabetical by " +
                     "`firstName`, then `lastName`, ignoring case; an account with no name comes after every " +
                     "account that has one, and two accounts with the same name are ordered by `id`. Show the " +
                     "rows in the order they arrive.\n\n" +
@@ -411,10 +411,10 @@ public class AdminUserController {
                     "session epoch again and revokes any refresh token and device trust still on file (an " +
                     "account deactivated before deactivation ended sessions may still hold some), so the user " +
                     "signs in again from a clean slate.\n\n" +
-                    "**Refuses to act on a SUPER_ADMIN target** — disabling the platform-owner account would " +
-                    "lock the platform out of itself, and reactivating it requires a SUPER_ADMIN, so no caller " +
-                    "is ever permitted to toggle it. The SUPER_ADMIN's `active` state is fixed at seed time " +
-                    "(BOOTSTRAP_ADMIN_PASSWORD).\n\n" +
+                    "**Refuses to act on any SUPER_ADMIN target** — the seeded platform owner (disabling it " +
+                    "would lock the platform out of itself) and every deputy alike, so no SUPER_ADMIN can " +
+                    "switch another off. The platform owner removes a deputy by demoting it first " +
+                    "(`DELETE /admin/super-admins/{userId}`).\n\n" +
                     "**Deactivating a STAFF-role holder needs the caller to hold every permission the " +
                     "account holds, and every platform staff built-in it holds** (read from the caller's " +
                     "current roles; SUPER_ADMIN passes both) — otherwise `403 target_not_manageable` " +
@@ -508,7 +508,7 @@ public class AdminUserController {
                                     @ExampleObject(name = "Target is SUPER_ADMIN", value = """
                                             {
                                               "code": "403 FORBIDDEN",
-                                              "message": "The SUPER_ADMIN account cannot be activated or deactivated.",
+                                              "message": "A SUPER_ADMIN account cannot be activated or deactivated. The platform owner can demote a deputy first with DELETE /admin/super-admins/{userId}.",
                                               "data": null
                                             }
                                             """),
@@ -560,7 +560,7 @@ public class AdminUserController {
 
                     | Role | What it is | How it is normally assigned |
                     |---|---|---|
-                    | `SUPER_ADMIN` | Platform owner. Full access to every admin endpoint. | Seeded once from `BOOTSTRAP_ADMIN_PASSWORD`. **Never grantable or revocable here.** |
+                    | `SUPER_ADMIN` | Platform owner class. Full access to every admin endpoint. | The seeded platform owner from `BOOTSTRAP_ADMIN_PASSWORD`; deputies only by the owner through `POST /admin/super-admins/{userId}`. **Never grantable or revocable here.** |
                     | `PRODUCT_OFFICER` | Internal platform staff. Not scoped to a tenant, merchant, shop or organizer, and grants no service bundle. Treated as a system user for MFA and admin listing. | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
                     | `PRODUCT_MANAGER` | Internal platform staff, same shape as `PRODUCT_OFFICER`. | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
                     | `CALL_CENTER_AGENT` | Customer support: looks customers up and performs routine support actions (`device-security:read`, `device-security:manage`, `marketplace-support:read`, `marketplace-support:manage`, `loyalty-support:read`, `loyalty-support:manage`, `customer-messages:send`). | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
@@ -604,8 +604,9 @@ public class AdminUserController {
 
                     ### Refusals
 
-                    * The target already being a `SUPER_ADMIN`, or `SUPER_ADMIN` appearing in the
-                      submitted set — **403** either way.
+                    * The target already being a `SUPER_ADMIN` (the seeded owner or a deputy), or
+                      `SUPER_ADMIN` appearing in the submitted set — **403** either way. Promotion and
+                      demotion are `POST` / `DELETE /admin/super-admins/{userId}`, platform owner only.
                     * `SHOP_ADMIN` / `SHOP_USER` on an account with no loyalty merchant + shop, or
                       `TEAM_MEMBER` on an account with no parent organizer — **400**. Those roles
                       authorize off scope baked in at creation time; granting one without it produces
@@ -752,17 +753,17 @@ public class AdminUserController {
                                     @ExampleObject(name = "Missing permission", value = """
                                             { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
                                             """),
-                                    @ExampleObject(name = "Target is the platform owner", value = """
+                                    @ExampleObject(name = "Target is a SUPER_ADMIN", value = """
                                             {
                                               "code": "403 FORBIDDEN",
-                                              "message": "The SUPER_ADMIN account's roles cannot be changed.",
+                                              "message": "A SUPER_ADMIN account's roles cannot be changed here. The platform owner demotes a deputy with DELETE /admin/super-admins/{userId}.",
                                               "data": null
                                             }
                                             """),
                                     @ExampleObject(name = "Escalation attempt", value = """
                                             {
                                               "code": "403 FORBIDDEN",
-                                              "message": "SUPER_ADMIN cannot be granted through this endpoint; that account is seeded once via BOOTSTRAP_ADMIN_PASSWORD.",
+                                              "message": "SUPER_ADMIN cannot be granted through this endpoint. Only the platform owner can promote an account, with POST /admin/super-admins/{userId}.",
                                               "data": null
                                             }
                                             """)
@@ -848,12 +849,12 @@ public class AdminUserController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Target is a SUPER_ADMIN (credential managed via BOOTSTRAP_ADMIN_PASSWORD)",
+                    description = "Target is a SUPER_ADMIN (the seeded owner or a deputy)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "Cannot reset the temporary password of a SUPER_ADMIN; that credential is managed via BOOTSTRAP_ADMIN_PASSWORD",
+                                      "message": "Cannot reset the temporary password of a SUPER_ADMIN.",
                                       "data": null
                                     }
                                     """))),

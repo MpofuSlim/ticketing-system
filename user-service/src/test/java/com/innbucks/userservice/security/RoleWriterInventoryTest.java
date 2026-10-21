@@ -101,6 +101,11 @@ class RoleWriterInventoryTest {
                 "UNREACHABLE — seeds/merges the bootstrap SUPER_ADMIN only (exempt from every staff rule); the "
                         + "alias is a read in adoptionRefusalReason.",
                 "new_user", 1, "set_roles", 1, "roles_alias", 1);
+        writer("service/SuperAdminService.java",
+                "GUARDED — promote/demote add or remove SUPER_ADMIN only: PlatformOwnerGuard (the seeded owner's "
+                        + "live row), lockAllByNameIn then lockById, StaffEligibility.superAdminPromotionBlocker "
+                        + "(staff-eligible, staff roles only, no business) and MFA enrolled; REQUIRED audit.",
+                "mutate_roles", 2);
         writer("security/MfaPolicy.java",
                 "READ ONLY — the alias is read to evaluate the gate-operator exemption.",
                 "roles_alias", 1);

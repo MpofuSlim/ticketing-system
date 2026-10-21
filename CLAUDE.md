@@ -772,6 +772,11 @@ permission, where "holds everything it holds" would be vacuously true.
   it could never have appointed. Business accounts are not gated on deactivation
   — their authority reaches one business. Only ADDED roles/codes are checked;
   what an account or role already holds is not.
+- **Every SUPER_ADMIN holds `*` — the seeded owner and its deputies alike
+  (V52)** — so these rules cannot tell them apart. What stops a deputy acting on
+  another SUPER_ADMIN is the explicit SUPER_ADMIN-target refusal in every admin
+  writer, and promotion/demotion is owner-only through `PlatformOwnerGuard` (see
+  "More than one SUPER_ADMIN" below).
 - **The two sides are compared differently, on purpose.** The caller's
   authority is what their roles EFFECTIVELY grant (a stale code grants them
   nothing); what they hand out or act against is read as STORED, so a stale code
@@ -832,6 +837,81 @@ permission, where "holds everything it holds" would be vacuously true.
   not on role names. `AuthResponsePermissionsFieldTest`.
 - `ShopStaffService` / `TeamMemberService` service-layer built-in-role guards are
   deliberately untouched by any of this.
+
+## More than one SUPER_ADMIN — the seeded owner promotes (user-service V52)
+
+**Owner decisions (2026-10-21): there may be more than one SUPER_ADMIN; ONLY the
+seeded platform owner promotes an account to SUPER_ADMIN or demotes one; NOBODY
+touches the owner.** A second SUPER_ADMIN (a "deputy") is the same role name
+holding the same `*` wildcard (expanded at mint by `PermissionResolver`), so
+loyalty, booking, event, seat and marketplace, which check the name, recognise it
+with no change outside user-service. A deputy can do everything the owner can
+except promote or demote.
+
+- **Who the owner is lives on its row, never in a request.** `users.platform_owner`
+  (V52), a partial unique index (`uq_users_platform_owner … WHERE platform_owner`)
+  so at most one row is TRUE. The entity maps it `insertable = false, updatable =
+  false` with no setter; the ONE writer is `UserRepository.markPlatformOwner`
+  (stamps only when no other row holds it, never clears), called only by
+  `DataInitializer` on the row it seeds or adopts. `PlatformOwnerWriterSitesTest`
+  pins all of it. Never answer "is this the owner" by comparing an email with
+  `BOOTSTRAP_ADMIN_EMAIL` (configuration, rotatable) or from a token claim (a
+  deputy's token is identical).
+- **V52's backfill** stamps the one account holding SUPER_ADMIN and **FAILS** when
+  more than one does — which is the owner is an operator's decision. Remove
+  SUPER_ADMIN from the others in `user_roles`, deploy, and let the owner promote
+  them again. A database with none stamps nobody. `PlatformOwnerMigrationPostgresIT`.
+- **`DataInitializer` refuses to seed or adopt** at `BOOTSTRAP_ADMIN_EMAIL` when
+  ANOTHER row is already the owner (ERROR + `BOOTSTRAP_ADMIN_SEED_REFUSED`, boot
+  continues): rotating the address must not mint a SUPER_ADMIN the owner never
+  promoted. Point it back at the owner's address.
+- **`PlatformOwnerGuard.requireOwner`** is the one owner check: the caller's LIVE
+  row has `platform_owner`, is `active` and still holds SUPER_ADMIN, else `403
+  platform_owner_only` (recorded as `STAFF_GRANT_REFUSED`).
+- **Endpoints** (`AdminSuperAdminController`, `/admin/super-admins`, on the
+  existing `user-admin-route` — no gateway change; all `hasRole('SUPER_ADMIN')`):
+  - `GET` — every SUPER_ADMIN, owner first; any SUPER_ADMIN may read it.
+  - `POST /{userId}` — promote, owner only. The target must be active, approved,
+    staff-eligible (`StaffEligibility`: staff domain, email proven, invite
+    accepted), hold only staff roles and belong to no business — else `409
+    super_admin_target_ineligible`, `data.reason` one of `account_inactive`,
+    `not_approved`, `off_domain`, `unverified`, `no_profile`,
+    `holds_non_staff_roles`, `organization_member`
+    (`StaffEligibility.superAdminPromotionBlocker`) — not already SUPER_ADMIN (`409
+    already_super_admin`), and have MFA enrolled (`409 mfa_not_enrolled`: a
+    SUPER_ADMIN without a second factor must never exist). A merchant, organizer or
+    customer account can never be promoted; the person gets a staff account first.
+    Other roles are kept.
+  - `DELETE /{userId}` — demote, owner only. Never the owner, the caller included
+    (`403 target_not_manageable`, `reason: platform_owner`); a non-SUPER_ADMIN is
+    `409 not_super_admin`. Other roles kept; an account left with none stays
+    active and authorizes nothing. Demotion does NOT deactivate — to switch the
+    person off too, demote then `POST /admin/staff/{id}/deactivate`.
+- **Shape of both changes** (`SuperAdminService`): owner check →
+  `lockAllByNameIn([SUPER_ADMIN])` → `lockById(target)` (roles, then users — the
+  grant order `setRoles` and `setPermissions` use) → checks → role change → flush
+  → `AccountSessionRevoker.signOutEverywhere` (atomic bump through
+  `TokenVersionBumper`, published after commit; every refresh family revoked;
+  device trust and live reset codes cleared; never deactivated) → REQUIRED audit
+  `SUPER_ADMIN_PROMOTED` / `SUPER_ADMIN_DEMOTED` (actor = owner, target = the
+  account) as the LAST statement (`503 audit_unavailable` rolls it all back).
+  Promotion clears device trust too, so the deputy's first SUPER_ADMIN session
+  passes a fresh second factor.
+- **Every other admin writer still refuses EVERY SUPER_ADMIN target, deputies
+  included**, which is what keeps deputies off each other and off the owner:
+  `setRoles` (also still refuses GRANTING SUPER_ADMIN — promotion is only the
+  owner's endpoint, since every SUPER_ADMIN holds `users:roles:write`),
+  `setActive`, reset-temp-password, `MfaService.adminReset`, the
+  `StaffAccountService` lifecycle, registration rejection and the support
+  console. Don't relax any of them to "the owner only": RoleGrantGuard cannot help
+  here, because a deputy holds `*` and so "holds everything the target holds".
+  `StaffAccountService` create still refuses SUPER_ADMIN (`reserved`): a deputy is
+  promoted from an existing account, never created as one.
+- **Minting is unchanged:** `StaffMintFilter`, `StaffEligibility` and
+  `PermissionResolver` key on the role, so a deputy is exempt from the
+  staff-eligibility enforce mode and gets the wildcard exactly like the owner
+  (`StaffMintFilterTest.deputySuperAdminExempt`). `AdminUserOrder` lists every
+  SUPER_ADMIN holder first. Pinned end to end by `SuperAdminDeputiesDispatchTest`.
 
 ## The gate-operator 2FA exemption, and the refresh hole it left open
 
@@ -1414,7 +1494,7 @@ sent to the applicant verbatim) — `RegistrationRejectionService`, behind
   `pending_registrations`, `revoked_tokens`.
 - **Refused, with nothing changed:** approved — 409 `registration_already_decided`
   (deactivate it instead; a decided account is never deleted); a staff account —
-  409 `use_staff_endpoints`; the SUPER_ADMIN — 403; and 409
+  409 `use_staff_endpoints`; a SUPER_ADMIN — 403; and 409
   `registration_business_in_use` with `data.reason`: `other_members` (anyone else
   in the business it created), `loyalty_merchant`, `team_members` (accounts name it
   as organizer — `ON DELETE RESTRICT`, and team members are never deleted),
@@ -1464,7 +1544,8 @@ sent to the applicant verbatim) — `RegistrationRejectionService`, behind
   this without a decision. A loyalty merchant created in the moment between the
   InnRewards check and the commit is not seen either.
 - **The System Users list order (owner decision, 2026-10-08):** `GET /admin/users`
-  returns platform owners (`SUPER_ADMIN`) first, then everyone else; within each,
+  returns `SUPER_ADMIN` holders (the seeded owner and any deputies, V52) first,
+  then everyone else; within each,
   by first name then last name, case-insensitive (`Locale.ROOT`), no name last,
   ties by id. One comparator, `AdminUserOrder.SYSTEM_USERS`, applied in Java after
   loading on every branch (the list is unpaged); `AdminUserOrderTest` and
@@ -1985,8 +2066,9 @@ agent token can call directly — it would bypass all of it.
 ## SUPER_ADMIN is never scoped out of a read (owner decision, 2026-09-30)
 
 **Every GET — reports, lists, detail views — answers SUPER_ADMIN for every
-merchant, shop, organization and organizer.** SUPER_ADMIN is the account that
-oversees the whole platform; a read that 403s it is a bug, not a safeguard.
+merchant, shop, organization and organizer.** A SUPER_ADMIN — the seeded owner
+or a deputy (V52) — oversees the whole platform; a read that 403s it is a bug, not
+a safeguard.
 
 The trap is ownership checks that resolve the caller's scope from their
 ORGANIZATION (`resolveCallerMerchantIds`, "does this shop belong to a merchant

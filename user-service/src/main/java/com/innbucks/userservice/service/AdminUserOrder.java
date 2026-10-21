@@ -15,8 +15,8 @@ import java.util.Locale;
  * refreshes.
  *
  * <ol>
- *   <li>Accounts holding {@code SUPER_ADMIN} (the platform owners) first, then
- *       everyone else.</li>
+ *   <li>Accounts holding {@code SUPER_ADMIN} (the seeded platform owner and any
+ *       deputies it promoted, V52) first, then everyone else.</li>
  *   <li>Within each group, alphabetical by first name, then by last name,
  *       ignoring case ({@link Locale#ROOT}, so the order does not depend on the
  *       JVM's locale): "alice" sits beside "Alice" instead of after "Zoe".</li>
@@ -38,7 +38,7 @@ public final class AdminUserOrder {
 
     /** The order {@code GET /admin/users} returns its rows in. */
     public static final Comparator<User> SYSTEM_USERS =
-            Comparator.comparingInt((User u) -> isPlatformOwner(u) ? 0 : 1)
+            Comparator.comparingInt((User u) -> isSuperAdmin(u) ? 0 : 1)
                     .thenComparing(u -> nameKey(u.getFirstName()), NAMES)
                     .thenComparing(u -> nameKey(u.getLastName()), NAMES)
                     .thenComparing(User::getId, Comparator.nullsLast(Comparator.naturalOrder()));
@@ -46,7 +46,7 @@ public final class AdminUserOrder {
     private AdminUserOrder() {
     }
 
-    private static boolean isPlatformOwner(User user) {
+    private static boolean isSuperAdmin(User user) {
         return user.hasRole(User.Role.SUPER_ADMIN);
     }
 

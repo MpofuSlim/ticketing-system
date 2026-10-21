@@ -137,6 +137,24 @@ public enum AuditEventType {
     USER_ROLES_CHANGED,
 
     /**
+     * The seeded platform owner promoted an account to SUPER_ADMIN through
+     * {@code POST /admin/super-admins/{userId}} (V52) — a deputy SUPER_ADMIN.
+     * Actor = the owner, target = the promoted account; metadata carries both
+     * role sets and what the sign-out ended. REQUIRED
+     * ({@code AuditService.recordRequired}, the transaction's last statement):
+     * a promotion that cannot be recorded is not made.
+     */
+    SUPER_ADMIN_PROMOTED,
+
+    /**
+     * The seeded platform owner took SUPER_ADMIN off a deputy through
+     * {@code DELETE /admin/super-admins/{userId}} (V52). Same shape and the same
+     * REQUIRED rule as {@link #SUPER_ADMIN_PROMOTED}. Never fired for the owner
+     * itself, which cannot be demoted.
+     */
+    SUPER_ADMIN_DEMOTED,
+
+    /**
      * A role was created through {@code POST /admin/roles} (V35). Carries the
      * role name and the permissions it was granted.
      *

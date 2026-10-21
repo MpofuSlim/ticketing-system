@@ -48,6 +48,19 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class UserAdminService {
 
+    /** 403 on {@code PUT /admin/users/{id}/active} for any SUPER_ADMIN target. */
+    public static final String SUPER_ADMIN_ACTIVE_MESSAGE = "A SUPER_ADMIN account cannot be activated or "
+            + "deactivated. The platform owner can demote a deputy first with DELETE /admin/super-admins/{userId}.";
+    /** 403 on {@code PUT /admin/users/{id}/roles} for any SUPER_ADMIN target. */
+    public static final String SUPER_ADMIN_ROLES_MESSAGE = "A SUPER_ADMIN account's roles cannot be changed "
+            + "here. The platform owner demotes a deputy with DELETE /admin/super-admins/{userId}.";
+    /** 403 on {@code PUT /admin/users/{id}/roles} when the set names SUPER_ADMIN. */
+    public static final String SUPER_ADMIN_GRANT_MESSAGE = "SUPER_ADMIN cannot be granted through this endpoint. "
+            + "Only the platform owner can promote an account, with POST /admin/super-admins/{userId}.";
+    /** 400 on {@code POST /admin/users/{id}/reset-temp-password} for any SUPER_ADMIN target. */
+    public static final String SUPER_ADMIN_TEMP_PASSWORD_MESSAGE =
+            "Cannot reset the temporary password of a SUPER_ADMIN.";
+
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
@@ -106,16 +119,19 @@ public class UserAdminService {
         User user = userRepository.lockById(id)
                 .orElseThrow(() -> new NotFoundException("User not found: " + id));
 
-        // SUPER_ADMIN is the platform-owner account, seeded once by
-        // BOOTSTRAP_ADMIN_PASSWORD and never modified through the admin API.
-        // Disabling it would lock the platform out of itself (no other role
-        // can re-enable). 403 (not 400) — this isn't a malformed request,
-        // it's an action no caller is permitted to take, ever.
+        // No SUPER_ADMIN is ever switched on or off through the admin API —
+        // the seeded platform owner (V52) and every deputy it promoted alike.
+        // Disabling the owner would lock the platform out of itself, and
+        // letting one deputy deactivate another (or the owner) would hand
+        // deputies the power over SUPER_ADMINs that only the owner holds. The
+        // owner removes a deputy by DEMOTING it first
+        // (DELETE /admin/super-admins/{userId}); it is then an ordinary staff
+        // account. 403 (not 400) — this isn't a malformed request, it's an
+        // action no caller is permitted to take, ever.
         if (user.hasRole(User.Role.SUPER_ADMIN)) {
             log.warn("setActive refused on SUPER_ADMIN target userId={} by={} attemptedActive={}",
                     id, adminEmail == null ? "system" : adminEmail, active);
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "The SUPER_ADMIN account cannot be activated or deactivated.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, SUPER_ADMIN_ACTIVE_MESSAGE);
         }
 
         // Switching a STAFF account on goes through POST /admin/staff/{id}/reactivate
@@ -273,10 +289,12 @@ public class UserAdminService {
      * still single-use. {@code credentialDeliveredAt} is cleared so a successful
      * delivery on this fresh password updates the timestamp cleanly.
      *
-     * <p>Refuses to act on a SUPER_ADMIN target: that account's credential is
-     * owned by the {@code BOOTSTRAP_ADMIN_PASSWORD} env seed, not this
-     * notification-delivered flow. Resetting it would lock the platform owner
-     * out behind an SMS/email that may never arrive.
+     * <p>Refuses to act on any SUPER_ADMIN target — the seeded owner, whose
+     * credential is owned by the {@code BOOTSTRAP_ADMIN_PASSWORD} env seed, and
+     * every deputy (V52), a staff account whose password was set through its
+     * invite. Resetting either would lock a platform owner out behind an
+     * SMS/email that may never arrive, and would let one SUPER_ADMIN take over
+     * another.
      */
     @Transactional
     public User resetTemporaryPassword(Long id, String adminEmail, AuditContext auditContext) {
@@ -284,9 +302,7 @@ public class UserAdminService {
                 .orElseThrow(() -> new NotFoundException("User not found: " + id));
 
         if (user.hasRole(User.Role.SUPER_ADMIN)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Cannot reset the temporary password of a SUPER_ADMIN; that credential is "
-                            + "managed via BOOTSTRAP_ADMIN_PASSWORD");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, SUPER_ADMIN_TEMP_PASSWORD_MESSAGE);
         }
         // Staff set passwords through an invite, which proves the mailbox; a
         // temporary password goes out over SMS/WhatsApp as a fallback and would
@@ -353,11 +369,15 @@ public class UserAdminService {
      * rebuilds claims from this freshly-written row — and picks up the new roles.
      *
      * <p>Refuses to touch a SUPER_ADMIN target and refuses to GRANT SUPER_ADMIN.
-     * The first would let an admin strip the platform-owner account (which no
-     * other role can restore); the second would turn this endpoint into a
-     * self-service privilege-escalation path — any SUPER_ADMIN could mint more
-     * of them, and the seeded owner would lose its "one account, one credential,
-     * managed by BOOTSTRAP_ADMIN_PASSWORD" property.
+     * There may be more than one SUPER_ADMIN (V52), but only the SEEDED platform
+     * owner may make or unmake one, and only through
+     * {@code POST / DELETE /admin/super-admins/{userId}} ({@link SuperAdminService}),
+     * which checks the owner, the target's staff eligibility and its second
+     * factor. Here, the first refusal stops anyone — a deputy SUPER_ADMIN
+     * included — stripping or reshaping a SUPER_ADMIN account (the owner's above
+     * all, which nobody may touch); the second stops this endpoint becoming a
+     * way round the owner-only promotion, since every SUPER_ADMIN holds
+     * {@code users:roles:write}.
      */
     @Transactional
     public User setRoles(Long id, Set<String> roles, String adminEmail, AuditContext auditContext) {
@@ -421,16 +441,13 @@ public class UserAdminService {
         if (user.hasRole(User.Role.SUPER_ADMIN)) {
             log.warn("setRoles refused on SUPER_ADMIN target userId={} by={} requested={}",
                     id, adminEmail == null ? "system" : adminEmail, requested);
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "The SUPER_ADMIN account's roles cannot be changed.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, SUPER_ADMIN_ROLES_MESSAGE);
         }
 
         if (requested.contains(User.Role.SUPER_ADMIN.name())) {
             log.warn("setRoles refused SUPER_ADMIN grant userId={} by={}",
                     id, adminEmail == null ? "system" : adminEmail);
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "SUPER_ADMIN cannot be granted through this endpoint; that account is seeded "
-                            + "once via BOOTSTRAP_ADMIN_PASSWORD.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, SUPER_ADMIN_GRANT_MESSAGE);
         }
 
         // Scope guards. SHOP_ADMIN / SHOP_USER authorize off the loyaltyShopId
