@@ -74,6 +74,12 @@ public class AdminDispatchHarness {
     public final RoleAdminService roleAdmin = new RoleAdminService(roles, audit, guard, bumper, eligibility);
     public final UserAdminService userAdmin;
     public final MfaService mfa;
+    /** What a sign-out everywhere touches, mocked so a test can prove each step ran. */
+    public final RefreshTokenRepository refreshTokens = mock(RefreshTokenRepository.class);
+    public final DeviceTrustService deviceTrust = mock(DeviceTrustService.class);
+    /** More than one SUPER_ADMIN (V52): the real owner guard and service. */
+    public final com.innbucks.userservice.service.PlatformOwnerGuard ownerGuard;
+    public final com.innbucks.userservice.service.SuperAdminService superAdmins;
     public final MockMvc mvc;
 
     /** The roles table: every built-in as the migrations seed it, plus whatever a test adds. */
@@ -101,16 +107,20 @@ public class AdminDispatchHarness {
         });
         when(roles.findHolderIds(anyString())).thenAnswer(inv -> List.of());
 
-        AccountSessionRevoker revoker = new AccountSessionRevoker(bumper, mock(RefreshTokenRepository.class),
-                mock(DeviceTrustService.class), mock(OtpRepository.class));
+        AccountSessionRevoker revoker = new AccountSessionRevoker(bumper, refreshTokens, deviceTrust,
+                mock(OtpRepository.class));
         userAdmin = new UserAdminService(users, mock(PasswordEncoder.class), audit,
                 mock(ApplicationEventPublisher.class), mock(TenantProfileRepository.class), bumper, revoker, roles,
                 guard, eligibility);
         mfa = new MfaService(users, mock(MfaBackupCodeRepository.class), mock(PasswordEncoder.class),
                 new MfaProperties(), bumper, guard);
+        ownerGuard = new com.innbucks.userservice.service.PlatformOwnerGuard(users, guard);
+        superAdmins = new com.innbucks.userservice.service.SuperAdminService(users, roles, ownerGuard, eligibility,
+                guard, revoker, audit);
         mvc = MockMvcBuilders.standaloneSetup(
                         new RoleAdminController(roleAdmin),
-                        new AdminUserController(users, mock(TenantProfileRepository.class), userAdmin, mfa))
+                        new AdminUserController(users, mock(TenantProfileRepository.class), userAdmin, mfa),
+                        new com.innbucks.userservice.controller.AdminSuperAdminController(superAdmins))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
     }
@@ -129,6 +139,21 @@ public class AdminDispatchHarness {
                 .tokenVersion(3L).build();
         when(users.findById(id)).thenReturn(Optional.of(u));
         // setActive reads its target under the row lock (lockById).
+        when(users.lockById(id)).thenReturn(Optional.of(u));
+        when(users.findByEmail(email)).thenReturn(Optional.of(u));
+        return u;
+    }
+
+    /**
+     * The SEEDED platform owner (V52): a SUPER_ADMIN whose row carries
+     * {@code platform_owner}. The builder is the only way a test can set the
+     * flag — the entity has no setter and the column is never written by a save.
+     */
+    public User owner(long id, String email) {
+        User u = User.builder().id(id).userUuid(UUID.randomUUID()).email(email).password("x")
+                .roles(new LinkedHashSet<>(List.of(User.Role.SUPER_ADMIN.name()))).active(true).approved(true)
+                .mfaEnabled(true).platformOwner(true).tokenVersion(3L).build();
+        when(users.findById(id)).thenReturn(Optional.of(u));
         when(users.lockById(id)).thenReturn(Optional.of(u));
         when(users.findByEmail(email)).thenReturn(Optional.of(u));
         return u;

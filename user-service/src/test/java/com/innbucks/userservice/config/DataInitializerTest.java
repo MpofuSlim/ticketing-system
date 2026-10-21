@@ -188,4 +188,73 @@ class DataInitializerTest {
         assertThat(saved.getValue().getRoles()).containsExactly(User.Role.SUPER_ADMIN.name());
         assertThat(saved.getValue().isMustChangePassword()).isTrue();
     }
+
+    // --- the platform owner (V52) ----------------------------------------------
+
+    @Test
+    void aFreshlySeededAdminIsStampedAsThePlatformOwner() {
+        when(userRepository.findByEmail(ADMIN_EMAIL)).thenReturn(Optional.empty());
+        when(passwordEncoder.encode(any())).thenReturn("HASHED");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            ReflectionTestUtils.setField(u, "id", 42L);
+            return u;
+        });
+        when(userRepository.markPlatformOwner(42L)).thenReturn(1);
+
+        initializer.run();
+
+        verify(userRepository).markPlatformOwner(42L);
+    }
+
+    @Test
+    void anExistingAdminRowWithoutTheFlagIsStamped_andAnOwnerRowIsLeftAlone() {
+        User admin = rowAt(ADMIN_EMAIL);
+        admin.setRoles(new LinkedHashSet<>(Set.of(User.Role.SUPER_ADMIN.name())));
+        admin.setActive(true);
+        admin.setApproved(true);
+        when(userRepository.findByEmail(ADMIN_EMAIL)).thenReturn(Optional.of(admin));
+
+        initializer.run();
+        verify(userRepository).markPlatformOwner(7L);
+
+        User owner = User.builder().id(8L).email(ADMIN_EMAIL).platformOwner(true).active(true).approved(true)
+                .roles(new LinkedHashSet<>(Set.of(User.Role.SUPER_ADMIN.name()))).build();
+        when(userRepository.findByEmail(ADMIN_EMAIL)).thenReturn(Optional.of(owner));
+        when(userRepository.findByPlatformOwnerTrue()).thenReturn(Optional.of(owner));
+
+        initializer.run();
+        verify(userRepository, never()).markPlatformOwner(8L);
+    }
+
+    @Test
+    void refusesToSeedASecondSuperAdminWhenAnotherRowIsTheOwner() {
+        // BOOTSTRAP_ADMIN_EMAIL rotated to a fresh address: seeding there would
+        // mint a SUPER_ADMIN the owner never promoted.
+        User owner = User.builder().id(1L).email("old-admin@innbucks.co.zw").platformOwner(true)
+                .roles(new LinkedHashSet<>(Set.of(User.Role.SUPER_ADMIN.name()))).active(true).build();
+        when(userRepository.findByPlatformOwnerTrue()).thenReturn(Optional.of(owner));
+        when(userRepository.findByEmail(ADMIN_EMAIL)).thenReturn(Optional.empty());
+
+        initializer.run();
+
+        verify(userRepository, never()).save(any());
+        verify(userRepository, never()).markPlatformOwner(any());
+    }
+
+    @Test
+    void refusesToAdoptALegacyRowWhenAnotherRowIsTheOwner() {
+        User owner = User.builder().id(1L).email("old-admin@innbucks.co.zw").platformOwner(true)
+                .roles(new LinkedHashSet<>(Set.of(User.Role.SUPER_ADMIN.name()))).active(true).build();
+        when(userRepository.findByPlatformOwnerTrue()).thenReturn(Optional.of(owner));
+        User legacy = rowAt(ADMIN_EMAIL);
+        legacy.setRoles(new LinkedHashSet<>());
+        when(userRepository.findByEmail(ADMIN_EMAIL)).thenReturn(Optional.of(legacy));
+
+        initializer.run();
+
+        assertThat(legacy.hasRole(User.Role.SUPER_ADMIN)).isFalse();
+        verify(userRepository, never()).save(any());
+        verify(userRepository, never()).markPlatformOwner(any());
+    }
 }

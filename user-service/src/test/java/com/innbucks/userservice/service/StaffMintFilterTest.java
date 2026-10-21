@@ -83,6 +83,19 @@ class StaffMintFilterTest {
     }
 
     @Test
+    @DisplayName("a deputy SUPER_ADMIN (V52, not the platform owner) is exempt exactly like the owner")
+    void deputySuperAdminExempt() {
+        User deputy = User.builder().id(4813L).email("tariro.moyo@innbucks.co.zw").platformOwner(false)
+                .roles(new LinkedHashSet<>(List.of("CALL_CENTER_SUPERVISOR", "SUPER_ADMIN"))).build();
+        StaffMintFilter.Minted minted = filter(StaffAccountProperties.Enforcement.ENFORCE)
+                .apply(deputy, List.of("CALL_CENTER_SUPERVISOR", "SUPER_ADMIN"),
+                        List.of("users:read", "staff:create", "device-security:manage"));
+        assertThat(minted.roles()).containsExactly("CALL_CENTER_SUPERVISOR", "SUPER_ADMIN");
+        assertThat(minted.permissions()).containsExactly("users:read", "staff:create", "device-security:manage");
+        verify(eligibility, never()).ineligibility(any());
+    }
+
+    @Test
     @DisplayName("a business token (no NAMED role, no PLATFORM code) is untouched and never evaluated")
     void businessUntouched() {
         User merchant = user("rudo@shop.co.zw", "MERCHANT_ADMIN");
