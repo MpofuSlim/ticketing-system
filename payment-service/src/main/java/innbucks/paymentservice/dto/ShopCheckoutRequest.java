@@ -10,11 +10,10 @@ import java.util.UUID;
 
 @Data
 @Schema(name = "ShopCheckoutRequest",
-        description = "Customer pays at a shop. The cash portion earns points per the merchant's " +
-                "loyalty rules; the points portion is burned from the customer's wallet. " +
-                "Set the amounts according to `paymentMethod`: " +
-                "CASH → only `cashAmount`; POINTS → only `pointsAmount`; " +
-                "CASH_AND_POINTS → both, each in its own native unit.")
+        description = "Customer pays at a shop with points: `pointsAmount` is burned from the " +
+                "customer's wallet. Only `paymentMethod=POINTS` is accepted. CASH and " +
+                "CASH_AND_POINTS are refused with 400, because this endpoint collects no cash " +
+                "and so cannot award points for it.")
 public class ShopCheckoutRequest {
 
     @Schema(example = "5b1c2d3e-4567-890a-bcde-f01234567890", description = "Shop where the checkout happens.")
@@ -34,21 +33,20 @@ public class ShopCheckoutRequest {
             nullable = true)
     private String msisdn;
 
-    @Schema(example = "CASH_AND_POINTS")
+    @Schema(example = "POINTS", description = "Must be POINTS. CASH and CASH_AND_POINTS are refused with 400.")
     @NotNull(message = "paymentMethod is required")
     private PaymentMethod paymentMethod;
 
-    // 0 is allowed (and meaningful — it's how a CASH-only payment encodes the
-    // unused points leg). The "must be > 0 for this paymentMethod" rule is
-    // enforced cross-field by PaymentController#validateAmounts so the error
-    // message can name the offending combination.
-    @Schema(example = "10.00", nullable = true,
-            description = "Cash amount in the merchant's currency. Required (> 0) when paymentMethod is CASH or CASH_AND_POINTS; must be omitted or 0 for POINTS.")
+    // 0 is allowed (a POINTS payment may send the unused cash field as 0).
+    // The cross-field rules are enforced by PaymentController#validateAmounts
+    // so the error message can name the offending combination.
+    @Schema(example = "0", nullable = true,
+            description = "Must be omitted or 0. A positive cash amount is refused: this endpoint collects no cash.")
     @PositiveOrZero(message = "cashAmount must be >= 0")
     private BigDecimal cashAmount;
 
     @Schema(example = "200.0000", nullable = true,
-            description = "Points to spend from the wallet. Required (> 0) when paymentMethod is POINTS or CASH_AND_POINTS; must be omitted or 0 for CASH.")
+            description = "Points to spend from the wallet. Required (> 0).")
     @PositiveOrZero(message = "pointsAmount must be >= 0")
     private BigDecimal pointsAmount;
 }

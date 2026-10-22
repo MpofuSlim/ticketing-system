@@ -86,9 +86,9 @@ timeout. **Customers cannot pay** while this is firing.
 2. If loyalty-service is up, the issue is between the two pods: DNS,
    network policy, service mesh. Curl from a payment-service pod:
    `curl -v http://loyalty-service:8086/actuator/health`.
-3. Fall-back: route shop checkouts through a degraded mode that
-   bypasses loyalty entirely (record cash-only, no points awarded).
-   That mode does not exist yet — adding it is the post-mortem action.
+3. There is no fall-back. A shop checkout spends points (it takes no
+   cash), so it cannot complete without loyalty-service. Customers can
+   still pay with money at the till while loyalty is down.
 
 ### `ShopCheckoutRejectionSpike`
 

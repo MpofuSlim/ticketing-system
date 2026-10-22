@@ -20,7 +20,8 @@ import java.util.UUID;
 
 /**
  * Calls loyalty-service's POST /loyalty/internal/shop-checkout to settle the
- * loyalty side of a shop payment (earn for cash, burn for points). Uses the
+ * loyalty side of a shop payment (a points burn; loyalty refuses a cash leg
+ * with CASH_EARN_NOT_ACCEPTED, and PaymentController never sends one). Uses the
  * shared internal-token header — the request never traverses the api-gateway
  * (the edge blocks /loyalty/internal/**).
  */
