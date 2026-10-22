@@ -52,7 +52,7 @@ class IdempotencyFilterTest {
 
         // Critical: the downstream handler must NOT run on a replay — that's
         // the whole point. Without this, a retried /payments/shop-checkout
-        // would credit + debit loyalty twice.
+        // would burn the customer's points twice.
         verify(chain, never()).doFilter(any(), any());
         assertEquals(200, res.getStatus());
         assertEquals("application/json", res.getContentType());

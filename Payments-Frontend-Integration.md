@@ -13,8 +13,9 @@ binding, idempotency keys, session-supersession, gateway rate limits.
 > directly for those operations. What remains in this backend on
 > `/payments` is the **ticket/order payment** rail (`POST /payments`,
 > InnBucks 2D code, EcoCash and ZimSwitch card) plus
-> `POST /payments/shop-checkout` — see the payment-service Swagger for
-> those. §4 covers the one cross-service effect of `POST /payments` the
+> `POST /payments/shop-checkout` (points only: `CASH` and
+> `CASH_AND_POINTS` are refused with 400) — see the payment-service
+> Swagger for those. §4 covers the one cross-service effect of `POST /payments` the
 > Swagger can't show: it moves the booking's `expiresAt`.
 
 Base URL: the API gateway (`http://localhost:8080` in dev). All endpoints

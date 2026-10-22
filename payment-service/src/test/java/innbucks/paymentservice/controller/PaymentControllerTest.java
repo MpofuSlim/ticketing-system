@@ -791,45 +791,51 @@ class PaymentControllerTest {
         }
     }
 
-    private ShopCheckoutRequest cashAndPoints(UUID shopId) {
+    private ShopCheckoutRequest pointsOnly(UUID shopId) {
         ShopCheckoutRequest r = new ShopCheckoutRequest();
         r.setShopId(shopId);
         r.setMsisdn("0712345678");
-        r.setPaymentMethod(PaymentMethod.CASH_AND_POINTS);
-        r.setCashAmount(new BigDecimal("10.00"));
+        r.setPaymentMethod(PaymentMethod.POINTS);
         r.setPointsAmount(new BigDecimal("200.0000"));
         return r;
     }
 
+    private ShopCheckoutRequest withCash(PaymentMethod method, String cash, String points) {
+        ShopCheckoutRequest r = new ShopCheckoutRequest();
+        r.setShopId(UUID.randomUUID());
+        r.setMsisdn("0712345678");
+        r.setPaymentMethod(method);
+        r.setCashAmount(cash == null ? null : new BigDecimal(cash));
+        r.setPointsAmount(points == null ? null : new BigDecimal(points));
+        return r;
+    }
+
     @Test
-    void shopCheckout_cashOnly_returnsEarnedPoints() {
+    void shopCheckout_pointsOnly_burnsAndEarnsNothing() {
         LoyaltyServiceClient loyalty = mock(LoyaltyServiceClient.class);
         UUID shopId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
         when(loyalty.shopCheckout(eq(shopId), eq("0712345678"),
-                eq(new BigDecimal("10.00")), eq(null),
+                eq(null), eq(new BigDecimal("200.0000")),
                 argThat((String r) -> r != null && r.startsWith("SHOP-"))))
                 .thenReturn(new LoyaltyServiceClient.CheckoutResult(
                         shopId, merchantId, UUID.randomUUID(), UUID.randomUUID(),
-                        new BigDecimal("10.00"), BigDecimal.ZERO,
-                        new BigDecimal("12.5000"), new BigDecimal("1812.5000"),
-                        UUID.randomUUID(), null));
-
-        ShopCheckoutRequest req = new ShopCheckoutRequest();
-        req.setShopId(shopId);
-        req.setMsisdn("0712345678");
-        req.setPaymentMethod(PaymentMethod.CASH);
-        req.setCashAmount(new BigDecimal("10.00"));
+                        BigDecimal.ZERO, new BigDecimal("200.0000"),
+                        BigDecimal.ZERO, new BigDecimal("1600.0000"),
+                        null, UUID.randomUUID()));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
+                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(pointsOnly(shopId), AUTH_0712345678);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         ShopCheckoutResponse data = resp.getBody().getData();
-        assertEquals(PaymentMethod.CASH, data.getPaymentMethod());
-        assertEquals(0, new BigDecimal("12.5000").compareTo(data.getPointsEarned()));
-        assertEquals(0, BigDecimal.ZERO.compareTo(data.getPointsRedeemed()));
+        assertEquals(PaymentMethod.POINTS, data.getPaymentMethod());
+        assertEquals(0, new BigDecimal("200.0000").compareTo(data.getPointsRedeemed()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(data.getPointsEarned()));
         assertEquals(merchantId, data.getMerchantId());
+        // walletBalanceAfter is intentionally OFF the response — see the field
+        // comment on ShopCheckoutResponse. Don't reintroduce an assertion here
+        // unless the field is being added back.
         // Auto-generated reference is surfaced on the response so the FE
         // / POS receipt can display it.
         assertNotNull(data.getReference());
@@ -837,58 +843,52 @@ class PaymentControllerTest {
     }
 
     @Test
-    void shopCheckout_cashAndPoints_returnsBothLegs() {
+    void shopCheckout_cashOnly_isRefused_andNeverReachesLoyalty() {
+        // The cash amount is whatever the customer typed: nothing here collects
+        // it and no till records the sale, so it must never earn points.
         LoyaltyServiceClient loyalty = mock(LoyaltyServiceClient.class);
-        UUID shopId = UUID.randomUUID();
-        when(loyalty.shopCheckout(eq(shopId), eq("0712345678"),
-                eq(new BigDecimal("10.00")), eq(new BigDecimal("200.0000")),
-                argThat((String r) -> r != null && r.startsWith("SHOP-"))))
-                .thenReturn(new LoyaltyServiceClient.CheckoutResult(
-                        shopId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
-                        new BigDecimal("10.00"), new BigDecimal("200.0000"),
-                        new BigDecimal("12.5000"), new BigDecimal("1612.5000"),
-                        UUID.randomUUID(), UUID.randomUUID()));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(cashAndPoints(shopId), AUTH_0712345678);
+                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
+                .shopCheckout(withCash(PaymentMethod.CASH, "10.00", null), AUTH_0712345678);
 
-        assertEquals(HttpStatus.OK, resp.getStatusCode());
-        ShopCheckoutResponse data = resp.getBody().getData();
-        assertEquals(0, new BigDecimal("200.0000").compareTo(data.getPointsRedeemed()));
-        assertEquals(0, new BigDecimal("12.5000").compareTo(data.getPointsEarned()));
-        // walletBalanceAfter is intentionally OFF the response — see the field
-        // comment on ShopCheckoutResponse. Don't reintroduce an assertion here
-        // unless the field is being added back.
-        assertNotNull(data.getReference());
-        assertTrue(data.getReference().startsWith("SHOP-"));
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertTrue(resp.getBody().getMessage().startsWith("paymentMethod=CASH is not accepted"));
+        verifyNoInteractions(loyalty);
     }
 
     @Test
-    void shopCheckout_rejectsCashMethodWithPointsAmount() {
-        ShopCheckoutRequest req = new ShopCheckoutRequest();
-        req.setShopId(UUID.randomUUID());
-        req.setMsisdn("0712345678");
-        req.setPaymentMethod(PaymentMethod.CASH);
-        req.setCashAmount(new BigDecimal("10.00"));
-        req.setPointsAmount(new BigDecimal("200")); // illegal mix
+    void shopCheckout_cashAndPoints_isRefused_andBurnsNothing() {
+        LoyaltyServiceClient loyalty = mock(LoyaltyServiceClient.class);
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
+                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
+                .shopCheckout(withCash(PaymentMethod.CASH_AND_POINTS, "10.00", "200.0000"), AUTH_0712345678);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
-        assertTrue(resp.getBody().getMessage().contains("CASH"));
+        assertTrue(resp.getBody().getMessage().startsWith("paymentMethod=CASH_AND_POINTS is not accepted"));
+        verifyNoInteractions(loyalty);
+    }
+
+    @Test
+    void shopCheckout_rejectsPointsMethodWithCashAmount() {
+        LoyaltyServiceClient loyalty = mock(LoyaltyServiceClient.class);
+
+        ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
+                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
+                .shopCheckout(withCash(PaymentMethod.POINTS, "10.00", "200"), AUTH_0712345678);
+
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertEquals("paymentMethod=POINTS requires pointsAmount > 0 and cashAmount must be null/zero",
+                resp.getBody().getMessage());
+        verifyNoInteractions(loyalty);
     }
 
     @Test
     void shopCheckout_rejectsPointsMethodWithoutPointsAmount() {
-        ShopCheckoutRequest req = new ShopCheckoutRequest();
-        req.setShopId(UUID.randomUUID());
-        req.setMsisdn("0712345678");
-        req.setPaymentMethod(PaymentMethod.POINTS);
-        // no pointsAmount → invalid
-
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
+                mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
+                .shopCheckout(withCash(PaymentMethod.POINTS, null, null), AUTH_0712345678);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
     }
@@ -900,7 +900,7 @@ class PaymentControllerTest {
                 .thenThrow(new LoyaltyCheckoutException("merchant is not active; no loyalty operations will run", 400));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(cashAndPoints(UUID.randomUUID()), AUTH_0712345678);
+                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(pointsOnly(UUID.randomUUID()), AUTH_0712345678);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("merchant is not active"));
@@ -913,16 +913,15 @@ class PaymentControllerTest {
         when(loyalty.shopCheckout(any(), any(), any(), any(), any()))
                 .thenReturn(new LoyaltyServiceClient.CheckoutResult(
                         shopId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
-                        new BigDecimal("10"), new BigDecimal("200"),
-                        new BigDecimal("12.5"), new BigDecimal("1612.5"),
-                        UUID.randomUUID(), UUID.randomUUID()));
+                        BigDecimal.ZERO, new BigDecimal("200"),
+                        BigDecimal.ZERO, new BigDecimal("1600"),
+                        null, UUID.randomUUID()));
         PaymentMetrics m = newMetrics();
-        new PaymentController(loyalty, m, mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
-                .shopCheckout(cashAndPoints(shopId), AUTH_0712345678);
+        new PaymentController(
+                loyalty, m, mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
+                .shopCheckout(pointsOnly(shopId), AUTH_0712345678);
 
-        double success = m.shopCheckoutDuration().count() > 0
-                ? counter(m, "outcome", "success", "mode", "mixed") : 0;
-        assertEquals(1.0, success);
+        assertEquals(1.0, counter(m, "outcome", "success", "mode", "points"));
         assertEquals(1L, m.shopCheckoutDuration().count());
     }
 
@@ -932,23 +931,19 @@ class PaymentControllerTest {
         when(loyalty.shopCheckout(any(), any(), any(), any(), any()))
                 .thenThrow(new LoyaltyCheckoutException("Unable to reach loyalty-service for checkout", 503));
         PaymentMetrics m = newMetrics();
-        new PaymentController(loyalty, m, mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
-                .shopCheckout(cashAndPoints(UUID.randomUUID()), AUTH_0712345678);
+        new PaymentController(
+                loyalty, m, mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
+                .shopCheckout(pointsOnly(UUID.randomUUID()), AUTH_0712345678);
 
-        assertEquals(1.0, counter(m, "outcome", "loyalty_unavailable", "mode", "mixed"));
+        assertEquals(1.0, counter(m, "outcome", "loyalty_unavailable", "mode", "points"));
     }
 
     @Test
-    void shopCheckout_validationFailureIncrementsValidationFailedCounter() {
-        ShopCheckoutRequest req = new ShopCheckoutRequest();
-        req.setShopId(UUID.randomUUID());
-        req.setMsisdn("0712345678");
-        req.setPaymentMethod(PaymentMethod.CASH);
-        req.setCashAmount(new BigDecimal("10"));
-        req.setPointsAmount(new BigDecimal("200"));
+    void shopCheckout_refusedCashIncrementsValidationFailedCounter() {
         PaymentMetrics m = newMetrics();
-        new PaymentController(mock(LoyaltyServiceClient.class), m, mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
-                .shopCheckout(req, AUTH_0712345678);
+        new PaymentController(
+                mock(LoyaltyServiceClient.class), m, mock(InnbucksPaymentService.class), mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class), new innbucks.paymentservice.client.ZimswitchProperties(), mock(innbucks.paymentservice.service.EcocashPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
+                .shopCheckout(withCash(PaymentMethod.CASH, "10", null), AUTH_0712345678);
 
         assertEquals(1.0, counter(m, "outcome", "validation_failed", "mode", "cash"));
     }
