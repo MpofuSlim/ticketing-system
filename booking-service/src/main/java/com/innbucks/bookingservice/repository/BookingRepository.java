@@ -165,4 +165,34 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         WHERE b.confirmationNumber = :confirmationNumber
     """)
     Optional<Booking> findByConfirmationNumberWithItems(@Param("confirmationNumber") String confirmationNumber);
+
+    // --- promo codes (V27) ---
+
+    /** Bookings that used the code and still count (not CANCELLED), for its max_uses. */
+    long countByPromoCodeIdAndStatusNot(UUID promoCodeId, Booking.BookingStatus status);
+
+    /** The same for one buyer, by phone, for max_uses_per_customer. */
+    long countByPromoCodeIdAndPhoneNumberAndStatusNot(UUID promoCodeId, String phoneNumber,
+                                                      Booking.BookingStatus status);
+
+    /** The same by email, for a booking that carries no phone. */
+    long countByPromoCodeIdAndUserEmailAndStatusNot(UUID promoCodeId, String userEmail,
+                                                    Booking.BookingStatus status);
+
+    /** Uses and the discount given, per code, for the organizer's list. */
+    @Query("""
+        SELECT b.promoCodeId AS promoCodeId, COUNT(b) AS uses, SUM(b.discountAmount) AS discountGiven
+        FROM Booking b
+        WHERE b.promoCodeId IN :promoCodeIds
+          AND b.status <> :cancelledStatus
+        GROUP BY b.promoCodeId
+    """)
+    List<PromoCodeUsage> summarizePromoCodeUses(@Param("promoCodeIds") java.util.Collection<UUID> promoCodeIds,
+                                                @Param("cancelledStatus") Booking.BookingStatus cancelledStatus);
+
+    interface PromoCodeUsage {
+        UUID getPromoCodeId();
+        Long getUses();
+        java.math.BigDecimal getDiscountGiven();
+    }
 }

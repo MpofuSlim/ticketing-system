@@ -279,7 +279,7 @@ class OrganizerReportServiceTest {
         String[] lines = csv.strip().split("\n");
 
         assertThat(lines[0]).isEqualTo(
-                "confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees");
+                "confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees,promoCode,discountAmount");
         assertThat(lines).hasSize(2);
         assertThat(lines[1]).contains(",2,200.00,200.00,0.00,");
         assertThat(lines[1]).doesNotContain("+263772000000"); // raw phone must be masked
@@ -305,9 +305,24 @@ class OrganizerReportServiceTest {
         String csv = service(repo).confirmedBookingsCsv(ORG, EVENT_A, null, null);
         String[] lines = csv.strip().split("\n");
 
-        assertThat(lines[1]).endsWith(",Alice Moyo,\"Tendai Ncube; Rudo, Sibanda\"");
+        assertThat(lines[1]).endsWith(",Alice Moyo,\"Tendai Ncube; Rudo, Sibanda\",,");
         // The ledger is names-only: attendee contact belongs to /bookings/by-event.
         assertThat(lines[1]).doesNotContain("tendai@example.com").doesNotContain("+263772000000");
+    }
+
+    @Test
+    void csv_carriesThePromoCode_andItsDiscount_atTheEnd() {
+        OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
+        LocalDateTime t = LocalDate.of(2026, 5, 2).atTime(15, 45);
+        Booking b = confirmed(EVENT_A, "180.00", "180.00", null, t,
+                item(CAT_VIP, "VIP", "90.00"), item(CAT_VIP, "VIP", "90.00"));
+        b.setPromoCode("EARLY10");
+        b.setDiscountAmount(new BigDecimal("20.00"));
+        when(repo.findConfirmedWithItems(eq(ORG), any(), any(), any())).thenReturn(List.of(b));
+
+        String[] lines = service(repo).confirmedBookingsCsv(ORG, EVENT_A, null, null).strip().split("\n");
+
+        assertThat(lines[1]).contains(",2,180.00,180.00,0.00,").endsWith(",EARLY10,20.00");
     }
 
     @Test

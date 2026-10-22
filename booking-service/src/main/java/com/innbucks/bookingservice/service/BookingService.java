@@ -145,6 +145,9 @@ public class BookingService {
     @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
     private String eventInternalToken;
 
+    /** Promo codes (V27); see {@link #setPromoCodeRepository}. */
+    private PromoCodeRepository promoCodeRepository;
+
     public BookingService(BookingRepository bookingRepository,
                           BookingItemRepository bookingItemRepository,
                           CategoryInventoryRepository categoryInventoryRepository,
@@ -255,7 +258,8 @@ public class BookingService {
         UUID tenantUserUuid = eventLookup == null ? null : eventLookup.getTenantUserUuid();
 
         ClaimInputs inputs = new ClaimInputs(userEmail, customerName, phoneNumber, request.getEventId(),
-                tenantUserUuid, qtyByCategory, categoryById, ticketSpecs);
+                tenantUserUuid, qtyByCategory, categoryById, ticketSpecs,
+                PromoCodes.normalize(request.getPromoCode()));
 
         // === Write phase — the ONLY place a DB connection is held. ===
         return claimWithRetries(inputs);
@@ -269,7 +273,8 @@ public class BookingService {
      */
     private record ClaimInputs(String userEmail, String customerName, String phoneNumber, UUID eventId,
                                UUID tenantUserUuid, Map<UUID, Integer> qtyByCategory,
-                               Map<UUID, CategoryLookupDTO> categoryById, List<TicketSpec> ticketSpecs) {
+                               Map<UUID, CategoryLookupDTO> categoryById, List<TicketSpec> ticketSpecs,
+                               String promoCode) {
     }
 
     /**
@@ -366,7 +371,7 @@ public class BookingService {
                 .expiresAt(LocalDateTime.now(ZoneOffset.UTC).plusMinutes(holdTtlMinutes))
                 .build();
         return txTemplate.execute(status -> persistBooking(booking, inputs.qtyByCategory(),
-                inputs.categoryById(), inputs.ticketSpecs(), inputs.userEmail()));
+                inputs.categoryById(), inputs.ticketSpecs(), inputs.userEmail(), inputs.promoCode()));
     }
 
     /** The SQLState that makes {@code ex} worth one retry (40P01 / 40001), else null. */
@@ -496,7 +501,8 @@ public class BookingService {
                                               Map<UUID, Integer> qtyByCategory,
                                               Map<UUID, CategoryLookupDTO> categoryById,
                                               List<TicketSpec> ticketSpecs,
-                                              String userEmail) {
+                                              String userEmail,
+                                              String promoCode) {
         // Claim capacity atomically, per category, in THIS transaction. The
         // per-category counter — not a seat row — is the oversell guard now.
         // Seed the counter once per category (remaining = total_seats −
@@ -537,7 +543,6 @@ public class BookingService {
         // open and limited.
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         Map<UUID, Iterator<PriceTierAllocator.TicketPrice>> pricesByCategory = new HashMap<>();
-        BigDecimal total = BigDecimal.ZERO;
         for (Map.Entry<UUID, Integer> e : qtyByCategory.entrySet()) {
             CategoryLookupDTO category = categoryById.get(e.getKey());
             PriceTierAllocator.Counts toCount = PriceTierAllocator.toCount(category, now);
@@ -546,12 +551,38 @@ public class BookingService {
             if (!toCount.none()) {
                 countTiers(e.getKey(), toCount, booking, counted, customer);
             }
-            List<PriceTierAllocator.TicketPrice> prices =
-                    PriceTierAllocator.allocate(category, e.getValue(), counted, customer, now);
-            for (PriceTierAllocator.TicketPrice price : prices) {
-                total = total.add(price.price());
+            pricesByCategory.put(e.getKey(),
+                    PriceTierAllocator.allocate(category, e.getValue(), counted, customer, now).iterator());
+        }
+        // One price per ticket of the category, in request order: the
+        // allocator returned exactly qtyByCategory's count for it.
+        List<PriceTierAllocator.TicketPrice> ticketPrices = new ArrayList<>(ticketSpecs.size());
+        for (TicketSpec spec : ticketSpecs) {
+            ticketPrices.add(pricesByCategory.get(spec.categoryId()).next());
+        }
+
+        // A promo code (V27) takes its discount off each eligible ticket's
+        // price, after the tier. Its row is locked here, after the category
+        // locks, so its uses are counted exactly.
+        PromoCode code = promoCode == null ? null : lockUsablePromoCode(booking, promoCode, now);
+        List<BigDecimal> discounts = new ArrayList<>(ticketSpecs.size());
+        BigDecimal total = BigDecimal.ZERO;
+        BigDecimal discountTotal = BigDecimal.ZERO;
+        for (int i = 0; i < ticketSpecs.size(); i++) {
+            BigDecimal price = ticketPrices.get(i).price();
+            BigDecimal discount = code != null && PromoCodes.appliesTo(code, ticketSpecs.get(i).categoryId())
+                    ? PromoCodes.discountOn(code, price) : null;
+            discounts.add(discount);
+            total = total.add(discount == null ? price : price.subtract(discount));
+            discountTotal = discount == null ? discountTotal : discountTotal.add(discount);
+        }
+        if (code != null) {
+            if (discountTotal.signum() == 0) {
+                throw PromoCodes.notApplicable();
             }
-            pricesByCategory.put(e.getKey(), prices.iterator());
+            booking.setPromoCodeId(code.getId());
+            booking.setPromoCode(code.getCode());
+            booking.setDiscountAmount(discountTotal);
         }
         booking.setTotalAmount(total);
 
@@ -568,11 +599,11 @@ public class BookingService {
         // attendee they named for it lands on the right ticket.
         List<BookingItem> items = new ArrayList<>(ticketSpecs.size());
         int ticketIndex = 1;
-        for (TicketSpec spec : ticketSpecs) {
+        for (int i = 0; i < ticketSpecs.size(); i++) {
+            TicketSpec spec = ticketSpecs.get(i);
             CategoryLookupDTO category = categoryById.get(spec.categoryId());
-            // One price per ticket of the category, in request order: the
-            // allocator returned exactly qtyByCategory's count for it.
-            PriceTierAllocator.TicketPrice price = pricesByCategory.get(spec.categoryId()).next();
+            PriceTierAllocator.TicketPrice price = ticketPrices.get(i);
+            BigDecimal discount = discounts.get(i);
             items.add(BookingItem.builder()
                     .booking(booking)
                     .seatId(UUID.randomUUID())
@@ -580,7 +611,8 @@ public class BookingService {
                     .rowLabel("GA")
                     .seatNumber(ticketIndex++)
                     .categoryName(category.getName())
-                    .priceAtBooking(price.price())
+                    .priceAtBooking(discount == null ? price.price() : price.price().subtract(discount))
+                    .discountAmount(discount)
                     .priceTierId(price.tierId())
                     .priceTierName(price.tierName())
                     .ticketNumber(references.nextTicketNumber())
@@ -633,6 +665,41 @@ public class BookingService {
             }
             rows.forEach(row -> customer.put(row.getPriceTierId(), nz(row.getCount())));
         }
+    }
+
+    /**
+     * The booking's promo code, row-locked, refused unless it can be used now:
+     * it exists for this event and is active, its window is open, and it has
+     * uses left overall and for this buyer (phone, else email). Uses are
+     * bookings not CANCELLED, counted under the lock, so a cancelled or
+     * expired booking frees its use.
+     */
+    private PromoCode lockUsablePromoCode(Booking booking, String promoCode, LocalDateTime nowUtc) {
+        if (promoCodeRepository == null) {
+            throw PromoCodes.invalid();
+        }
+        PromoCode code = promoCodeRepository.lockByEventIdAndCode(booking.getEventId(), promoCode)
+                .filter(PromoCode::isActive)
+                .orElseThrow(PromoCodes::invalid);
+        PromoCodes.requireOpen(code, nowUtc);
+        if (code.getMaxUses() != null && bookingRepository.countByPromoCodeIdAndStatusNot(
+                code.getId(), Booking.BookingStatus.CANCELLED) >= code.getMaxUses()) {
+            throw PromoCodes.usedUp();
+        }
+        if (code.getMaxUsesPerCustomer() != null) {
+            long mine = 0;
+            if (booking.getPhoneNumber() != null && !booking.getPhoneNumber().isBlank()) {
+                mine = bookingRepository.countByPromoCodeIdAndPhoneNumberAndStatusNot(
+                        code.getId(), booking.getPhoneNumber(), Booking.BookingStatus.CANCELLED);
+            } else if (booking.getUserEmail() != null && !booking.getUserEmail().isBlank()) {
+                mine = bookingRepository.countByPromoCodeIdAndUserEmailAndStatusNot(
+                        code.getId(), booking.getUserEmail(), Booking.BookingStatus.CANCELLED);
+            }
+            if (mine >= code.getMaxUsesPerCustomer()) {
+                throw PromoCodes.limitReached();
+            }
+        }
+        return code;
     }
 
     private static long nz(Long value) {
@@ -853,6 +920,7 @@ public class BookingService {
                 .ticketNumber(item.getTicketNumber())
                 .priceAtBooking(item.getPriceAtBooking())
                 .priceTierName(item.getPriceTierName())
+                .discountAmount(item.getDiscountAmount())
                 .bookedAt(b.getCreatedAt())
                 .updatedAt(b.getUpdatedAt())
                 .expiresAt(b.getExpiresAt())
@@ -1021,6 +1089,7 @@ public class BookingService {
                                 .seatNumber(i.getSeatNumber())
                                 .priceAtBooking(i.getPriceAtBooking())
                                 .priceTierName(i.getPriceTierName())
+                            .discountAmount(i.getDiscountAmount())
                                 .ticketNumber(i.getTicketNumber())
                                 .qrCode(qrCodeGenerator.toDataUri(i.getTicketNumber()))
                                 .attendeeName(i.getAttendeeName())
@@ -1148,6 +1217,7 @@ public class BookingService {
                             .seatNumber(i.getSeatNumber())
                             .priceAtBooking(i.getPriceAtBooking())
                             .priceTierName(i.getPriceTierName())
+                            .discountAmount(i.getDiscountAmount())
                             .ticketNumber(confirmed ? i.getTicketNumber() : null)
                             .qrCode(confirmed ? qrCodeGenerator.toDataUri(i.getTicketNumber()) : null)
                             // Name only — public view; attendee contact stays server-side.
@@ -1823,6 +1893,12 @@ public class BookingService {
         this.eventLookupCache = eventLookupCache;
     }
 
+    /** Setter for the same reason; without it a booking naming a promo code is refused as invalid. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPromoCodeRepository(PromoCodeRepository promoCodeRepository) {
+        this.promoCodeRepository = promoCodeRepository;
+    }
+
     /** Setter for the same reason; without it the claim retry is simply not counted. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setMetrics(BookingMetrics metrics) {
@@ -1877,6 +1953,8 @@ public class BookingService {
                 .totalAmount(booking.getTotalAmount())
                 .pointsUsed(booking.getPointsUsed())
                 .cashAmount(booking.getCashAmount())
+                .promoCode(booking.getPromoCode())
+                .discountAmount(booking.getDiscountAmount())
                 .items(itemDTOs)
                 .createdAt(booking.getCreatedAt())
                 .updatedAt(booking.getUpdatedAt())

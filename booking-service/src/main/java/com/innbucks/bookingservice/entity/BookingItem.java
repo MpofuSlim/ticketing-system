@@ -44,8 +44,13 @@ public class BookingItem {
     @Column(nullable = false)
     private String categoryName;
 
+    /** What was paid for this ticket: its tier's (or the full) price, less {@link #discountAmount}. */
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal priceAtBooking;
+
+    /** The promo code's discount on this ticket (V27); null when none applied. */
+    @Column(name = "discount_amount", precision = 10, scale = 2)
+    private BigDecimal discountAmount;
 
     /**
      * The seat-service price tier this ticket was sold at (V26), null at the

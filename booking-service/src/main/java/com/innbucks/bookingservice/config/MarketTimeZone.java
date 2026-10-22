@@ -73,6 +73,24 @@ public class MarketTimeZone {
         this.zone = resolved;
     }
 
+    /**
+     * A date-time a client sent, as the UTC wall clock our columns store. With
+     * no zone it is the market's local time, as an organizer types it
+     * ({@code 2026-09-08T23:59:59} in Harare becomes {@code 21:59:59}); with
+     * {@code Z} or an offset it is that exact instant, so a client that did
+     * convert is never shifted twice. Same rule as seat- and event-service.
+     *
+     * @throws java.time.format.DateTimeParseException when the value is neither form
+     */
+    public LocalDateTime parseToUtc(String value) {
+        String text = value == null ? "" : value.trim();
+        try {
+            return OffsetDateTime.parse(text).withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        } catch (java.time.format.DateTimeParseException notAnInstant) {
+            return LocalDateTime.parse(text).atZone(zone).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        }
+    }
+
     /** This cell's market timezone. */
     public ZoneId zone() {
         return zone;

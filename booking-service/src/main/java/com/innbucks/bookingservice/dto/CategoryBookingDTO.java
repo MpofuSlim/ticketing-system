@@ -51,6 +51,9 @@ public class CategoryBookingDTO {
     /** The price tier the ticket was sold at; absent at the full price. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String priceTierName;
+    /** The promo code's discount on this ticket (V27); priceAtBooking is after it. Absent when none. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private BigDecimal discountAmount;
     /**
      * Named attendee for THIS ticket (V22), when the purchaser gave one; null
      * = the purchaser's own ticket. This is the "who is actually coming"

@@ -216,14 +216,35 @@ public class BookingController {
                             @ExampleObject(name = "Body is not JSON", value = """
                                     { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "body": "The request body is not valid JSON." } }
                                     """),
-                            @ExampleObject(name = "Body is JSON but not one object (e.g. an array)", value = EXAMPLE_NOT_AN_OBJECT)
+                            @ExampleObject(name = "Body is JSON but not one object (e.g. an array)", value = EXAMPLE_NOT_AN_OBJECT),
+                            @ExampleObject(name = "Promo code unknown or switched off", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "This promo code is not valid for this event.", "data": { "errorCode": "PROMO_CODE_INVALID" } }
+                                    """),
+                            @ExampleObject(name = "Promo code expired", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "This promo code has expired.", "data": { "errorCode": "PROMO_CODE_EXPIRED" } }
+                                    """),
+                            @ExampleObject(name = "Promo code not for these tickets", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "This promo code doesn't apply to the tickets you chose.", "data": { "errorCode": "PROMO_CODE_NOT_APPLICABLE" } }
+                                    """),
+                            @ExampleObject(name = "Promo code would make a ticket free", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "This promo code takes off more than a ticket costs.", "data": { "errorCode": "PROMO_CODE_TOO_LARGE" } }
+                                    """)
                     })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
-                    description = "Not enough tickets left in a category the request names. Nothing was held.",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Sold out", value = """
+                    description = "Not enough tickets left in a category the request names, or the promo code is used "
+                            + "up (overall, or by this buyer). Nothing was held.",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Sold out", value = """
                             { "code": "409 CONFLICT", "message": "Not enough tickets left in \\"VIP\\". Please choose fewer tickets or a different category.", "data": null }
-                            """))),
+                            """),
+                            @ExampleObject(name = "Promo code used up", value = """
+                            { "code": "409 CONFLICT", "message": "This promo code has been used up.", "data": { "errorCode": "PROMO_CODE_USED_UP" } }
+                            """),
+                            @ExampleObject(name = "Promo code limit reached for this buyer", value = """
+                            { "code": "409 CONFLICT", "message": "You've already used this promo code as many times as it allows.", "data": { "errorCode": "PROMO_CODE_LIMIT_REACHED" } }
+                            """)
+                    })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "503",
                     description = "Nothing was held; the same request can be sent again. TRY_AGAIN: the hold's database "

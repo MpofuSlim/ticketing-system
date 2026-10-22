@@ -60,6 +60,19 @@ public class Booking {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal totalAmount;
 
+    // The promo code this booking used (V27), as typed and as found: the id
+    // counts its uses under the code's row lock, the text survives a later
+    // change to the code. discountAmount is the whole booking's discount,
+    // already taken off totalAmount. All three null when no code was used.
+    @Column(name = "promo_code_id")
+    private UUID promoCodeId;
+
+    @Column(name = "promo_code", length = 40)
+    private String promoCode;
+
+    @Column(name = "discount_amount", precision = 10, scale = 2)
+    private BigDecimal discountAmount;
+
     // Stable cross-service identifier of the owning organizer, mirrored
     // from events.tenant_user_uuid via EventLookupDTO at create time.
     // Powers the team-member scan authorization: the scanner's
