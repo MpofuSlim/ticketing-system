@@ -70,6 +70,11 @@ public class SecurityConfig {
                         // /bookings/confirmation/**: those return full PII and remain
                         // authenticated + owner-scoped. Do NOT permitAll them.
                         .requestMatchers(HttpMethod.GET, "/bookings/public/**").permitAll()
+                        // The signed-in ticket wallet. It must be matched BEFORE
+                        // the public ticket-artifact permit below: as a pattern,
+                        // /bookings/*/tickets/** also matches /bookings/me/tickets,
+                        // which would serve it with no session at all.
+                        .requestMatchers(HttpMethod.GET, "/bookings/me/**").authenticated()
                         // Public ticket artifacts (QR PNG + HTML view page) linked
                         // from the confirmation email/WhatsApp — opened with no app
                         // session. Bearer-instrument model: the unguessable booking
@@ -94,6 +99,9 @@ public class SecurityConfig {
                         // anonymously as it books. Only this exact path: the
                         // organizer's /bookings/promo-codes endpoints stay authenticated.
                         .requestMatchers(HttpMethod.POST, "/bookings/promo-codes/check").permitAll()
+                        // The partner yes/no ticket check: no session, its own
+                        // X-Api-Key checked in TicketCheckController. Exact path only.
+                        .requestMatchers(HttpMethod.POST, "/bookings/ticket-check").permitAll()
                         // Confirm is called by payment-service after a payment.
                         // No JWT is involved — payment-service authenticates via
                         // the shared `X-Internal-Token` checked inside

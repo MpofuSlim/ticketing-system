@@ -52,8 +52,8 @@ class GatewayRouteTableTest {
             "user-internal-deny", "user-self-route",
             "event-internal-deny", "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-internal-deny", "seat-service-category-route",
-            "booking-internal-deny", "booking-public-phone-route", "booking-service-route",
-            "booking-invoices-route", "booking-tickets-route",
+            "booking-internal-deny", "booking-public-phone-route", "booking-ticket-check-route",
+            "booking-service-route", "booking-invoices-route", "booking-tickets-route",
             "scans-route", "brand-assets-route",
             "payment-internal-deny", "payment-service-read-route",
             "payments-innbucks-write-route", "ecocash-notify-write-route",
@@ -98,7 +98,7 @@ class GatewayRouteTableTest {
             "user-event-organizer-route", "booking-event-organizer-reports-route",
             "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
-            "booking-public-phone-route",
+            "booking-public-phone-route", "booking-ticket-check-route",
             "booking-service-route", "booking-invoices-route", "booking-tickets-route",
             "scans-route", "brand-assets-route",
             "payment-service-read-route", "payments-innbucks-write-route",
@@ -143,7 +143,10 @@ class GatewayRouteTableTest {
             // DTX device security: the app-facing surface sends real OTPs (SMS
             // cost), and the partner surface is shared-key authenticated — the
             // loyalty-partner-registration hazard exactly.
-            "auth-device-security-route", "device-security-partner-route");
+            "auth-device-security-route", "device-security-partner-route",
+            // The partner ticket check: shared-key authenticated, so the
+            // limiter is the only cap on guessing the key.
+            "booking-ticket-check-route");
 
     @Autowired
     RouteDefinitionLocator locator;
@@ -254,6 +257,29 @@ class GatewayRouteTableTest {
         assertThat(order.indexOf("booking-public-phone-route"))
                 .as("booking-public-phone-route must match before the /bookings/** catch-all")
                 .isBetween(0, order.indexOf("booking-service-route") - 1);
+        // Same reason for the partner ticket check: in the catch-all it would
+        // share the bearer-keyed bucket, where a garbage Authorization header
+        // mints a fresh bucket per guess at the key.
+        assertThat(order.indexOf("booking-ticket-check-route"))
+                .as("booking-ticket-check-route must match before the /bookings/** catch-all")
+                .isBetween(0, order.indexOf("booking-service-route") - 1);
+    }
+
+    @Test
+    void ticketCheckRouteIsPostOnlyExactPathIpKeyedAndFailsSafe() {
+        assertThat(predicateArgs("booking-ticket-check-route", "Method")).containsExactly("POST");
+        assertThat(predicateArgs("booking-ticket-check-route", "Path"))
+                .containsExactly("/bookings/ticket-check");
+        boolean ipKeyed = route("booking-ticket-check-route").getFilters().stream()
+                .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                .flatMap(f -> f.getArgs().values().stream())
+                .anyMatch(v -> v != null && v.contains("preAuthIpKeyResolver"));
+        assertThat(ipKeyed)
+                .as("must key on IP, never the attacker-controlled Authorization header")
+                .isTrue();
+        assertThat(usesResilientLimiter("booking-ticket-check-route"))
+                .as("must fail SAFE: a Redis outage must not remove the only cap on guessing the key")
+                .isTrue();
     }
 
     @Test

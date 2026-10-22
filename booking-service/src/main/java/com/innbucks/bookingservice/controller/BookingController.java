@@ -739,6 +739,106 @@ public class BookingController {
     }
 
     /**
+     * The signed-in twin of {@link #getMyTicketsPublic}: the same ticket wallet,
+     * for the phone on the caller's own token. There is no phone in the path, so
+     * it cannot be pointed at another number. It is what lets
+     * {@code /bookings/public/phone/**} close.
+     */
+    @GetMapping("/me/tickets")
+    @PreAuthorize("isAuthenticated()")
+    @Operation(summary = "My tickets (signed in)",
+            description = "The ticket wallet of the phone on the caller's session: the same shape, "
+                    + "filter and order as `GET /bookings/public/phone/{phoneNumber}`, which it replaces. "
+                    + "CONFIRMED bookings only, each with its event (title, venue, start/end), the "
+                    + "scannable per-seat QR codes and a server-decided `window` of UPCOMING / LIVE / PAST.\n\n"
+                    + "**Filtering**: `?filter=UPCOMING|LIVE|PAST` (case-insensitive); `FUTURE` and "
+                    + "`PRESENT` are aliases. Omit it, or pass `ALL`, for everything.\n\n"
+                    + "**Ordering**: live events first, then upcoming soonest-first, then past "
+                    + "most-recent-first.\n\n"
+                    + "The phone comes from the token, never the request. A session with no phone (a "
+                    + "staff sign-in, for example) is a `400`. A number with no confirmed bookings is "
+                    + "an empty list.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Tickets returned (empty list if the phone has no confirmed bookings)",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = CustomerTicketDTO.class),
+                            examples = @ExampleObject(name = "My tickets", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Tickets retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "confirmationNumber": "INN-20260502-AB12CD",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "eventTitle": "Harare Jazz Festival",
+                                          "venue": "Harare International Conference Centre",
+                                          "startDateTime": "2026-09-12T16:00:00Z",
+                                          "endDateTime": "2026-09-12T22:00:00Z",
+                                          "window": "UPCOMING",
+                                          "live": false,
+                                          "totalAmount": 100.00,
+                                          "items": [
+                                            {
+                                              "seatId": "11111111-2222-3333-4444-555555555555",
+                                              "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                              "categoryName": "VIP",
+                                              "rowLabel": "A",
+                                              "seatNumber": 12,
+                                              "priceAtBooking": 100.00,
+                                              "ticketNumber": "20260502-3FQ7M-X9K2D",
+                                              "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
+                                            }
+                                          ],
+                                          "createdAt": "2026-05-02T15:45:00Z"
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "The session carries no phone number, or the filter is unknown",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "No phone on the session", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Your session has no phone number. Sign in with your phone to see your tickets.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Unknown filter", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Unknown filter 'SOON'. Use UPCOMING (or FUTURE), LIVE (or PRESENT), PAST, or ALL.",
+                                              "data": null
+                                            }
+                                            """)})),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "No token, or an invalid one",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<CustomerTicketDTO>>> getMyTickets(
+            @RequestParam(value = "filter", required = false) String filter,
+            Authentication authentication) {
+        TicketWindow window = parseTicketFilter(filter);
+        String phone = normalizePhone(extractPhoneNumber(authentication));
+        if (phone == null) {
+            throw new BadRequestException(
+                    "Your session has no phone number. Sign in with your phone to see your tickets.");
+        }
+        log.debug("GET /bookings/me/tickets phone={} filter={}", MsisdnMasking.mask(phone), window);
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(ApiResult.ok("Tickets retrieved successfully",
+                        bookingService.getPublicTicketsByPhoneNumber(phone, window)));
+    }
+
+    /**
      * Resolve the {@code filter} query parameter to a {@link TicketWindow}, or
      * null for "all buckets".
      *

@@ -37,6 +37,20 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     List<Booking> findByPhoneNumberAndTenantUserUuidOrderByCreatedAtDesc(String phoneNumber,
                                                                          UUID tenantUserUuid);
 
+    // POST /bookings/ticket-check: bookings of the event in `status` whose
+    // ticket the phone holds, as the purchaser or as a named attendee with
+    // their own phone. Both phones are stored in E.164.
+    @Query("""
+            SELECT COUNT(b) FROM Booking b
+            WHERE b.eventId = :eventId AND b.status = :status
+              AND (b.phoneNumber = :phone
+                   OR EXISTS (SELECT i.id FROM BookingItem i
+                              WHERE i.booking = b AND i.attendeePhone = :phone))
+            """)
+    long countHeldBy(@Param("eventId") UUID eventId,
+                     @Param("phone") String phone,
+                     @Param("status") Booking.BookingStatus status);
+
     // The booking row's write lock. Every path that changes a booking's stock
     // takes it FIRST, before any category row (StockLedger has the order):
     // confirm (and its resurrect phase), cancel, extend-hold and the write

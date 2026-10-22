@@ -198,6 +198,10 @@ app:
     # binding does not reach these dashed names from the env vars.
     max-total-hold: ${BOOKING_MAX_TOTAL_HOLD:PT60M}
     max-hold-extension: ${BOOKING_MAX_HOLD_EXTENSION:PT45M}
+    # The partner yes/no ticket check (POST /bookings/ticket-check): the key the
+    # caller sends as X-Api-Key. Blank = the endpoint is off (404). A secret:
+    # set it per host in cell.<iso>.local.env, never in a committed file.
+    ticket-check-api-key: ${BOOKINGS_TICKET_CHECK_API_KEY:}
     # Pre-event WhatsApp reminder (EventReminderScheduler): sent once per
     # CONFIRMED booking when its event starts within this window. Hourly cron.
     reminder-window-hours: ${BOOKING_REMINDER_WINDOW_HOURS:24}
