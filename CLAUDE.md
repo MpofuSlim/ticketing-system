@@ -2536,8 +2536,8 @@ bird" 100.00 for the first 100 tickets or until 8 September, then "Phase 1"
 first tier still open is the price, and once every tier has closed, `price`
 applies. A tier closes at `ends_at` (UTC, exclusive) or once `quantity` tickets
 are held or sold at it, whichever comes first, and must have at least one of
-the two (`chk_price_tier_closes`). Nothing runs when a tier closes: every read
-works out the price in force at that moment.
+the two (`chk_price_tier_closes`). It opens at `starts_at` if it has one. Nothing
+runs when a tier closes: every read works out the price in force at that moment.
 
 - **`price` keeps meaning the full price everywhere** (what an organizer edits).
   Responses add `currentPrice` (what a booking made now pays), `currentTierName`,
@@ -2601,8 +2601,108 @@ works out the price in force at that moment.
 - **Deploy booking-service before an organizer sets a tier.** An older booking
   image ignores `priceTiers` and charges `price`: no harm, but the tier is not
   honoured until it runs the new build.
-- **Not built:** a tier start date (a tier opens when the ones before it close),
-  per-customer limits on tier tickets, promo codes.
+- **A tier can start, cap one buyer, and keep refunds counted.** `starts_at`
+  (inclusive; before it the tier is UPCOMING and the next open tier is the price).
+  `max_per_customer`: one buyer's tickets at the tier, counted by the
+  purchaser's phone, else email (`countActiveFor{Phone,Email}ByCategoryAndPriceTiers`),
+  under the same stock lock; their further tickets cost the next open tier's
+  price, never refused. A cap never closes the tier for anyone else, so the
+  listing ignores it. `refunds_reopen` (default true): false keeps a ticket
+  refunded after payment (CANCELLED + `ADMIN_REVERSED`) counted against the
+  quantity; an expired, unpaid hold always frees its place. The tier-counts
+  endpoint returns `count` (held or sold) and `refunded` per tier, so seat-service
+  shows the same `sold` booking-service charges by. The PUT replaces the whole
+  list, so a field left out is reset (`refundsReopen` to true, the cap to none).
+- **The ticket says what it was sold as.** `BookingItem.ticketTypeLabel()` is
+  "VIP (Early bird)", or the category alone at the full price; the ticket page,
+  both confirmation emails and the receipt's `Prices:` line ("2 x VIP (Early bird)
+  at 100.00, 1 x VIP at 150.00", only when a tier was used) print it. Plain ASCII
+  on purpose: the notification API has refused typographic characters. The
+  WhatsApp QR caption is unchanged (template-variable length).
+- **Analytics projects revenue at the tiers.** `GET /seat-categories/analytics`
+  adds `projectedRevenue` per category and in the totals: what is held or sold at
+  its booked price, plus the unsold tickets at the price each would cost now (the
+  open tiers in order up to what each has left, then the full price;
+  `CategoryPricing.valueIfSoldNow`). `potentialRevenue` keeps meaning every seat
+  at the full price. Null when booking-service could not be asked; the tier counts
+  are fetched after the read transaction closes.
+- **Every price change is on the record (seat-service V10).**
+  `seat_category_price_changes`, written in the same transaction as the change:
+  CREATED (price and tiers), PRICE_CHANGED (old/new full price; a rename records
+  nothing), TIERS_CHANGED (both sides' terms as JSON, as they were; an unchanged
+  list records nothing), with `changed_by` (JPA auditor) and `changed_at`.
+  Append-only three ways: a repository that can only save and read, `@Immutable`,
+  and a trigger refusing UPDATE and DELETE. **`category_id` has no foreign key on
+  purpose**: the record outlives the category, and the ITs hard-delete categories.
+  `GET /seat-categories/{id}/price-history` (owner or SUPER_ADMIN, newest first,
+  at most 200; a deleted category's history stays readable).
+
+## Promo codes (booking-service V27)
+
+**An organizer creates a code for one of their events; a buyer types it at
+`POST /bookings` (`promoCode`) and each eligible ticket costs less, after its
+price tier.** `promo_codes` + `promo_code_categories` (none = every category).
+PERCENT is 1–99 % (CHECK `chk_promo_codes_value`), FIXED an amount off each
+ticket; either can have a total use limit, a per-buyer limit (phone, else email)
+and a window (`starts_at` / `ends_at`, organizer's local time in, UTC stored).
+
+- **A code never makes a ticket free.** A discount that would take a ticket to
+  0.00 or below refuses the booking (`PROMO_CODE_TOO_LARGE`): the rails cannot
+  collect nothing. A ticket's discount is rounded half-up to the cent.
+- **Uses are counted under the code's row lock**, taken in `persistBooking` AFTER
+  the category stock locks (`PromoCodeRepository.lockByEventIdAndCode`, FOR UPDATE).
+  Nothing that holds the code row takes a stock lock, so the order cannot
+  deadlock, and "100 uses" is exact (`BookingPromoCodePostgresIT`: 20 concurrent
+  bookings, a 5-use code, exactly 5). A use is a booking not CANCELLED, so an
+  expired or cancelled booking frees its use. A resurrected booking (H2) keeps its
+  discount and can push the code past its limit by that booking: it was paid.
+- **`priceAtBooking` is what was paid for the ticket, after the discount**; the
+  item and the booking carry `discountAmount`, the booking `promoCode` /
+  `promoCodeId`. So every revenue sum (reports, the tier report, seat analytics)
+  is net with no change to any query. The bookings CSV appends `promoCode`,
+  `discountAmount` at the END. **Don't move the discount out of priceAtBooking**
+  without changing every revenue sum in the same PR.
+- **Refusals carry `data.errorCode`**: `PROMO_CODE_INVALID` (unknown, switched
+  off, or another event's: one answer, so codes cannot be probed),
+  `_NOT_STARTED`, `_EXPIRED`, `_NOT_APPLICABLE` (no ticket in its categories),
+  `_TOO_LARGE` (400s); `_USED_UP`, `_LIMIT_REACHED` (409s). The booking rolls back:
+  nothing is held.
+- **Endpoints**, all on the existing `/bookings/**` route:
+  `POST /bookings/promo-codes`, `PUT /bookings/promo-codes/{id}` (terms only; the
+  event and the code text never change; `active: false` switches it off; no
+  delete, since bookings name it), `GET /bookings/promo-codes?eventId=` (with
+  `uses` and `discountGiven`; platform staff read any event), and the public
+  `POST /bookings/promo-codes/check` (permitAll for that exact path; not a
+  reservation, and it cannot check the buyer's own limit). The organizer's
+  ownership is asked of event-service with no transaction open
+  (`PromoCodeService.requireEventOwnership`, fail-closed).
+- **Category ids are not checked against the event** at create: the console
+  picks them from the event's own list, and one that is not the event's simply
+  never matches (the booking is then `PROMO_CODE_NOT_APPLICABLE`).
+
+## Price-tier reminders, opt-in (booking-service V28)
+
+**A signed-in customer follows an event (`POST /bookings/event-reminders`,
+CUSTOMER only, the phone always the session's); about a day before the price tier
+on sale in one of its categories ends, they get one message per tier: WhatsApp,
+SMS if WhatsApp fails.** `GET` lists what the phone follows, `DELETE
+/{eventId}` stops one; at most 50 at a time (`REMINDER_LIMIT_REACHED`).
+
+- **Only the tier on sale now.** seat-service lists the categories with a tier
+  ending in the window (`GET /seat-categories/internal/price-tiers/ending`,
+  X-Internal-Token, gateway `seat-internal-deny`, GET permitAll); booking-service
+  works out which tier is on sale with `PriceTierAllocator` over its own counts
+  and reminds only when that one is ending. A sold-out or not-yet-open tier is
+  never announced, and neither is "Phase 1 ends" while Early bird is on sale.
+- **Claim, commit, then send**: each (subscription, tier) is an `INSERT ... ON
+  CONFLICT DO NOTHING` into `price_tier_reminders_sent`, committed before the
+  send, so nobody hears twice on any number of replicas and a crash loses a
+  message rather than repeating one. No send runs with a transaction open.
+- **Ops:** hourly at :25 under ShedLock (`PriceTierReminderService.remind`);
+  `BOOKING_TIER_REMINDER_CRON=-` switches it off, `BOOKING_TIER_REMINDER_WINDOW_HOURS`
+  (24) sizes the window. seat-service unreachable skips the run (logged).
+- **Not done:** attendees and Ticketize web guests (no session) cannot follow; the
+  message carries no link; there is no email channel.
 
 ## The oversell guard is on ALLOCATION, not on approval
 
