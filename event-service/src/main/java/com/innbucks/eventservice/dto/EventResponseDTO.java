@@ -93,6 +93,8 @@ public class EventResponseDTO {
     @Schema(description = "Last update timestamp (server time).")
     private LocalDateTime updatedAt;
 
-    @Schema(description = "Seat categories configured for this event, including sections and section prices.")
+    @Schema(nullable = true, description = "Seat categories configured for this event, including sections, "
+            + "section prices and price tiers. Filled by GET /events/{id} only; null on every list and on "
+            + "the create / update / status-change responses.")
     private List<EventSeatCategoryResponseDTO> seatCategories;
 }
