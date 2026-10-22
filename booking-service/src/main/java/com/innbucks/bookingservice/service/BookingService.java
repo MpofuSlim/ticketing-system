@@ -116,6 +116,21 @@ public class BookingService {
     @org.springframework.beans.factory.annotation.Value("${app.booking.max-seats-per-booking:20}")
     private int maxSeatsPerBooking = 20;
 
+    // Per-number cap on unpaid bookings. POST /bookings takes any phone a
+    // caller types, and a booking is what POST /payments sends an EcoCash PIN
+    // prompt for (and, after a payment attempt, what its expiry notice goes
+    // to). Without this, one caller could aim a stream of bookings at
+    // someone else's number. A paid booking never counts, so a real buyer is
+    // never stopped by their own purchases. Zero or less switches it off.
+    @org.springframework.beans.factory.annotation.Value("${app.booking.unpaid-per-number.max:5}")
+    private int maxUnpaidPerNumber = 5;
+
+    private Duration unpaidPerNumberWindow = Duration.ofMinutes(15);
+
+    public static final String TOO_MANY_UNPAID_BOOKINGS = "TOO_MANY_UNPAID_BOOKINGS";
+    static final String TOO_MANY_UNPAID_BOOKINGS_MESSAGE =
+            "This phone number has too many unpaid bookings. Pay for one of them, or try again later.";
+
     // How long a PENDING booking holds its seats before the expiration
     // scheduler auto-cancels it. Java-side default of 5 means unit tests that
     // construct BookingService with `new` (no Spring) get a sensible value;
@@ -186,6 +201,8 @@ public class BookingService {
             throw new BadRequestException(
                     "You may book at most " + maxSeatsPerBooking + " seats per booking.");
         }
+
+        requireUnpaidRoomFor(phoneNumber);
 
         // === Resolution phase — NO transaction, NO DB connection held. ===
         // Every seat-service / event-service round trip below runs BEFORE the
@@ -1957,6 +1974,42 @@ public class BookingService {
     @org.springframework.beans.factory.annotation.Value("${app.booking.max-hold-extension:PT45M}")
     void setMaxHoldExtension(String value) {
         this.maxHoldExtension = org.springframework.boot.convert.DurationStyle.detectAndParse(value);
+    }
+
+    @org.springframework.beans.factory.annotation.Value("${app.booking.unpaid-per-number.window:PT15M}")
+    void setUnpaidPerNumberWindow(String value) {
+        this.unpaidPerNumberWindow = org.springframework.boot.convert.DurationStyle.detectAndParse(value);
+    }
+
+    /**
+     * Refuses a new booking when the purchaser's phone already has
+     * {@code maxUnpaidPerNumber} unpaid bookings made in the window: 429
+     * {@code TOO_MANY_UNPAID_BOOKINGS}, with {@code retryAfterSeconds} until the
+     * oldest of them leaves the window. Runs before anything is looked up or
+     * held. Two requests for one number at the same instant can both pass the
+     * count; the gateway's per-caller limit on POST /bookings bounds that.
+     */
+    private void requireUnpaidRoomFor(String phoneNumber) {
+        if (maxUnpaidPerNumber <= 0 || phoneNumber == null || phoneNumber.isBlank()) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime since = now.minus(unpaidPerNumberWindow);
+        long unpaid = bookingRepository.countUnpaidSince(phoneNumber, Booking.BookingStatus.CONFIRMED, since);
+        if (unpaid < maxUnpaidPerNumber) {
+            return;
+        }
+        LocalDateTime oldest = bookingRepository.oldestUnpaidSince(phoneNumber, Booking.BookingStatus.CONFIRMED, since);
+        long retryAfterSeconds = oldest == null
+                ? unpaidPerNumberWindow.toSeconds()
+                : Math.max(1, secondsUntil(now, oldest.plus(unpaidPerNumberWindow)));
+        if (metrics != null) {
+            metrics.unpaidPerNumberRefused();
+        }
+        log.warn("Booking rejected, too many unpaid bookings for the number phone={} unpaid={} max={} retryAfterSeconds={}",
+                MsisdnMasking.mask(phoneNumber), unpaid, maxUnpaidPerNumber, retryAfterSeconds);
+        throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, TOO_MANY_UNPAID_BOOKINGS,
+                TOO_MANY_UNPAID_BOOKINGS_MESSAGE, Map.of("retryAfterSeconds", retryAfterSeconds));
     }
 
     private EventLookupDTO fetchEventLookup(UUID eventId) {

@@ -24,6 +24,12 @@ jwt:
   expiration: 3600000
 
 app:
+  # The per-number cap on unpaid bookings is off here: these tests book many
+  # times for one phone to exercise stock and concurrency, which the cap would
+  # refuse. UnpaidBookingsPerNumberPostgresIT switches it back on.
+  booking:
+    unpaid-per-number:
+      max: 0
   idempotency:
     store: memory
   events:

@@ -246,6 +246,17 @@ public class BookingController {
                             """)
                     })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "429",
+                    description = "Nothing was held. TOO_MANY_UNPAID_BOOKINGS: the purchaser's phone already has 5 "
+                            + "unpaid bookings made in the last 15 minutes (paid ones never count); "
+                            + "data.retryAfterSeconds is when the oldest leaves that window. Pay for an existing "
+                            + "booking instead of making another. The gateway also limits POST /bookings per source "
+                            + "IP (1 a second, burst 10); its 429 has an empty body.",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Too many unpaid bookings for this phone (TOO_MANY_UNPAID_BOOKINGS)", value = """
+                            { "code": "429 TOO_MANY_REQUESTS", "message": "This phone number has too many unpaid bookings. Pay for one of them, or try again later.", "data": { "errorCode": "TOO_MANY_UNPAID_BOOKINGS", "retryAfterSeconds": 540 } }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "503",
                     description = "Nothing was held; the same request can be sent again. TRY_AGAIN: the hold's database "
                             + "transaction lost a deadlock (or serialization) race twice in a row, or a ticket or "

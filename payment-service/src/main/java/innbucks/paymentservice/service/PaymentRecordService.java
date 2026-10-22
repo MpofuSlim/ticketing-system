@@ -4,6 +4,7 @@ import innbucks.paymentservice.audit.AuditContext;
 import innbucks.paymentservice.audit.AuditEventType;
 import innbucks.paymentservice.audit.AuditService;
 import innbucks.paymentservice.entity.Payment;
+import innbucks.paymentservice.entity.PaymentRail;
 import innbucks.paymentservice.entity.Payment.PaymentStatus;
 import innbucks.paymentservice.entity.PaymentEvent;
 import innbucks.paymentservice.order.OrderType;
@@ -110,6 +111,23 @@ public class PaymentRecordService {
     public boolean hasActiveOrSucceededPayment(OrderType orderType, String orderRef) {
         return repository.existsByOrderTypeAndOrderRefAndStatusIn(orderType, orderRef, ACTIVE_OR_SUCCEEDED);
     }
+
+    /**
+     * EcoCash charges to any of {@code msisdns} created after {@code since},
+     * and the creation time of the oldest (null when there are none): the
+     * per-number prompt cap's inputs.
+     */
+    @Transactional(readOnly = true)
+    public RecentCharges recentEcocashCharges(java.util.Collection<String> msisdns, Instant since) {
+        long count = repository.countByPaymentRailAndCustomerMsisdnInAndCreatedAtAfter(
+                PaymentRail.ECOCASH, msisdns, since);
+        Instant oldest = count == 0 ? null
+                : repository.findFirstByPaymentRailAndCustomerMsisdnInAndCreatedAtAfterOrderByCreatedAtAsc(
+                        PaymentRail.ECOCASH, msisdns, since).map(Payment::getCreatedAt).orElse(null);
+        return new RecentCharges(count, oldest);
+    }
+
+    public record RecentCharges(long count, Instant oldest) {}
 
     /** The partial unique index that enforces one active payment per order (V12). */
     static final String ACTIVE_ORDER_INDEX = "uq_payment_active_order";

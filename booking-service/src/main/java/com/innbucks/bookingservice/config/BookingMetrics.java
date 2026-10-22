@@ -77,6 +77,7 @@ public class BookingMetrics {
     public static final String HOLD_EXTENSION_REFUSED = "booking.hold.extension_refused";
     public static final String CONFIRM_RESURRECTED = "booking.confirm.resurrected";
     public static final String TICKET_CHECK = "booking.ticket_check";
+    public static final String UNPAID_PER_NUMBER_REFUSED = "booking.create.unpaid_per_number_refused";
 
     /** Which generated reference clashed; the {@code reference} tag of {@link #REFERENCE_COLLISION}. */
     public enum ReferenceKind {
@@ -124,6 +125,7 @@ public class BookingMetrics {
     private final Map<TicketCheckOutcome, Counter> ticketChecks = new EnumMap<>(TicketCheckOutcome.class);
     private final Map<ClaimRetryOutcome, Counter> claimRetries = new EnumMap<>(ClaimRetryOutcome.class);
     private final Counter expirySkipped;
+    private final Counter unpaidPerNumberRefused;
     private final Map<HoldExtensionRefusal, Counter> holdExtensionRefusals = new EnumMap<>(HoldExtensionRefusal.class);
     private final Map<Booking.CancelReason, Map<ResurrectOutcome, Counter>> resurrections =
             new EnumMap<>(Booking.CancelReason.class);
@@ -166,6 +168,9 @@ public class BookingMetrics {
             }
             resurrections.put(reason, byOutcome);
         }
+        this.unpaidPerNumberRefused = Counter.builder(UNPAID_PER_NUMBER_REFUSED)
+                .description("New bookings refused because the phone already had too many unpaid ones")
+                .register(registry);
         for (TicketCheckOutcome outcome : TicketCheckOutcome.values()) {
             ticketChecks.put(outcome, Counter.builder(TICKET_CHECK)
                     .description("Partner ticket checks, by outcome")
@@ -176,6 +181,10 @@ public class BookingMetrics {
 
     public void ticketCheck(TicketCheckOutcome outcome) {
         ticketChecks.get(outcome).increment();
+    }
+
+    public void unpaidPerNumberRefused() {
+        unpaidPerNumberRefused.increment();
     }
 
     public void referenceCollision(ReferenceKind kind) {
