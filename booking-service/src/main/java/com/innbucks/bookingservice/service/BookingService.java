@@ -530,24 +530,24 @@ public class BookingService {
         }
 
         // Price every ticket, now that each category's stock row is locked by
-        // this transaction: a price tier's quantity is counted from the items
-        // other bookings committed, and none can commit, cancel or expire a
-        // ticket of these categories until this transaction ends. The count is
-        // asked only for tiers that are open and limited by quantity.
+        // this transaction: a price tier's quantity and per-customer cap are
+        // counted from the items other bookings committed, and none can
+        // commit, cancel, expire or reverse a ticket of these categories until
+        // this transaction ends. The counts are asked only for tiers that are
+        // open and limited.
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         Map<UUID, Iterator<PriceTierAllocator.TicketPrice>> pricesByCategory = new HashMap<>();
         BigDecimal total = BigDecimal.ZERO;
         for (Map.Entry<UUID, Integer> e : qtyByCategory.entrySet()) {
             CategoryLookupDTO category = categoryById.get(e.getKey());
-            List<UUID> counted = PriceTierAllocator.tiersToCount(category, now);
-            Map<UUID, Long> sold = new HashMap<>();
-            if (!counted.isEmpty()) {
-                bookingItemRepository.countActiveByCategoryAndPriceTiers(
-                                e.getKey(), counted, Booking.BookingStatus.CANCELLED)
-                        .forEach(row -> sold.put(row.getPriceTierId(), row.getCount() == null ? 0L : row.getCount()));
+            PriceTierAllocator.Counts toCount = PriceTierAllocator.toCount(category, now);
+            Map<UUID, Long> counted = new HashMap<>();
+            Map<UUID, Long> customer = new HashMap<>();
+            if (!toCount.none()) {
+                countTiers(e.getKey(), toCount, booking, counted, customer);
             }
             List<PriceTierAllocator.TicketPrice> prices =
-                    PriceTierAllocator.allocate(category, e.getValue(), sold, now);
+                    PriceTierAllocator.allocate(category, e.getValue(), counted, customer, now);
             for (PriceTierAllocator.TicketPrice price : prices) {
                 total = total.add(price.price());
             }
@@ -600,6 +600,43 @@ public class BookingService {
                 booking.getId(), booking.getConfirmationNumber(), userEmail, booking.getEventId(),
                 booking.getTotalAmount(), items.size());
         return toDTO(booking);
+    }
+
+    /**
+     * The counts a category's open, limited tiers need, read under its stock
+     * lock (see persistBooking): tickets counting against each tier's quantity
+     * (held or sold, plus refunded where refunds do not reopen), and the
+     * tickets this buyer already holds at each capped tier, by the purchaser's
+     * phone, else email.
+     */
+    private void countTiers(UUID categoryId, PriceTierAllocator.Counts toCount, Booking booking,
+                            Map<UUID, Long> counted, Map<UUID, Long> customer) {
+        if (!toCount.quantityTiers().isEmpty()) {
+            bookingItemRepository.countActiveByCategoryAndPriceTiers(
+                            categoryId, toCount.quantityTiers(), Booking.BookingStatus.CANCELLED)
+                    .forEach(row -> counted.merge(row.getPriceTierId(), nz(row.getCount()), Long::sum));
+        }
+        if (!toCount.keepRefundedTiers().isEmpty()) {
+            bookingItemRepository.countRefundedByCategoryAndPriceTiers(categoryId, toCount.keepRefundedTiers())
+                    .forEach(row -> counted.merge(row.getPriceTierId(), nz(row.getCount()), Long::sum));
+        }
+        if (!toCount.customerCappedTiers().isEmpty()) {
+            List<BookingItemRepository.TierActiveItemCount> rows;
+            if (booking.getPhoneNumber() != null && !booking.getPhoneNumber().isBlank()) {
+                rows = bookingItemRepository.countActiveForPhoneByCategoryAndPriceTiers(categoryId,
+                        toCount.customerCappedTiers(), booking.getPhoneNumber(), Booking.BookingStatus.CANCELLED);
+            } else if (booking.getUserEmail() != null && !booking.getUserEmail().isBlank()) {
+                rows = bookingItemRepository.countActiveForEmailByCategoryAndPriceTiers(categoryId,
+                        toCount.customerCappedTiers(), booking.getUserEmail(), Booking.BookingStatus.CANCELLED);
+            } else {
+                rows = List.of();
+            }
+            rows.forEach(row -> customer.put(row.getPriceTierId(), nz(row.getCount())));
+        }
+    }
+
+    private static long nz(Long value) {
+        return value == null ? 0L : value;
     }
 
     /** Fetch a category's capacity + price + owning event from seat-service. */
@@ -709,15 +746,20 @@ public class BookingService {
         if (categoryIds == null || categoryIds.isEmpty()) {
             return List.of();
         }
-        return bookingItemRepository
-                .countActiveItemsByCategoryAndPriceTier(categoryIds, Booking.BookingStatus.CANCELLED)
-                .stream()
-                .map(p -> CategoryTierCountDTO.builder()
-                        .categoryId(p.getCategoryId())
-                        .priceTierId(p.getPriceTierId())
-                        .count(p.getCount() == null ? 0L : p.getCount())
-                        .build())
-                .collect(Collectors.toList());
+        Map<List<UUID>, CategoryTierCountDTO> rows = new LinkedHashMap<>();
+        for (BookingItemRepository.CategoryTierActiveItemCount p : bookingItemRepository
+                .countActiveItemsByCategoryAndPriceTier(categoryIds, Booking.BookingStatus.CANCELLED)) {
+            rows.computeIfAbsent(List.of(p.getCategoryId(), p.getPriceTierId()), k -> CategoryTierCountDTO.builder()
+                    .categoryId(p.getCategoryId()).priceTierId(p.getPriceTierId()).build())
+                    .setCount(nz(p.getCount()));
+        }
+        for (BookingItemRepository.CategoryTierActiveItemCount p : bookingItemRepository
+                .countRefundedItemsByCategoryAndPriceTier(categoryIds)) {
+            rows.computeIfAbsent(List.of(p.getCategoryId(), p.getPriceTierId()), k -> CategoryTierCountDTO.builder()
+                    .categoryId(p.getCategoryId()).priceTierId(p.getPriceTierId()).build())
+                    .setRefunded(nz(p.getCount()));
+        }
+        return new ArrayList<>(rows.values());
     }
 
     // Same shape as getBookingsByCategory but scoped to a whole event. Lets

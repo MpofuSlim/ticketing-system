@@ -508,6 +508,96 @@ class BookingServiceTest {
         order.verify(itemRepo).countActiveByCategoryAndPriceTiers(any(), any(), any());
     }
 
+    /** VIP at 150.00 with {@code first} ahead of Phase 1 120.00 (a week). */
+    private SeatServiceClient tieredClient(RequestFixture fx, CategoryLookupDTO.PriceTier first) {
+        SeatServiceClient client = mock(SeatServiceClient.class);
+        when(client.getCategory(DEFAULT_CATEGORY_ID)).thenReturn(ApiResult.ok("ok", CategoryLookupDTO.builder()
+                .seatCategoryId(DEFAULT_CATEGORY_ID).eventId(fx.eventId).name("VIP")
+                .price(new BigDecimal("150.00"))
+                .priceTiers(List.of(first,
+                        CategoryLookupDTO.PriceTier.builder().id(PHASE_TIER).name("Phase 1")
+                                .price(new BigDecimal("120.00")).endsAt(inDays(7)).build()))
+                .totalSeats(DEFAULT_TOTAL_SEATS).availableSeats(DEFAULT_TOTAL_SEATS)
+                .build()));
+        return client;
+    }
+
+    @Test
+    void createBooking_aBuyerAtTheirTierLimit_paysTheNextTierForTheRest() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        CategoryInventoryRepository inventory = successfulInventory();
+        RequestFixture fx = request(nPrices(3));
+        when(itemRepo.countActiveForEmailByCategoryAndPriceTiers(DEFAULT_CATEGORY_ID, List.of(EARLY_TIER),
+                "user@example.com", Booking.BookingStatus.CANCELLED)).thenReturn(List.of(tierCount(EARLY_TIER, 1)));
+        BookingService service = newService(bookingRepo, itemRepo, inventory, tieredClient(fx,
+                        CategoryLookupDTO.PriceTier.builder().id(EARLY_TIER).name("Early bird")
+                                .price(new BigDecimal("100.00")).endsAt(inDays(7)).maxPerCustomer(2).build()),
+                mock(ApplicationEventPublisher.class));
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        // Holds one already, may hold two: one more at 100.00, the rest at Phase 1.
+        assertEquals(List.of("Early bird", "Phase 1", "Phase 1"),
+                resp.getItems().stream().map(BookingItemDTO::getPriceTierName).toList());
+        assertEquals(0, new BigDecimal("340.00").compareTo(resp.getTotalAmount()));
+        verify(itemRepo, never()).countActiveByCategoryAndPriceTiers(any(), any(), any());
+        InOrder order = inOrder(inventory, itemRepo);
+        order.verify(inventory).tryClaim(DEFAULT_CATEGORY_ID, 3);
+        order.verify(itemRepo).countActiveForEmailByCategoryAndPriceTiers(any(), any(), any(), any());
+    }
+
+    @Test
+    void createBooking_withAPhone_countsTheBuyersTicketsByPhone() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(nPrices(2));
+        when(itemRepo.countActiveForPhoneByCategoryAndPriceTiers(DEFAULT_CATEGORY_ID, List.of(EARLY_TIER),
+                "+263771234567", Booking.BookingStatus.CANCELLED)).thenReturn(List.of(tierCount(EARLY_TIER, 2)));
+        BookingService service = newService(bookingRepo, itemRepo, tieredClient(fx,
+                CategoryLookupDTO.PriceTier.builder().id(EARLY_TIER).name("Early bird")
+                        .price(new BigDecimal("100.00")).endsAt(inDays(7)).maxPerCustomer(2).build()));
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", "+263771234567", fx.request);
+
+        assertEquals(List.of("Phase 1", "Phase 1"),
+                resp.getItems().stream().map(BookingItemDTO::getPriceTierName).toList());
+        verify(itemRepo, never()).countActiveForEmailByCategoryAndPriceTiers(any(), any(), any(), any());
+    }
+
+    @Test
+    void createBooking_refundedTicketsKeepTheirPlace_whenTheTierDoesNotReopen() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(nPrices(1));
+        when(itemRepo.countActiveByCategoryAndPriceTiers(DEFAULT_CATEGORY_ID, List.of(EARLY_TIER),
+                Booking.BookingStatus.CANCELLED)).thenReturn(List.of(tierCount(EARLY_TIER, 3)));
+        when(itemRepo.countRefundedByCategoryAndPriceTiers(DEFAULT_CATEGORY_ID, List.of(EARLY_TIER)))
+                .thenReturn(List.of(tierCount(EARLY_TIER, 2)));
+        BookingService service = newService(bookingRepo, itemRepo, tieredClient(fx,
+                CategoryLookupDTO.PriceTier.builder().id(EARLY_TIER).name("Early bird")
+                        .price(new BigDecimal("100.00")).quantity(5).refundsReopen(false).build()));
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        // 3 held or sold + 2 refunded = the tier's 5.
+        assertEquals("Phase 1", resp.getItems().get(0).getPriceTierName());
+        assertEquals(0, new BigDecimal("120.00").compareTo(resp.getTotalAmount()));
+    }
+
+    @Test
+    void createBooking_aTierThatReopens_neverAsksForRefunds() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(nPrices(1));
+        BookingService service = newService(bookingRepo, itemRepo, tieredClient(fx, inDays(7)));
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        assertEquals("Early bird", resp.getItems().get(0).getPriceTierName());
+        verify(itemRepo, never()).countRefundedByCategoryAndPriceTiers(any(), any());
+    }
+
     @Test
     void createBooking_afterEveryTierHasEnded_chargesThePrice_andCountsNothing() {
         BookingRepository bookingRepo = mock(BookingRepository.class);

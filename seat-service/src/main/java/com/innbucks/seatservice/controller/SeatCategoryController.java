@@ -97,9 +97,9 @@ public class SeatCategoryController {
                                           "currentTierName": "Early bird",
                                           "priceTiers": [
                                             { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
-                                              "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "sold": 37, "remaining": 63, "status": "ACTIVE" },
+                                              "startsAt": null, "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true, "sold": 37, "remaining": 63, "status": "ACTIVE" },
                                             { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
-                                              "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                              "startsAt": null, "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true, "sold": 0, "status": "UPCOMING" }
                                           ],
                                           "availableSeats": 13,
                                           "sections": [
@@ -161,9 +161,9 @@ public class SeatCategoryController {
                                         "price": 150.00,
                                         "priceTiers": [
                                           { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
-                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100 },
+                                            "startsAt": null, "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true },
                                           { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
-                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null }
+                                            "startsAt": null, "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true }
                                         ],
                                         "totalSeats": 50,
                                         "availableSeats": 50
@@ -193,10 +193,13 @@ public class SeatCategoryController {
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(summary = "Create category",
             description = "Creates a seat category for an event. Requires EVENT_ORGANIZER role. Optional "
-                    + "`priceTiers` (each { name, price, endsAt?, quantity? }, in the order they apply) sell "
-                    + "tickets below `price` in phases: the first tier still open is the price, and a tier "
-                    + "closes at endsAt or after quantity tickets, whichever comes first. endsAt is the "
-                    + "organizer's local time with no zone, e.g. 2026-09-08T23:59:59.")
+                    + "`priceTiers` (each { name, price, startsAt?, endsAt?, quantity?, maxPerCustomer?, "
+                    + "refundsReopen? }, in the order they apply) sell tickets below `price` in phases: the "
+                    + "first tier open is the price. A tier opens at startsAt (or as the tiers before it "
+                    + "close) and closes at endsAt or after quantity tickets, whichever comes first. "
+                    + "maxPerCustomer caps one buyer's tickets at the tier (the rest cost the next tier's "
+                    + "price); refundsReopen false keeps a refunded ticket's place taken. startsAt and "
+                    + "endsAt are the organizer's local time with no zone, e.g. 2026-09-08T23:59:59.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -218,9 +221,9 @@ public class SeatCategoryController {
                                         "currentTierName": "Early bird",
                                         "priceTiers": [
                                           { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
-                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "sold": 0, "remaining": 100, "status": "ACTIVE" },
+                                            "startsAt": null, "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true, "sold": 0, "remaining": 100, "status": "ACTIVE" },
                                           { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
-                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                            "startsAt": null, "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true, "sold": 0, "status": "UPCOMING" }
                                         ],
                                         "availableSeats": 50,
                                         "sections": [
@@ -314,9 +317,9 @@ public class SeatCategoryController {
                                         "currentTierName": "Early bird",
                                         "priceTiers": [
                                           { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
-                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "sold": 37, "remaining": 63, "status": "ACTIVE" },
+                                            "startsAt": null, "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true, "sold": 37, "remaining": 63, "status": "ACTIVE" },
                                           { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
-                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                            "startsAt": null, "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true, "sold": 0, "status": "UPCOMING" }
                                         ],
                                         "availableSeats": 37,
                                         "sections": [
@@ -392,11 +395,16 @@ public class SeatCategoryController {
     @Operation(summary = "Set the price tiers",
             description = "Replaces the category's price tiers with `tiers`, in the order they apply (e.g. Early "
                     + "bird, then Phase 1); `[]` removes them all. The first tier still open is the price, and once "
-                    + "all have closed the category's `price` applies. A tier closes at `endsAt` or after "
-                    + "`quantity` tickets, whichever comes first; it needs at least one. **Send the `id` of every "
+                    + "all have closed the category's `price` applies. A tier opens at `startsAt` (none: as "
+                    + "the tiers before it close) and closes at `endsAt` or after `quantity` tickets, whichever "
+                    + "comes first; it needs at least one of the two. `maxPerCustomer` caps how many tickets one "
+                    + "buyer (by phone, else email) gets at the tier; their further tickets cost the next open "
+                    + "tier's price. `refundsReopen` (default true) false keeps a refunded ticket's place "
+                    + "taken; an expired, unpaid hold always frees its place. The whole list is replaced, so "
+                    + "send every field you want to keep. **Send the `id` of every "
                     + "tier you keep**, so the tickets it has sold still count toward its quantity; a tier without "
-                    + "an id is new, and a stored tier left out is deleted. `endsAt` is the organizer's local time "
-                    + "with no zone (2026-09-08T23:59:59 runs through 8 September). Each tier's price must be "
+                    + "an id is new, and a stored tier left out is deleted. `startsAt` and `endsAt` are the "
+                    + "organizer's local time with no zone (2026-09-08T23:59:59 runs through 8 September). Each tier's price must be "
                     + "lower than the category's price. Tickets already booked keep the price they were booked "
                     + "at. Requires the owning EVENT_ORGANIZER or SUPER_ADMIN. Returns the category in the list "
                     + "endpoint's shape.")
@@ -421,11 +429,11 @@ public class SeatCategoryController {
                                         "currentTierName": "Early bird",
                                         "priceTiers": [
                                           { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
-                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 150, "sold": 37, "remaining": 113, "status": "ACTIVE" },
+                                            "startsAt": null, "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 150, "maxPerCustomer": 4, "refundsReopen": false, "sold": 37, "remaining": 113, "status": "ACTIVE" },
                                           { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
-                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" },
+                                            "startsAt": null, "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true, "sold": 0, "status": "UPCOMING" },
                                           { "id": "8e3a4f5b-6c7d-4e8f-a0b1-2c3d4e5f6a7b", "name": "Phase 2", "price": 140.00,
-                                            "endsAt": "2026-09-27T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                            "startsAt": "2026-09-21T00:00:00+02:00", "endsAt": "2026-09-27T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true, "sold": 0, "status": "UPCOMING" }
                                         ],
                                         "availableSeats": 37,
                                         "sections": [
@@ -465,6 +473,27 @@ public class SeatCategoryController {
                                             {
                                               "code": "400 BAD_REQUEST",
                                               "message": "The end of \\"Phase 2\\" must be a date and time like 2026-09-08T23:59:59.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Start not before the end", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "The start of \\"Phase 2\\" must be before its end.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Unreadable start", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "The start of \\"Phase 2\\" must be a date and time like 2026-09-05T18:00:00.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Bad customer limit", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "The limit per customer for \\"Phase 2\\" must be at least 1.",
                                               "data": null
                                             }
                                             """),

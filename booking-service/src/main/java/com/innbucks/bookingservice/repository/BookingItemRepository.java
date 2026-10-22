@@ -201,6 +201,83 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
             @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
     );
 
+    /**
+     * Tickets of {@code tierIds} in one category whose booking was reversed
+     * after payment (CANCELLED, {@code ADMIN_REVERSED}). They count against a
+     * tier's quantity when the tier does not reopen on refund. Read under the
+     * category's stock lock, like the active count: the reversal takes it too.
+     */
+    @Query("""
+        SELECT i.priceTierId AS priceTierId, COUNT(i) AS count
+        FROM BookingItem i
+        JOIN i.booking b
+        WHERE i.categoryId = :categoryId
+          AND i.priceTierId IN :tierIds
+          AND b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CANCELLED
+          AND b.cancelReason = com.innbucks.bookingservice.entity.Booking.CancelReason.ADMIN_REVERSED
+        GROUP BY i.priceTierId
+    """)
+    List<TierActiveItemCount> countRefundedByCategoryAndPriceTiers(
+            @Param("categoryId") UUID categoryId,
+            @Param("tierIds") Collection<UUID> tierIds
+    );
+
+    /**
+     * Active tickets one buyer holds at each of {@code tierIds} in one
+     * category, by the purchaser's phone, for a tier's per-customer cap. Read
+     * under the category's stock lock, so two bookings by the same buyer
+     * cannot both take the last place under the cap.
+     */
+    @Query("""
+        SELECT i.priceTierId AS priceTierId, COUNT(i) AS count
+        FROM BookingItem i
+        JOIN i.booking b
+        WHERE i.categoryId = :categoryId
+          AND i.priceTierId IN :tierIds
+          AND b.status <> :cancelledStatus
+          AND b.phoneNumber = :phoneNumber
+        GROUP BY i.priceTierId
+    """)
+    List<TierActiveItemCount> countActiveForPhoneByCategoryAndPriceTiers(
+            @Param("categoryId") UUID categoryId,
+            @Param("tierIds") Collection<UUID> tierIds,
+            @Param("phoneNumber") String phoneNumber,
+            @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
+    );
+
+    /** The same per-customer count by the purchaser's email, for a booking that carries no phone. */
+    @Query("""
+        SELECT i.priceTierId AS priceTierId, COUNT(i) AS count
+        FROM BookingItem i
+        JOIN i.booking b
+        WHERE i.categoryId = :categoryId
+          AND i.priceTierId IN :tierIds
+          AND b.status <> :cancelledStatus
+          AND b.userEmail = :userEmail
+        GROUP BY i.priceTierId
+    """)
+    List<TierActiveItemCount> countActiveForEmailByCategoryAndPriceTiers(
+            @Param("categoryId") UUID categoryId,
+            @Param("tierIds") Collection<UUID> tierIds,
+            @Param("userEmail") String userEmail,
+            @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
+    );
+
+    /** Refunded tickets per price tier for several categories, for seat-service's display. */
+    @Query("""
+        SELECT i.categoryId AS categoryId, i.priceTierId AS priceTierId, COUNT(i) AS count
+        FROM BookingItem i
+        JOIN i.booking b
+        WHERE i.categoryId IN :categoryIds
+          AND i.priceTierId IS NOT NULL
+          AND b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CANCELLED
+          AND b.cancelReason = com.innbucks.bookingservice.entity.Booking.CancelReason.ADMIN_REVERSED
+        GROUP BY i.categoryId, i.priceTierId
+    """)
+    List<CategoryTierActiveItemCount> countRefundedItemsByCategoryAndPriceTier(
+            @Param("categoryIds") Collection<UUID> categoryIds
+    );
+
     interface TierActiveItemCount {
         UUID getPriceTierId();
         Long getCount();

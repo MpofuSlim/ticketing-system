@@ -430,14 +430,16 @@ public class SeatCategoryService {
                 .fetchActiveCountsByCategories(List.of(categoryId))
                 .orElse(null);
         SeatCategory category = edited.category();
-        Map<UUID, Long> sold = soldByTier(categoryId, tierSoldCounts(
+        Map<UUID, CategoryPricing.Sold> sold = soldByTier(categoryId, tierSoldCounts(
                 Map.of(categoryId, tierTermsOf(edited.tiers()))));
         return toCreateResponseDTO(category, edited.sections(), liveAvailableSeats(category, counts),
                 edited.tiers(), sold);
     }
 
     /** One validated tier before it is saved; {@code id} names the stored tier it updates, or is null. */
-    private record TierInput(UUID id, String name, BigDecimal price, LocalDateTime endsAtUtc, Integer quantity) {
+    private record TierInput(UUID id, String name, BigDecimal price, LocalDateTime startsAtUtc,
+                             LocalDateTime endsAtUtc, Integer quantity, Integer maxPerCustomer,
+                             boolean refundsReopen) {
     }
 
     /**
@@ -502,6 +504,19 @@ public class SeatCategoryService {
             if (quantity != null && quantity <= 0) {
                 throw new BadRequestException("The number of tickets for \"" + name + "\" must be at least 1.");
             }
+            Integer maxPerCustomer = tier.getMaxPerCustomer();
+            if (maxPerCustomer != null && maxPerCustomer <= 0) {
+                throw new BadRequestException("The limit per customer for \"" + name + "\" must be at least 1.");
+            }
+            LocalDateTime startsAtUtc = null;
+            if (tier.getStartsAt() != null && !tier.getStartsAt().isBlank()) {
+                try {
+                    startsAtUtc = marketTimeZone.parseToUtc(tier.getStartsAt());
+                } catch (DateTimeParseException e) {
+                    throw new BadRequestException("The start of \"" + name
+                            + "\" must be a date and time like 2026-09-05T18:00:00.");
+                }
+            }
             LocalDateTime endsAtUtc = null;
             if (tier.getEndsAt() != null && !tier.getEndsAt().isBlank()) {
                 try {
@@ -521,7 +536,11 @@ public class SeatCategoryService {
             if (endsAtUtc == null && quantity == null) {
                 throw new BadRequestException("\"" + name + "\" needs an end date, a number of tickets, or both.");
             }
-            inputs.add(new TierInput(tier.getId(), name, price, endsAtUtc, quantity));
+            if (startsAtUtc != null && endsAtUtc != null && !startsAtUtc.isBefore(endsAtUtc)) {
+                throw new BadRequestException("The start of \"" + name + "\" must be before its end.");
+            }
+            inputs.add(new TierInput(tier.getId(), name, price, startsAtUtc, endsAtUtc, quantity, maxPerCustomer,
+                    tier.getRefundsReopen() == null || tier.getRefundsReopen()));
         }
         return inputs;
     }
@@ -554,8 +573,11 @@ public class SeatCategoryService {
             row.setPosition(position);
             row.setName(input.name());
             row.setPrice(input.price());
+            row.setStartsAt(input.startsAtUtc());
             row.setEndsAt(input.endsAtUtc());
             row.setQuantity(input.quantity());
+            row.setMaxPerCustomer(input.maxPerCustomer());
+            row.setRefundsReopen(input.refundsReopen());
             rows.add(row);
         }
         List<SeatCategoryPriceTier> removed = existing.stream()
@@ -582,7 +604,8 @@ public class SeatCategoryService {
      * categories that have tiers. Null when it could not be asked (tiers then
      * show without counts); an absent category or tier has sold nothing.
      */
-    private Map<UUID, Map<UUID, Long>> tierSoldCounts(Map<UUID, List<CategoryPricing.Tier>> tiersByCategory) {
+    private Map<UUID, Map<UUID, CategoryPricing.Sold>> tierSoldCounts(
+            Map<UUID, List<CategoryPricing.Tier>> tiersByCategory) {
         List<UUID> withTiers = tiersByCategory.entrySet().stream()
                 .filter(e -> !e.getValue().isEmpty())
                 .map(Map.Entry::getKey)
@@ -593,7 +616,8 @@ public class SeatCategoryService {
         return bookingServiceClient.fetchTierSoldCounts(withTiers).orElse(null);
     }
 
-    private static Map<UUID, Long> soldByTier(UUID categoryId, Map<UUID, Map<UUID, Long>> soldCounts) {
+    private static Map<UUID, CategoryPricing.Sold> soldByTier(UUID categoryId,
+                                                              Map<UUID, Map<UUID, CategoryPricing.Sold>> soldCounts) {
         return soldCounts == null ? null : soldCounts.getOrDefault(categoryId, Map.of());
     }
 
@@ -735,7 +759,7 @@ public class SeatCategoryService {
         // that have tiers.
         Map<UUID, List<CategoryPricing.Tier>> tiersByCategory = new LinkedHashMap<>();
         layout.categories().forEach(c -> tiersByCategory.put(c.id(), c.tiers()));
-        Map<UUID, Map<UUID, Long>> soldCounts = tierSoldCounts(tiersByCategory);
+        Map<UUID, Map<UUID, CategoryPricing.Sold>> soldCounts = tierSoldCounts(tiersByCategory);
         LocalDateTime now = nowUtc();
         return layout.categories().stream()
                 .map(category -> category.toDto(liveAvailableSeats(
@@ -786,7 +810,8 @@ public class SeatCategoryService {
                           Integer totalSeats, List<SectionLayout> sections) {
 
         /** A fresh response DTO, in exactly {@code toCreateResponseDTO}'s shape. */
-        CreateCategoryResponseDTO toDto(Integer availableSeats, Map<UUID, Long> soldByTier, LocalDateTime nowUtc) {
+        CreateCategoryResponseDTO toDto(Integer availableSeats, Map<UUID, CategoryPricing.Sold> soldByTier,
+                                        LocalDateTime nowUtc) {
             List<SectionSeatConfigDTO> sectionCopies = sections.stream()
                     .map(section -> {
                         SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
@@ -1030,7 +1055,7 @@ public class SeatCategoryService {
             List<SectionSeatConfigDTO> sections,
             Integer availableSeats,
             List<SeatCategoryPriceTier> tiers,
-            Map<UUID, Long> soldByTier
+            Map<UUID, CategoryPricing.Sold> soldByTier
     ) {
         List<SectionSeatConfigDTO> sectionCopies = sections.stream()
                 .map(section -> {

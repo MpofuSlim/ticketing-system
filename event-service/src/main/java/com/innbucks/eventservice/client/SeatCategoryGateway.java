@@ -218,12 +218,14 @@ public class SeatCategoryGateway {
                 List<TierView> tiers = new java.util.ArrayList<>();
                 if (category.getPriceTiers() != null) {
                     for (SeatCategoryServiceResponseDTO.PriceTier tier : category.getPriceTiers()) {
+                        LocalDateTime startsAt = parseUtc(tier.getStartsAt());
                         LocalDateTime endsAt = parseUtc(tier.getEndsAt());
-                        if (tier.getEndsAt() != null && !tier.getEndsAt().isBlank() && endsAt == null) {
+                        if ((present(tier.getStartsAt()) && startsAt == null)
+                                || (present(tier.getEndsAt()) && endsAt == null)) {
                             continue;
                         }
-                        tiers.add(new TierView(tier.getName(), tier.getPrice(), endsAt, tier.getQuantity(),
-                                tier.getSold()));
+                        tiers.add(new TierView(tier.getName(), tier.getPrice(), startsAt, endsAt,
+                                tier.getQuantity(), tier.getMaxPerCustomer(), tier.getSold()));
                     }
                 }
                 views.add(new CategoryView(category.getName(), category.getDescription(),
@@ -269,8 +271,10 @@ public class SeatCategoryGateway {
 
         /**
          * seat-service's rule (its {@code CategoryPricing}), kept in lock-step:
-         * tiers apply in order, the first one neither past its end nor sold to
-         * its quantity (and below the full price) is ACTIVE.
+         * tiers apply in order, the first one started, neither past its end nor
+         * sold to its quantity (and below the full price) is ACTIVE. A
+         * per-customer cap only moves one buyer's extra tickets to the next
+         * tier, so it never changes what the page shows.
          */
         List<EventPriceTierDTO> priceTiers(LocalDateTime nowUtc) {
             List<EventPriceTierDTO> out = new java.util.ArrayList<>(tiers.size());
@@ -281,6 +285,8 @@ public class SeatCategoryGateway {
                     status = EventPriceTierDTO.Status.ENDED;
                 } else if (tier.quantity() != null && tier.sold() != null && tier.sold() >= tier.quantity()) {
                     status = EventPriceTierDTO.Status.SOLD_OUT;
+                } else if (tier.startsAtUtc() != null && nowUtc.isBefore(tier.startsAtUtc())) {
+                    status = EventPriceTierDTO.Status.UPCOMING;
                 } else if (!activeFound && price != null && tier.price() != null
                         && tier.price().compareTo(price) < 0) {
                     status = EventPriceTierDTO.Status.ACTIVE;
@@ -291,8 +297,10 @@ public class SeatCategoryGateway {
                 out.add(EventPriceTierDTO.builder()
                         .name(tier.name())
                         .price(tier.price())
+                        .startsAt(tier.startsAtUtc())
                         .endsAt(tier.endsAtUtc())
                         .quantity(tier.quantity())
+                        .maxPerCustomer(tier.maxPerCustomer())
                         .remaining(tier.quantity() == null || tier.sold() == null ? null
                                 : Math.max(0L, tier.quantity() - tier.sold()))
                         .status(status)
@@ -302,17 +310,22 @@ public class SeatCategoryGateway {
         }
     }
 
-    record TierView(String name, BigDecimal price, LocalDateTime endsAtUtc, Integer quantity, Long sold) {
+    record TierView(String name, BigDecimal price, LocalDateTime startsAtUtc, LocalDateTime endsAtUtc,
+                    Integer quantity, Integer maxPerCustomer, Long sold) {
     }
 
     record SectionView(String section, Integer seatCount) {
     }
 
+    private static boolean present(String value) {
+        return value != null && !value.isBlank();
+    }
+
     /**
-     * seat-service's {@code endsAt} as a UTC wall clock: with a zone (it
-     * renders the market offset unless told the caller is a service) that
-     * instant, without one UTC, the S2S convention. Unreadable is null, which
-     * drops that tier from the page; the booking is still priced by
+     * seat-service's {@code startsAt} / {@code endsAt} as a UTC wall clock:
+     * with a zone (it renders the market offset unless told the caller is a
+     * service) that instant, without one UTC, the S2S convention. Unreadable is
+     * null, which drops that tier from the page; the booking is still priced by
      * booking-service from seat-service's own answer.
      */
     static LocalDateTime parseUtc(String value) {
@@ -325,7 +338,7 @@ public class SeatCategoryGateway {
             try {
                 return LocalDateTime.parse(value.trim());
             } catch (DateTimeParseException unreadable) {
-                log.warn("seatCategories price tier end unreadable, tier dropped from the event page");
+                log.warn("seatCategories price tier date unreadable, tier dropped from the event page");
                 return null;
             }
         }

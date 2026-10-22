@@ -47,12 +47,28 @@ public class SeatCategoryPriceTier {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal price;
 
+    /** UTC wall clock at which the tier opens (inclusive); null = open from the start. */
+    @Column(name = "starts_at")
+    private LocalDateTime startsAt;
+
     /** UTC wall clock at which the tier closes (exclusive); null closes on quantity alone. */
     @Column(name = "ends_at")
     private LocalDateTime endsAt;
 
     /** Tickets that may sell at this tier; null closes on time alone. */
     private Integer quantity;
+
+    /** Tickets one buyer may hold at this tier; the rest are priced at the next open tier. Null = no cap. */
+    @Column(name = "max_per_customer")
+    private Integer maxPerCustomer;
+
+    /**
+     * Whether a ticket refunded after payment frees its place in
+     * {@link #quantity}. An unpaid hold that lapses always frees it.
+     */
+    @Column(name = "refunds_reopen", nullable = false)
+    @Builder.Default
+    private boolean refundsReopen = true;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

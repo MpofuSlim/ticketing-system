@@ -35,7 +35,7 @@ class CategoryPricingTest {
 
     @Test
     void theFirstOpenTier_isThePrice() {
-        CategoryPricing.Priced priced = CategoryPricing.price(FULL, tiers(), Map.of(earlyId, 37L),
+        CategoryPricing.Priced priced = CategoryPricing.price(FULL, tiers(), Map.of(earlyId, new CategoryPricing.Sold(37, 0)),
                 EARLY_ENDS.minusDays(1));
 
         assertEquals(new BigDecimal("100.00"), priced.currentPrice());
@@ -49,7 +49,7 @@ class CategoryPricingTest {
 
     @Test
     void aTierSoldToItsQuantity_handsOverToTheNext_beforeItsEnd() {
-        CategoryPricing.Priced priced = CategoryPricing.price(FULL, tiers(), Map.of(earlyId, 100L),
+        CategoryPricing.Priced priced = CategoryPricing.price(FULL, tiers(), Map.of(earlyId, new CategoryPricing.Sold(100, 0)),
                 EARLY_ENDS.minusDays(1));
 
         assertEquals(new BigDecimal("120.00"), priced.currentPrice());
@@ -67,6 +67,44 @@ class CategoryPricingTest {
         assertEquals(FULL, after.currentPrice());
         assertNull(after.currentTierName());
         assertEquals(List.of(Status.ENDED, Status.ENDED), statuses(after));
+    }
+
+    @Test
+    void aTierBeforeItsStart_isUpcoming_andTheNextOpenTierIsThePrice() {
+        LocalDateTime opens = EARLY_ENDS.minusDays(3);
+        List<CategoryPricing.Tier> later = List.of(
+                new CategoryPricing.Tier(earlyId, "Flash sale", new BigDecimal("90.00"), opens, EARLY_ENDS,
+                        null, 2, true),
+                new CategoryPricing.Tier(phaseId, "Phase 1", new BigDecimal("120.00"), PHASE_ENDS, null));
+
+        CategoryPricing.Priced before = CategoryPricing.price(FULL, later, Map.of(), opens.minusSeconds(1));
+        CategoryPricing.Priced at = CategoryPricing.price(FULL, later, Map.of(), opens);
+
+        assertEquals(new BigDecimal("120.00"), before.currentPrice());
+        assertEquals(List.of(Status.UPCOMING, Status.ACTIVE), statuses(before));
+        assertEquals(opens, before.tiers().get(0).getStartsAt());
+        assertEquals(2, before.tiers().get(0).getMaxPerCustomer());
+        assertEquals(new BigDecimal("90.00"), at.currentPrice());
+        assertEquals(List.of(Status.ACTIVE, Status.UPCOMING), statuses(at));
+    }
+
+    @Test
+    void refundedTickets_countOnlyWhereRefundsDoNotReopen() {
+        CategoryPricing.Tier reopens = new CategoryPricing.Tier(earlyId, "Early bird", new BigDecimal("100.00"),
+                null, EARLY_ENDS, 100, null, true);
+        CategoryPricing.Tier keeps = new CategoryPricing.Tier(earlyId, "Early bird", new BigDecimal("100.00"),
+                null, EARLY_ENDS, 100, null, false);
+        Map<UUID, CategoryPricing.Sold> sold = Map.of(earlyId, new CategoryPricing.Sold(95, 5));
+
+        CategoryPricing.Priced reopened = CategoryPricing.price(FULL, List.of(reopens), sold, EARLY_ENDS.minusDays(1));
+        CategoryPricing.Priced kept = CategoryPricing.price(FULL, List.of(keeps), sold, EARLY_ENDS.minusDays(1));
+
+        assertEquals(95L, reopened.tiers().get(0).getSold());
+        assertEquals(Status.ACTIVE, reopened.tiers().get(0).getStatus());
+        assertEquals(100L, kept.tiers().get(0).getSold());
+        assertEquals(Status.SOLD_OUT, kept.tiers().get(0).getStatus());
+        assertFalse(kept.tiers().get(0).isRefundsReopen());
+        assertEquals(FULL, kept.currentPrice());
     }
 
     @Test

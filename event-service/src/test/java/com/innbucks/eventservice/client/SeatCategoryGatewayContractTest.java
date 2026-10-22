@@ -253,6 +253,49 @@ class SeatCategoryGatewayContractTest {
     }
 
     @Test
+    @DisplayName("A tier before its start is UPCOMING and not the price; it opens on time, with its cap shown")
+    void priceTiers_beforeItsStart_isUpcoming() {
+        UUID eventId = UUID.randomUUID();
+        wireMock.stubFor(get(urlPathEqualTo("/seat-categories"))
+                .withQueryParam("eventId", equalTo(eventId.toString()))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {
+                                  "code": "200 OK",
+                                  "message": "Categories retrieved successfully",
+                                  "data": [
+                                    {
+                                      "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                      "eventId": "%s",
+                                      "name": "VIP",
+                                      "price": 150.00,
+                                      "priceTiers": [
+                                        { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
+                                          "startsAt": "2026-09-01T00:00:00+02:00", "endsAt": "2026-09-08T23:59:59+02:00",
+                                          "quantity": 100, "maxPerCustomer": 4, "sold": 0 }
+                                      ],
+                                      "availableSeats": 50,
+                                      "sections": []
+                                    }
+                                  ]
+                                }
+                                """.formatted(eventId))));
+
+        gateway.setClock(fixedAt("2026-08-31T21:59:59Z"));
+        EventSeatCategoryResponseDTO before = gateway.fetchForEvent(eventId).get(0);
+        gateway.setClock(fixedAt("2026-08-31T22:00:00Z"));
+        EventSeatCategoryResponseDTO opened = gateway.fetchForEvent(eventId).get(0);
+
+        assertEquals(new BigDecimal("150.00"), before.getCurrentPrice());
+        assertEquals(List.of(EventPriceTierDTO.Status.UPCOMING), statuses(before));
+        assertEquals(LocalDateTime.of(2026, 8, 31, 22, 0), before.getPriceTiers().get(0).getStartsAt());
+        assertEquals(4, before.getPriceTiers().get(0).getMaxPerCustomer());
+        assertEquals(new BigDecimal("100.00"), opened.getCurrentPrice());
+        assertEquals(List.of(EventPriceTierDTO.Status.ACTIVE), statuses(opened));
+    }
+
+    @Test
     @DisplayName("Unreadable tier end: that tier is dropped, the categories still render")
     void priceTiers_unreadableEnd_dropsOnlyThatTier() {
         UUID eventId = UUID.randomUUID();

@@ -45,6 +45,12 @@ public class PriceTierRequestDTO {
     @Digits(integer = 8, fraction = 2, message = "Tier price can have at most 2 decimal places")
     private BigDecimal price;
 
+    @Schema(example = "2026-09-05T18:00:00", nullable = true,
+            description = "When the tier opens, in the organizer's local time with no zone (or an instant "
+                    + "with Z / an offset). Omit to open at once. Must be before endsAt.")
+    @Size(max = 40, message = "Tier start must be a date and time like 2026-09-05T18:00:00")
+    private String startsAt;
+
     @Schema(example = "2026-09-08T23:59:59", nullable = true,
             description = "When the tier closes. The organizer's local time with no zone (send "
                     + "2026-09-08T23:59:59 to run through 8 September); a value with Z or an offset is that "
@@ -56,4 +62,16 @@ public class PriceTierRequestDTO {
             description = "How many tickets sell at this tier before it closes. Set endsAt, quantity, or both.")
     @Positive(message = "Tier quantity must be at least 1")
     private Integer quantity;
+
+    @Schema(example = "4", nullable = true,
+            description = "Most tickets one customer (by phone, else email) can hold at this tier; tickets "
+                    + "past it are priced at the next open tier. Omit for no cap.")
+    @Positive(message = "Tier limit per customer must be at least 1")
+    private Integer maxPerCustomer;
+
+    @Schema(example = "true", nullable = true,
+            description = "Whether a ticket refunded after payment frees its place in the quantity, so the "
+                    + "next buyer gets it at this price. Defaults to true. An unpaid hold that lapses always "
+                    + "frees its place.")
+    private Boolean refundsReopen;
 }

@@ -12,9 +12,12 @@ import java.util.UUID;
 
 /**
  * Which price a seat category charges at a given moment. Tiers apply in order
- * and the first one still open is the price; once every tier has closed, the
- * category's own price. A tier is open until {@code endsAt} (exclusive) and
- * until {@code quantity} tickets are held or sold at it.
+ * and the first one open is the price; once every tier has closed, the
+ * category's own price. A tier is open from {@code startsAt} (inclusive) until
+ * {@code endsAt} (exclusive) and until {@code quantity} tickets are held or
+ * sold at it (refunded ones too, when it does not reopen on refund). Its
+ * per-customer cap only moves one buyer's extra tickets to the next tier, so
+ * it never changes what the listing shows.
  *
  * <p>The one place seat-service applies the rule, so every {@code currentPrice}
  * and tier {@code status} it shows comes from here. booking-service applies the
@@ -32,19 +35,40 @@ public final class CategoryPricing {
     }
 
     /** A tier's terms, as stored or cached. Immutable. */
-    public record Tier(UUID id, String name, BigDecimal price, LocalDateTime endsAtUtc, Integer quantity) {
+    public record Tier(UUID id, String name, BigDecimal price, LocalDateTime startsAtUtc, LocalDateTime endsAtUtc,
+                       Integer quantity, Integer maxPerCustomer, boolean refundsReopen) {
+
+        /** Terms with no start, no per-customer cap, and refunds reopening. */
+        public Tier(UUID id, String name, BigDecimal price, LocalDateTime endsAtUtc, Integer quantity) {
+            this(id, name, price, null, endsAtUtc, quantity, null, true);
+        }
 
         static Tier of(SeatCategoryPriceTier tier) {
-            return new Tier(tier.getId(), tier.getName(), tier.getPrice(), tier.getEndsAt(), tier.getQuantity());
+            return new Tier(tier.getId(), tier.getName(), tier.getPrice(), tier.getStartsAt(), tier.getEndsAt(),
+                    tier.getQuantity(), tier.getMaxPerCustomer(), tier.isRefundsReopen());
         }
 
         boolean ended(LocalDateTime nowUtc) {
             return endsAtUtc != null && !nowUtc.isBefore(endsAtUtc);
         }
 
+        boolean notStarted(LocalDateTime nowUtc) {
+            return startsAtUtc != null && nowUtc.isBefore(startsAtUtc);
+        }
+
         boolean soldOut(Long sold) {
             return quantity != null && sold != null && sold >= quantity;
         }
+
+        /** What counts against {@link #quantity}: held and sold, plus refunded unless refunds reopen. */
+        Long counted(Sold sold) {
+            return sold == null ? null : sold.active() + (refundsReopen ? 0 : sold.refunded());
+        }
+    }
+
+    /** One tier's tickets as booking-service counts them: held or sold, and refunded after payment. */
+    public record Sold(long active, long refunded) {
+        static final Sold NONE = new Sold(0, 0);
     }
 
     /** One category priced at one moment. */
@@ -54,22 +78,24 @@ public final class CategoryPricing {
     /**
      * Price a category at {@code nowUtc}.
      *
-     * @param soldByTier tickets held or sold at each tier, or null when
-     *                   booking-service could not be asked. Unknown counts
-     *                   never close a tier here (booking-service still counts
-     *                   exactly) and leave {@code sold}/{@code remaining} out.
+     * @param soldByTier each tier's tickets, or null when booking-service could
+     *                   not be asked. Unknown counts never close a tier here
+     *                   (booking-service still counts exactly) and leave
+     *                   {@code sold}/{@code remaining} out.
      */
-    public static Priced price(BigDecimal fullPrice, List<Tier> tiers, Map<UUID, Long> soldByTier,
+    public static Priced price(BigDecimal fullPrice, List<Tier> tiers, Map<UUID, Sold> soldByTier,
                                LocalDateTime nowUtc) {
         List<PriceTierDTO> out = new ArrayList<>(tiers.size());
         Tier current = null;
         for (Tier tier : tiers) {
-            Long sold = soldByTier == null ? null : soldByTier.getOrDefault(tier.id(), 0L);
+            Long sold = soldByTier == null ? null : tier.counted(soldByTier.getOrDefault(tier.id(), Sold.NONE));
             PriceTierDTO.Status status;
             if (tier.ended(nowUtc)) {
                 status = PriceTierDTO.Status.ENDED;
             } else if (tier.soldOut(sold)) {
                 status = PriceTierDTO.Status.SOLD_OUT;
+            } else if (tier.notStarted(nowUtc)) {
+                status = PriceTierDTO.Status.UPCOMING;
             } else if (current == null && belowFullPrice(tier, fullPrice)) {
                 status = PriceTierDTO.Status.ACTIVE;
                 current = tier;
@@ -80,8 +106,11 @@ public final class CategoryPricing {
                     .id(tier.id())
                     .name(tier.name())
                     .price(tier.price())
+                    .startsAt(tier.startsAtUtc())
                     .endsAt(tier.endsAtUtc())
                     .quantity(tier.quantity())
+                    .maxPerCustomer(tier.maxPerCustomer())
+                    .refundsReopen(tier.refundsReopen())
                     .sold(sold)
                     .remaining(tier.quantity() == null || sold == null ? null
                             : Math.max(0L, tier.quantity() - sold))
@@ -99,8 +128,11 @@ public final class CategoryPricing {
                         .id(tier.id())
                         .name(tier.name())
                         .price(tier.price())
+                        .startsAt(tier.startsAtUtc())
                         .endsAt(tier.endsAtUtc())
                         .quantity(tier.quantity())
+                        .maxPerCustomer(tier.maxPerCustomer())
+                        .refundsReopen(tier.refundsReopen())
                         .build())
                 .toList();
     }

@@ -36,6 +36,10 @@ public class PriceTierDTO {
     @Schema(example = "100.00")
     private BigDecimal price;
 
+    @Schema(example = "2026-09-01T00:00:00+02:00", nullable = true,
+            description = "When the tier opens, at the market's offset; null when it is open from the start.")
+    private LocalDateTime startsAt;
+
     @Schema(example = "2026-09-08T23:59:59+02:00", nullable = true,
             description = "When the tier closes, at the market's offset; null when it closes on quantity alone.")
     private LocalDateTime endsAt;
@@ -44,9 +48,15 @@ public class PriceTierDTO {
             description = "Tickets that sell at this tier; null when it closes on time alone.")
     private Integer quantity;
 
+    @Schema(example = "4", nullable = true, description = "Most tickets one customer can hold at this tier.")
+    private Integer maxPerCustomer;
+
+    @Schema(example = "true", description = "Whether a refunded ticket frees its place in the quantity.")
+    private boolean refundsReopen;
+
     @Schema(example = "37", nullable = true,
-            description = "Tickets held or sold at this tier. Absent on the booking read, and when "
-                    + "booking-service could not be asked.")
+            description = "Tickets held or sold at this tier (and, when refundsReopen is false, refunded). "
+                    + "Absent on the booking read, and when booking-service could not be asked.")
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private Long sold;
 
@@ -56,7 +66,8 @@ public class PriceTierDTO {
     private Long remaining;
 
     @Schema(example = "ACTIVE",
-            description = "ACTIVE: the price now. UPCOMING: applies once the tiers before it close. "
+            description = "ACTIVE: the price now. UPCOMING: before its start, or applies once the tiers "
+                    + "before it close. "
                     + "ENDED: past endsAt. SOLD_OUT: quantity reached (it reopens if a hold on it expires "
                     + "before endsAt).")
     @JsonInclude(JsonInclude.Include.NON_NULL)
