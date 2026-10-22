@@ -32,6 +32,10 @@ public class SeatCategory {
 
     private String description;
 
+    /**
+     * The full ticket price, charged once every price tier has closed
+     * ({@link SeatCategoryPriceTier}). A tier never changes it.
+     */
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal price;
 

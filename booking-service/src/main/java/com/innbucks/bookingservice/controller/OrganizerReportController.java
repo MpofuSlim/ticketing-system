@@ -169,8 +169,10 @@ public class OrganizerReportController {
 
     @GetMapping("/by-category")
     @Operation(summary = "Revenue per ticket class",
-            description = "Tickets sold and revenue per ticket class (category) for a single event. " +
-                          "`eventId` is required; `from`/`to` default to the last 30 days.")
+            description = "Tickets sold and revenue per ticket class (category) for a single event, each split "
+                          + "by `priceTiers`: the price tier every ticket was sold at (e.g. Early bird), in the "
+                          + "order the tiers first sold, with the \"Full price\" row last. `eventId` is required; "
+                          + "`from`/`to` default to the last 30 days.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Per-category breakdown",
@@ -180,8 +182,18 @@ public class OrganizerReportController {
                                       "code": "200 OK",
                                       "message": "Per-category revenue retrieved",
                                       "data": [
-                                        { "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11", "categoryName": "VIP", "ticketsSold": 120, "revenue": 12000.00 },
-                                        { "categoryId": "1b2c3d4e-5f60-7182-93a4-b5c6d7e8f901", "categoryName": "General", "ticketsSold": 200, "revenue": 10000.00 }
+                                        { "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11", "categoryName": "VIP",
+                                          "ticketsSold": 120, "revenue": 13100.00,
+                                          "priceTiers": [
+                                            { "priceTierId": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "ticketsSold": 100, "revenue": 10000.00 },
+                                            { "priceTierId": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "ticketsSold": 15, "revenue": 1800.00 },
+                                            { "priceTierId": null, "name": "Full price", "ticketsSold": 5, "revenue": 750.00 }
+                                          ] },
+                                        { "categoryId": "1b2c3d4e-5f60-7182-93a4-b5c6d7e8f901", "categoryName": "General",
+                                          "ticketsSold": 200, "revenue": 10000.00,
+                                          "priceTiers": [
+                                            { "priceTierId": null, "name": "Full price", "ticketsSold": 200, "revenue": 10000.00 }
+                                          ] }
                                       ]
                                     }
                                     """))),

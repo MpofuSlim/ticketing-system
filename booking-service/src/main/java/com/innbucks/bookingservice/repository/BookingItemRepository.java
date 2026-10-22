@@ -156,4 +156,59 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
         UUID getCategoryId();
         Long getCount();
     }
+
+    /**
+     * Active (non-CANCELLED) tickets sold at each of {@code tierIds} in one
+     * category. BookingService.persistBooking calls it AFTER claiming the
+     * category's category_inventory row in the same transaction: every
+     * booking, cancellation and expiry of the category takes that lock first,
+     * so the count cannot change before this booking's items are inserted.
+     * That is what makes a tier's quantity ("the first 100") exact. A tier
+     * with nothing sold is absent from the result.
+     */
+    @Query("""
+        SELECT i.priceTierId AS priceTierId, COUNT(i) AS count
+        FROM BookingItem i
+        JOIN i.booking b
+        WHERE i.categoryId = :categoryId
+          AND i.priceTierId IN :tierIds
+          AND b.status <> :cancelledStatus
+        GROUP BY i.priceTierId
+    """)
+    List<TierActiveItemCount> countActiveByCategoryAndPriceTiers(
+            @Param("categoryId") UUID categoryId,
+            @Param("tierIds") Collection<UUID> tierIds,
+            @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
+    );
+
+    /**
+     * Active tickets per price tier for several categories, for seat-service's
+     * display of each tier's sold / remaining (GET
+     * /bookings/internal/categories/tier-counts). Full-price tickets are left
+     * out; a tier with nothing sold is absent.
+     */
+    @Query("""
+        SELECT i.categoryId AS categoryId, i.priceTierId AS priceTierId, COUNT(i) AS count
+        FROM BookingItem i
+        JOIN i.booking b
+        WHERE i.categoryId IN :categoryIds
+          AND i.priceTierId IS NOT NULL
+          AND b.status <> :cancelledStatus
+        GROUP BY i.categoryId, i.priceTierId
+    """)
+    List<CategoryTierActiveItemCount> countActiveItemsByCategoryAndPriceTier(
+            @Param("categoryIds") Collection<UUID> categoryIds,
+            @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
+    );
+
+    interface TierActiveItemCount {
+        UUID getPriceTierId();
+        Long getCount();
+    }
+
+    interface CategoryTierActiveItemCount {
+        UUID getCategoryId();
+        UUID getPriceTierId();
+        Long getCount();
+    }
 }

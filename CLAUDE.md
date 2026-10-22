@@ -2261,7 +2261,8 @@ query per category under every seat query.
   for 12 bookings; guest list `/bookings/by-event/{id}` and `/by-category`
   13 → 1; gate lookup 2 → 1; scan 4 → 3; reminders (4 bookings) 14 → 6;
   event-change broadcast (4 bookings) 5 → 1; expiry sweep (5 holds, with their
-  notices) 17 → 13; seat category listing 2 + one per category → 2. A new read
+  notices) 17 → 13; seat category listing 2 + one per category → 2 (3 since
+  price tiers: one more query for every category's tiers). A new read
   path that renders an association belongs in that IT. (Since H1 the sweep
   cancels each hold in a transaction of its own, so it is 1 + 5 per hold — 26
   for five — and confirm / cancel / reverse lock the booking row before
@@ -2526,6 +2527,83 @@ halves look like one rule and are not.
   not check*, where 409 says *the server checked and the state says no*), never
   assumed safe. Pinned by
   `deleteCategory_refusedWhenBookingServiceCannotBeReached`.
+## Price tiers: early bird, phases, "the first 100" (seat-service V9, booking-service V26)
+
+**A seat category can sell below its `price` in ordered tiers, e.g. "Early
+bird" 100.00 for the first 100 tickets or until 8 September, then "Phase 1"
+120.00 until 20 September, then `price` (150.00).** Tiers live in
+`seat_category_price_tiers` (seat-service V9). They apply in `tier_order`: the
+first tier still open is the price, and once every tier has closed, `price`
+applies. A tier closes at `ends_at` (UTC, exclusive) or once `quantity` tickets
+are held or sold at it, whichever comes first, and must have at least one of
+the two (`chk_price_tier_closes`). Nothing runs when a tier closes: every read
+works out the price in force at that moment.
+
+- **`price` keeps meaning the full price everywhere** (what an organizer edits).
+  Responses add `currentPrice` (what a booking made now pays), `currentTierName`,
+  and `priceTiers` (each with `sold`, `remaining`, `status` ACTIVE / UPCOMING /
+  ENDED / SOLD_OUT on the listing and write responses).
+- **The rule exists three times, deliberately** (the services share no code):
+  seat-service `CategoryPricing` (display), booking-service `PriceTierAllocator`
+  (what is charged), event-service `SeatCategoryGateway.CategoryView` (event
+  page). The first open tier wins; a tier at or above `price` never applies (a
+  backstop: the service refuses one). Change all three together.
+- **"The first 100" is exact because booking-service counts AFTER the stock
+  lock.** `persistBooking` claims each category's `category_inventory` row
+  (`tryClaim`), and only then counts the tickets sold at that category's open,
+  quantity-limited tiers (`countActiveByCategoryAndPriceTiers`, non-CANCELLED,
+  index `idx_booking_items_category_price_tier`). Every booking, cancellation and
+  expiry of the category takes that row lock first, so nothing can change the
+  count before this booking's items insert. **Never move the count before the
+  claim**, and never cache it. `BookingPriceTierPostgresIT` pins it: 60
+  concurrent bookings, exactly 10 at a 10-ticket tier.
+- **Each ticket records its tier** (`booking_items.price_tier_id` /
+  `price_tier_name`, V26; NULL = full price) and its price (`priceAtBooking`), so
+  a booking can straddle a boundary (three tickets with two left at "Early bird":
+  two at 100.00, one at the next tier), and a later tier change never restates a
+  sold ticket. The total is summed from the tickets inside the claim, not before.
+  A cancelled or expired ticket frees its place in the tier (it stops counting).
+  A resurrected booking (H2) keeps its tickets' tiers and prices, so the tier can
+  end up above its quantity by those tickets: the customer already paid.
+- **Display counts are separate and best-effort.** seat-service asks
+  `GET /bookings/internal/categories/tier-counts` (the internal trio: controller
+  token, GET permitAll, gateway `booking-internal-deny`) only for categories that
+  have tiers; unreachable means tiers show without counts and never close on
+  quantity on screen. event-service's page shows seat-service's counts up to its
+  30s TTL old. Neither affects what a booking pays.
+- **Never cache `currentPrice` or a status.** Both layout caches hold the terms
+  (and event-service the count) and work the price out per request, so a tier
+  closes on time on every replica. The booking read
+  (`GET /seat-categories/{id}`) carries the terms only, read live.
+- **Editing:** `priceTiers` on `POST /seat-categories`;
+  `PUT /seat-categories/{id}/price-tiers` replaces the whole list (`[]` removes
+  all). **A kept tier must be sent with its `id`**: it is updated in place, so its
+  sold tickets still count toward its quantity; a tier without an id is new, a
+  stored one left out is deleted (its tickets keep their tier name). The order
+  constraint is DEFERRABLE, so a reorder never trips it mid-flush. Not on
+  `PUT /seat-categories/{id}`, so an older console cannot wipe tiers on a rename.
+- **`endsAt` in is a string, read by `MarketTimeZone.parseToUtc`**: no zone = the
+  market's local time as typed (the event-time rule); `Z` or an offset = that
+  instant, never shifted twice. booking and event-service read seat-service's
+  value leniently; an unreadable end closes the tier in booking and hides it on
+  the event page.
+- **Refusals (400, before any write):** a tier not below `price`, an end not in
+  the future (an ENDED kept tier sent back unchanged is fine), an unreadable end,
+  neither end nor quantity, quantity < 1, more than 2 decimals, a duplicate name
+  (case-insensitive), an id that is not this category's, more than 10 tiers. A
+  `price` edit at or below any tier that has not passed its end is refused too
+  ("Lower or remove that tier first."); a SOLD_OUT tier still counts, because an
+  expired hold can reopen it.
+- **The report:** `GET /event-organizer/reports/by-category` splits each class by
+  `priceTiers` (tickets and revenue per tier, in the order each first sold, the
+  "Full price" row last). `priceTierName` is on every booking item view
+  (absent at full price).
+- **Deploy booking-service before an organizer sets a tier.** An older booking
+  image ignores `priceTiers` and charges `price`: no harm, but the tier is not
+  honoured until it runs the new build.
+- **Not built:** a tier start date (a tier opens when the ones before it close),
+  per-customer limits on tier tickets, promo codes.
+
 ## The oversell guard is on ALLOCATION, not on approval
 
 **The sellable ceiling is `SUM(seat_categories.total_seats)`, not

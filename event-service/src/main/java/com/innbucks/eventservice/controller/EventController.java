@@ -159,10 +159,16 @@ public class EventController {
                                               {
                                                 "name": "VIP",
                                                 "description": "Front rows",
-                                                "categoryPrice": 100.00,
+                                                "categoryPrice": 150.00,
+                                                "currentPrice": 100.00,
+                                                "currentTierName": "Early bird",
+                                                "priceTiers": [
+                                                  { "name": "Early bird", "price": 100.00, "endsAt": "2026-06-01T23:59:59+02:00", "quantity": 100, "remaining": 63, "status": "ACTIVE" },
+                                                  { "name": "Phase 1", "price": 120.00, "endsAt": "2026-06-10T23:59:59+02:00", "quantity": null, "status": "UPCOMING" }
+                                                ],
                                                 "sections": [
-                                                  { "section": "A", "seatCount": 25, "price": 100.00 },
-                                                  { "section": "B", "seatCount": 25, "price": 100.00 }
+                                                  { "section": "A", "seatCount": 25, "price": 150.00 },
+                                                  { "section": "B", "seatCount": 25, "price": 150.00 }
                                                 ]
                                               }
                                             ]
@@ -514,9 +520,15 @@ public class EventController {
                                               {
                                                 "name": "VIP",
                                                 "description": "Front rows",
-                                                "categoryPrice": 100.00,
+                                                "categoryPrice": 150.00,
+                                                "currentPrice": 100.00,
+                                                "currentTierName": "Early bird",
+                                                "priceTiers": [
+                                                  { "name": "Early bird", "price": 100.00, "endsAt": "2026-06-01T23:59:59+02:00", "quantity": 100, "remaining": 63, "status": "ACTIVE" },
+                                                  { "name": "Phase 1", "price": 120.00, "endsAt": "2026-06-10T23:59:59+02:00", "quantity": null, "status": "UPCOMING" }
+                                                ],
                                                 "sections": [
-                                                  { "section": "A", "seatCount": 25, "price": 100.00 }
+                                                  { "section": "A", "seatCount": 25, "price": 150.00 }
                                                 ]
                                               }
                                             ]
@@ -797,16 +809,25 @@ public class EventController {
                                           {
                                             "name": "VIP",
                                             "description": "Front rows",
-                                            "categoryPrice": 100.00,
+                                            "categoryPrice": 150.00,
+                                            "currentPrice": 100.00,
+                                            "currentTierName": "Early bird",
+                                            "priceTiers": [
+                                              { "name": "Early bird", "price": 100.00, "endsAt": "2026-06-01T23:59:59+02:00", "quantity": 100, "remaining": 63, "status": "ACTIVE" },
+                                              { "name": "Phase 1", "price": 120.00, "endsAt": "2026-06-10T23:59:59+02:00", "quantity": null, "status": "UPCOMING" }
+                                            ],
                                             "sections": [
-                                              { "section": "A", "seatCount": 25, "price": 100.00 },
-                                              { "section": "B", "seatCount": 25, "price": 100.00 }
+                                              { "section": "A", "seatCount": 25, "price": 150.00 },
+                                              { "section": "B", "seatCount": 25, "price": 150.00 }
                                             ]
                                           },
                                           {
                                             "name": "GA",
                                             "description": "General admission",
                                             "categoryPrice": 60.00,
+                                            "currentPrice": 60.00,
+                                            "currentTierName": null,
+                                            "priceTiers": [],
                                             "sections": [
                                               { "section": "F", "seatCount": 50, "price": 60.00 }
                                             ]
@@ -1340,9 +1361,15 @@ public class EventController {
                                           {
                                             "name": "VIP",
                                             "description": "Front rows",
-                                            "categoryPrice": 100.00,
+                                            "categoryPrice": 150.00,
+                                            "currentPrice": 100.00,
+                                            "currentTierName": "Early bird",
+                                            "priceTiers": [
+                                              { "name": "Early bird", "price": 100.00, "endsAt": "2026-06-01T23:59:59+02:00", "quantity": 100, "remaining": 63, "status": "ACTIVE" },
+                                              { "name": "Phase 1", "price": 120.00, "endsAt": "2026-06-10T23:59:59+02:00", "quantity": null, "status": "UPCOMING" }
+                                            ],
                                             "sections": [
-                                              { "section": "A", "seatCount": 25, "price": 100.00 }
+                                              { "section": "A", "seatCount": 25, "price": 150.00 }
                                             ]
                                           }
                                         ]

@@ -40,6 +40,13 @@ public class CreateCategoryRequestDTO {
             message = "Price must be greater than 0")
     private BigDecimal price;
 
+    @Schema(nullable = true,
+            description = "Optional price tiers, in the order they apply (e.g. Early bird, then Phase 1). "
+                    + "The first tier still open is the price; once all have closed, price applies. Omit "
+                    + "for none; change them later with PUT /seat-categories/{id}/price-tiers.")
+    @Size(max = PriceTiersRequestDTO.MAX_TIERS, message = "At most 10 price tiers per category")
+    private List<@Valid PriceTierRequestDTO> priceTiers;
+
     @Schema(description = "One entry per physical section. Total seats = sum of all seatCount values. "
             + "At most 100 sections per request; sum of seatCount is further capped at 500,000 server-side.")
     @NotEmpty(message = "At least one section is required")

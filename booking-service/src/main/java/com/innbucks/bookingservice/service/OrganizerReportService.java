@@ -3,6 +3,7 @@ package com.innbucks.bookingservice.service;
 import com.innbucks.bookingservice.dto.report.BucketSize;
 import com.innbucks.bookingservice.dto.report.ReportMetaDTO;
 import com.innbucks.bookingservice.dto.report.CategoryRevenueDTO;
+import com.innbucks.bookingservice.dto.report.PriceTierRevenueDTO;
 import com.innbucks.bookingservice.dto.report.EventRevenueDTO;
 import com.innbucks.bookingservice.dto.report.RevenueSummaryDTO;
 import com.innbucks.bookingservice.dto.report.SalesBucketDTO;
@@ -149,11 +150,29 @@ public class OrganizerReportService {
                         k -> new CategoryAccumulator(item.getCategoryName()));
                 acc.tickets++;
                 acc.revenue = acc.revenue.add(nz(item.getPriceAtBooking()));
+                // Bookings come oldest first, so tiers are listed in the order
+                // they first sold, which is the order they ran.
+                TierAccumulator tier = acc.tiers.computeIfAbsent(item.getPriceTierId(),
+                        k -> new TierAccumulator(item.getPriceTierId() == null
+                                ? PriceTierRevenueDTO.FULL_PRICE : item.getPriceTierName()));
+                tier.tickets++;
+                tier.revenue = tier.revenue.add(nz(item.getPriceAtBooking()));
             }
         }
         List<CategoryRevenueDTO> out = new ArrayList<>();
-        byCategory.forEach((categoryId, acc) ->
-                out.add(new CategoryRevenueDTO(categoryId, acc.name, acc.tickets, scale2(acc.revenue))));
+        byCategory.forEach((categoryId, acc) -> {
+            List<PriceTierRevenueDTO> tiers = new ArrayList<>();
+            acc.tiers.forEach((tierId, tier) -> {
+                if (tierId != null) {
+                    tiers.add(new PriceTierRevenueDTO(tierId, tier.name, tier.tickets, scale2(tier.revenue)));
+                }
+            });
+            TierAccumulator full = acc.tiers.get(null);
+            if (full != null) {
+                tiers.add(new PriceTierRevenueDTO(null, full.name, full.tickets, scale2(full.revenue)));
+            }
+            out.add(new CategoryRevenueDTO(categoryId, acc.name, acc.tickets, scale2(acc.revenue), tiers));
+        });
         out.sort(Comparator.comparing(CategoryRevenueDTO::revenue).reversed());
         return out;
     }
@@ -286,6 +305,15 @@ public class OrganizerReportService {
         final String name;
         long tickets;
         BigDecimal revenue = BigDecimal.ZERO;
+        /** By price tier id, null for the full price, in the order each first sold. */
+        final Map<UUID, TierAccumulator> tiers = new LinkedHashMap<>();
         CategoryAccumulator(String name) { this.name = name; }
+    }
+
+    private static final class TierAccumulator {
+        final String name;
+        long tickets;
+        BigDecimal revenue = BigDecimal.ZERO;
+        TierAccumulator(String name) { this.name = name; }
     }
 }

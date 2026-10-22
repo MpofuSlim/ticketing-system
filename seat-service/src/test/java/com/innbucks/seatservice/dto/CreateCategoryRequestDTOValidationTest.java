@@ -118,6 +118,39 @@ class CreateCategoryRequestDTOValidationTest {
         assertTrue(violations.isEmpty(), "valid request should produce no violations, got: " + violations);
     }
 
+    @Test
+    void priceTiers_areValidatedInsideTheCreateRequest() {
+        PriceTierRequestDTO tier = new PriceTierRequestDTO();
+        tier.setName(" ");
+        tier.setPrice(new BigDecimal("0.00"));
+        tier.setQuantity(0);
+        CreateCategoryRequestDTO req = request(List.of(section("A", 25)));
+        req.setPriceTiers(List.of(tier));
+
+        var violations = validator.validate(req);
+
+        assertTrue(hasViolationOnPath(violations, "priceTiers[0].name"), "blank tier name must be rejected");
+        assertTrue(hasViolationOnPath(violations, "priceTiers[0].price"), "zero tier price must be rejected");
+        assertTrue(hasViolationOnPath(violations, "priceTiers[0].quantity"), "zero tier quantity must be rejected");
+    }
+
+    @Test
+    void priceTiers_threeDecimalsOrMoreThanTen_areRejected_andNoneAtAllIsFine() {
+        PriceTierRequestDTO tier = new PriceTierRequestDTO();
+        tier.setName("Early bird");
+        tier.setPrice(new BigDecimal("99.999"));
+        tier.setQuantity(100);
+        CreateCategoryRequestDTO req = request(List.of(section("A", 25)));
+        req.setPriceTiers(List.of(tier));
+        assertTrue(hasViolationOnPath(validator.validate(req), "priceTiers[0].price"));
+
+        tier.setPrice(new BigDecimal("99.00"));
+        req.setPriceTiers(java.util.Collections.nCopies(11, tier));
+        assertTrue(hasViolationOnPath(validator.validate(req), "priceTiers"));
+
+        assertTrue(validator.validate(request(List.of(section("A", 25)))).isEmpty());
+    }
+
     private boolean hasViolationOnPath(Set<? extends ConstraintViolation<?>> violations, String fieldSuffix) {
         return violations.stream()
                 .anyMatch(v -> v.getPropertyPath().toString().endsWith(fieldSuffix));

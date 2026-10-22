@@ -6,6 +6,7 @@ import com.innbucks.bookingservice.util.MsisdnMasking;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.ExtendHoldRequestDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
+import com.innbucks.bookingservice.dto.CategoryTierCountDTO;
 import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CustomerTicketDTO;
@@ -1214,6 +1215,63 @@ public class BookingController {
         log.debug("GET /bookings/internal/categories/active-counts categoryIds={} (S2S)", categoryIds);
         return ResponseEntity.ok(ApiResult.ok("Active category counts retrieved successfully",
                 bookingService.getActiveItemCountsByCategories(categoryIds)));
+    }
+
+    // Internal-only, the same trio as categories/active-counts: X-Internal-Token
+    // checked here, GET /bookings/internal/** permitted in SecurityConfig, and
+    // the gateway's booking-internal-deny route. seat-service shows each price
+    // tier's sold / remaining from it.
+    @GetMapping("/internal/categories/tier-counts")
+    @SecurityRequirements()
+    @Operation(
+            summary = "Active tickets per price tier (internal, S2S)",
+            description = "Internal endpoint used by seat-service to show each price tier's `sold` and " +
+                    "`remaining`. Authenticated with the shared X-Internal-Token; denied at the gateway edge. " +
+                    "One row per (categoryId, priceTierId) with at least one PENDING or CONFIRMED ticket; " +
+                    "full-price tickets and tiers with nothing sold are absent. Display only: a booking " +
+                    "counts its tiers itself, under the category's stock lock."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Counts returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = CategoryTierCountDTO.class),
+                            examples = @ExampleObject(name = "Tier counts", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Price tier counts retrieved successfully",
+                                      "data": [
+                                        { "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "priceTierId": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "count": 37 }
+                                      ]
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401", description = "Missing or invalid X-Internal-Token",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Bad token", value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Missing or invalid X-Internal-Token", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<CategoryTierCountDTO>>> getCategoryTierCounts(
+            @RequestParam("categoryIds") List<UUID> categoryIds,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized GET /bookings/internal/categories/tier-counts — missing or wrong X-Internal-Token");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.<List<CategoryTierCountDTO>>builder()
+                            .code("401 UNAUTHORIZED")
+                            .message("Missing or invalid X-Internal-Token")
+                            .data(null)
+                            .build());
+        }
+        log.debug("GET /bookings/internal/categories/tier-counts categoryIds={} (S2S)", categoryIds);
+        return ResponseEntity.ok(ApiResult.ok("Price tier counts retrieved successfully",
+                bookingService.getActiveTierCountsByCategories(categoryIds)));
     }
 
     @GetMapping("/confirmation/{number}")
