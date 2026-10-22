@@ -2,6 +2,7 @@ package com.innbucks.seatservice.service;
 
 import com.innbucks.seatservice.client.BookingServiceClient;
 import com.innbucks.seatservice.client.EventServiceClient;
+import com.innbucks.seatservice.config.MarketTimeZone;
 import com.innbucks.seatservice.dto.*;
 import com.innbucks.seatservice.entity.*;
 import com.innbucks.seatservice.exception.BadRequestException;
@@ -21,7 +22,13 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URI;
+import java.time.Clock;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -30,6 +37,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 @Service
@@ -85,6 +93,30 @@ public class SeatCategoryService {
         this.writeTx = TransactionPhases.readWrite(transactionManager);
     }
 
+    /**
+     * Reads an early-bird end the organizer typed in the market's local time.
+     * A setter for the same reason as the transaction manager. The application
+     * always has the bean (a {@code @Component}); the plain-{@code new} unit
+     * tests and the slim web-slice contexts that lack it get the ZW cell's zone.
+     */
+    private MarketTimeZone marketTimeZone = new MarketTimeZone("ZW");
+
+    @Autowired(required = false)
+    void setMarketTimeZone(MarketTimeZone marketTimeZone) {
+        this.marketTimeZone = marketTimeZone;
+    }
+
+    /** Decides whether an early bird is still running. Tests move it. */
+    private Clock clock = Clock.systemUTC();
+
+    void setClock(Clock clock) {
+        this.clock = clock;
+    }
+
+    private LocalDateTime nowUtc() {
+        return LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+    }
+
     // createCategory and deleteCategory still make their event-service /
     // booking-service calls inside their transaction, ON PURPOSE: those calls
     // are the fail-closed oversell guard (requireCapacityHeadroom) and the
@@ -129,6 +161,9 @@ public class SeatCategoryService {
                     request.getEventId(), request.getName(), request.getPrice());
             throw new BadRequestException("Price must be greater than 0.");
         }
+        EarlyBird earlyBird = request.getEarlyBird() == null
+                ? null
+                : resolveEarlyBird(request.getEarlyBird(), request.getPrice());
 
         // Sum in long to dodge int overflow when validation has already
         // passed but section counts approach Integer.MAX_VALUE collectively.
@@ -161,6 +196,8 @@ public class SeatCategoryService {
                 .name(HtmlSanitizer.stripAll(request.getName()))
                 .description(HtmlSanitizer.stripAll(request.getDescription()))
                 .price(request.getPrice())
+                .earlyBirdPrice(earlyBird == null ? null : earlyBird.price())
+                .earlyBirdEndsAt(earlyBird == null ? null : earlyBird.endsAtUtc())
                 .totalSeats(totalSeats)
                 .availableSeats(totalSeats)
                 .deleted(false)
@@ -221,11 +258,20 @@ public class SeatCategoryService {
         // on every booking for a value the caller discards. The live per-category
         // number is surfaced on the FE-facing list endpoint (getCategoriesByEvent)
         // instead.
+        //
+        // currentPrice is what the booking is charged, so it is worked out
+        // here, at the moment of the booking, from the row just read — never
+        // from a cache.
+        LocalDateTime now = nowUtc();
         return CategoryCapacityDTO.builder()
                 .seatCategoryId(category.getId())
                 .eventId(category.getEventId())
                 .name(category.getName())
                 .price(category.getPrice())
+                .currentPrice(CategoryPricing.currentPrice(category.getPrice(), category.getEarlyBirdPrice(),
+                        category.getEarlyBirdEndsAt(), now))
+                .earlyBird(CategoryPricing.earlyBird(category.getPrice(), category.getEarlyBirdPrice(),
+                        category.getEarlyBirdEndsAt(), now))
                 .totalSeats(category.getTotalSeats())
                 .availableSeats(category.getAvailableSeats())
                 .build();
@@ -266,22 +312,27 @@ public class SeatCategoryService {
                                                     String requesterEmail,
                                                     boolean isAdmin,
                                                     String authHeader) {
-        if (!isAdmin) {
-            SeatCategory found = TransactionPhases.inTransaction(readTx, () -> loadLiveForUpdate(categoryId));
-            requireEventOwnership(found.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
-        }
-
-        record Updated(SeatCategory category, List<SectionSeatConfigDTO> sections) {
-        }
-        Updated updated = TransactionPhases.inTransaction(writeTx, () -> {
-            SeatCategory category = loadLiveForUpdate(categoryId);
-
+        CreateCategoryResponseDTO updated = editCategory(categoryId, callerOrganizerUuid, requesterEmail, isAdmin,
+                authHeader, category -> {
             // Defence-in-depth on top of the DTO @DecimalMin (only fires on @Valid
             // controller calls), same as createCategory.
             if (request.getPrice() == null || request.getPrice().signum() <= 0) {
                 log.warn("Category update rejected, non-positive price categoryId={} price={}",
                         categoryId, request.getPrice());
                 throw new BadRequestException("Price must be greater than 0.");
+            }
+
+            // While an early bird runs it must stay below the price, or the
+            // "offer" would cost the same or more. One that has ended no longer
+            // matters, so it never blocks a price change.
+            if (category.getEarlyBirdPrice() != null && category.getEarlyBirdEndsAt() != null
+                    && nowUtc().isBefore(category.getEarlyBirdEndsAt())
+                    && request.getPrice().compareTo(category.getEarlyBirdPrice()) <= 0) {
+                log.warn("Category update rejected, price not above the running early bird categoryId={} "
+                        + "price={} earlyBirdPrice={}", categoryId, request.getPrice(), category.getEarlyBirdPrice());
+                throw new BadRequestException("The ticket price must be higher than the early-bird price ("
+                        + money(category.getEarlyBirdPrice()) + ") while the early bird runs. "
+                        + "Lower or remove the early bird first.");
             }
 
             // Renaming onto a name another live category in the same event already
@@ -300,12 +351,83 @@ public class SeatCategoryService {
             category.setName(HtmlSanitizer.stripAll(request.getName()));
             category.setDescription(HtmlSanitizer.stripAll(request.getDescription()));
             category.setPrice(request.getPrice());
+        });
+        log.info("Seat category updated categoryId={} eventId={}", categoryId, updated.getEventId());
+        return updated;
+    }
+
+    /**
+     * Set or replace a category's early bird: tickets sell at
+     * {@code request.price} until {@code request.endsAt}, then at the category's
+     * price. Same owner rule and phases as {@link #updateCategory}. Bookings
+     * already made keep the price they were made at ({@code priceAtBooking}), so
+     * changing an offer never restates a sold ticket.
+     */
+    public CreateCategoryResponseDTO setEarlyBird(UUID categoryId,
+                                                  EarlyBirdRequestDTO request,
+                                                  UUID callerOrganizerUuid,
+                                                  String requesterEmail,
+                                                  boolean isAdmin,
+                                                  String authHeader) {
+        return editCategory(categoryId, callerOrganizerUuid, requesterEmail, isAdmin, authHeader, category -> {
+            EarlyBird earlyBird = resolveEarlyBird(request, category.getPrice());
+            category.setEarlyBirdPrice(earlyBird.price());
+            category.setEarlyBirdEndsAt(earlyBird.endsAtUtc());
+            log.info("Early-bird price set categoryId={} eventId={} earlyBirdPrice={} endsAtUtc={} "
+                            + "requesterEmail={} isAdmin={}", categoryId, category.getEventId(), earlyBird.price(),
+                    earlyBird.endsAtUtc(), requesterEmail, isAdmin);
+        });
+    }
+
+    /**
+     * Remove a category's early bird, running or ended: from now on every
+     * booking pays the category's price. Removing when there is none is not an
+     * error, so a retried call answers the same.
+     */
+    public CreateCategoryResponseDTO removeEarlyBird(UUID categoryId,
+                                                     UUID callerOrganizerUuid,
+                                                     String requesterEmail,
+                                                     boolean isAdmin,
+                                                     String authHeader) {
+        return editCategory(categoryId, callerOrganizerUuid, requesterEmail, isAdmin, authHeader, category -> {
+            log.info("Early-bird price removed categoryId={} eventId={} hadEarlyBird={} requesterEmail={} isAdmin={}",
+                    categoryId, category.getEventId(), category.getEarlyBirdPrice() != null,
+                    requesterEmail, isAdmin);
+            category.setEarlyBirdPrice(null);
+            category.setEarlyBirdEndsAt(null);
+        });
+    }
+
+    /**
+     * The phases every category edit shares, so no remote call runs while a
+     * transaction is open (see {@link #updateCategory}): an organizer's
+     * ownership check with none open, then one write transaction that re-reads
+     * the category (404 if it was deleted meanwhile), applies {@code change},
+     * saves and evicts the layout, then the live count for the response after
+     * the commit.
+     */
+    private CreateCategoryResponseDTO editCategory(UUID categoryId,
+                                                   UUID callerOrganizerUuid,
+                                                   String requesterEmail,
+                                                   boolean isAdmin,
+                                                   String authHeader,
+                                                   Consumer<SeatCategory> change) {
+        if (!isAdmin) {
+            SeatCategory found = TransactionPhases.inTransaction(readTx, () -> loadLiveForUpdate(categoryId));
+            requireEventOwnership(found.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
+        }
+
+        record Edited(SeatCategory category, List<SectionSeatConfigDTO> sections) {
+        }
+        Edited edited = TransactionPhases.inTransaction(writeTx, () -> {
+            SeatCategory category = loadLiveForUpdate(categoryId);
+            change.accept(category);
             categoryRepository.save(category);
             layoutCache.evict(category.getEventId());
 
             // Return the same shape getCategoriesByEvent emits — sections rebuilt
             // from the persisted seats (unchanged by this edit).
-            return new Updated(category, sectionsForCategory(categoryId));
+            return new Edited(category, sectionsForCategory(categoryId));
         });
 
         // Live availability for the response, after the commit (degrades to the
@@ -313,9 +435,46 @@ public class SeatCategoryService {
         Map<UUID, Long> counts = bookingServiceClient
                 .fetchActiveCountsByCategories(List.of(categoryId))
                 .orElse(null);
-        SeatCategory category = updated.category();
-        log.info("Seat category updated categoryId={} eventId={}", categoryId, category.getEventId());
-        return toCreateResponseDTO(category, updated.sections(), liveAvailableSeats(category, counts));
+        SeatCategory category = edited.category();
+        return toCreateResponseDTO(category, edited.sections(), liveAvailableSeats(category, counts));
+    }
+
+    /** A validated early bird, its end as the UTC wall clock the column stores. */
+    private record EarlyBird(BigDecimal price, LocalDateTime endsAtUtc) {
+    }
+
+    /**
+     * Check an early-bird offer against the category's full price. Re-checks
+     * what bean validation checks too, for callers that skip it.
+     */
+    private EarlyBird resolveEarlyBird(EarlyBirdRequestDTO request, BigDecimal fullPrice) {
+        BigDecimal price = request.getPrice();
+        if (price == null || price.signum() <= 0) {
+            throw new BadRequestException("Early-bird price must be greater than 0.");
+        }
+        if (price.stripTrailingZeros().scale() > 2) {
+            throw new BadRequestException("Early-bird price can have at most 2 decimal places.");
+        }
+        if (fullPrice != null && price.compareTo(fullPrice) >= 0) {
+            log.warn("Early bird rejected, not below the ticket price earlyBirdPrice={} price={}", price, fullPrice);
+            throw new BadRequestException("The early-bird price must be lower than the ticket price ("
+                    + money(fullPrice) + ").");
+        }
+        LocalDateTime endsAtUtc;
+        try {
+            endsAtUtc = marketTimeZone.parseToUtc(request.getEndsAt());
+        } catch (DateTimeParseException e) {
+            throw new BadRequestException("Early-bird end must be a date and time like 2026-09-08T23:59:59.");
+        }
+        if (!endsAtUtc.isAfter(nowUtc())) {
+            log.warn("Early bird rejected, end not in the future endsAtUtc={}", endsAtUtc);
+            throw new BadRequestException("The early-bird end must be in the future.");
+        }
+        return new EarlyBird(price, endsAtUtc);
+    }
+
+    private static String money(BigDecimal amount) {
+        return amount.setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
 
     private SeatCategory loadLiveForUpdate(UUID categoryId) {
@@ -405,7 +564,8 @@ public class SeatCategoryService {
      * The event's live categories for the public listing.
      *
      * <p><b>Two halves, cached differently.</b> The LAYOUT — which categories,
-     * their name, description, price, total seats and section breakdown — is
+     * their name, description, price and early-bird offer, total seats and
+     * section breakdown — is
      * cached per event ({@code seats.cache.category-layout.ttl}, 60s) and
      * evicted by this pod's create / update / delete of a category in that
      * event. Seats are generated once, at category creation, so section counts
@@ -414,6 +574,8 @@ public class SeatCategoryService {
      * booking-service cannot answer, the stored mirror is read from Postgres
      * now (or taken from the rows this very call loaded) rather than from the
      * cache. Another replica can serve the old layout for up to the TTL.
+     * {@code currentPrice} is not part of the layout: it is worked out per
+     * request from the cached offer, so an early bird ends on time everywhere.
      *
      * <p>None of the write guards read through this: the capacity-headroom
      * check queries the repository itself and the delete guard asks
@@ -443,9 +605,12 @@ public class SeatCategoryService {
                 ? Map.of()
                 : (mirrorLoadedNow.isEmpty() ? storedMirror(categoryIds) : mirrorLoadedNow);
 
+        // The price in force is worked out for THIS request, not when the
+        // layout was cached, so an early bird ends on time on every replica.
+        LocalDateTime now = nowUtc();
         return layout.categories().stream()
                 .map(category -> category.toDto(liveAvailableSeats(
-                        category.id(), category.totalSeats(), mirror.get(category.id()), counts)))
+                        category.id(), category.totalSeats(), mirror.get(category.id()), counts), now))
                 .collect(Collectors.toList());
     }
 
@@ -463,7 +628,7 @@ public class SeatCategoryService {
         static EventLayout of(List<SeatCategory> categories, Map<UUID, List<SectionSeatConfigDTO>> sections) {
             return new EventLayout(categories.stream()
                     .map(c -> new CategoryLayout(c.getId(), c.getEventId(), c.getName(), c.getDescription(),
-                            c.getPrice(), c.getTotalSeats(),
+                            c.getPrice(), c.getEarlyBirdPrice(), c.getEarlyBirdEndsAt(), c.getTotalSeats(),
                             sections.getOrDefault(c.getId(), List.of()).stream()
                                     .map(sec -> new SectionLayout(sec.getSection(), sec.getSeatCount(),
                                             sec.getImageUrl()))
@@ -473,10 +638,11 @@ public class SeatCategoryService {
     }
 
     record CategoryLayout(UUID id, UUID eventId, String name, String description,
-                          java.math.BigDecimal price, Integer totalSeats, List<SectionLayout> sections) {
+                          BigDecimal price, BigDecimal earlyBirdPrice, LocalDateTime earlyBirdEndsAt,
+                          Integer totalSeats, List<SectionLayout> sections) {
 
         /** A fresh response DTO, in exactly {@code toCreateResponseDTO}'s shape. */
-        CreateCategoryResponseDTO toDto(Integer availableSeats) {
+        CreateCategoryResponseDTO toDto(Integer availableSeats, LocalDateTime nowUtc) {
             List<SectionSeatConfigDTO> sectionCopies = sections.stream()
                     .map(section -> {
                         SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
@@ -492,6 +658,8 @@ public class SeatCategoryService {
                     .name(name)
                     .description(description)
                     .price(price)
+                    .currentPrice(CategoryPricing.currentPrice(price, earlyBirdPrice, earlyBirdEndsAt, nowUtc))
+                    .earlyBird(CategoryPricing.earlyBird(price, earlyBirdPrice, earlyBirdEndsAt, nowUtc))
                     .availableSeats(availableSeats)
                     .sections(sectionCopies)
                     .build();
@@ -726,12 +894,17 @@ public class SeatCategoryService {
                 })
                 .collect(Collectors.toList());
 
+        LocalDateTime now = nowUtc();
         return CreateCategoryResponseDTO.builder()
                 .seatCategoryId(category.getId())
                 .eventId(category.getEventId())
                 .name(category.getName())
                 .description(category.getDescription())
                 .price(category.getPrice())
+                .currentPrice(CategoryPricing.currentPrice(category.getPrice(), category.getEarlyBirdPrice(),
+                        category.getEarlyBirdEndsAt(), now))
+                .earlyBird(CategoryPricing.earlyBird(category.getPrice(), category.getEarlyBirdPrice(),
+                        category.getEarlyBirdEndsAt(), now))
                 .availableSeats(availableSeats)
                 .sections(sectionCopies)
                 .build();

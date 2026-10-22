@@ -40,6 +40,13 @@ public class CreateCategoryRequestDTO {
             message = "Price must be greater than 0")
     private BigDecimal price;
 
+    @Schema(nullable = true,
+            description = "Optional early-bird offer: tickets sell at earlyBird.price until earlyBird.endsAt, "
+                    + "then at price. Omit for none; add or change one later with "
+                    + "PUT /seat-categories/{id}/early-bird.")
+    @Valid
+    private EarlyBirdRequestDTO earlyBird;
+
     @Schema(description = "One entry per physical section. Total seats = sum of all seatCount values. "
             + "At most 100 sections per request; sum of seatCount is further capped at 500,000 server-side.")
     @NotEmpty(message = "At least one section is required")

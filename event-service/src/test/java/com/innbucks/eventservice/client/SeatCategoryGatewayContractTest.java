@@ -1,5 +1,7 @@
 package com.innbucks.eventservice.client;
 
+import com.innbucks.eventservice.cache.ReadCacheConfig;
+import com.innbucks.eventservice.cache.ReadCacheProperties;
 import com.innbucks.eventservice.config.PooledHttpClientProperties;
 import com.innbucks.eventservice.config.PooledHttpClient;
 import com.innbucks.eventservice.config.HttpClientConfig;
@@ -16,7 +18,11 @@ import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.net.ServerSocket;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Function;
@@ -25,6 +31,8 @@ import java.util.function.Supplier;
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -165,6 +173,98 @@ class SeatCategoryGatewayContractTest {
                 "http://localhost:" + closedPort);
 
         assertTrue(dead.fetchForEvent(UUID.randomUUID()).isEmpty());
+    }
+
+    private static void stubVipWithEarlyBird(UUID eventId, String endsAt) {
+        wireMock.stubFor(get(urlPathEqualTo("/seat-categories"))
+                .withQueryParam("eventId", equalTo(eventId.toString()))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {
+                                  "code": "200 OK",
+                                  "message": "Categories retrieved successfully",
+                                  "data": [
+                                    {
+                                      "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                      "eventId": "%s",
+                                      "name": "VIP",
+                                      "description": "Front rows",
+                                      "price": 150.00,
+                                      "currentPrice": 100.00,
+                                      "earlyBird": { "price": 100.00, "endsAt": "%s", "active": true },
+                                      "availableSeats": 50,
+                                      "sections": [ { "section": "A", "seatCount": 25 } ]
+                                    }
+                                  ]
+                                }
+                                """.formatted(eventId, endsAt))));
+    }
+
+    private static Clock fixedAt(String instant) {
+        return Clock.fixed(Instant.parse(instant), ZoneOffset.UTC);
+    }
+
+    @Test
+    @DisplayName("Early bird running: currentPrice is the early-bird price, the full price stays categoryPrice")
+    void earlyBird_running_isTheCurrentPrice() {
+        UUID eventId = UUID.randomUUID();
+        stubVipWithEarlyBird(eventId, "2026-09-08T23:59:59+02:00");
+        gateway.setClock(fixedAt("2026-09-01T08:00:00Z"));
+
+        EventSeatCategoryResponseDTO vip = gateway.fetchForEvent(eventId).get(0);
+
+        assertEquals(new BigDecimal("150.00"), vip.getCategoryPrice());
+        assertEquals(new BigDecimal("100.00"), vip.getCurrentPrice());
+        assertTrue(vip.getEarlyBird().isActive());
+        assertEquals(LocalDateTime.of(2026, 9, 8, 21, 59, 59), vip.getEarlyBird().getEndsAt());
+        assertEquals(new BigDecimal("150.00"), vip.getSections().get(0).getPrice());
+    }
+
+    @Test
+    @DisplayName("Early bird ended: event-service decides by the end itself, whatever seat-service's flag said")
+    void earlyBird_ended_isTheFullPrice() {
+        UUID eventId = UUID.randomUUID();
+        stubVipWithEarlyBird(eventId, "2026-09-08T21:59:59Z");
+        gateway.setClock(fixedAt("2026-09-08T21:59:59Z"));
+
+        EventSeatCategoryResponseDTO vip = gateway.fetchForEvent(eventId).get(0);
+
+        assertEquals(new BigDecimal("150.00"), vip.getCurrentPrice());
+        assertFalse(vip.getEarlyBird().isActive());
+    }
+
+    @Test
+    @DisplayName("Unreadable early-bird end: the offer is dropped, the categories still render")
+    void earlyBird_unreadableEnd_dropsOnlyTheOffer() {
+        UUID eventId = UUID.randomUUID();
+        stubVipWithEarlyBird(eventId, "next Tuesday");
+        gateway.setClock(fixedAt("2026-09-01T08:00:00Z"));
+
+        EventSeatCategoryResponseDTO vip = gateway.fetchForEvent(eventId).get(0);
+
+        assertNull(vip.getEarlyBird());
+        assertEquals(new BigDecimal("150.00"), vip.getCurrentPrice());
+        assertEquals("VIP", vip.getName());
+    }
+
+    @Test
+    @DisplayName("A cached layout ends the early bird on time without asking seat-service again")
+    void cachedLayout_endsTheEarlyBirdOnTime() {
+        UUID eventId = UUID.randomUUID();
+        stubVipWithEarlyBird(eventId, "2026-09-08T23:59:59+02:00");
+        SeatCategoryGateway cached = new SeatCategoryGateway(restTemplate(), passThroughBreakerFactory(),
+                "http://localhost:" + wireMock.port(),
+                new ReadCacheConfig().readCacheManager(new ReadCacheProperties()));
+
+        cached.setClock(fixedAt("2026-09-08T21:00:00Z"));
+        BigDecimal during = cached.fetchForEvent(eventId).get(0).getCurrentPrice();
+        cached.setClock(fixedAt("2026-09-08T22:00:00Z"));
+        BigDecimal after = cached.fetchForEvent(eventId).get(0).getCurrentPrice();
+
+        assertEquals(new BigDecimal("100.00"), during);
+        assertEquals(new BigDecimal("150.00"), after);
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/seat-categories")));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

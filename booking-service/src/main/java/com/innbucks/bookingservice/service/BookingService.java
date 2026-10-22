@@ -237,10 +237,13 @@ public class BookingService {
             categoryById.put(categoryId, category);
         }
 
-        // Total = sum over categories of price × quantity.
+        // Total = sum over categories of price × quantity, at the price in
+        // force now (an early-bird price while one runs). The same lookup
+        // prices each ticket's priceAtBooking below, so the total and the
+        // tickets always agree, and a later price change never restates them.
         BigDecimal total = BigDecimal.ZERO;
         for (Map.Entry<UUID, Integer> e : qtyByCategory.entrySet()) {
-            BigDecimal price = categoryById.get(e.getKey()).getPrice();
+            BigDecimal price = categoryById.get(e.getKey()).priceNow();
             total = total.add(price.multiply(BigDecimal.valueOf(e.getValue())));
         }
 
@@ -554,7 +557,7 @@ public class BookingService {
                     .rowLabel("GA")
                     .seatNumber(ticketIndex++)
                     .categoryName(category.getName())
-                    .priceAtBooking(category.getPrice())
+                    .priceAtBooking(category.priceNow())
                     .ticketNumber(references.nextTicketNumber())
                     .attendeeName(spec.attendeeName())
                     .attendeeEmail(spec.attendeeEmail())

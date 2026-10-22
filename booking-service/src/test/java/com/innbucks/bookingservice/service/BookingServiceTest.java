@@ -447,6 +447,46 @@ class BookingServiceTest {
     }
 
     @Test
+    void createBooking_chargesTheEarlyBirdPrice_seatServiceReportsAsCurrent() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(new BigDecimal("150.00"));
+        SeatServiceClient client = mock(SeatServiceClient.class);
+        when(client.getCategory(DEFAULT_CATEGORY_ID)).thenReturn(ApiResult.ok("ok", CategoryLookupDTO.builder()
+                .seatCategoryId(DEFAULT_CATEGORY_ID).eventId(fx.eventId).name("VIP")
+                .price(new BigDecimal("150.00")).currentPrice(new BigDecimal("100.00"))
+                .totalSeats(DEFAULT_TOTAL_SEATS).availableSeats(DEFAULT_TOTAL_SEATS)
+                .build()));
+        BookingService service = newService(bookingRepo, itemRepo, client);
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        // The total and the ticket both freeze the early-bird price, so the
+        // ticket keeps it after the early bird ends.
+        assertEquals(0, new BigDecimal("100.00").compareTo(resp.getTotalAmount()));
+        assertEquals(0, new BigDecimal("100.00").compareTo(resp.getItems().get(0).getPriceAtBooking()));
+    }
+
+    @Test
+    void createBooking_fromASeatServiceWithoutCurrentPrice_chargesThePrice() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(new BigDecimal("150.00"));
+        SeatServiceClient client = mock(SeatServiceClient.class);
+        when(client.getCategory(DEFAULT_CATEGORY_ID)).thenReturn(ApiResult.ok("ok", CategoryLookupDTO.builder()
+                .seatCategoryId(DEFAULT_CATEGORY_ID).eventId(fx.eventId).name("VIP")
+                .price(new BigDecimal("150.00"))
+                .totalSeats(DEFAULT_TOTAL_SEATS).availableSeats(DEFAULT_TOTAL_SEATS)
+                .build()));
+        BookingService service = newService(bookingRepo, itemRepo, client);
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        assertEquals(0, new BigDecimal("150.00").compareTo(resp.getTotalAmount()));
+        assertEquals(0, new BigDecimal("150.00").compareTo(resp.getItems().get(0).getPriceAtBooking()));
+    }
+
+    @Test
     void createBooking_derivesPriceAndCategoryFromSeatService() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);

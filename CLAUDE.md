@@ -2526,6 +2526,58 @@ halves look like one rule and are not.
   not check*, where 409 says *the server checked and the state says no*), never
   assumed safe. Pinned by
   `deleteCategory_refusedWhenBookingServiceCannotBeReached`.
+## Early-bird prices are worked out at read time (seat-service V9)
+
+**A seat category can sell at a lower `early_bird_price` until
+`early_bird_ends_at` (a UTC wall clock, exclusive), then at `price` again.
+Nothing runs when it ends: every read works out the price in force for that
+moment.** `price` keeps meaning the full price everywhere, which is what an
+organizer edits. Every response adds `currentPrice` (what a booking made now
+pays) and `earlyBird` ({ price, endsAt, active }, kept after it ends, null
+when there is none).
+
+- **One rule, in `CategoryPricing`** (seat-service): the early-bird price
+  applies while `now < endsAt` AND it is below `price`. The second half is a
+  backstop, so a bad row can never raise what a ticket costs. event-service's
+  `SeatCategoryGateway.CategoryView.earlyBirdActive` is a copy of the same rule
+  (the services share no code); change them together.
+- **booking-service charges `currentPrice`** (`CategoryLookupDTO.priceNow()`,
+  falling back to `price` from a seat-service that predates it) from the live
+  `GET /seat-categories/{id}`, and freezes it in `priceAtBooking` like any
+  price. So a booking made before the end keeps the early-bird price through its
+  hold and payment, and removing or changing an offer never restates a sold
+  ticket. Either deploy order is safe, because booking falls back to `price`,
+  but no early bird is charged until both run, so **deploy both before an
+  organizer sets one**.
+- **Never cache `currentPrice`.** Both caches hold the offer (price + end) and
+  work the price out per request: seat-service's `category-layout` in
+  `CategoryLayout.toDto(…, now)`, event-service's `seat-categories` in
+  `CategoryLayout.toDtos(now)`. So an early bird ends on time on every replica.
+  A newly SET or removed offer reaches the cached views within their TTL, like
+  a reprice. The booking read is never cached.
+- **`endsAt` in is a string, read by `MarketTimeZone.parseToUtc`**: with no zone
+  it is the market's local time as the organizer typed it (the event-time rule);
+  with `Z` or an offset it is that instant, so a client that did convert is not
+  shifted twice. Out, it is a `LocalDateTime` rendered at the market offset.
+  event-service reads seat-service's value leniently: an unreadable end drops
+  the offer from the event page and nothing else.
+- **Endpoints:** `earlyBird` on `POST /seat-categories`;
+  `PUT /seat-categories/{id}/early-bird` sets or replaces;
+  `DELETE /seat-categories/{id}/early-bird` removes (idempotent). Same owner rule
+  and phases as the category update (`editCategory`). It is NOT on
+  `PUT /seat-categories/{id}`, deliberately: an older console that does not send
+  the field would wipe a running offer on every rename.
+- **Refusals (400):** an offer not below `price`, an end not in the future, an
+  unreadable end, more than 2 decimals. While an offer runs, a `price` edit at or
+  below it is refused too ("Lower or remove the early bird first."). An ended
+  offer never blocks a price edit.
+- **V9's CHECKs** keep the two columns set together and the price above 0. The
+  "below `price`" rule is the service's, because `price` may legitimately drop
+  below an ENDED offer.
+- **Not built:** quantity-limited early birds ("the first 100 tickets"),
+  several price tiers, and a report of how many tickets sold at the early-bird
+  price (`priceAtBooking` already holds it).
+
 ## The oversell guard is on ALLOCATION, not on approval
 
 **The sellable ceiling is `SUM(seat_categories.total_seats)`, not

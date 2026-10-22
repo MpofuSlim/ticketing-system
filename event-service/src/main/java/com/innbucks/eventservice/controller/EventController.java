@@ -159,10 +159,12 @@ public class EventController {
                                               {
                                                 "name": "VIP",
                                                 "description": "Front rows",
-                                                "categoryPrice": 100.00,
+                                                "categoryPrice": 150.00,
+                                                "currentPrice": 100.00,
+                                                "earlyBird": { "price": 100.00, "endsAt": "2026-06-01T23:59:59+02:00", "active": true },
                                                 "sections": [
-                                                  { "section": "A", "seatCount": 25, "price": 100.00 },
-                                                  { "section": "B", "seatCount": 25, "price": 100.00 }
+                                                  { "section": "A", "seatCount": 25, "price": 150.00 },
+                                                  { "section": "B", "seatCount": 25, "price": 150.00 }
                                                 ]
                                               }
                                             ]
@@ -514,9 +516,11 @@ public class EventController {
                                               {
                                                 "name": "VIP",
                                                 "description": "Front rows",
-                                                "categoryPrice": 100.00,
+                                                "categoryPrice": 150.00,
+                                                "currentPrice": 100.00,
+                                                "earlyBird": { "price": 100.00, "endsAt": "2026-06-01T23:59:59+02:00", "active": true },
                                                 "sections": [
-                                                  { "section": "A", "seatCount": 25, "price": 100.00 }
+                                                  { "section": "A", "seatCount": 25, "price": 150.00 }
                                                 ]
                                               }
                                             ]
@@ -797,16 +801,20 @@ public class EventController {
                                           {
                                             "name": "VIP",
                                             "description": "Front rows",
-                                            "categoryPrice": 100.00,
+                                            "categoryPrice": 150.00,
+                                            "currentPrice": 100.00,
+                                            "earlyBird": { "price": 100.00, "endsAt": "2026-06-01T23:59:59+02:00", "active": true },
                                             "sections": [
-                                              { "section": "A", "seatCount": 25, "price": 100.00 },
-                                              { "section": "B", "seatCount": 25, "price": 100.00 }
+                                              { "section": "A", "seatCount": 25, "price": 150.00 },
+                                              { "section": "B", "seatCount": 25, "price": 150.00 }
                                             ]
                                           },
                                           {
                                             "name": "GA",
                                             "description": "General admission",
                                             "categoryPrice": 60.00,
+                                            "currentPrice": 60.00,
+                                            "earlyBird": null,
                                             "sections": [
                                               { "section": "F", "seatCount": 50, "price": 60.00 }
                                             ]
@@ -1340,9 +1348,11 @@ public class EventController {
                                           {
                                             "name": "VIP",
                                             "description": "Front rows",
-                                            "categoryPrice": 100.00,
+                                            "categoryPrice": 150.00,
+                                            "currentPrice": 100.00,
+                                            "earlyBird": { "price": 100.00, "endsAt": "2026-06-01T23:59:59+02:00", "active": true },
                                             "sections": [
-                                              { "section": "A", "seatCount": 25, "price": 100.00 }
+                                              { "section": "A", "seatCount": 25, "price": 150.00 }
                                             ]
                                           }
                                         ]

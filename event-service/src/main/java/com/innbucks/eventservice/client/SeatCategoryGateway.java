@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.client;
 
 import com.innbucks.eventservice.dto.ApiResult;
+import com.innbucks.eventservice.dto.EventEarlyBirdDTO;
 import com.innbucks.eventservice.dto.EventSeatCategoryResponseDTO;
 import com.innbucks.eventservice.dto.EventSectionResponseDTO;
 import com.innbucks.eventservice.dto.SeatCategorySectionDTO;
@@ -23,6 +24,11 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
@@ -42,6 +48,8 @@ public class SeatCategoryGateway {
     private final CircuitBreaker circuitBreaker;
     private final String seatServiceBaseUrl;
     private final ReadThroughCache layoutCache;
+    /** Decides whether an early bird is still running. Tests move it. */
+    private Clock clock = Clock.systemUTC();
 
     @Autowired
     public SeatCategoryGateway(
@@ -53,6 +61,10 @@ public class SeatCategoryGateway {
         this.circuitBreaker = circuitBreakerFactory.create("seatCategories");
         this.seatServiceBaseUrl = seatServiceBaseUrl;
         this.layoutCache = ReadThroughCache.of(cacheManager, ReadCacheConfig.SEAT_CATEGORIES);
+    }
+
+    void setClock(Clock clock) {
+        this.clock = clock;
     }
 
     /** No cache: every {@link #fetchForEvent} calls seat-service. */
@@ -69,7 +81,7 @@ public class SeatCategoryGateway {
      * a fresh copy.
      *
      * <p>What is cached is the static layout only — name, description, price,
-     * section labels and seat counts (the allocation, not remaining stock;
+     * the early-bird offer, section labels and seat counts (the allocation, not remaining stock;
      * this response has never carried live availability). Category writes
      * happen in seat-service, so nothing here can evict: a new, repriced or
      * deleted category reaches the public detail view within the TTL. The
@@ -82,13 +94,13 @@ public class SeatCategoryGateway {
     public List<EventSeatCategoryResponseDTO> fetchForEvent(UUID eventId) {
         Cache.ValueWrapper hit = layoutCache.lookup(eventId);
         if (hit != null && hit.get() instanceof CategoryLayout layout) {
-            return layout.toDtos();
+            return layout.toDtos(nowUtc());
         }
         return circuitBreaker.run(
                 () -> {
                     CategoryLayout layout = CategoryLayout.of(fetchRaw(eventId));
                     layoutCache.put(eventId, layout);
-                    return layout.toDtos();
+                    return layout.toDtos(nowUtc());
                 },
                 throwable -> {
                     log.warn("seatCategories breaker fallback eventId={}",
@@ -176,25 +188,19 @@ public class SeatCategoryGateway {
     }
 
     private List<EventSeatCategoryResponseDTO> doFetch(UUID eventId) {
-        List<SeatCategoryServiceResponseDTO> categories = fetchRaw(eventId);
-        if (categories.isEmpty()) {
-            return Collections.emptyList();
-        }
+        return CategoryLayout.of(fetchRaw(eventId)).toDtos(nowUtc());
+    }
 
-        return categories.stream()
-                .map(category -> EventSeatCategoryResponseDTO.builder()
-                        .name(category.getName())
-                        .description(category.getDescription())
-                        .categoryPrice(category.getPrice())
-                        .sections(mapSectionsWithPrice(category.getSections(), category.getPrice()))
-                        .build())
-                .collect(Collectors.toList());
+    private LocalDateTime nowUtc() {
+        return LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
     }
 
     /**
      * The cached form of one event's categories: immutable records, rebuilt
      * into fresh DTOs on every read so no caller can mutate what the next one
-     * is served. Produces exactly what {@link #doFetch} produces.
+     * is served. Holds the early-bird offer, never which price applies:
+     * {@link #toDtos} works that out at the time of each read, so a cached
+     * copy can never keep an early bird running past its end.
      */
     record CategoryLayout(List<CategoryView> categories) {
 
@@ -207,13 +213,16 @@ public class SeatCategoryGateway {
                         sections.add(new SectionView(section.getSection(), section.getSeatCount()));
                     }
                 }
+                SeatCategoryServiceResponseDTO.EarlyBird earlyBird = category.getEarlyBird();
+                LocalDateTime earlyBirdEndsAt = earlyBird == null ? null : parseUtc(earlyBird.getEndsAt());
+                BigDecimal earlyBirdPrice = earlyBird == null || earlyBirdEndsAt == null ? null : earlyBird.getPrice();
                 views.add(new CategoryView(category.getName(), category.getDescription(),
-                        category.getPrice(), List.copyOf(sections)));
+                        category.getPrice(), earlyBirdPrice, earlyBirdEndsAt, List.copyOf(sections)));
             }
             return new CategoryLayout(List.copyOf(views));
         }
 
-        List<EventSeatCategoryResponseDTO> toDtos() {
+        List<EventSeatCategoryResponseDTO> toDtos(LocalDateTime nowUtc) {
             if (categories.isEmpty()) {
                 return Collections.emptyList();
             }
@@ -222,6 +231,12 @@ public class SeatCategoryGateway {
                             .name(c.name())
                             .description(c.description())
                             .categoryPrice(c.price())
+                            .currentPrice(c.earlyBirdActive(nowUtc) ? c.earlyBirdPrice() : c.price())
+                            .earlyBird(c.earlyBirdPrice() == null ? null : EventEarlyBirdDTO.builder()
+                                    .price(c.earlyBirdPrice())
+                                    .endsAt(c.earlyBirdEndsAt())
+                                    .active(c.earlyBirdActive(nowUtc))
+                                    .build())
                             .sections(c.sections().isEmpty()
                                     ? Collections.emptyList()
                                     : c.sections().stream()
@@ -236,23 +251,43 @@ public class SeatCategoryGateway {
         }
     }
 
-    record CategoryView(String name, String description, BigDecimal price, List<SectionView> sections) {
+    record CategoryView(String name, String description, BigDecimal price,
+                        BigDecimal earlyBirdPrice, LocalDateTime earlyBirdEndsAt, List<SectionView> sections) {
+
+        /**
+         * seat-service's rule (its {@code CategoryPricing}), kept in lock-step:
+         * the early-bird price applies before its end and only while it is
+         * below the full price.
+         */
+        boolean earlyBirdActive(LocalDateTime nowUtc) {
+            return price != null && earlyBirdPrice != null && earlyBirdEndsAt != null
+                    && nowUtc.isBefore(earlyBirdEndsAt) && earlyBirdPrice.compareTo(price) < 0;
+        }
     }
 
     record SectionView(String section, Integer seatCount) {
     }
 
-    private List<EventSectionResponseDTO> mapSectionsWithPrice(
-            List<SeatCategorySectionDTO> sections, BigDecimal price) {
-        if (sections == null || sections.isEmpty()) {
-            return Collections.emptyList();
+    /**
+     * seat-service's {@code endsAt} as a UTC wall clock: with a zone (it
+     * renders the market offset unless told the caller is a service) that
+     * instant, without one UTC, the S2S convention. Unreadable is null, which
+     * drops the offer: the page then shows the full price, and the booking is
+     * still priced by seat-service itself.
+     */
+    static LocalDateTime parseUtc(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
         }
-        return sections.stream()
-                .map(section -> EventSectionResponseDTO.builder()
-                        .section(section.getSection())
-                        .seatCount(section.getSeatCount())
-                        .price(price)
-                        .build())
-                .collect(Collectors.toList());
+        try {
+            return OffsetDateTime.parse(value.trim()).withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        } catch (DateTimeParseException withoutZone) {
+            try {
+                return LocalDateTime.parse(value.trim());
+            } catch (DateTimeParseException unreadable) {
+                log.warn("seatCategories early-bird end unreadable, offer dropped from the event page");
+                return null;
+            }
+        }
     }
 }

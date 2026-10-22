@@ -32,8 +32,22 @@ public class SeatCategory {
 
     private String description;
 
+    /** The full ticket price. An early bird never changes it. */
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal price;
+
+    /**
+     * The early-bird price, charged until {@link #earlyBirdEndsAt}; null when
+     * the category has no early bird. Set together with the end, or not at all
+     * (V9's CHECK). Which price applies is decided at read time by
+     * {@link com.innbucks.seatservice.service.CategoryPricing}.
+     */
+    @Column(name = "early_bird_price", precision = 10, scale = 2)
+    private BigDecimal earlyBirdPrice;
+
+    /** UTC wall clock at which the early-bird price stops applying (exclusive). */
+    @Column(name = "early_bird_ends_at")
+    private LocalDateTime earlyBirdEndsAt;
 
     @Column(nullable = false)
     private Integer totalSeats;

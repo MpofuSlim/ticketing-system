@@ -118,6 +118,32 @@ class CreateCategoryRequestDTOValidationTest {
         assertTrue(violations.isEmpty(), "valid request should produce no violations, got: " + violations);
     }
 
+    @Test
+    void earlyBird_isValidatedInsideTheCreateRequest() {
+        EarlyBirdRequestDTO earlyBird = new EarlyBirdRequestDTO();
+        earlyBird.setPrice(new BigDecimal("0.00"));
+        earlyBird.setEndsAt(" ");
+        CreateCategoryRequestDTO req = request(List.of(section("A", 25)));
+        req.setEarlyBird(earlyBird);
+
+        var violations = validator.validate(req);
+
+        assertTrue(hasViolationOnPath(violations, "earlyBird.price"), "zero early-bird price must be rejected");
+        assertTrue(hasViolationOnPath(violations, "earlyBird.endsAt"), "blank early-bird end must be rejected");
+    }
+
+    @Test
+    void earlyBird_withThreeDecimals_isRejected_andNoneAtAllIsFine() {
+        EarlyBirdRequestDTO earlyBird = new EarlyBirdRequestDTO();
+        earlyBird.setPrice(new BigDecimal("99.999"));
+        earlyBird.setEndsAt("2026-09-08T23:59:59");
+        CreateCategoryRequestDTO req = request(List.of(section("A", 25)));
+        req.setEarlyBird(earlyBird);
+
+        assertTrue(hasViolationOnPath(validator.validate(req), "earlyBird.price"));
+        assertTrue(validator.validate(request(List.of(section("A", 25)))).isEmpty());
+    }
+
     private boolean hasViolationOnPath(Set<? extends ConstraintViolation<?>> violations, String fieldSuffix) {
         return violations.stream()
                 .anyMatch(v -> v.getPropertyPath().toString().endsWith(fieldSuffix));
