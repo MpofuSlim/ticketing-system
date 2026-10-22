@@ -31,6 +31,12 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // an Optional. See GET /bookings/phone/{phoneNumber}.
     List<Booking> findByPhoneNumberOrderByCreatedAtDesc(String phoneNumber);
 
+    // The same lookup for an EVENT_ORGANIZER: only bookings of events they own
+    // (tenantUserUuid is stamped from the event at booking time). A row with no
+    // stamp never matches, so it fails closed for organizers.
+    List<Booking> findByPhoneNumberAndTenantUserUuidOrderByCreatedAtDesc(String phoneNumber,
+                                                                         UUID tenantUserUuid);
+
     // The booking row's write lock. Every path that changes a booking's stock
     // takes it FIRST, before any category row (StockLedger has the order):
     // confirm (and its resurrect phase), cancel, extend-hold and the write
