@@ -155,7 +155,8 @@ public class EventController {
                                             "active": true,
                                             "createdAt": "2026-04-25T08:00:00",
                                             "updatedAt": "2026-05-02T15:00:00",
-                                            "seatCategories": null
+                                            "seatCategories": null,
+                                            "priceFrom": { "currentPrice": 60.00, "fullPrice": 60.00, "tierName": null, "categoryName": "GA", "soldOut": false }
                                           }
                                         ],
                                         "pageable": {
@@ -384,7 +385,8 @@ public class EventController {
                                             "active": true,
                                             "createdAt": "2026-04-25T08:00:00",
                                             "updatedAt": "2026-05-02T15:00:00",
-                                            "seatCategories": null
+                                            "seatCategories": null,
+                                            "priceFrom": { "currentPrice": 60.00, "fullPrice": 60.00, "tierName": null, "categoryName": "GA", "soldOut": false }
                                           }
                                         ],
                                         "pageable": {
@@ -500,7 +502,8 @@ public class EventController {
                                             "rejected": false,
                                             "createdAt": "2026-04-25T08:00:00",
                                             "updatedAt": "2026-05-02T15:00:00",
-                                            "seatCategories": null
+                                            "seatCategories": null,
+                                            "priceFrom": { "currentPrice": 60.00, "fullPrice": 60.00, "tierName": null, "categoryName": "GA", "soldOut": false }
                                           }
                                         ],
                                         "pageable": {
@@ -637,7 +640,8 @@ public class EventController {
                                             "rejected": false,
                                             "createdAt": "2026-06-01T09:00:00",
                                             "updatedAt": "2026-06-01T09:00:00",
-                                            "seatCategories": null
+                                            "seatCategories": null,
+                                            "priceFrom": { "currentPrice": 80.00, "fullPrice": 120.00, "tierName": "Early bird", "categoryName": "Standard", "soldOut": false }
                                           },
                                           {
                                             "eventId": "9b2ffff0-3d0a-4b1e-8a2e-2f9b0c5d1a44",
@@ -656,7 +660,8 @@ public class EventController {
                                             "rejected": true,
                                             "createdAt": "2026-06-02T11:00:00",
                                             "updatedAt": "2026-06-03T08:30:00",
-                                            "seatCategories": null
+                                            "seatCategories": null,
+                                            "priceFrom": null
                                           }
                                         ],
                                         "pageable": {
@@ -801,7 +806,8 @@ public class EventController {
                                               { "section": "F", "seatCount": 50, "price": 60.00 }
                                             ]
                                           }
-                                        ]
+                                        ],
+                                        "priceFrom": { "currentPrice": 60.00, "fullPrice": 60.00, "tierName": null, "categoryName": "GA", "soldOut": false }
                                       }
                                     }
                                     """)
@@ -856,7 +862,8 @@ public class EventController {
                                             "active": true,
                                             "createdAt": "2026-04-25T08:00:00",
                                             "updatedAt": "2026-05-02T15:00:00",
-                                            "seatCategories": null
+                                            "seatCategories": null,
+                                            "priceFrom": { "currentPrice": 60.00, "fullPrice": 60.00, "tierName": null, "categoryName": "GA", "soldOut": false }
                                           }
                                         ],
                                         "pageable": {
@@ -942,7 +949,8 @@ public class EventController {
                                             "active": true,
                                             "createdAt": "2026-04-25T08:00:00",
                                             "updatedAt": "2026-05-02T15:00:00",
-                                            "seatCategories": null
+                                            "seatCategories": null,
+                                            "priceFrom": { "currentPrice": 60.00, "fullPrice": 60.00, "tierName": null, "categoryName": "GA", "soldOut": false }
                                           }
                                         ],
                                         "pageable": {
@@ -1048,7 +1056,8 @@ public class EventController {
                                         "active": false,
                                         "createdAt": "2026-05-02T15:00:00",
                                         "updatedAt": "2026-05-02T15:00:00",
-                                        "seatCategories": null
+                                        "seatCategories": null,
+                                        "priceFrom": null
                                       }
                                     }
                                     """)
@@ -1326,7 +1335,8 @@ public class EventController {
                                         "active": true,
                                         "createdAt": "2026-04-25T08:00:00",
                                         "updatedAt": "2026-05-02T16:00:00",
-                                        "seatCategories": null
+                                        "seatCategories": null,
+                                        "priceFrom": null
                                       }
                                     }
                                     """)
@@ -1390,7 +1400,8 @@ public class EventController {
                                         "active": true,
                                         "createdAt": "2026-04-25T08:00:00",
                                         "updatedAt": "2026-05-02T16:00:00",
-                                        "seatCategories": null
+                                        "seatCategories": null,
+                                        "priceFrom": null
                                       }
                                     }
                                     """)
@@ -1462,7 +1473,8 @@ public class EventController {
                                         "rejected": false,
                                         "createdAt": "2026-04-25T08:00:00",
                                         "updatedAt": "2026-05-02T16:30:00",
-                                        "seatCategories": null
+                                        "seatCategories": null,
+                                        "priceFrom": null
                                       }
                                     }
                                     """)
@@ -1530,7 +1542,8 @@ public class EventController {
                                         "rejected": true,
                                         "createdAt": "2026-06-02T11:00:00",
                                         "updatedAt": "2026-06-03T08:30:00",
-                                        "seatCategories": null
+                                        "seatCategories": null,
+                                        "priceFrom": null
                                       }
                                     }
                                     """)
@@ -1592,7 +1605,8 @@ public class EventController {
                                         "rejected": false,
                                         "createdAt": "2026-06-02T11:00:00",
                                         "updatedAt": "2026-06-04T07:15:00",
-                                        "seatCategories": null
+                                        "seatCategories": null,
+                                        "priceFrom": null
                                       }
                                     }
                                     """)

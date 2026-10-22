@@ -97,4 +97,10 @@ public class EventResponseDTO {
             + "section prices and price tiers. Filled by GET /events/{id} only; null on every list and on "
             + "the create / update / status-change responses.")
     private List<EventSeatCategoryResponseDTO> seatCategories;
+
+    @Schema(nullable = true, description = "What the cheapest ticket costs if booked now, for cards and "
+            + "filters (\"Early bird from 100.00\"). On every list and on GET /events/{id}; null when the event "
+            + "has no seat category, when seat-service could not be asked, and on create / update / "
+            + "status-change responses.")
+    private EventPriceFromDTO priceFrom;
 }

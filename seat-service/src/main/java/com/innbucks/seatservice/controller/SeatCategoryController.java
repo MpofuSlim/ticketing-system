@@ -139,6 +139,68 @@ public class SeatCategoryController {
         return ResponseEntity.ok(ApiResult.ok("Categories retrieved successfully", result));
     }
 
+    @GetMapping("/by-events")
+    @SecurityRequirements()
+    @Operation(summary = "List categories of several events",
+            description = "The same listing as `GET /seat-categories?eventId=`, for up to 100 events in one call, as "
+                    + "one flat list: each category carries its `eventId`, and an event with no category is simply "
+                    + "absent. event-service uses it to put a \"from\" price on every event of a list page with one "
+                    + "call. `currentPrice`, `priceTiers` and `availableSeats` are worked out live, exactly as for "
+                    + "one event. Public read.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Categories returned",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Two events", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Categories retrieved successfully",
+                                      "data": [
+                                        {
+                                          "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "name": "VIP",
+                                          "description": "Front rows",
+                                          "price": 150.00,
+                                          "currentPrice": 100.00,
+                                          "currentTierName": "Early bird",
+                                          "priceTiers": [
+                                            { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
+                                              "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "sold": 37, "remaining": 63, "status": "ACTIVE" }
+                                          ],
+                                          "availableSeats": 13,
+                                          "sections": [ { "section": "A", "seatCount": 25 }, { "section": "B", "seatCount": 25 } ]
+                                        },
+                                        {
+                                          "seatCategoryId": "1b2c3d4e-5f60-7182-93a4-b5c6d7e8f901",
+                                          "eventId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                                          "name": "General",
+                                          "description": "General admission",
+                                          "price": 50.00,
+                                          "currentPrice": 50.00,
+                                          "currentTierName": null,
+                                          "priceTiers": [],
+                                          "availableSeats": 200,
+                                          "sections": [ { "section": "F", "seatCount": 200 } ]
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "More than 100 events, or an id that is not a UUID",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Too many events", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "At most 100 events per request.", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<CreateCategoryResponseDTO>>> getByEvents(
+            @Parameter(description = "Event UUIDs, comma-separated (at most 100)") @RequestParam List<UUID> eventIds
+    ) {
+        log.debug("GET /seat-categories/by-events events={}", eventIds == null ? 0 : eventIds.size());
+        List<CreateCategoryResponseDTO> result = categoryService.getCategoriesByEvents(eventIds);
+        return ResponseEntity.ok(ApiResult.ok("Categories retrieved successfully", result));
+    }
+
     @GetMapping("/{id}")
     @SecurityRequirements()
     @Operation(summary = "Get category capacity",

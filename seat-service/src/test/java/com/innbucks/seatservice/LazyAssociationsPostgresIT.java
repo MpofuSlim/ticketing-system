@@ -140,6 +140,31 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void listingByEvents_costsTheSameForTwoOrSixEvents() throws Exception {
+        List<UUID> two = List.of(seedEvent(2), seedEvent(1));
+        List<UUID> six = new java.util.ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            six.add(seedEvent(2));
+        }
+
+        measure("[E=2] GET /seat-categories/by-events", get("/seat-categories/by-events")
+                        .param("eventIds", two.stream().map(UUID::toString).collect(java.util.stream.Collectors.joining(","))),
+                r -> r.andExpect(jsonPath("$.data", hasSize(3)))
+                        .andExpect(jsonPath("$.data[0].eventId").value(two.get(0).toString()))
+                        .andExpect(jsonPath("$.data[2].eventId").value(two.get(1).toString()))
+                        .andExpect(jsonPath("$.data[0].sections[*].section", contains("STAND", "BOX", "LAWN")))
+                        .andExpect(jsonPath("$.data[*].availableSeats", everyItem(is(10)))));
+        measure("[E=6] GET /seat-categories/by-events", get("/seat-categories/by-events")
+                        .param("eventIds", six.stream().map(UUID::toString).collect(java.util.stream.Collectors.joining(","))),
+                r -> r.andExpect(jsonPath("$.data", hasSize(12))));
+        // Categories, their sections, and their price tiers: one query each,
+        // whatever the number of events.
+        assertThat(measured.get("[E=6] GET /seat-categories/by-events"))
+                .isEqualTo(measured.get("[E=2] GET /seat-categories/by-events"))
+                .isEqualTo(3);
+    }
+
+    @Test
     void seatEndpoints_renderTheCategory() throws Exception {
         UUID eventId = seedEvent(1);
         SeatCategory category = categoryRepository.findByEventIdAndDeletedFalse(eventId).get(0);

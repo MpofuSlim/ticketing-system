@@ -847,7 +847,74 @@ public class SeatCategoryService {
             List<UUID> ids = categories.stream().map(SeatCategory::getId).collect(Collectors.toList());
             return EventLayout.of(categories, sectionsByCategory(ids), tiersByCategory(ids));
         });
-        List<UUID> categoryIds = layout.categories().stream()
+        return liveListing(layout.categories(), mirrorLoadedNow);
+    }
+
+    /** Most events {@link #getCategoriesByEvents} answers in one call: an event-service list page. */
+    public static final int MAX_EVENTS_PER_LISTING = 100;
+
+    /**
+     * {@link #getCategoriesByEvent} for several events at once, in one flat
+     * list (each category names its event), for event-service's list pages.
+     * The same cached layouts serve both: the events already in this pod's
+     * layout cache cost nothing, and the rest are loaded together in three
+     * queries (categories, sections, tiers) and cached one event at a time.
+     * Availability and tier counts are then asked of booking-service ONCE for
+     * every category, live, and the price in force is worked out now, exactly
+     * as for one event. An event with no live category contributes nothing.
+     */
+    public List<CreateCategoryResponseDTO> getCategoriesByEvents(List<UUID> eventIds) {
+        List<UUID> events = eventIds == null ? List.of()
+                : eventIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (events.size() > MAX_EVENTS_PER_LISTING) {
+            throw new BadRequestException("At most " + MAX_EVENTS_PER_LISTING + " events per request.");
+        }
+        if (events.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, EventLayout> layouts = new LinkedHashMap<>();
+        List<UUID> missing = new ArrayList<>();
+        for (UUID eventId : events) {
+            org.springframework.cache.Cache.ValueWrapper hit = layoutCache.lookup(eventId);
+            if (hit != null && hit.get() instanceof EventLayout layout) {
+                layouts.put(eventId, layout);
+            } else {
+                missing.add(eventId);
+            }
+        }
+        Map<UUID, Integer> mirrorLoadedNow = new java.util.HashMap<>();
+        if (!missing.isEmpty()) {
+            Map<UUID, List<SeatCategory>> byEvent = new LinkedHashMap<>();
+            List<UUID> ids = new ArrayList<>();
+            for (SeatCategory category : categoryRepository.findByEventIdInAndDeletedFalse(missing)) {
+                byEvent.computeIfAbsent(category.getEventId(), k -> new ArrayList<>()).add(category);
+                mirrorLoadedNow.put(category.getId(), category.getAvailableSeats());
+                ids.add(category.getId());
+            }
+            Map<UUID, List<SectionSeatConfigDTO>> sections = sectionsByCategory(ids);
+            Map<UUID, List<SeatCategoryPriceTier>> tiers = tiersByCategory(ids);
+            for (UUID eventId : missing) {
+                EventLayout layout = EventLayout.of(byEvent.getOrDefault(eventId, List.of()), sections, tiers);
+                layoutCache.put(eventId, layout);
+                layouts.put(eventId, layout);
+            }
+        }
+        List<CategoryLayout> categories = new ArrayList<>();
+        for (UUID eventId : events) {
+            categories.addAll(layouts.get(eventId).categories());
+        }
+        log.debug("Fetching seat categories events={} fromCache={}", events.size(), events.size() - missing.size());
+        return liveListing(categories, mirrorLoadedNow);
+    }
+
+    /**
+     * Cached layouts made into the live listing: availability and tier counts
+     * asked of booking-service in one round trip each, the price in force
+     * worked out now.
+     */
+    private List<CreateCategoryResponseDTO> liveListing(List<CategoryLayout> categories,
+                                                        Map<UUID, Integer> mirrorLoadedNow) {
+        List<UUID> categoryIds = categories.stream()
                 .map(CategoryLayout::id)
                 .collect(Collectors.toList());
 
@@ -857,21 +924,30 @@ public class SeatCategoryService {
         Map<UUID, Long> counts = bookingServiceClient
                 .fetchActiveCountsByCategories(categoryIds)
                 .orElse(null);
-        Map<UUID, Integer> mirror = counts != null || categoryIds.isEmpty()
-                ? Map.of()
-                : (mirrorLoadedNow.isEmpty() ? storedMirror(categoryIds) : mirrorLoadedNow);
+        // Degraded path: the stored mirror, from the rows just loaded where there
+        // are any and read now for the rest (a batch mixes cached and loaded events).
+        Map<UUID, Integer> mirror = Map.of();
+        if (counts == null && !categoryIds.isEmpty()) {
+            Map<UUID, Integer> known = new java.util.HashMap<>(mirrorLoadedNow);
+            List<UUID> unread = categoryIds.stream().filter(id -> !known.containsKey(id)).toList();
+            if (!unread.isEmpty()) {
+                known.putAll(storedMirror(unread));
+            }
+            mirror = known;
+        }
+        Map<UUID, Integer> mirrorNow = mirror;
 
         // The price in force is worked out for THIS request, not when the
         // layout was cached, so a tier closes on time on every replica. Tier
         // counts are asked live, like availability, and only for categories
         // that have tiers.
         Map<UUID, List<CategoryPricing.Tier>> tiersByCategory = new LinkedHashMap<>();
-        layout.categories().forEach(c -> tiersByCategory.put(c.id(), c.tiers()));
+        categories.forEach(c -> tiersByCategory.put(c.id(), c.tiers()));
         Map<UUID, Map<UUID, CategoryPricing.Sold>> soldCounts = tierSoldCounts(tiersByCategory);
         LocalDateTime now = nowUtc();
-        return layout.categories().stream()
+        return categories.stream()
                 .map(category -> category.toDto(liveAvailableSeats(
-                        category.id(), category.totalSeats(), mirror.get(category.id()), counts),
+                        category.id(), category.totalSeats(), mirrorNow.get(category.id()), counts),
                         soldByTier(category.id(), soldCounts), now))
                 .collect(Collectors.toList());
     }

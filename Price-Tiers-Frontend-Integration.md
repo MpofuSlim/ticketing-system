@@ -231,16 +231,46 @@ sold at full price.
 
 ## 5. Super app / Ticketize web (customer side)
 
-### 5.1 Event page — `GET /events/{id}` only
+### 5.0 Event cards and Discover — `priceFrom` on every event
+
+Every event on `GET /events`, `GET /events/active`, `GET /events/search`,
+`GET /events/by-country` (and the organizer's own lists) now carries:
+
+```json
+"seatCategories": null,
+"priceFrom": { "currentPrice": 100.00, "fullPrice": 150.00, "tierName": "Early bird",
+               "categoryName": "VIP", "soldOut": false }
+```
+
+| Field | Meaning |
+|---|---|
+| `currentPrice` | what the cheapest ticket costs if booked **now** (the tier on sale, else the full price) |
+| `fullPrice` | that category's full price; show it struck through when higher than `currentPrice` |
+| `tierName` | e.g. `"Early bird"`; `null` at the full price |
+| `categoryName` | the category that cheapest ticket is in |
+| `soldOut` | `true` when every category is sold out (the prices then describe the cheapest one anyway) |
+
+- Card copy: `tierName` set → "Early bird from $100" (with $150 struck through);
+  else "From $60".
+- **`priceFrom` is `null`** when the event has no seat categories yet, or when
+  the backend could not work prices out at that moment. Show no price; never 0.
+- A sold-out category is skipped, so `priceFrom` is the cheapest ticket you can
+  still buy.
+- `GET /events/{id}` carries the same field, so the event page header can use it.
+- The lists still have **no** `seatCategories`: per-category prices and tiers are
+  on the event page only.
+- **Discover's price filter and sort:** done in the browser over one page of
+  results, they only filter or sort that page. Use `priceFrom` for display; a
+  correct filter or sort across all events needs backend support (not built yet).
+
+### 5.1 Event page — `GET /events/{id}`
 
 > [!WARNING]
-> **Correction (2026-10-22): the event LISTS carry no prices.** `GET /events`,
-> `GET /events/active`, search and by-country return `"seatCategories": null`
-> for every event. Only `GET /events/{id}` fills it, and so only the event page
-> can show tiers. The Swagger examples for the list endpoints showed
-> categories, which was wrong; the first version of this guide repeated it.
-> Event cards and Discover therefore have no price to show or filter on until
-> the backend adds one (not built yet).
+> **Correction (2026-10-22): the event LISTS carry no `seatCategories`.**
+> `GET /events`, `GET /events/active`, search and by-country return
+> `"seatCategories": null` for every event; only `GET /events/{id}` fills it. The
+> Swagger examples for the list endpoints showed categories, which was wrong,
+> and the first version of this guide repeated it. Use `priceFrom` (§5.0) on cards.
 
 Each seat category gains three fields:
 
@@ -347,3 +377,4 @@ A missing `tiers` key gives `"tiers is required (send [] to remove every tier)"`
 - [ ] The event page's `remaining` can be ~30 s old. The booking response is the truth.
 - [ ] Tier prices must stay **below** the full price. Lowering the full price may need tier edits first (§4.4).
 - [ ] `priceTierName` is **absent** (not `null`) at full price. Check for the key.
+- [ ] Cards use `priceFrom` (§5.0); `null` means show no price, never 0. The lists have no `seatCategories`.

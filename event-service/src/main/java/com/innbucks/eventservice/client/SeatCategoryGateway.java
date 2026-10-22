@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.client;
 
 import com.innbucks.eventservice.dto.ApiResult;
+import com.innbucks.eventservice.dto.EventPriceFromDTO;
 import com.innbucks.eventservice.dto.EventPriceTierDTO;
 import com.innbucks.eventservice.dto.EventSeatCategoryResponseDTO;
 import com.innbucks.eventservice.dto.EventSectionResponseDTO;
@@ -29,8 +30,11 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -80,9 +84,11 @@ public class SeatCategoryGateway {
      * cache ({@code events.cache.seat-categories.ttl}, 30s) when this pod has
      * a fresh copy.
      *
-     * <p>What is cached is the static layout only — name, description, price,
-     * the price tiers' terms and sold counts, section labels and seat counts (the allocation, not remaining stock;
-     * this response has never carried live availability). Category writes
+     * <p>What is cached is the layout — name, description, price, the price
+     * tiers' terms and sold counts, section labels and seat counts (the
+     * allocation), and each category's seats left, read for display only (it
+     * decides an event's "from" price, {@link #fetchPriceFrom}; this response
+     * does not carry it, and no sale reads it). Category writes
      * happen in seat-service, so nothing here can evict: a new, repriced or
      * deleted category reaches the public detail view within the TTL. The
      * booking itself prices from seat-service live, never from this.
@@ -166,6 +172,84 @@ public class SeatCategoryGateway {
         );
     }
 
+    /** The most events one seat-service call covers: its {@code /by-events} limit. */
+    static final int MAX_EVENTS_PER_CALL = 100;
+
+    /**
+     * Each event's {@link EventPriceFromDTO} for a list page: the cheapest
+     * ticket now, worked out on THIS request (never cached) from the same
+     * per-event layout cache {@link #fetchForEvent} fills. The events not
+     * cached on this pod are fetched together, in one
+     * {@code GET /seat-categories/by-events} call per 100, and cached as if
+     * each had been read alone. An event with no category, or one seat-service
+     * could not be asked about, is absent: the list still serves.
+     */
+    public Map<UUID, EventPriceFromDTO> fetchPriceFrom(Collection<UUID> eventIds) {
+        if (eventIds == null || eventIds.isEmpty()) {
+            return Map.of();
+        }
+        List<UUID> events = eventIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        Map<UUID, CategoryLayout> layouts = new LinkedHashMap<>();
+        List<UUID> missing = new java.util.ArrayList<>();
+        for (UUID eventId : events) {
+            Cache.ValueWrapper hit = layoutCache.lookup(eventId);
+            if (hit != null && hit.get() instanceof CategoryLayout layout) {
+                layouts.put(eventId, layout);
+            } else {
+                missing.add(eventId);
+            }
+        }
+        for (int from = 0; from < missing.size(); from += MAX_EVENTS_PER_CALL) {
+            List<UUID> chunk = missing.subList(from, Math.min(missing.size(), from + MAX_EVENTS_PER_CALL));
+            layouts.putAll(circuitBreaker.run(
+                    () -> fetchLayouts(chunk),
+                    throwable -> {
+                        log.warn("seatCategories breaker fallback on price-from lookup events={}",
+                                chunk.size(), throwable);
+                        return Map.of();
+                    }));
+        }
+        LocalDateTime now = nowUtc();
+        Map<UUID, EventPriceFromDTO> out = new LinkedHashMap<>();
+        layouts.forEach((eventId, layout) -> {
+            EventPriceFromDTO priceFrom = layout.priceFrom(now);
+            if (priceFrom != null) {
+                out.put(eventId, priceFrom);
+            }
+        });
+        return out;
+    }
+
+    /** Several events' layouts from one seat-service call, each cached as {@link #fetchForEvent} would. */
+    private Map<UUID, CategoryLayout> fetchLayouts(List<UUID> eventIds) {
+        String url = UriComponentsBuilder
+                .fromUriString(seatServiceBaseUrl)
+                .path("/seat-categories/by-events")
+                .queryParam("eventIds", eventIds.stream().map(UUID::toString).collect(Collectors.joining(",")))
+                .toUriString();
+        ResponseEntity<ApiResult<List<SeatCategoryServiceResponseDTO>>> response =
+                restTemplate.exchange(url, HttpMethod.GET, null, new ParameterizedTypeReference<>() {});
+        ApiResult<List<SeatCategoryServiceResponseDTO>> envelope = response.getBody();
+        List<SeatCategoryServiceResponseDTO> categories = envelope == null ? null : envelope.getData();
+        if (categories == null) {
+            // Not an answer: cache nothing, so the next page asks again.
+            return Map.of();
+        }
+        Map<UUID, List<SeatCategoryServiceResponseDTO>> byEvent = new LinkedHashMap<>();
+        for (SeatCategoryServiceResponseDTO category : categories) {
+            if (category.getEventId() != null) {
+                byEvent.computeIfAbsent(category.getEventId(), k -> new java.util.ArrayList<>()).add(category);
+            }
+        }
+        Map<UUID, CategoryLayout> layouts = new LinkedHashMap<>();
+        for (UUID eventId : eventIds) {
+            CategoryLayout layout = CategoryLayout.of(byEvent.getOrDefault(eventId, List.of()));
+            layoutCache.put(eventId, layout);
+            layouts.put(eventId, layout);
+        }
+        return layouts;
+    }
+
     private List<SeatCategoryServiceResponseDTO> fetchRaw(UUID eventId) {
         String url = UriComponentsBuilder
                 .fromUriString(seatServiceBaseUrl)
@@ -199,7 +283,8 @@ public class SeatCategoryGateway {
      * The cached form of one event's categories: immutable records, rebuilt
      * into fresh DTOs on every read so no caller can mutate what the next one
      * is served. Holds each price tier's terms and the sold count seat-service
-     * reported, never which tier applies: {@link #toDtos} works that out at the
+     * reported, and each category's seats left (display only), never which
+     * tier applies: {@link #toDtos} works that out at the
      * time of each read, so a cached copy can never keep a tier open past its
      * end. A sold count can be up to the TTL old (display only; the booking is
      * priced by booking-service itself).
@@ -229,7 +314,8 @@ public class SeatCategoryGateway {
                     }
                 }
                 views.add(new CategoryView(category.getName(), category.getDescription(),
-                        category.getPrice(), List.copyOf(tiers), List.copyOf(sections)));
+                        category.getPrice(), List.copyOf(tiers), List.copyOf(sections),
+                        category.getAvailableSeats()));
             }
             return new CategoryLayout(List.copyOf(views));
         }
@@ -264,10 +350,59 @@ public class SeatCategoryGateway {
                     })
                     .collect(Collectors.toList());
         }
+
+        /**
+         * What the cheapest ticket costs now, among the categories that still
+         * have seats (a category whose seats are unknown counts as having
+         * some). When every category is sold out, the cheapest of them with
+         * {@code soldOut} set. Null for an event with no priced category.
+         */
+        EventPriceFromDTO priceFrom(LocalDateTime nowUtc) {
+            EventPriceFromDTO cheapest = null;
+            EventPriceFromDTO cheapestSoldOut = null;
+            for (CategoryView c : categories) {
+                if (c.price() == null) {
+                    continue;
+                }
+                EventPriceTierDTO active = c.priceTiers(nowUtc).stream()
+                        .filter(t -> t.getStatus() == EventPriceTierDTO.Status.ACTIVE)
+                        .findFirst().orElse(null);
+                EventPriceFromDTO candidate = EventPriceFromDTO.builder()
+                        .currentPrice(active == null ? c.price() : active.getPrice())
+                        .fullPrice(c.price())
+                        .tierName(active == null ? null : active.getName())
+                        .categoryName(c.name())
+                        .build();
+                if (c.availableSeats() != null && c.availableSeats() <= 0) {
+                    cheapestSoldOut = cheaper(cheapestSoldOut, candidate);
+                } else {
+                    cheapest = cheaper(cheapest, candidate);
+                }
+            }
+            if (cheapest != null) {
+                return cheapest;
+            }
+            if (cheapestSoldOut != null) {
+                cheapestSoldOut.setSoldOut(true);
+            }
+            return cheapestSoldOut;
+        }
+
+        /** The lower current price; on a tie the lower full price; on a full tie the first. */
+        private static EventPriceFromDTO cheaper(EventPriceFromDTO best, EventPriceFromDTO candidate) {
+            if (best == null) {
+                return candidate;
+            }
+            int byCurrent = candidate.getCurrentPrice().compareTo(best.getCurrentPrice());
+            if (byCurrent != 0) {
+                return byCurrent < 0 ? candidate : best;
+            }
+            return candidate.getFullPrice().compareTo(best.getFullPrice()) < 0 ? candidate : best;
+        }
     }
 
     record CategoryView(String name, String description, BigDecimal price, List<TierView> tiers,
-                        List<SectionView> sections) {
+                        List<SectionView> sections, Integer availableSeats) {
 
         /**
          * seat-service's rule (its {@code CategoryPricing}), kept in lock-step:

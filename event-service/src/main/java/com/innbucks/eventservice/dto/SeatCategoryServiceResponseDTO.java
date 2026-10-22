@@ -15,6 +15,12 @@ public class SeatCategoryServiceResponseDTO {
     private BigDecimal price;
     /** The price tiers in the order they apply, with seat-service's live counts; see {@link PriceTier}. */
     private List<PriceTier> priceTiers;
+    /**
+     * Seats left in the category, live when seat-service answered. Cached with
+     * the layout and read for display only: it decides whether a category can
+     * be an event's "from" price ({@link EventPriceFromDTO}), never a sale.
+     */
+    private Integer availableSeats;
     private List<SeatCategorySectionDTO> sections;
 
     /**

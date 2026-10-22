@@ -6,12 +6,16 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
 public interface SeatCategoryRepository extends JpaRepository<SeatCategory, UUID> {
 
     List<SeatCategory> findByEventIdAndDeletedFalse(UUID eventId);
+
+    /** Several events' live categories in one query (GET /seat-categories/by-events). */
+    List<SeatCategory> findByEventIdInAndDeletedFalse(Collection<UUID> eventIds);
 
     boolean existsByEventIdAndNameAndDeletedFalse(UUID eventId, String name);
 
