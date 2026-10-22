@@ -128,6 +128,47 @@ class TicketRenderingServiceTest {
                 .contains("20260610-T1");
     }
 
+    // -- price tiers (V26): the ticket says what it was sold as ---------------
+
+    @Test
+    void pageAndEmail_printTheTierTheTicketWasSoldAt() {
+        Booking b = booking(Booking.BookingStatus.CONFIRMED);
+        b.getItems().get(0).setPriceTierName("Early bird");
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
+
+        assertThat(service.ticketPageHtml(b.getId(), BASE).orElseThrow()).contains("VIP (Early bird)");
+        assertThat(service.confirmationEmailHtml(b, BASE)).contains("VIP (Early bird)");
+    }
+
+    @Test
+    void aTicketAtTheFullPrice_printsTheCategoryAlone() {
+        Booking b = booking(Booking.BookingStatus.CONFIRMED);
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
+
+        assertThat(service.ticketPageHtml(b.getId(), BASE).orElseThrow())
+                .contains(">VIP<")
+                .doesNotContain("VIP (");
+    }
+
+    @Test
+    void theReceipt_breaksThePriceDownByTier_onlyWhenATierWasUsed() {
+        BookingItem early1 = item("VIP", "Early bird", "100.00");
+        BookingItem early2 = item("VIP", "Early bird", "100.00");
+        BookingItem full = item("VIP", null, "150.00");
+
+        assertThat(TicketDeliveryService.priceBreakdown(List.of(early1, early2, full)))
+                .isEqualTo("2 x VIP (Early bird) at 100.00, 1 x VIP at 150.00");
+        assertThat(TicketDeliveryService.priceBreakdown(List.of(full))).isNull();
+    }
+
+    private static BookingItem item(String category, String tier, String price) {
+        BookingItem item = new BookingItem();
+        item.setCategoryName(category);
+        item.setPriceTierName(tier);
+        item.setPriceAtBooking(new BigDecimal(price));
+        return item;
+    }
+
     // -- V22: whose ticket is this ------------------------------------------
 
     @Test

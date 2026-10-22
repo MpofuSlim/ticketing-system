@@ -13,7 +13,9 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Delivers a confirmed booking's tickets to the customer — the single
@@ -452,6 +454,10 @@ public class TicketDeliveryService {
         if (total != null) {
             sb.append("Total: ").append(total.toPlainString()).append('\n');
         }
+        String prices = priceBreakdown(items);
+        if (prices != null) {
+            sb.append("Prices: ").append(prices).append('\n');
+        }
         if (!items.isEmpty()) {
             sb.append("Ticket numbers: ");
             for (int i = 0; i < items.size(); i++) {
@@ -520,8 +526,8 @@ public class TicketDeliveryService {
         sb.append("Event: ").append(eventTitle).append('\n');
         sb.append("Booking reference: ").append(booking.getConfirmationNumber()).append('\n');
         sb.append("Your ticket number: ").append(item.getTicketNumber()).append('\n');
-        if (item.getCategoryName() != null && !item.getCategoryName().isBlank()) {
-            sb.append("Ticket type: ").append(item.getCategoryName()).append('\n');
+        if (item.ticketTypeLabel() != null) {
+            sb.append("Ticket type: ").append(item.ticketTypeLabel()).append('\n');
         }
         boolean hasPhone = item.getAttendeePhone() != null && !item.getAttendeePhone().isBlank();
         String buyer = booking.getCustomerName() == null || booking.getCustomerName().isBlank()
@@ -541,6 +547,27 @@ public class TicketDeliveryService {
             sb.append("\nView the tickets online: ").append(publicBaseUrl)
               .append("/bookings/").append(booking.getId()).append("/tickets");
         }
+        return sb.toString();
+    }
+
+    /**
+     * What each ticket cost, grouped by ticket type and price in the order
+     * they were booked, e.g. "2 x VIP (Early bird) at 100.00, 1 x VIP at
+     * 150.00". Null when no ticket was sold at a price tier: a booking at the
+     * full price reads exactly as it did before tiers existed.
+     */
+    static String priceBreakdown(List<BookingItem> items) {
+        if (items.stream().noneMatch(i -> i.getPriceTierName() != null && !i.getPriceTierName().isBlank())) {
+            return null;
+        }
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (BookingItem item : items) {
+            String type = item.ticketTypeLabel() == null ? "Ticket" : item.ticketTypeLabel();
+            String price = item.getPriceAtBooking() == null ? "" : " at " + item.getPriceAtBooking().toPlainString();
+            counts.merge(type + price, 1, Integer::sum);
+        }
+        StringBuilder sb = new StringBuilder();
+        counts.forEach((line, n) -> sb.append(sb.isEmpty() ? "" : ", ").append(n).append(" x ").append(line));
         return sb.toString();
     }
 

@@ -29,6 +29,17 @@ public interface SeatServiceClient {
     // limit asks seat-service for at most N random AVAILABLE seats instead of
     // the whole pool — pulling every seat of a large category overran the 1s
     // circuit-breaker timeout and 503'd bookings. See BookingService.AVAILABLE_SAMPLE_SIZE.
+    /**
+     * S2S: the live categories with a price tier ending in [from, to) (ISO
+     * instants), each with its full price and tier terms, for the tier-ending
+     * reminder job ({@code TierEndingReminderJob}).
+     */
+    @GetMapping("/seat-categories/internal/price-tiers/ending")
+    ApiResult<List<CategoryLookupDTO>> getCategoriesWithTiersEnding(
+            @RequestParam("from") String from,
+            @RequestParam("to") String to,
+            @org.springframework.web.bind.annotation.RequestHeader("X-Internal-Token") String internalToken);
+
     @GetMapping("/seats/available")
     ApiResult<List<AvailableSeatDTO>> getAvailableSeats(@RequestParam("categoryId") UUID categoryId,
                                                         @RequestParam("limit") int limit);

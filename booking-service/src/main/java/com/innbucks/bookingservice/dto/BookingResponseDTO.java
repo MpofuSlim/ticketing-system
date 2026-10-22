@@ -34,6 +34,17 @@ public class BookingResponseDTO {
     // Set after confirm. Equals totalAmount on pure-cash, less than totalAmount
     // when points were used.
     private BigDecimal cashAmount;
+    // The promo code the booking used (V27) and the discount it gave, already
+    // taken off totalAmount. Absent when no code was used.
+    @io.swagger.v3.oas.annotations.media.Schema(example = "EARLY10", nullable = true,
+            description = "The promo code this booking used; absent when none.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String promoCode;
+    @io.swagger.v3.oas.annotations.media.Schema(example = "20.00", nullable = true,
+            description = "The promo code's discount on the whole booking, already taken off totalAmount; "
+                    + "absent when no code was used.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private BigDecimal discountAmount;
     private List<BookingItemDTO> items; // each item has its own ticketNumber
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

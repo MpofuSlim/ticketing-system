@@ -36,6 +36,13 @@ public class SeatServiceClientFallback implements SeatServiceClient {
     }
 
     @Override
+    public ApiResult<List<CategoryLookupDTO>> getCategoriesWithTiersEnding(String from, String to,
+                                                                          String internalToken) {
+        log.warn("seat-service getCategoriesWithTiersEnding fallback engaged (circuit breaker / call failure)");
+        throw new SeatServiceUnavailableException("seat-service is currently unavailable.");
+    }
+
+    @Override
     public ApiResult<List<AvailableSeatDTO>> getAvailableSeats(UUID categoryId, int limit) {
         log.warn("seat-service getAvailableSeats fallback engaged (circuit breaker / call failure) categoryId={} limit={}",
                 categoryId, limit);

@@ -8,6 +8,7 @@ import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.CategoryActiveCountDTO;
 import com.innbucks.seatservice.dto.CategoryBookingDTO;
 import com.innbucks.seatservice.dto.CategoryTierCountDTO;
+import com.innbucks.seatservice.service.CategoryPricing;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
@@ -78,14 +79,15 @@ public class BookingServiceClient {
      * category listing.
      */
     /**
-     * Active (PENDING + CONFIRMED) tickets per price tier, keyed category →
-     * tier → count, for showing a tier's sold / remaining / SOLD_OUT. A tier
-     * with nothing sold is absent (read it as 0). Empty Optional on any failure,
+     * Tickets per price tier, keyed category → tier → (active, refunded), for
+     * showing a tier's sold / remaining / SOLD_OUT. Active is PENDING +
+     * CONFIRMED; refunded is reversed after payment. A tier with neither is
+     * absent (read it as 0). Empty Optional on any failure,
      * like {@link #fetchActiveCountsByCategories}: the listing then shows tiers
      * without counts rather than failing. Display only — booking-service prices
      * each ticket from its own count.
      */
-    public Optional<Map<UUID, Map<UUID, Long>>> fetchTierSoldCounts(Collection<UUID> categoryIds) {
+    public Optional<Map<UUID, Map<UUID, CategoryPricing.Sold>>> fetchTierSoldCounts(Collection<UUID> categoryIds) {
         if (categoryIds == null || categoryIds.isEmpty()) {
             return Optional.of(Map.of());
         }
@@ -101,7 +103,7 @@ public class BookingServiceClient {
                     .header("X-Internal-Token", internalToken)
                     .retrieve()
                     .body(String.class);
-            Map<UUID, Map<UUID, Long>> counts = new HashMap<>();
+            Map<UUID, Map<UUID, CategoryPricing.Sold>> counts = new HashMap<>();
             if (body == null) {
                 return Optional.of(counts);
             }
@@ -113,7 +115,7 @@ public class BookingServiceClient {
                 for (CategoryTierCountDTO row : envelope.getData()) {
                     if (row.getCategoryId() != null && row.getPriceTierId() != null) {
                         counts.computeIfAbsent(row.getCategoryId(), k -> new HashMap<>())
-                                .put(row.getPriceTierId(), row.getCount());
+                                .put(row.getPriceTierId(), new CategoryPricing.Sold(row.getCount(), row.getRefunded()));
                     }
                 }
             }

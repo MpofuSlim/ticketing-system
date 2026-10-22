@@ -62,14 +62,30 @@ class BookingPriceTierPostgresIT extends BookingStockPostgresTestBase {
                 .totalSeats(1_000).build()));
     }
 
+    /** VIP 150.00: one {@code early} tier ahead of Phase 1 120.00. */
+    private void tieredCategory(CategoryLookupDTO.PriceTier early) {
+        category(eventId, categoryId, "VIP", 1_000);
+        String inAWeek = LocalDateTime.now(ZoneOffset.UTC).plusDays(7).withNano(0) + "Z";
+        when(seatServiceClient.getCategory(categoryId)).thenReturn(ApiResult.ok(CategoryLookupDTO.builder()
+                .seatCategoryId(categoryId).eventId(eventId).name("VIP").price(new BigDecimal("150.00"))
+                .priceTiers(List.of(early,
+                        CategoryLookupDTO.PriceTier.builder().id(phaseTier).name("Phase 1")
+                                .price(new BigDecimal("120.00")).endsAt(inAWeek).build()))
+                .totalSeats(1_000).build()));
+    }
+
     private MvcResult book(int tickets) throws Exception {
+        return book(tickets, "+263771234567");
+    }
+
+    private MvcResult book(int tickets, String phone) throws Exception {
         StringBuilder seats = new StringBuilder();
         for (int i = 0; i < tickets; i++) {
             seats.append(i == 0 ? "" : ",").append("{\"categoryId\":\"").append(categoryId).append("\"}");
         }
         return mvc.perform(post("/bookings").contentType(MediaType.APPLICATION_JSON).content("""
-                {"eventId":"%s","customerName":"Rufaro Moyo","phoneNumber":"+263771234567","seats":[%s]}
-                """.formatted(eventId, seats))).andReturn();
+                {"eventId":"%s","customerName":"Rufaro Moyo","phoneNumber":"%s","seats":[%s]}
+                """.formatted(eventId, phone, seats))).andReturn();
     }
 
     private long ticketsAt(String tierName) {
@@ -135,6 +151,43 @@ class BookingPriceTierPostgresIT extends BookingStockPostgresTestBase {
                 .andExpect(jsonPath("$.data.length()").value(2))
                 .andExpect(jsonPath("$.data[?(@.priceTierId == '" + earlyTier + "')].count").value(3))
                 .andExpect(jsonPath("$.data[?(@.priceTierId == '" + phaseTier + "')].count").value(2));
+    }
+
+    @Test
+    void thePerCustomerLimit_isCountedByPhone_acrossBookings() throws Exception {
+        tieredCategory(CategoryLookupDTO.PriceTier.builder().id(earlyTier).name("Early bird")
+                .price(new BigDecimal("100.00")).quantity(10).maxPerCustomer(2).build());
+
+        assertThat(book(3).getResponse().getStatus()).isEqualTo(201);
+        assertThat(book(1).getResponse().getContentAsString()).contains("\"priceTierName\":\"Phase 1\"");
+        assertThat(book(1, "+263772222222").getResponse().getContentAsString())
+                .contains("\"priceTierName\":\"Early bird\"");
+
+        assertThat(ticketsAt("Early bird")).isEqualTo(3); // two for the first phone, one for the second
+        assertThat(ticketsAt("Phase 1")).isEqualTo(2);
+    }
+
+    @Test
+    void refundedTickets_keepTheirPlace_whenTheTierDoesNotReopen() throws Exception {
+        tieredCategory(CategoryLookupDTO.PriceTier.builder().id(earlyTier).name("Early bird")
+                .price(new BigDecimal("100.00")).quantity(10).refundsReopen(false).build());
+        assertThat(book(8).getResponse().getStatus()).isEqualTo(201);
+        jdbc.update("UPDATE bookings SET status = 'CANCELLED', cancel_reason = 'ADMIN_REVERSED' WHERE event_id = ?",
+                eventId);
+
+        assertThat(book(4).getResponse().getStatus()).isEqualTo(201);
+
+        // 8 refunded still count: 2 places left at the early-bird price.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM booking_items i JOIN bookings b ON b.id = i.booking_id
+                WHERE b.event_id = ? AND b.status <> 'CANCELLED' AND i.price_tier_name = 'Early bird'""",
+                Long.class, eventId)).isEqualTo(2);
+        mvc.perform(get("/bookings/internal/categories/tier-counts")
+                        .param("categoryIds", categoryId.toString())
+                        .header("X-Internal-Token", internalToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.priceTierId == '" + earlyTier + "')].count").value(2))
+                .andExpect(jsonPath("$.data[?(@.priceTierId == '" + earlyTier + "')].refunded").value(8));
     }
 
     @Test

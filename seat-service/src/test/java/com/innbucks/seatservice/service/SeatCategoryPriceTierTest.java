@@ -7,6 +7,7 @@ import com.innbucks.seatservice.client.EventServiceClient;
 import com.innbucks.seatservice.dto.CategoryCapacityDTO;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
+import com.innbucks.seatservice.dto.PriceChangeDTO;
 import com.innbucks.seatservice.dto.EventLookupDTO;
 import com.innbucks.seatservice.dto.PriceTierDTO;
 import com.innbucks.seatservice.dto.PriceTierRequestDTO;
@@ -14,8 +15,10 @@ import com.innbucks.seatservice.dto.PriceTiersRequestDTO;
 import com.innbucks.seatservice.dto.SectionSeatConfigDTO;
 import com.innbucks.seatservice.dto.UpdateCategoryRequestDTO;
 import com.innbucks.seatservice.entity.SeatCategory;
+import com.innbucks.seatservice.entity.SeatCategoryPriceChange;
 import com.innbucks.seatservice.entity.SeatCategoryPriceTier;
 import com.innbucks.seatservice.exception.BadRequestException;
+import com.innbucks.seatservice.repository.SeatCategoryPriceChangeRepository;
 import com.innbucks.seatservice.repository.SeatCategoryPriceTierRepository;
 import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
@@ -61,6 +64,8 @@ class SeatCategoryPriceTierTest {
     private final UUID eventId = UUID.randomUUID();
     private final UUID owner = UUID.randomUUID();
     private final List<SeatCategoryPriceTier> store = new ArrayList<>();
+    /** What the service recorded as price changes (V11). */
+    private final List<SeatCategoryPriceChange> changes = new ArrayList<>();
 
     private SeatCategoryRepository catRepo;
     private SeatCategoryPriceTierRepository tierRepo;
@@ -143,6 +148,17 @@ class SeatCategoryPriceTierTest {
 
     private SeatCategoryService withClock(SeatCategoryService service) {
         service.setClock(clock);
+        SeatCategoryPriceChangeRepository changeRepo = mock(SeatCategoryPriceChangeRepository.class);
+        when(changeRepo.save(any())).thenAnswer(inv -> {
+            changes.add(inv.getArgument(0));
+            return inv.getArgument(0);
+        });
+        when(changeRepo.findTop200ByCategoryIdOrderByChangedAtDesc(any())).thenAnswer(inv -> {
+            List<SeatCategoryPriceChange> newestFirst = new ArrayList<>(changes);
+            java.util.Collections.reverse(newestFirst);
+            return newestFirst;
+        });
+        service.setPriceChangeRepository(changeRepo);
         return service;
     }
 
@@ -253,14 +269,65 @@ class SeatCategoryPriceTierTest {
         assertTrue(store.isEmpty());
     }
 
+    @Test
+    void create_storesAStartACapAndTheRefundRule() {
+        PriceTierRequestDTO flash = tier(null, "Flash sale", "90.00", "2026-09-06T23:59:59", 50);
+        flash.setStartsAt("2026-09-05T18:00:00");
+        flash.setMaxPerCustomer(2);
+        flash.setRefundsReopen(false);
+
+        CreateCategoryResponseDTO created = service().createCategory(createRequest(flash));
+
+        SeatCategoryPriceTier stored = store.get(0);
+        assertEquals(LocalDateTime.of(2026, 9, 5, 16, 0), stored.getStartsAt());
+        assertEquals(2, stored.getMaxPerCustomer());
+        assertFalse(stored.isRefundsReopen());
+        assertEquals(new BigDecimal("150.00"), created.getCurrentPrice());
+        assertEquals(List.of(PriceTierDTO.Status.UPCOMING), statuses(created));
+    }
+
+    @Test
+    void create_refusesABadStartOrCap() {
+        SeatCategoryService service = service();
+        PriceTierRequestDTO unreadable = tier(null, "Flash sale", "90.00", null, 50);
+        unreadable.setStartsAt("Friday evening");
+        assertRefused("The start of \"Flash sale\" must be a date and time like 2026-09-05T18:00:00.",
+                () -> service.createCategory(createRequest(unreadable)));
+        PriceTierRequestDTO backwards = tier(null, "Flash sale", "90.00", "2026-09-05T18:00:00", null);
+        backwards.setStartsAt("2026-09-05T18:00:00");
+        assertRefused("The start of \"Flash sale\" must be before its end.",
+                () -> service.createCategory(createRequest(backwards)));
+        PriceTierRequestDTO noCap = tier(null, "Flash sale", "90.00", null, 50);
+        noCap.setMaxPerCustomer(0);
+        assertRefused("The limit per customer for \"Flash sale\" must be at least 1.",
+                () -> service.createCategory(createRequest(noCap)));
+
+        verify(catRepo, never()).save(any());
+        assertTrue(store.isEmpty());
+    }
+
     // --- pricing on the listing ---
+
+    @Test
+    void refundedTickets_keepAPlace_whenTheTierDoesNotReopen() {
+        storeStandardTiers();
+        SeatCategoryPriceTier early = store.get(0);
+        early.setRefundsReopen(false);
+        when(bookings.fetchTierSoldCounts(anyCollection()))
+                .thenReturn(Optional.of(Map.of(vip.getId(), Map.of(early.getId(), new CategoryPricing.Sold(98, 2)))));
+
+        CreateCategoryResponseDTO listed = service().getCategoriesByEvent(eventId).get(0);
+
+        assertEquals(100L, listed.getPriceTiers().get(0).getSold());
+        assertEquals(new BigDecimal("120.00"), listed.getCurrentPrice());
+    }
 
     @Test
     void aTierSoldToItsQuantity_handsOverToTheNext() {
         storeStandardTiers();
         UUID earlyId = store.get(0).getId();
         when(bookings.fetchTierSoldCounts(anyCollection()))
-                .thenReturn(Optional.of(Map.of(vip.getId(), Map.of(earlyId, 100L))));
+                .thenReturn(Optional.of(Map.of(vip.getId(), Map.of(earlyId, new CategoryPricing.Sold(100, 0)))));
 
         CreateCategoryResponseDTO listed = service().getCategoriesByEvent(eventId).get(0);
 
@@ -433,6 +500,98 @@ class SeatCategoryPriceTierTest {
         assertNull(capacity.getPriceTiers().get(0).getSold());
         assertNull(capacity.getPriceTiers().get(0).getStatus());
         verify(bookings, never()).fetchTierSoldCounts(anyCollection());
+    }
+
+    // --- price history (V11) ---
+
+    @Test
+    void create_recordsThePriceAndTiersItWasCreatedWith() {
+        service().createCategory(createRequest(tier(null, "Early bird", "100.00", "2026-09-08T23:59:59", 100)));
+
+        assertEquals(1, changes.size());
+        SeatCategoryPriceChange created = changes.get(0);
+        assertEquals(SeatCategoryPriceChange.ChangeType.CREATED, created.getChangeType());
+        assertEquals(new BigDecimal("150.00"), created.getNewPrice());
+        assertNull(created.getTiersBefore());
+        assertTrue(created.getTiersAfter().contains("\"name\":\"Early bird\""));
+        assertTrue(created.getTiersAfter().contains("\"endsAt\":\"2026-09-08T21:59:59\""));
+    }
+
+    @Test
+    void aPriceEdit_isRecorded_butARenameIsNot() {
+        SeatCategoryService service = service();
+        service.updateCategory(vip.getId(), update("150.00"));
+        assertTrue(changes.isEmpty());
+
+        service.updateCategory(vip.getId(), update("160.00"));
+
+        assertEquals(1, changes.size());
+        assertEquals(SeatCategoryPriceChange.ChangeType.PRICE_CHANGED, changes.get(0).getChangeType());
+        assertEquals(new BigDecimal("150.00"), changes.get(0).getOldPrice());
+        assertEquals(new BigDecimal("160.00"), changes.get(0).getNewPrice());
+    }
+
+    @Test
+    void replacingTiers_recordsBothSides_asTheyWere_andAnUnchangedListRecordsNothing() {
+        storeStandardTiers();
+        SeatCategoryService service = service();
+        UUID earlyId = store.get(0).getId();
+        UUID phaseId = store.get(1).getId();
+
+        service.setPriceTiers(vip.getId(), tiers(
+                        tier(earlyId, "Early bird", "100.00", "2026-09-08T23:59:59", 150),
+                        tier(phaseId, "Phase 1", "120.00", "2026-09-20T23:59:59", null)),
+                null, "admin@example.com", true, null);
+        service.setPriceTiers(vip.getId(), tiers(
+                        tier(earlyId, "Early bird", "100.00", "2026-09-08T23:59:59", 150),
+                        tier(phaseId, "Phase 1", "120.00", "2026-09-20T23:59:59", null)),
+                null, "admin@example.com", true, null);
+
+        assertEquals(1, changes.size());
+        SeatCategoryPriceChange change = changes.get(0);
+        assertEquals(SeatCategoryPriceChange.ChangeType.TIERS_CHANGED, change.getChangeType());
+        assertTrue(change.getTiersBefore().contains("\"quantity\":100"));
+        assertTrue(change.getTiersAfter().contains("\"quantity\":150"));
+    }
+
+    @Test
+    void resavingTheSameTiers_fromAJsonClient_recordsNothing() {
+        // A JSON client holds 100.00 as 100 and sends it back so.
+        storeStandardTiers();
+        SeatCategoryService service = service();
+
+        service.setPriceTiers(vip.getId(), tiers(
+                        tier(store.get(0).getId(), "Early bird", "100", "2026-09-08T23:59:59", 100),
+                        tier(store.get(1).getId(), "Phase 1", "120", "2026-09-20T23:59:59", null)),
+                null, "admin@example.com", true, null);
+
+        assertTrue(changes.isEmpty());
+        assertEquals(new BigDecimal("100.00"), store.get(0).getPrice());
+    }
+
+    @Test
+    void theHistory_readsBackNewestFirst_withTheTiersAsTheyWere() {
+        storeStandardTiers();
+        SeatCategoryService service = service();
+        service.updateCategory(vip.getId(), update("160.00"));
+        service.setPriceTiers(vip.getId(), tiers(), null, "admin@example.com", true, null);
+
+        List<PriceChangeDTO> history = service.getPriceHistory(vip.getId(), null, "admin@example.com", true, null);
+
+        assertEquals(List.of("TIERS_CHANGED", "PRICE_CHANGED"),
+                history.stream().map(PriceChangeDTO::getChangeType).toList());
+        assertEquals(List.of("Early bird", "Phase 1"),
+                history.get(0).getTiersBefore().stream().map(PriceChangeDTO.Tier::getName).toList());
+        assertEquals(EARLY_ENDS_UTC, history.get(0).getTiersBefore().get(0).getEndsAt());
+        assertTrue(history.get(0).getTiersAfter().isEmpty());
+    }
+
+    @Test
+    void anotherOrganizer_cannotReadTheHistory() {
+        SeatCategoryService service = service();
+
+        assertThrows(AccessDeniedException.class,
+                () -> service.getPriceHistory(vip.getId(), UUID.randomUUID(), "other@example.com", false, "Bearer x"));
     }
 
     /** A clock a test can move. */

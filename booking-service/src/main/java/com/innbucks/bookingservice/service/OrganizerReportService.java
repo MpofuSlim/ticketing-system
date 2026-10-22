@@ -209,9 +209,11 @@ public class OrganizerReportService {
         // V22 appends customerName + attendees (named guests on the booking's
         // tickets, "; "-joined, names only). Still one row per BOOKING — this
         // is the accountant's ledger, not the guest list; the per-ticket guest
-        // list with contacts is GET /bookings/by-event/{id}.
+        // list with contacts is GET /bookings/by-event/{id}. V27 appends
+        // promoCode + discountAmount at the END, so a positional parser of the
+        // old export keeps working; totalAmount is already after the discount.
         StringBuilder sb = new StringBuilder();
-        sb.append("confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees\n");
+        sb.append("confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees,promoCode,discountAmount\n");
         for (Booking b : confirmed) {
             sb.append(csv(b.getConfirmationNumber())).append(',')
               .append(csv(b.getEventId())).append(',')
@@ -222,7 +224,9 @@ public class OrganizerReportService {
               .append(scale2(nz(b.getPointsUsed()))).append(',')
               .append(csv(MsisdnMasking.mask(b.getPhoneNumber()))).append(',')
               .append(csv(b.getCustomerName())).append(',')
-              .append(csv(attendeeNames(b))).append('\n');
+              .append(csv(attendeeNames(b))).append(',')
+              .append(csv(b.getPromoCode())).append(',')
+              .append(b.getDiscountAmount() == null ? "" : scale2(b.getDiscountAmount())).append('\n');
         }
         return sb.toString();
     }

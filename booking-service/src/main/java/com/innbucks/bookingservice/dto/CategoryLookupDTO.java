@@ -49,7 +49,16 @@ public class CategoryLookupDTO {
         private UUID id;
         private String name;
         private BigDecimal price;
+        private String startsAt;
         private String endsAt;
         private Integer quantity;
+        /** Tickets one buyer may hold at this tier; null = no cap. */
+        private Integer maxPerCustomer;
+        /** Whether a refunded ticket frees its place in the quantity; null = true. */
+        private Boolean refundsReopen;
+
+        public boolean reopensOnRefund() {
+            return refundsReopen == null || refundsReopen;
+        }
     }
 }

@@ -42,6 +42,13 @@ public class CreateBookingRequestDTO {
             description = "Only required for guest (unauthenticated) bookings. Ignored when a JWT is present.")
     private String phoneNumber;
 
+    @Schema(example = "EARLY10", nullable = true,
+            description = "Optional promo code for this event, any letter case. Its discount comes off each "
+                    + "eligible ticket's price (after any price tier). An invalid, expired or used-up code "
+                    + "refuses the booking (data.errorCode PROMO_CODE_*): the buyer removes it or fixes it.")
+    @Size(max = 40, message = "Promo code must be at most 40 characters")
+    private String promoCode;
+
     @Schema(description = "One entry per ticket to book, in the order the tickets should be issued. "
             + "Each may name the attendee who will hold that ticket.")
     @NotEmpty(message = "At least one seat is required")

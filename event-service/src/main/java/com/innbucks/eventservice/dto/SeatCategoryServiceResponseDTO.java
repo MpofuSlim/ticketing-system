@@ -30,8 +30,10 @@ public class SeatCategoryServiceResponseDTO {
         private UUID id;
         private String name;
         private BigDecimal price;
+        private String startsAt;
         private String endsAt;
         private Integer quantity;
+        private Integer maxPerCustomer;
         /** Absent when seat-service could not ask booking-service. */
         private Long sold;
     }

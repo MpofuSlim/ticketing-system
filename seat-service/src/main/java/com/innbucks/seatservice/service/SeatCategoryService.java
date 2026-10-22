@@ -119,6 +119,17 @@ public class SeatCategoryService {
         this.marketTimeZone = marketTimeZone;
     }
 
+    /**
+     * Where each price change is recorded (V11). A setter, not required, like
+     * the ones above: the plain-{@code new} tests that predate it record nothing.
+     */
+    private SeatCategoryPriceChangeRepository priceChangeRepository;
+
+    @Autowired(required = false)
+    void setPriceChangeRepository(SeatCategoryPriceChangeRepository priceChangeRepository) {
+        this.priceChangeRepository = priceChangeRepository;
+    }
+
     /** Decides whether an early bird is still running. Tests move it. */
     private Clock clock = Clock.systemUTC();
 
@@ -214,6 +225,8 @@ public class SeatCategoryService {
 
         categoryRepository.save(category);
         List<SeatCategoryPriceTier> tiers = replaceTiers(category.getId(), tierInputs, List.of());
+        recordChange(category, SeatCategoryPriceChange.ChangeType.CREATED, null, category.getPrice(),
+                null, PriceHistory.snapshot(tiers));
 
         // Auto-generate seats with per-section capacity, e.g. A1-A5, B1-B7, C1-C8
         List<Seat> seats = new ArrayList<>();
@@ -358,9 +371,14 @@ public class SeatCategoryService {
             log.info("Updating seat category categoryId={} eventId={} name={} requesterEmail={} isAdmin={}",
                     categoryId, category.getEventId(), request.getName(), requesterEmail, isAdmin);
 
+            BigDecimal oldPrice = category.getPrice();
             category.setName(HtmlSanitizer.stripAll(request.getName()));
             category.setDescription(HtmlSanitizer.stripAll(request.getDescription()));
             category.setPrice(request.getPrice());
+            if (oldPrice == null || oldPrice.compareTo(request.getPrice()) != 0) {
+                recordChange(category, SeatCategoryPriceChange.ChangeType.PRICE_CHANGED, oldPrice,
+                        request.getPrice(), null, null);
+            }
         });
         log.info("Seat category updated categoryId={} eventId={}", categoryId, updated.getEventId());
         return updated;
@@ -386,7 +404,13 @@ public class SeatCategoryService {
             Map<UUID, SeatCategoryPriceTier> existingById = new LinkedHashMap<>();
             existing.forEach(tier -> existingById.put(tier.getId(), tier));
             List<TierInput> inputs = validateTiers(request.getTiers(), category.getPrice(), existingById);
+            // Snapshot before replaceTiers: it updates the kept tiers in place.
+            String before = PriceHistory.snapshot(existing);
             List<SeatCategoryPriceTier> saved = replaceTiers(categoryId, inputs, existing);
+            String after = PriceHistory.snapshot(saved);
+            if (!before.equals(after)) {
+                recordChange(category, SeatCategoryPriceChange.ChangeType.TIERS_CHANGED, null, null, before, after);
+            }
             log.info("Price tiers set categoryId={} eventId={} tiers={} replaced={} requesterEmail={} isAdmin={}",
                     categoryId, category.getEventId(), saved.size(), existing.size(), requesterEmail, isAdmin);
         });
@@ -430,14 +454,96 @@ public class SeatCategoryService {
                 .fetchActiveCountsByCategories(List.of(categoryId))
                 .orElse(null);
         SeatCategory category = edited.category();
-        Map<UUID, Long> sold = soldByTier(categoryId, tierSoldCounts(
+        Map<UUID, CategoryPricing.Sold> sold = soldByTier(categoryId, tierSoldCounts(
                 Map.of(categoryId, tierTermsOf(edited.tiers()))));
         return toCreateResponseDTO(category, edited.sections(), liveAvailableSeats(category, counts),
                 edited.tiers(), sold);
     }
 
+    /**
+     * Record one price change, in the caller's transaction, so a change that
+     * rolls back leaves no history and a history row always describes a change
+     * that happened. {@code changed_by} is stamped by JPA auditing.
+     */
+    private void recordChange(SeatCategory category, SeatCategoryPriceChange.ChangeType type,
+                              BigDecimal oldPrice, BigDecimal newPrice, String tiersBefore, String tiersAfter) {
+        if (priceChangeRepository == null) {
+            return;
+        }
+        priceChangeRepository.save(SeatCategoryPriceChange.builder()
+                .categoryId(category.getId())
+                .eventId(category.getEventId())
+                .changeType(type)
+                .oldPrice(oldPrice)
+                .newPrice(newPrice)
+                .tiersBefore(tiersBefore)
+                .tiersAfter(tiersAfter)
+                .changedAt(nowUtc())
+                .build());
+    }
+
+    /**
+     * A category's price history, newest first (at most 200 changes): when the
+     * full price moved, when the tiers were replaced (each side's terms as they
+     * were), and who did it. The owning EVENT_ORGANIZER or SUPER_ADMIN; a
+     * deleted category's history stays readable. The ownership check asks
+     * event-service with no transaction open, like the edits.
+     */
+    public List<PriceChangeDTO> getPriceHistory(UUID categoryId,
+                                                UUID callerOrganizerUuid,
+                                                String requesterEmail,
+                                                boolean isAdmin,
+                                                String authHeader) {
+        SeatCategory category = TransactionPhases.inTransaction(readTx, () -> categoryRepository.findById(categoryId)
+                .orElseThrow(() -> new NotFoundException("Seat category not found")));
+        if (!isAdmin) {
+            requireEventOwnership(category.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
+        }
+        if (priceChangeRepository == null) {
+            return List.of();
+        }
+        return TransactionPhases.inTransaction(readTx,
+                        () -> priceChangeRepository.findTop200ByCategoryIdOrderByChangedAtDesc(categoryId))
+                .stream()
+                .map(PriceHistory::toDto)
+                .toList();
+    }
+
+    /**
+     * The live categories that have a price tier ending in {@code [fromUtc,
+     * toUtc)}, each with its full price and every tier's terms (the shape of
+     * {@link #getCategoryCapacity}), for booking-service's tier-ending reminder
+     * job. Which tier is current is left to the caller, which counts what each
+     * tier sold itself.
+     */
+    @Transactional(readOnly = true)
+    public List<CategoryCapacityDTO> categoriesWithTiersEnding(LocalDateTime fromUtc, LocalDateTime toUtc) {
+        if (priceTierRepository == null) {
+            return List.of();
+        }
+        List<UUID> categoryIds = priceTierRepository.findCategoryIdsWithTierEndingBetween(fromUtc, toUtc);
+        if (categoryIds.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, List<SeatCategoryPriceTier>> tiers = tiersByCategory(categoryIds);
+        return categoryRepository.findAllById(categoryIds).stream()
+                .filter(c -> !c.isDeleted())
+                .map(c -> CategoryCapacityDTO.builder()
+                        .seatCategoryId(c.getId())
+                        .eventId(c.getEventId())
+                        .name(c.getName())
+                        .price(c.getPrice())
+                        .priceTiers(CategoryPricing.terms(tierTermsOf(tiers.getOrDefault(c.getId(), List.of()))))
+                        .totalSeats(c.getTotalSeats())
+                        .availableSeats(c.getAvailableSeats())
+                        .build())
+                .toList();
+    }
+
     /** One validated tier before it is saved; {@code id} names the stored tier it updates, or is null. */
-    private record TierInput(UUID id, String name, BigDecimal price, LocalDateTime endsAtUtc, Integer quantity) {
+    private record TierInput(UUID id, String name, BigDecimal price, LocalDateTime startsAtUtc,
+                             LocalDateTime endsAtUtc, Integer quantity, Integer maxPerCustomer,
+                             boolean refundsReopen) {
     }
 
     /**
@@ -461,7 +567,10 @@ public class SeatCategoryService {
         Set<UUID> ids = new HashSet<>();
         List<TierInput> inputs = new ArrayList<>(requested.size());
         for (PriceTierRequestDTO tier : requested) {
-            String name = tier == null || tier.getName() == null ? "" : HtmlSanitizer.stripAll(tier.getName()).trim();
+            if (tier == null) {
+                throw new BadRequestException("Every price tier needs a name.");
+            }
+            String name = tier.getName() == null ? "" : HtmlSanitizer.stripAll(tier.getName()).trim();
             if (name.isEmpty()) {
                 throw new BadRequestException("Every price tier needs a name.");
             }
@@ -499,6 +608,19 @@ public class SeatCategoryService {
             if (quantity != null && quantity <= 0) {
                 throw new BadRequestException("The number of tickets for \"" + name + "\" must be at least 1.");
             }
+            Integer maxPerCustomer = tier.getMaxPerCustomer();
+            if (maxPerCustomer != null && maxPerCustomer <= 0) {
+                throw new BadRequestException("The limit per customer for \"" + name + "\" must be at least 1.");
+            }
+            LocalDateTime startsAtUtc = null;
+            if (tier.getStartsAt() != null && !tier.getStartsAt().isBlank()) {
+                try {
+                    startsAtUtc = marketTimeZone.parseToUtc(tier.getStartsAt());
+                } catch (DateTimeParseException e) {
+                    throw new BadRequestException("The start of \"" + name
+                            + "\" must be a date and time like 2026-09-05T18:00:00.");
+                }
+            }
             LocalDateTime endsAtUtc = null;
             if (tier.getEndsAt() != null && !tier.getEndsAt().isBlank()) {
                 try {
@@ -518,7 +640,15 @@ public class SeatCategoryService {
             if (endsAtUtc == null && quantity == null) {
                 throw new BadRequestException("\"" + name + "\" needs an end date, a number of tickets, or both.");
             }
-            inputs.add(new TierInput(tier.getId(), name, price, endsAtUtc, quantity));
+            if (startsAtUtc != null && endsAtUtc != null && !startsAtUtc.isBefore(endsAtUtc)) {
+                throw new BadRequestException("The start of \"" + name + "\" must be before its end.");
+            }
+            // At the column's scale: a JSON client sends 100 for a stored 100.00,
+            // and the price history compares snapshots, so an unchanged re-save
+            // must not read as a change. The checks above allow 2 decimals at most.
+            inputs.add(new TierInput(tier.getId(), name, price.setScale(2, RoundingMode.UNNECESSARY),
+                    startsAtUtc, endsAtUtc, quantity, maxPerCustomer,
+                    tier.getRefundsReopen() == null || tier.getRefundsReopen()));
         }
         return inputs;
     }
@@ -551,8 +681,11 @@ public class SeatCategoryService {
             row.setPosition(position);
             row.setName(input.name());
             row.setPrice(input.price());
+            row.setStartsAt(input.startsAtUtc());
             row.setEndsAt(input.endsAtUtc());
             row.setQuantity(input.quantity());
+            row.setMaxPerCustomer(input.maxPerCustomer());
+            row.setRefundsReopen(input.refundsReopen());
             rows.add(row);
         }
         List<SeatCategoryPriceTier> removed = existing.stream()
@@ -579,7 +712,8 @@ public class SeatCategoryService {
      * categories that have tiers. Null when it could not be asked (tiers then
      * show without counts); an absent category or tier has sold nothing.
      */
-    private Map<UUID, Map<UUID, Long>> tierSoldCounts(Map<UUID, List<CategoryPricing.Tier>> tiersByCategory) {
+    private Map<UUID, Map<UUID, CategoryPricing.Sold>> tierSoldCounts(
+            Map<UUID, List<CategoryPricing.Tier>> tiersByCategory) {
         List<UUID> withTiers = tiersByCategory.entrySet().stream()
                 .filter(e -> !e.getValue().isEmpty())
                 .map(Map.Entry::getKey)
@@ -590,7 +724,8 @@ public class SeatCategoryService {
         return bookingServiceClient.fetchTierSoldCounts(withTiers).orElse(null);
     }
 
-    private static Map<UUID, Long> soldByTier(UUID categoryId, Map<UUID, Map<UUID, Long>> soldCounts) {
+    private static Map<UUID, CategoryPricing.Sold> soldByTier(UUID categoryId,
+                                                              Map<UUID, Map<UUID, CategoryPricing.Sold>> soldCounts) {
         return soldCounts == null ? null : soldCounts.getOrDefault(categoryId, Map.of());
     }
 
@@ -732,7 +867,7 @@ public class SeatCategoryService {
         // that have tiers.
         Map<UUID, List<CategoryPricing.Tier>> tiersByCategory = new LinkedHashMap<>();
         layout.categories().forEach(c -> tiersByCategory.put(c.id(), c.tiers()));
-        Map<UUID, Map<UUID, Long>> soldCounts = tierSoldCounts(tiersByCategory);
+        Map<UUID, Map<UUID, CategoryPricing.Sold>> soldCounts = tierSoldCounts(tiersByCategory);
         LocalDateTime now = nowUtc();
         return layout.categories().stream()
                 .map(category -> category.toDto(liveAvailableSeats(
@@ -783,7 +918,8 @@ public class SeatCategoryService {
                           Integer totalSeats, List<SectionLayout> sections) {
 
         /** A fresh response DTO, in exactly {@code toCreateResponseDTO}'s shape. */
-        CreateCategoryResponseDTO toDto(Integer availableSeats, Map<UUID, Long> soldByTier, LocalDateTime nowUtc) {
+        CreateCategoryResponseDTO toDto(Integer availableSeats, Map<UUID, CategoryPricing.Sold> soldByTier,
+                                        LocalDateTime nowUtc) {
             List<SectionSeatConfigDTO> sectionCopies = sections.stream()
                     .map(section -> {
                         SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
@@ -1027,7 +1163,7 @@ public class SeatCategoryService {
             List<SectionSeatConfigDTO> sections,
             Integer availableSeats,
             List<SeatCategoryPriceTier> tiers,
-            Map<UUID, Long> soldByTier
+            Map<UUID, CategoryPricing.Sold> soldByTier
     ) {
         List<SectionSeatConfigDTO> sectionCopies = sections.stream()
                 .map(section -> {

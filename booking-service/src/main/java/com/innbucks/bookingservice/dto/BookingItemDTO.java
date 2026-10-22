@@ -24,6 +24,13 @@ public class BookingItemDTO {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String priceTierName;
 
+    /** The promo code's discount on this ticket (V27); priceAtBooking is after it. Absent when none. */
+    @Schema(example = "10.00", nullable = true,
+            description = "Promo code discount on this ticket; priceAtBooking is what was paid after it. "
+                    + "Absent when no code applied to the ticket.")
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private BigDecimal discountAmount;
+
     private String ticketNumber; // e.g. 20260419-7KQ4M-9XZ2B (legacy tickets: 20260419-48291X)
 
     // Per-seat scan code. Base64 PNG wrapped as a data URI so the frontend

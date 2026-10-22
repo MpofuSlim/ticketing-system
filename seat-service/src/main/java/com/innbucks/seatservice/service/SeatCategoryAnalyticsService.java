@@ -6,6 +6,8 @@ import com.innbucks.seatservice.dto.CategoryBookingDTO;
 import com.innbucks.seatservice.dto.EventAnalyticsDTO;
 import com.innbucks.seatservice.entity.Seat;
 import com.innbucks.seatservice.entity.SeatCategory;
+import com.innbucks.seatservice.entity.SeatCategoryPriceTier;
+import com.innbucks.seatservice.repository.SeatCategoryPriceTierRepository;
 import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
 import lombok.RequiredArgsConstructor;
@@ -68,6 +70,19 @@ public class SeatCategoryAnalyticsService {
         this.readTx = TransactionPhases.readOnly(transactionManager);
     }
 
+    /**
+     * Price tiers, for the projected revenue. A setter (not required) for the
+     * same reason as the template: the plain-{@code new} tests, and a mocked
+     * bean of this class in a web-slice test, have none. Without it every
+     * category projects at its full price.
+     */
+    private SeatCategoryPriceTierRepository priceTierRepository;
+
+    @Autowired(required = false)
+    void setPriceTierRepository(SeatCategoryPriceTierRepository priceTierRepository) {
+        this.priceTierRepository = priceTierRepository;
+    }
+
     /** Deliberately NOT {@code @Transactional} — see the class javadoc. */
     public EventAnalyticsDTO getEventAnalytics(UUID eventId,
                                                UUID callerOrganizerUuid,
@@ -99,7 +114,8 @@ public class SeatCategoryAnalyticsService {
         // seat-service's own reads, in one short read-only transaction: the
         // categories, and — only when booking-service was unreachable — each
         // category's seat-status fallback from the seats table.
-        record LocalReads(List<SeatCategory> categories, List<EventAnalyticsDTO.CategoryAnalytics> blocks) {
+        record LocalReads(List<SeatCategory> categories, List<EventAnalyticsDTO.CategoryAnalytics> blocks,
+                          Map<UUID, List<CategoryPricing.Tier>> tiers) {
         }
         LocalReads local = TransactionPhases.inTransaction(readTx, () -> {
             List<SeatCategory> categories = categoryRepository.findByEventIdAndDeletedFalse(eventId);
@@ -109,10 +125,13 @@ public class SeatCategoryAnalyticsService {
                         bookingsByCategory.getOrDefault(category.getId(), List.of());
                 blocks.add(buildCategoryBlock(category, categoryBookings, reachable, safePage, safeSize));
             }
-            return new LocalReads(categories, blocks);
+            return new LocalReads(categories, blocks, tiersOf(categories));
         });
         List<SeatCategory> categories = local.categories();
         List<EventAnalyticsDTO.CategoryAnalytics> blocks = local.blocks();
+        if (reachable) {
+            project(categories, blocks, local.tiers());
+        }
 
         EventAnalyticsDTO.EventTotals totals = rollUp(categories, blocks);
 
@@ -156,6 +175,52 @@ public class SeatCategoryAnalyticsService {
             log.warn("Analytics ownership check failed eventId={} requesterEmail={} callerOrganizerUuid={} ownerUuid={}",
                     eventId, requesterEmail, callerOrganizerUuid, ownerUuid);
             throw new AccessDeniedException("You do not own this event");
+        }
+    }
+
+    /** Each category's tiers, in order; empty for a category with none. */
+    private Map<UUID, List<CategoryPricing.Tier>> tiersOf(List<SeatCategory> categories) {
+        Map<UUID, List<CategoryPricing.Tier>> tiers = new java.util.HashMap<>();
+        if (priceTierRepository == null || categories.isEmpty()) {
+            return tiers;
+        }
+        List<UUID> ids = categories.stream().map(SeatCategory::getId).toList();
+        for (SeatCategoryPriceTier tier : priceTierRepository.findByCategoryIdInOrderByCategoryIdAscPositionAsc(ids)) {
+            tiers.computeIfAbsent(tier.getCategoryId(), k -> new ArrayList<>()).add(CategoryPricing.Tier.of(tier));
+        }
+        return tiers;
+    }
+
+    /**
+     * Fill in each category's projected revenue: what it has taken or holds,
+     * plus its unsold tickets at the price each would cost now. Runs after the
+     * read transaction closed: the tier counts are asked of booking-service,
+     * and only for categories that have a quantity-limited tier.
+     */
+    private void project(List<SeatCategory> categories, List<EventAnalyticsDTO.CategoryAnalytics> blocks,
+                         Map<UUID, List<CategoryPricing.Tier>> tiers) {
+        List<UUID> counted = tiers.entrySet().stream()
+                .filter(e -> e.getValue().stream().anyMatch(t -> t.quantity() != null))
+                .map(Map.Entry::getKey)
+                .toList();
+        Map<UUID, Map<UUID, CategoryPricing.Sold>> sold = counted.isEmpty()
+                ? Map.of()
+                : bookingServiceClient.fetchTierSoldCounts(counted).orElse(null);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        for (int i = 0; i < categories.size(); i++) {
+            SeatCategory category = categories.get(i);
+            EventAnalyticsDTO.BookingStats stats = blocks.get(i).getBookings();
+            if (category.getTotalSeats() == null) {
+                continue;
+            }
+            long unsold = category.getTotalSeats() - (long) stats.getPendingRecords() - stats.getPaidRecords();
+            Map<UUID, CategoryPricing.Sold> soldByTier = sold == null
+                    ? null : sold.getOrDefault(category.getId(), Map.of());
+            BigDecimal unsoldValue = CategoryPricing.valueIfSoldNow(category.getPrice(),
+                    tiers.getOrDefault(category.getId(), List.of()), soldByTier, unsold, now);
+            if (unsoldValue != null) {
+                stats.setProjectedRevenue(stats.getPendingRevenue().add(stats.getPaidRevenue()).add(unsoldValue));
+            }
         }
     }
 
@@ -297,6 +362,7 @@ public class SeatCategoryAnalyticsService {
         BigDecimal pendingRevenue = BigDecimal.ZERO;
         BigDecimal paidRevenue = BigDecimal.ZERO;
         BigDecimal potential = BigDecimal.ZERO;
+        BigDecimal projected = BigDecimal.ZERO;
         LocalDateTime mostRecent = null;
 
         for (EventAnalyticsDTO.CategoryAnalytics block : blocks) {
@@ -314,6 +380,8 @@ public class SeatCategoryAnalyticsService {
             if (b.getPendingRevenue() != null)   pendingRevenue = pendingRevenue.add(b.getPendingRevenue());
             if (b.getPaidRevenue() != null)      paidRevenue    = paidRevenue.add(b.getPaidRevenue());
             if (b.getPotentialRevenue() != null) potential      = potential.add(b.getPotentialRevenue());
+            projected = projected == null || b.getProjectedRevenue() == null
+                    ? null : projected.add(b.getProjectedRevenue());
             if (b.getMostRecentBookingAt() != null
                     && (mostRecent == null || b.getMostRecentBookingAt().isAfter(mostRecent))) {
                 mostRecent = b.getMostRecentBookingAt();
@@ -332,6 +400,7 @@ public class SeatCategoryAnalyticsService {
                 .pendingRevenue(pendingRevenue)
                 .paidRevenue(paidRevenue)
                 .potentialRevenue(categories.isEmpty() ? null : potential)
+                .projectedRevenue(categories.isEmpty() ? null : projected)
                 .mostRecentBookingAt(mostRecent)
                 .build();
     }

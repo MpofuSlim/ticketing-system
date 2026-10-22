@@ -5,6 +5,7 @@ import com.innbucks.seatservice.dto.CategoryCapacityDTO;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
 import com.innbucks.seatservice.dto.EventAnalyticsDTO;
+import com.innbucks.seatservice.dto.PriceChangeDTO;
 import com.innbucks.seatservice.dto.PriceTiersRequestDTO;
 import com.innbucks.seatservice.dto.UpdateCategoryRequestDTO;
 import com.innbucks.seatservice.security.JwtAuthDetails;
@@ -54,6 +55,9 @@ public class SeatCategoryController {
     private final SeatCategoryService categoryService;
     private final SeatCategoryAnalyticsService analyticsService;
 
+    @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
+    private String internalApiToken;
+
     /**
      * Upper bound on @RequestParam {@code size} across listing endpoints.
      * Stops a hostile {@code size=999999} from materialising the entire
@@ -97,9 +101,9 @@ public class SeatCategoryController {
                                           "currentTierName": "Early bird",
                                           "priceTiers": [
                                             { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
-                                              "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "sold": 37, "remaining": 63, "status": "ACTIVE" },
+                                              "startsAt": null, "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true, "sold": 37, "remaining": 63, "status": "ACTIVE" },
                                             { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
-                                              "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                              "startsAt": null, "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true, "sold": 0, "status": "UPCOMING" }
                                           ],
                                           "availableSeats": 13,
                                           "sections": [
@@ -161,9 +165,9 @@ public class SeatCategoryController {
                                         "price": 150.00,
                                         "priceTiers": [
                                           { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
-                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100 },
+                                            "startsAt": null, "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true },
                                           { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
-                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null }
+                                            "startsAt": null, "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true }
                                         ],
                                         "totalSeats": 50,
                                         "availableSeats": 50
@@ -193,10 +197,13 @@ public class SeatCategoryController {
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(summary = "Create category",
             description = "Creates a seat category for an event. Requires EVENT_ORGANIZER role. Optional "
-                    + "`priceTiers` (each { name, price, endsAt?, quantity? }, in the order they apply) sell "
-                    + "tickets below `price` in phases: the first tier still open is the price, and a tier "
-                    + "closes at endsAt or after quantity tickets, whichever comes first. endsAt is the "
-                    + "organizer's local time with no zone, e.g. 2026-09-08T23:59:59.")
+                    + "`priceTiers` (each { name, price, startsAt?, endsAt?, quantity?, maxPerCustomer?, "
+                    + "refundsReopen? }, in the order they apply) sell tickets below `price` in phases: the "
+                    + "first tier open is the price. A tier opens at startsAt (or as the tiers before it "
+                    + "close) and closes at endsAt or after quantity tickets, whichever comes first. "
+                    + "maxPerCustomer caps one buyer's tickets at the tier (the rest cost the next tier's "
+                    + "price); refundsReopen false keeps a refunded ticket's place taken. startsAt and "
+                    + "endsAt are the organizer's local time with no zone, e.g. 2026-09-08T23:59:59.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -218,9 +225,9 @@ public class SeatCategoryController {
                                         "currentTierName": "Early bird",
                                         "priceTiers": [
                                           { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
-                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "sold": 0, "remaining": 100, "status": "ACTIVE" },
+                                            "startsAt": null, "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true, "sold": 0, "remaining": 100, "status": "ACTIVE" },
                                           { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
-                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                            "startsAt": null, "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true, "sold": 0, "status": "UPCOMING" }
                                         ],
                                         "availableSeats": 50,
                                         "sections": [
@@ -314,9 +321,9 @@ public class SeatCategoryController {
                                         "currentTierName": "Early bird",
                                         "priceTiers": [
                                           { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
-                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "sold": 37, "remaining": 63, "status": "ACTIVE" },
+                                            "startsAt": null, "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true, "sold": 37, "remaining": 63, "status": "ACTIVE" },
                                           { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
-                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                            "startsAt": null, "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true, "sold": 0, "status": "UPCOMING" }
                                         ],
                                         "availableSeats": 37,
                                         "sections": [
@@ -392,11 +399,16 @@ public class SeatCategoryController {
     @Operation(summary = "Set the price tiers",
             description = "Replaces the category's price tiers with `tiers`, in the order they apply (e.g. Early "
                     + "bird, then Phase 1); `[]` removes them all. The first tier still open is the price, and once "
-                    + "all have closed the category's `price` applies. A tier closes at `endsAt` or after "
-                    + "`quantity` tickets, whichever comes first; it needs at least one. **Send the `id` of every "
+                    + "all have closed the category's `price` applies. A tier opens at `startsAt` (none: as "
+                    + "the tiers before it close) and closes at `endsAt` or after `quantity` tickets, whichever "
+                    + "comes first; it needs at least one of the two. `maxPerCustomer` caps how many tickets one "
+                    + "buyer (by phone, else email) gets at the tier; their further tickets cost the next open "
+                    + "tier's price. `refundsReopen` (default true) false keeps a refunded ticket's place "
+                    + "taken; an expired, unpaid hold always frees its place. The whole list is replaced, so "
+                    + "send every field you want to keep. **Send the `id` of every "
                     + "tier you keep**, so the tickets it has sold still count toward its quantity; a tier without "
-                    + "an id is new, and a stored tier left out is deleted. `endsAt` is the organizer's local time "
-                    + "with no zone (2026-09-08T23:59:59 runs through 8 September). Each tier's price must be "
+                    + "an id is new, and a stored tier left out is deleted. `startsAt` and `endsAt` are the "
+                    + "organizer's local time with no zone (2026-09-08T23:59:59 runs through 8 September). Each tier's price must be "
                     + "lower than the category's price. Tickets already booked keep the price they were booked "
                     + "at. Requires the owning EVENT_ORGANIZER or SUPER_ADMIN. Returns the category in the list "
                     + "endpoint's shape.")
@@ -421,11 +433,11 @@ public class SeatCategoryController {
                                         "currentTierName": "Early bird",
                                         "priceTiers": [
                                           { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
-                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 150, "sold": 37, "remaining": 113, "status": "ACTIVE" },
+                                            "startsAt": null, "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 150, "maxPerCustomer": 4, "refundsReopen": false, "sold": 37, "remaining": 113, "status": "ACTIVE" },
                                           { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
-                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" },
+                                            "startsAt": null, "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true, "sold": 0, "status": "UPCOMING" },
                                           { "id": "8e3a4f5b-6c7d-4e8f-a0b1-2c3d4e5f6a7b", "name": "Phase 2", "price": 140.00,
-                                            "endsAt": "2026-09-27T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                            "startsAt": "2026-09-21T00:00:00+02:00", "endsAt": "2026-09-27T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true, "sold": 0, "status": "UPCOMING" }
                                         ],
                                         "availableSeats": 37,
                                         "sections": [
@@ -466,6 +478,27 @@ public class SeatCategoryController {
                                               "code": "400 BAD_REQUEST",
                                               "message": "The end of \\"Phase 2\\" must be a date and time like 2026-09-08T23:59:59.",
                                               "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Start not before the end", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "The start of \\"Phase 2\\" must be before its end.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Unreadable start", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "The start of \\"Phase 2\\" must be a date and time like 2026-09-05T18:00:00.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Bad customer limit", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Validation failed",
+                                              "data": { "tiers[2].maxPerCustomer": "Tier limit per customer must be at least 1" }
                                             }
                                             """),
                                     @ExampleObject(name = "Duplicate name", value = """
@@ -524,6 +557,187 @@ public class SeatCategoryController {
         return ResponseEntity.ok(ApiResult.ok("Price tiers set", updated));
     }
 
+    /**
+     * S2S only: booking-service's hourly tier-ending reminder job. Off the
+     * internet (gateway {@code seat-internal-deny}); the GET is permitAll in
+     * SecurityConfig ({@code /seat-categories/**}), so this token check is the
+     * authentication.
+     */
+    @GetMapping("/internal/price-tiers/ending")
+    @Operation(summary = "Categories with a price tier ending soon (internal)",
+            description = "The live categories that have a price tier ending in [from, to) (instants, e.g. "
+                    + "2026-09-07T22:00:00Z; at most 7 days apart), each with its full price and every tier's "
+                    + "terms, in the shape of GET /seat-categories/{id}. Requires X-Internal-Token. "
+                    + "booking-service decides which tier is current from its own counts.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Categories",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Ending",
+                            value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Categories retrieved successfully",
+                                      "data": [
+                                        {
+                                          "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "name": "VIP",
+                                          "price": 150.00,
+                                          "priceTiers": [
+                                            { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
+                                              "startsAt": null, "endsAt": "2026-09-08T21:59:59Z", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true }
+                                          ],
+                                          "totalSeats": 50,
+                                          "availableSeats": 50
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Bad window",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Bad window",
+                            value = """
+                                    { "code": "400 BAD_REQUEST", "message": "from and to must be instants, from before to, at most 7 days apart.", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing or wrong X-Internal-Token",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Unauthorized",
+                            value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Unauthorized", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<CategoryCapacityDTO>>> categoriesWithTiersEnding(
+            @RequestParam("from") String from,
+            @RequestParam("to") String to,
+            @org.springframework.web.bind.annotation.RequestHeader(value = "X-Internal-Token", required = false)
+            String token) {
+        if (!internalTokenMatches(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Unauthorized"));
+        }
+        java.time.LocalDateTime fromUtc;
+        java.time.LocalDateTime toUtc;
+        try {
+            fromUtc = java.time.OffsetDateTime.parse(from).withOffsetSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
+            toUtc = java.time.OffsetDateTime.parse(to).withOffsetSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
+        } catch (java.time.format.DateTimeParseException e) {
+            fromUtc = null;
+            toUtc = null;
+        }
+        if (fromUtc == null || !fromUtc.isBefore(toUtc) || fromUtc.plusDays(7).isBefore(toUtc)) {
+            return ResponseEntity.badRequest().body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                    "from and to must be instants, from before to, at most 7 days apart."));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Categories retrieved successfully",
+                categoryService.categoriesWithTiersEnding(fromUtc, toUtc)));
+    }
+
+    private boolean internalTokenMatches(String token) {
+        if (token == null || internalApiToken == null || internalApiToken.isBlank()) {
+            return false;
+        }
+        return java.security.MessageDigest.isEqual(token.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                internalApiToken.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    @GetMapping("/{id}/price-history")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(summary = "Price history of a category",
+            description = "Every change to the category's full price or its price tiers, newest first (at most "
+                    + "200): CREATED (the price and tiers it was created with), PRICE_CHANGED (old and new full "
+                    + "price) and TIERS_CHANGED (the tiers before and after, each with its terms as they were). "
+                    + "`changedBy` is the organizer's uuid or the admin's email. The record is append-only. "
+                    + "Requires the owning EVENT_ORGANIZER or SUPER_ADMIN; a deleted category's history stays "
+                    + "readable.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Price history, newest first",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Price history", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Price history retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "5c7e9a1b-2d3f-4b6c-8d0e-1f2a3b4c5d6e",
+                                          "changeType": "TIERS_CHANGED",
+                                          "oldPrice": null,
+                                          "newPrice": null,
+                                          "tiersBefore": [
+                                            { "name": "Early bird", "price": 100.00, "startsAt": null,
+                                              "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true },
+                                            { "name": "Phase 1", "price": 120.00, "startsAt": null,
+                                              "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true }
+                                          ],
+                                          "tiersAfter": [
+                                            { "name": "Early bird", "price": 100.00, "startsAt": null,
+                                              "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 150, "maxPerCustomer": 4, "refundsReopen": false },
+                                            { "name": "Phase 1", "price": 120.00, "startsAt": null,
+                                              "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true },
+                                            { "name": "Phase 2", "price": 140.00, "startsAt": "2026-09-21T00:00:00+02:00",
+                                              "endsAt": "2026-09-27T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true }
+                                          ],
+                                          "changedBy": "7a1c3e5f-2b4d-4f6a-8c0e-1a2b3c4d5e6f",
+                                          "changedAt": "2026-09-03T09:30:00+02:00"
+                                        },
+                                        {
+                                          "id": "4b6d8f0a-1c2e-4a5b-9c7d-0e1f2a3b4c5d",
+                                          "changeType": "PRICE_CHANGED",
+                                          "oldPrice": 150.00,
+                                          "newPrice": 160.00,
+                                          "tiersBefore": null,
+                                          "tiersAfter": null,
+                                          "changedBy": "7a1c3e5f-2b4d-4f6a-8c0e-1a2b3c4d5e6f",
+                                          "changedAt": "2026-09-02T10:15:00+02:00"
+                                        },
+                                        {
+                                          "id": "3a5c7e9f-0b1d-4f2a-8b6c-9d0e1f2a3b4c",
+                                          "changeType": "CREATED",
+                                          "oldPrice": null,
+                                          "newPrice": 150.00,
+                                          "tiersBefore": null,
+                                          "tiersAfter": [
+                                            { "name": "Early bird", "price": 100.00, "startsAt": null,
+                                              "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true },
+                                            { "name": "Phase 1", "price": 120.00, "startsAt": null,
+                                              "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true }
+                                          ],
+                                          "changedBy": "7a1c3e5f-2b4d-4f6a-8c0e-1a2b3c4d5e6f",
+                                          "changedAt": "2026-08-25T08:00:00+02:00"
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing/invalid JWT",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Invalid token", value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Not the owning EVENT_ORGANIZER / SUPER_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Forbidden", value = """
+                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Category not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    { "code": "404 NOT_FOUND", "message": "Seat category not found", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<PriceChangeDTO>>> getPriceHistory(
+            @Parameter(description = "Seat category UUID") @PathVariable UUID id,
+            Authentication authentication,
+            HttpServletRequest httpRequest
+    ) {
+        String requesterEmail = authentication.getName();
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        log.debug("GET /seat-categories/{}/price-history requesterEmail={} isAdmin={}", id, requesterEmail, isAdmin);
+        List<PriceChangeDTO> history = categoryService.getPriceHistory(id, organizerUuid(authentication),
+                requesterEmail, isAdmin, httpRequest.getHeader("Authorization"));
+        return ResponseEntity.ok(ApiResult.ok("Price history retrieved successfully", history));
+    }
+
     @GetMapping("/analytics")
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
@@ -535,7 +749,12 @@ public class SeatCategoryController {
                     "Tolerates booking-service downtime — `bookingServiceReachable=false` indicates " +
                     "the bookings sections reflect no-data, not zero-bookings. " +
                     "Pagination applies per-category: each category's `bookings.items` is sliced to " +
-                    "the requested page; the aggregate counts/revenue stay computed across the full set."
+                    "the requested page; the aggregate counts/revenue stay computed across the full set. " +
+                    "`potentialRevenue` is every seat at the full price; `projectedRevenue` is what the " +
+                    "category would take if every remaining ticket sold now: the tickets held or sold at the " +
+                    "price they were booked at, plus the unsold ones at the price each would cost now (the " +
+                    "open price tiers in order, e.g. 10 left at the early-bird price, then the full price). " +
+                    "Null when booking-service could not be asked."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -560,9 +779,10 @@ public class SeatCategoryController {
                                           "pendingBookings": 3,
                                           "paidBookings": 47,
                                           "cancelledBookings": 3,
-                                          "pendingRevenue": 300.00,
-                                          "paidRevenue": 4700.00,
+                                          "pendingRevenue": 260.00,
+                                          "paidRevenue": 4140.00,
                                           "potentialRevenue": 8000.00,
+                                          "projectedRevenue": 7800.00,
                                           "mostRecentBookingAt": "2026-05-02T15:45:00"
                                         },
                                         "categories": [
@@ -587,6 +807,7 @@ public class SeatCategoryController {
                                               "pendingRevenue": 200.00,
                                               "paidRevenue": 3300.00,
                                               "potentialRevenue": 5000.00,
+                                              "projectedRevenue": 4800.00,
                                               "mostRecentBookingAt": "2026-05-02T15:45:00",
                                               "pageNumber": 0,
                                               "pageSize": 20,
@@ -647,9 +868,10 @@ public class SeatCategoryController {
                                               "pendingRecords": 1,
                                               "paidRecords": 14,
                                               "cancelledRecords": 0,
-                                              "pendingRevenue": 100.00,
-                                              "paidRevenue": 1400.00,
+                                              "pendingRevenue": 60.00,
+                                              "paidRevenue": 840.00,
                                               "potentialRevenue": 3000.00,
+                                              "projectedRevenue": 3000.00,
                                               "mostRecentBookingAt": "2026-05-02T14:00:00",
                                               "pageNumber": 0,
                                               "pageSize": 20,

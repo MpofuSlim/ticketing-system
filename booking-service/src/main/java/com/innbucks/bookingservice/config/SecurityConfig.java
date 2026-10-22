@@ -90,6 +90,10 @@ public class SecurityConfig {
                         // longer anonymously enumerable. Do NOT re-add a public
                         // permitAll for /bookings/active-counts here.
                         .requestMatchers(HttpMethod.POST, "/bookings").permitAll()
+                        // A guest checkout checks a promo code before it books, as
+                        // anonymously as it books. Only this exact path: the
+                        // organizer's /bookings/promo-codes endpoints stay authenticated.
+                        .requestMatchers(HttpMethod.POST, "/bookings/promo-codes/check").permitAll()
                         // Confirm is called by payment-service after a payment.
                         // No JWT is involved — payment-service authenticates via
                         // the shared `X-Internal-Token` checked inside

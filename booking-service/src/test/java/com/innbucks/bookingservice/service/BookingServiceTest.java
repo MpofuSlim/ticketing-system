@@ -12,11 +12,14 @@ import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
+import com.innbucks.bookingservice.entity.PromoCode;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
+import com.innbucks.bookingservice.exception.ApiProblemException;
 import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
+import com.innbucks.bookingservice.repository.PromoCodeRepository;
 import com.innbucks.common.ticket.TicketNumbers;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -506,6 +509,217 @@ class BookingServiceTest {
         InOrder order = inOrder(inventory, itemRepo);
         order.verify(inventory).tryClaim(DEFAULT_CATEGORY_ID, 4);
         order.verify(itemRepo).countActiveByCategoryAndPriceTiers(any(), any(), any());
+    }
+
+    /** VIP at 150.00 with {@code first} ahead of Phase 1 120.00 (a week). */
+    private SeatServiceClient tieredClient(RequestFixture fx, CategoryLookupDTO.PriceTier first) {
+        SeatServiceClient client = mock(SeatServiceClient.class);
+        when(client.getCategory(DEFAULT_CATEGORY_ID)).thenReturn(ApiResult.ok("ok", CategoryLookupDTO.builder()
+                .seatCategoryId(DEFAULT_CATEGORY_ID).eventId(fx.eventId).name("VIP")
+                .price(new BigDecimal("150.00"))
+                .priceTiers(List.of(first,
+                        CategoryLookupDTO.PriceTier.builder().id(PHASE_TIER).name("Phase 1")
+                                .price(new BigDecimal("120.00")).endsAt(inDays(7)).build()))
+                .totalSeats(DEFAULT_TOTAL_SEATS).availableSeats(DEFAULT_TOTAL_SEATS)
+                .build()));
+        return client;
+    }
+
+    @Test
+    void createBooking_aBuyerAtTheirTierLimit_paysTheNextTierForTheRest() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        CategoryInventoryRepository inventory = successfulInventory();
+        RequestFixture fx = request(nPrices(3));
+        when(itemRepo.countActiveForEmailByCategoryAndPriceTiers(DEFAULT_CATEGORY_ID, List.of(EARLY_TIER),
+                "user@example.com", Booking.BookingStatus.CANCELLED)).thenReturn(List.of(tierCount(EARLY_TIER, 1)));
+        BookingService service = newService(bookingRepo, itemRepo, inventory, tieredClient(fx,
+                        CategoryLookupDTO.PriceTier.builder().id(EARLY_TIER).name("Early bird")
+                                .price(new BigDecimal("100.00")).endsAt(inDays(7)).maxPerCustomer(2).build()),
+                mock(ApplicationEventPublisher.class));
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        // Holds one already, may hold two: one more at 100.00, the rest at Phase 1.
+        assertEquals(List.of("Early bird", "Phase 1", "Phase 1"),
+                resp.getItems().stream().map(BookingItemDTO::getPriceTierName).toList());
+        assertEquals(0, new BigDecimal("340.00").compareTo(resp.getTotalAmount()));
+        verify(itemRepo, never()).countActiveByCategoryAndPriceTiers(any(), any(), any());
+        InOrder order = inOrder(inventory, itemRepo);
+        order.verify(inventory).tryClaim(DEFAULT_CATEGORY_ID, 3);
+        order.verify(itemRepo).countActiveForEmailByCategoryAndPriceTiers(any(), any(), any(), any());
+    }
+
+    @Test
+    void createBooking_withAPhone_countsTheBuyersTicketsByPhone() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(nPrices(2));
+        when(itemRepo.countActiveForPhoneByCategoryAndPriceTiers(DEFAULT_CATEGORY_ID, List.of(EARLY_TIER),
+                "+263771234567", Booking.BookingStatus.CANCELLED)).thenReturn(List.of(tierCount(EARLY_TIER, 2)));
+        BookingService service = newService(bookingRepo, itemRepo, tieredClient(fx,
+                CategoryLookupDTO.PriceTier.builder().id(EARLY_TIER).name("Early bird")
+                        .price(new BigDecimal("100.00")).endsAt(inDays(7)).maxPerCustomer(2).build()));
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", "+263771234567", fx.request);
+
+        assertEquals(List.of("Phase 1", "Phase 1"),
+                resp.getItems().stream().map(BookingItemDTO::getPriceTierName).toList());
+        verify(itemRepo, never()).countActiveForEmailByCategoryAndPriceTiers(any(), any(), any(), any());
+    }
+
+    @Test
+    void createBooking_refundedTicketsKeepTheirPlace_whenTheTierDoesNotReopen() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(nPrices(1));
+        when(itemRepo.countActiveByCategoryAndPriceTiers(DEFAULT_CATEGORY_ID, List.of(EARLY_TIER),
+                Booking.BookingStatus.CANCELLED)).thenReturn(List.of(tierCount(EARLY_TIER, 3)));
+        when(itemRepo.countRefundedByCategoryAndPriceTiers(DEFAULT_CATEGORY_ID, List.of(EARLY_TIER)))
+                .thenReturn(List.of(tierCount(EARLY_TIER, 2)));
+        BookingService service = newService(bookingRepo, itemRepo, tieredClient(fx,
+                CategoryLookupDTO.PriceTier.builder().id(EARLY_TIER).name("Early bird")
+                        .price(new BigDecimal("100.00")).quantity(5).refundsReopen(false).build()));
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        // 3 held or sold + 2 refunded = the tier's 5.
+        assertEquals("Phase 1", resp.getItems().get(0).getPriceTierName());
+        assertEquals(0, new BigDecimal("120.00").compareTo(resp.getTotalAmount()));
+    }
+
+    @Test
+    void createBooking_aTierThatReopens_neverAsksForRefunds() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(nPrices(1));
+        BookingService service = newService(bookingRepo, itemRepo, tieredClient(fx, inDays(7)));
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        assertEquals("Early bird", resp.getItems().get(0).getPriceTierName());
+        verify(itemRepo, never()).countRefundedByCategoryAndPriceTiers(any(), any());
+    }
+
+    // --- promo codes (V27) ---
+
+    private static final UUID PROMO_ID = UUID.fromString("1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e");
+
+    private static PromoCode promo(PromoCode.DiscountType type, String value) {
+        return PromoCode.builder().id(PROMO_ID).code("EARLY10").discountType(type)
+                .discountValue(new BigDecimal(value)).active(true).build();
+    }
+
+    private static PromoCodeRepository promoRepo(RequestFixture fx, PromoCode code) {
+        PromoCodeRepository repo = mock(PromoCodeRepository.class);
+        when(repo.lockByEventIdAndCode(fx.eventId, "EARLY10")).thenReturn(Optional.ofNullable(code));
+        return repo;
+    }
+
+    @Test
+    void createBooking_aPromoCode_comesOffEachTicketAfterItsTier_andIsRecorded() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        CategoryInventoryRepository inventory = successfulInventory();
+        RequestFixture fx = request(nPrices(2));
+        fx.request.setPromoCode(" early10 ");
+        when(itemRepo.countActiveByCategoryAndPriceTiers(DEFAULT_CATEGORY_ID, List.of(EARLY_TIER),
+                Booking.BookingStatus.CANCELLED)).thenReturn(List.of(tierCount(EARLY_TIER, 4)));
+        PromoCodeRepository promos = promoRepo(fx, promo(PromoCode.DiscountType.PERCENT, "10"));
+        BookingService service = newService(bookingRepo, itemRepo, inventory, tieredClient(fx, inDays(7)),
+                mock(ApplicationEventPublisher.class));
+        service.setPromoCodeRepository(promos);
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        // One left at Early bird 100.00 -> 90.00, then Phase 1 120.00 -> 108.00.
+        assertEquals(0, new BigDecimal("198.00").compareTo(resp.getTotalAmount()));
+        assertEquals("EARLY10", resp.getPromoCode());
+        assertEquals(0, new BigDecimal("22.00").compareTo(resp.getDiscountAmount()));
+        assertEquals(0, new BigDecimal("90.00").compareTo(resp.getItems().get(0).getPriceAtBooking()));
+        assertEquals(0, new BigDecimal("10.00").compareTo(resp.getItems().get(0).getDiscountAmount()));
+        assertEquals(0, new BigDecimal("12.00").compareTo(resp.getItems().get(1).getDiscountAmount()));
+        ArgumentCaptor<Booking> saved = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepo, atLeastOnce()).save(saved.capture());
+        assertEquals(PROMO_ID, saved.getValue().getPromoCodeId());
+        // The code is locked after the stock, so its uses are counted under both.
+        InOrder order = inOrder(inventory, promos);
+        order.verify(inventory).tryClaim(DEFAULT_CATEGORY_ID, 2);
+        order.verify(promos).lockByEventIdAndCode(fx.eventId, "EARLY10");
+    }
+
+    @Test
+    void createBooking_anUnknownOrSwitchedOffCode_isRefusedAsInvalid() {
+        RequestFixture fx = request(nPrices(1));
+        fx.request.setPromoCode("EARLY10");
+        BookingService unknown = newService(mock(BookingRepository.class), mock(BookingItemRepository.class),
+                stubClient(fx));
+        unknown.setPromoCodeRepository(promoRepo(fx, null));
+        PromoCode off = promo(PromoCode.DiscountType.PERCENT, "10");
+        off.setActive(false);
+        BookingService switchedOff = newService(mock(BookingRepository.class), mock(BookingItemRepository.class),
+                stubClient(fx));
+        switchedOff.setPromoCodeRepository(promoRepo(fx, off));
+
+        for (BookingService service : List.of(unknown, switchedOff)) {
+            ApiProblemException ex = assertThrows(ApiProblemException.class,
+                    () -> service.createBooking("user@example.com", null, fx.request));
+            assertEquals("PROMO_CODE_INVALID", ex.getErrorCode());
+        }
+    }
+
+    @Test
+    void createBooking_aCodeUsedUp_orUsedUpByThisBuyer_isRefused() {
+        RequestFixture fx = request(nPrices(1));
+        fx.request.setPromoCode("EARLY10");
+        PromoCode limited = promo(PromoCode.DiscountType.PERCENT, "10");
+        limited.setMaxUses(5);
+        BookingRepository full = mock(BookingRepository.class);
+        when(full.countByPromoCodeIdAndStatusNot(PROMO_ID, Booking.BookingStatus.CANCELLED)).thenReturn(5L);
+        BookingService usedUp = newService(full, mock(BookingItemRepository.class), stubClient(fx));
+        usedUp.setPromoCodeRepository(promoRepo(fx, limited));
+
+        PromoCode oncePerBuyer = promo(PromoCode.DiscountType.PERCENT, "10");
+        oncePerBuyer.setMaxUsesPerCustomer(1);
+        BookingRepository mine = mock(BookingRepository.class);
+        when(mine.countByPromoCodeIdAndPhoneNumberAndStatusNot(PROMO_ID, "+263771234567",
+                Booking.BookingStatus.CANCELLED)).thenReturn(1L);
+        BookingService limitReached = newService(mine, mock(BookingItemRepository.class), stubClient(fx));
+        limitReached.setPromoCodeRepository(promoRepo(fx, oncePerBuyer));
+
+        assertEquals("PROMO_CODE_USED_UP", assertThrows(ApiProblemException.class,
+                () -> usedUp.createBooking("user@example.com", null, fx.request)).getErrorCode());
+        assertEquals("PROMO_CODE_LIMIT_REACHED", assertThrows(ApiProblemException.class,
+                () -> limitReached.createBooking("user@example.com", "+263771234567", fx.request)).getErrorCode());
+    }
+
+    @Test
+    void createBooking_aCodeForOtherCategories_isNotApplicable() {
+        RequestFixture fx = request(nPrices(1));
+        fx.request.setPromoCode("EARLY10");
+        PromoCode otherCategory = promo(PromoCode.DiscountType.FIXED, "5");
+        otherCategory.setCategoryIds(new java.util.HashSet<>(List.of(UUID.randomUUID())));
+        BookingService service = newService(mock(BookingRepository.class), mock(BookingItemRepository.class),
+                stubClient(fx));
+        service.setPromoCodeRepository(promoRepo(fx, otherCategory));
+
+        assertEquals("PROMO_CODE_NOT_APPLICABLE", assertThrows(ApiProblemException.class,
+                () -> service.createBooking("user@example.com", null, fx.request)).getErrorCode());
+    }
+
+    @Test
+    void createBooking_withoutACode_neverTouchesPromoCodes() {
+        RequestFixture fx = request(nPrices(1));
+        PromoCodeRepository promos = mock(PromoCodeRepository.class);
+        BookingService service = newService(mock(BookingRepository.class), mock(BookingItemRepository.class),
+                stubClient(fx));
+        service.setPromoCodeRepository(promos);
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        assertNull(resp.getPromoCode());
+        assertNull(resp.getDiscountAmount());
+        verifyNoInteractions(promos);
     }
 
     @Test

@@ -51,7 +51,7 @@ class GatewayRouteTableTest {
             "booking-event-organizer-reports-route", "user-event-organizer-route",
             "user-internal-deny", "user-self-route",
             "event-internal-deny", "event-availability-deny", "event-service-route",
-            "seat-service-seat-route", "seat-service-category-route",
+            "seat-service-seat-route", "seat-internal-deny", "seat-service-category-route",
             "booking-internal-deny", "booking-public-phone-route", "booking-service-route",
             "booking-invoices-route", "booking-tickets-route",
             "scans-route", "brand-assets-route",
@@ -218,6 +218,9 @@ class GatewayRouteTableTest {
         assertThat(order.indexOf("user-internal-deny"))
                 .as("user-internal-deny must match before /users/**")
                 .isBetween(0, order.indexOf("user-self-route") - 1);
+        assertThat(order.indexOf("seat-internal-deny"))
+                .as("seat-internal-deny must match before /seat-categories/**")
+                .isBetween(0, order.indexOf("seat-service-category-route") - 1);
         assertThat(order.indexOf("booking-internal-deny"))
                 .as("booking-internal-deny must match before /bookings/**")
                 .isBetween(0, order.indexOf("booking-service-route") - 1);
@@ -424,6 +427,8 @@ class GatewayRouteTableTest {
         assertThat(predicateArgs("user-internal-deny", "Path")).containsExactly("/users/internal/**");
         assertThat(route("booking-internal-deny").getUri()).hasToString("forward:/__edge_deny__");
         assertThat(predicateArgs("booking-internal-deny", "Path")).containsExactly("/bookings/internal/**");
+        assertThat(route("seat-internal-deny").getUri()).hasToString("forward:/__edge_deny__");
+        assertThat(predicateArgs("seat-internal-deny", "Path")).containsExactly("/seat-categories/internal/**");
         assertThat(route("marketplace-internal-deny").getUri()).hasToString("forward:/__edge_deny__");
         assertThat(predicateArgs("marketplace-internal-deny", "Path")).containsExactly("/marketplace/internal/**");
         assertThat(route("loans-forgot-password-deny").getUri()).hasToString("forward:/__edge_deny__");
