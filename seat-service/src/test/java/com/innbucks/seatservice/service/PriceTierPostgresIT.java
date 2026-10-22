@@ -3,9 +3,11 @@ package com.innbucks.seatservice.service;
 import com.innbucks.seatservice.client.BookingServiceClient;
 import com.innbucks.seatservice.client.EventServiceClient;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
+import com.innbucks.seatservice.dto.PriceChangeDTO;
 import com.innbucks.seatservice.dto.PriceTierDTO;
 import com.innbucks.seatservice.dto.PriceTierRequestDTO;
 import com.innbucks.seatservice.dto.PriceTiersRequestDTO;
+import com.innbucks.seatservice.dto.UpdateCategoryRequestDTO;
 import com.innbucks.seatservice.entity.SeatCategory;
 import com.innbucks.seatservice.entity.SeatCategoryPriceTier;
 import com.innbucks.seatservice.repository.SeatCategoryPriceTierRepository;
@@ -37,7 +39,8 @@ import static org.mockito.Mockito.when;
 /**
  * V9 on real Postgres: a replacement that reorders tiers and inserts one where
  * another is leaving commits (the order constraint is deferred), kept tiers
- * keep their ids, and the CHECKs refuse a tier that could never close.
+ * keep their ids, and the CHECKs refuse a tier that could never close. V10:
+ * every price change is recorded, and the record refuses UPDATE and DELETE.
  */
 class PriceTierPostgresIT extends PostgresIntegrationTestBase {
 
@@ -135,5 +138,31 @@ class PriceTierPostgresIT extends PostgresIntegrationTestBase {
                 UUID.randomUUID(), categoryId))
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .hasMessageContaining("chk_price_tier_closes");
+    }
+
+    @Test
+    void everyPriceChange_isRecorded_andTheRecordCannotBeRewritten() {
+        UUID categoryId = seedCategory();
+        set(categoryId, tier(null, "Early bird", "100.00", 100));
+        UpdateCategoryRequestDTO update = new UpdateCategoryRequestDTO();
+        update.setName("VIP");
+        update.setPrice(new BigDecimal("160.00"));
+        categoryService.updateCategory(categoryId, update);
+
+        List<PriceChangeDTO> history = categoryService.getPriceHistory(categoryId, null, "admin@example.com",
+                true, null);
+
+        assertThat(history).extracting(PriceChangeDTO::getChangeType)
+                .containsExactly("PRICE_CHANGED", "TIERS_CHANGED");
+        assertThat(history.get(1).getTiersAfter()).extracting(PriceChangeDTO.Tier::getName)
+                .containsExactly("Early bird");
+        assertThatThrownBy(() -> jdbc.update("UPDATE seat_category_price_changes SET new_price = 1"))
+                .hasMessageContaining("append-only");
+        assertThatThrownBy(() -> jdbc.update("DELETE FROM seat_category_price_changes WHERE category_id = ?",
+                categoryId)).hasMessageContaining("append-only");
+        // The history outlives the category it describes: there is no foreign key.
+        clean();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM seat_category_price_changes WHERE category_id = ?",
+                Long.class, categoryId)).isEqualTo(2);
     }
 }

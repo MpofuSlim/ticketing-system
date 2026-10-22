@@ -5,6 +5,7 @@ import com.innbucks.seatservice.dto.CategoryCapacityDTO;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
 import com.innbucks.seatservice.dto.EventAnalyticsDTO;
+import com.innbucks.seatservice.dto.PriceChangeDTO;
 import com.innbucks.seatservice.dto.PriceTiersRequestDTO;
 import com.innbucks.seatservice.dto.UpdateCategoryRequestDTO;
 import com.innbucks.seatservice.security.JwtAuthDetails;
@@ -551,6 +552,107 @@ public class SeatCategoryController {
         CreateCategoryResponseDTO updated = categoryService.setPriceTiers(id, request, organizerUuid(authentication),
                 requesterEmail, isAdmin, httpRequest.getHeader("Authorization"));
         return ResponseEntity.ok(ApiResult.ok("Price tiers set", updated));
+    }
+
+    @GetMapping("/{id}/price-history")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(summary = "Price history of a category",
+            description = "Every change to the category's full price or its price tiers, newest first (at most "
+                    + "200): CREATED (the price and tiers it was created with), PRICE_CHANGED (old and new full "
+                    + "price) and TIERS_CHANGED (the tiers before and after, each with its terms as they were). "
+                    + "`changedBy` is the organizer's uuid or the admin's email. The record is append-only. "
+                    + "Requires the owning EVENT_ORGANIZER or SUPER_ADMIN; a deleted category's history stays "
+                    + "readable.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Price history, newest first",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Price history", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Price history retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "5c7e9a1b-2d3f-4b6c-8d0e-1f2a3b4c5d6e",
+                                          "changeType": "TIERS_CHANGED",
+                                          "oldPrice": null,
+                                          "newPrice": null,
+                                          "tiersBefore": [
+                                            { "name": "Early bird", "price": 100.00, "startsAt": null,
+                                              "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true },
+                                            { "name": "Phase 1", "price": 120.00, "startsAt": null,
+                                              "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true }
+                                          ],
+                                          "tiersAfter": [
+                                            { "name": "Early bird", "price": 100.00, "startsAt": null,
+                                              "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 150, "maxPerCustomer": 4, "refundsReopen": false },
+                                            { "name": "Phase 1", "price": 120.00, "startsAt": null,
+                                              "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true },
+                                            { "name": "Phase 2", "price": 140.00, "startsAt": "2026-09-21T00:00:00+02:00",
+                                              "endsAt": "2026-09-27T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true }
+                                          ],
+                                          "changedBy": "7a1c3e5f-2b4d-4f6a-8c0e-1a2b3c4d5e6f",
+                                          "changedAt": "2026-09-03T09:30:00+02:00"
+                                        },
+                                        {
+                                          "id": "4b6d8f0a-1c2e-4a5b-9c7d-0e1f2a3b4c5d",
+                                          "changeType": "PRICE_CHANGED",
+                                          "oldPrice": 150.00,
+                                          "newPrice": 160.00,
+                                          "tiersBefore": null,
+                                          "tiersAfter": null,
+                                          "changedBy": "7a1c3e5f-2b4d-4f6a-8c0e-1a2b3c4d5e6f",
+                                          "changedAt": "2026-09-02T10:15:00+02:00"
+                                        },
+                                        {
+                                          "id": "3a5c7e9f-0b1d-4f2a-8b6c-9d0e1f2a3b4c",
+                                          "changeType": "CREATED",
+                                          "oldPrice": null,
+                                          "newPrice": 150.00,
+                                          "tiersBefore": null,
+                                          "tiersAfter": [
+                                            { "name": "Early bird", "price": 100.00, "startsAt": null,
+                                              "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true },
+                                            { "name": "Phase 1", "price": 120.00, "startsAt": null,
+                                              "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true }
+                                          ],
+                                          "changedBy": "7a1c3e5f-2b4d-4f6a-8c0e-1a2b3c4d5e6f",
+                                          "changedAt": "2026-08-25T08:00:00+02:00"
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing/invalid JWT",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Invalid token", value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Not the owning EVENT_ORGANIZER / SUPER_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Forbidden", value = """
+                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Category not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    { "code": "404 NOT_FOUND", "message": "Seat category not found", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<PriceChangeDTO>>> getPriceHistory(
+            @Parameter(description = "Seat category UUID") @PathVariable UUID id,
+            Authentication authentication,
+            HttpServletRequest httpRequest
+    ) {
+        String requesterEmail = authentication.getName();
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        log.debug("GET /seat-categories/{}/price-history requesterEmail={} isAdmin={}", id, requesterEmail, isAdmin);
+        List<PriceChangeDTO> history = categoryService.getPriceHistory(id, organizerUuid(authentication),
+                requesterEmail, isAdmin, httpRequest.getHeader("Authorization"));
+        return ResponseEntity.ok(ApiResult.ok("Price history retrieved successfully", history));
     }
 
     @GetMapping("/analytics")

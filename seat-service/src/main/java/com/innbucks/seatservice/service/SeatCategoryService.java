@@ -119,6 +119,17 @@ public class SeatCategoryService {
         this.marketTimeZone = marketTimeZone;
     }
 
+    /**
+     * Where each price change is recorded (V10). A setter, not required, like
+     * the ones above: the plain-{@code new} tests that predate it record nothing.
+     */
+    private SeatCategoryPriceChangeRepository priceChangeRepository;
+
+    @Autowired(required = false)
+    void setPriceChangeRepository(SeatCategoryPriceChangeRepository priceChangeRepository) {
+        this.priceChangeRepository = priceChangeRepository;
+    }
+
     /** Decides whether an early bird is still running. Tests move it. */
     private Clock clock = Clock.systemUTC();
 
@@ -214,6 +225,8 @@ public class SeatCategoryService {
 
         categoryRepository.save(category);
         List<SeatCategoryPriceTier> tiers = replaceTiers(category.getId(), tierInputs, List.of());
+        recordChange(category, SeatCategoryPriceChange.ChangeType.CREATED, null, category.getPrice(),
+                null, PriceHistory.snapshot(tiers));
 
         // Auto-generate seats with per-section capacity, e.g. A1-A5, B1-B7, C1-C8
         List<Seat> seats = new ArrayList<>();
@@ -358,9 +371,14 @@ public class SeatCategoryService {
             log.info("Updating seat category categoryId={} eventId={} name={} requesterEmail={} isAdmin={}",
                     categoryId, category.getEventId(), request.getName(), requesterEmail, isAdmin);
 
+            BigDecimal oldPrice = category.getPrice();
             category.setName(HtmlSanitizer.stripAll(request.getName()));
             category.setDescription(HtmlSanitizer.stripAll(request.getDescription()));
             category.setPrice(request.getPrice());
+            if (oldPrice == null || oldPrice.compareTo(request.getPrice()) != 0) {
+                recordChange(category, SeatCategoryPriceChange.ChangeType.PRICE_CHANGED, oldPrice,
+                        request.getPrice(), null, null);
+            }
         });
         log.info("Seat category updated categoryId={} eventId={}", categoryId, updated.getEventId());
         return updated;
@@ -386,7 +404,13 @@ public class SeatCategoryService {
             Map<UUID, SeatCategoryPriceTier> existingById = new LinkedHashMap<>();
             existing.forEach(tier -> existingById.put(tier.getId(), tier));
             List<TierInput> inputs = validateTiers(request.getTiers(), category.getPrice(), existingById);
+            // Snapshot before replaceTiers: it updates the kept tiers in place.
+            String before = PriceHistory.snapshot(existing);
             List<SeatCategoryPriceTier> saved = replaceTiers(categoryId, inputs, existing);
+            String after = PriceHistory.snapshot(saved);
+            if (!before.equals(after)) {
+                recordChange(category, SeatCategoryPriceChange.ChangeType.TIERS_CHANGED, null, null, before, after);
+            }
             log.info("Price tiers set categoryId={} eventId={} tiers={} replaced={} requesterEmail={} isAdmin={}",
                     categoryId, category.getEventId(), saved.size(), existing.size(), requesterEmail, isAdmin);
         });
@@ -434,6 +458,55 @@ public class SeatCategoryService {
                 Map.of(categoryId, tierTermsOf(edited.tiers()))));
         return toCreateResponseDTO(category, edited.sections(), liveAvailableSeats(category, counts),
                 edited.tiers(), sold);
+    }
+
+    /**
+     * Record one price change, in the caller's transaction, so a change that
+     * rolls back leaves no history and a history row always describes a change
+     * that happened. {@code changed_by} is stamped by JPA auditing.
+     */
+    private void recordChange(SeatCategory category, SeatCategoryPriceChange.ChangeType type,
+                              BigDecimal oldPrice, BigDecimal newPrice, String tiersBefore, String tiersAfter) {
+        if (priceChangeRepository == null) {
+            return;
+        }
+        priceChangeRepository.save(SeatCategoryPriceChange.builder()
+                .categoryId(category.getId())
+                .eventId(category.getEventId())
+                .changeType(type)
+                .oldPrice(oldPrice)
+                .newPrice(newPrice)
+                .tiersBefore(tiersBefore)
+                .tiersAfter(tiersAfter)
+                .changedAt(nowUtc())
+                .build());
+    }
+
+    /**
+     * A category's price history, newest first (at most 200 changes): when the
+     * full price moved, when the tiers were replaced (each side's terms as they
+     * were), and who did it. The owning EVENT_ORGANIZER or SUPER_ADMIN; a
+     * deleted category's history stays readable. The ownership check asks
+     * event-service with no transaction open, like the edits.
+     */
+    public List<PriceChangeDTO> getPriceHistory(UUID categoryId,
+                                                UUID callerOrganizerUuid,
+                                                String requesterEmail,
+                                                boolean isAdmin,
+                                                String authHeader) {
+        SeatCategory category = TransactionPhases.inTransaction(readTx, () -> categoryRepository.findById(categoryId)
+                .orElseThrow(() -> new NotFoundException("Seat category not found")));
+        if (!isAdmin) {
+            requireEventOwnership(category.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
+        }
+        if (priceChangeRepository == null) {
+            return List.of();
+        }
+        return TransactionPhases.inTransaction(readTx,
+                        () -> priceChangeRepository.findTop200ByCategoryIdOrderByChangedAtDesc(categoryId))
+                .stream()
+                .map(PriceHistory::toDto)
+                .toList();
     }
 
     /** One validated tier before it is saved; {@code id} names the stored tier it updates, or is null. */
