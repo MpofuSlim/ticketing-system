@@ -461,7 +461,10 @@ public class SeatCategoryService {
         Set<UUID> ids = new HashSet<>();
         List<TierInput> inputs = new ArrayList<>(requested.size());
         for (PriceTierRequestDTO tier : requested) {
-            String name = tier == null || tier.getName() == null ? "" : HtmlSanitizer.stripAll(tier.getName()).trim();
+            if (tier == null) {
+                throw new BadRequestException("Every price tier needs a name.");
+            }
+            String name = tier.getName() == null ? "" : HtmlSanitizer.stripAll(tier.getName()).trim();
             if (name.isEmpty()) {
                 throw new BadRequestException("Every price tier needs a name.");
             }

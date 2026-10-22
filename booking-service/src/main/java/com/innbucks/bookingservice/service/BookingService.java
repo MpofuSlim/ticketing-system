@@ -535,7 +535,7 @@ public class BookingService {
         // ticket of these categories until this transaction ends. The count is
         // asked only for tiers that are open and limited by quantity.
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        Map<UUID, Deque<PriceTierAllocator.TicketPrice>> pricesByCategory = new HashMap<>();
+        Map<UUID, Iterator<PriceTierAllocator.TicketPrice>> pricesByCategory = new HashMap<>();
         BigDecimal total = BigDecimal.ZERO;
         for (Map.Entry<UUID, Integer> e : qtyByCategory.entrySet()) {
             CategoryLookupDTO category = categoryById.get(e.getKey());
@@ -551,7 +551,7 @@ public class BookingService {
             for (PriceTierAllocator.TicketPrice price : prices) {
                 total = total.add(price.price());
             }
-            pricesByCategory.put(e.getKey(), new ArrayDeque<>(prices));
+            pricesByCategory.put(e.getKey(), prices.iterator());
         }
         booking.setTotalAmount(total);
 
@@ -570,7 +570,9 @@ public class BookingService {
         int ticketIndex = 1;
         for (TicketSpec spec : ticketSpecs) {
             CategoryLookupDTO category = categoryById.get(spec.categoryId());
-            PriceTierAllocator.TicketPrice price = pricesByCategory.get(spec.categoryId()).poll();
+            // One price per ticket of the category, in request order: the
+            // allocator returned exactly qtyByCategory's count for it.
+            PriceTierAllocator.TicketPrice price = pricesByCategory.get(spec.categoryId()).next();
             items.add(BookingItem.builder()
                     .booking(booking)
                     .seatId(UUID.randomUUID())
