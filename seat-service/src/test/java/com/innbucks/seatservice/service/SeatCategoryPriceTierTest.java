@@ -555,6 +555,21 @@ class SeatCategoryPriceTierTest {
     }
 
     @Test
+    void resavingTheSameTiers_fromAJsonClient_recordsNothing() {
+        // A JSON client holds 100.00 as 100 and sends it back so.
+        storeStandardTiers();
+        SeatCategoryService service = service();
+
+        service.setPriceTiers(vip.getId(), tiers(
+                        tier(store.get(0).getId(), "Early bird", "100", "2026-09-08T23:59:59", 100),
+                        tier(store.get(1).getId(), "Phase 1", "120", "2026-09-20T23:59:59", null)),
+                null, "admin@example.com", true, null);
+
+        assertTrue(changes.isEmpty());
+        assertEquals(new BigDecimal("100.00"), store.get(0).getPrice());
+    }
+
+    @Test
     void theHistory_readsBackNewestFirst_withTheTiersAsTheyWere() {
         storeStandardTiers();
         SeatCategoryService service = service();

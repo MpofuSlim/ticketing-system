@@ -2676,7 +2676,9 @@ and a window (`starts_at` / `ends_at`, organizer's local time in, UTC stored).
   `POST /bookings/promo-codes/check` (permitAll for that exact path; not a
   reservation, and it cannot check the buyer's own limit). The organizer's
   ownership is asked of event-service with no transaction open
-  (`PromoCodeService.requireEventOwnership`, fail-closed).
+  (`PromoCodeService.requireEventOwnership`, fail-closed: anything but a
+  confirmed owner is a 403, an unknown event included, because the Feign
+  fallback makes event-service's 404 and an outage the same empty answer).
 - **Category ids are not checked against the event** at create: the console
   picks them from the event's own list, and one that is not the event's simply
   never matches (the booking is then `PROMO_CODE_NOT_APPLICABLE`).
@@ -2695,10 +2697,21 @@ SMS if WhatsApp fails.** `GET` lists what the phone follows, `DELETE
   works out which tier is on sale with `PriceTierAllocator` over its own counts
   and reminds only when that one is ending. A sold-out or not-yet-open tier is
   never announced, and neither is "Phase 1 ends" while Early bird is on sale.
+  **Nor is a sold-out category**: one whose `category_inventory.remaining` is 0
+  (no row = nothing booked yet = on sale). A lapsed hold frees a ticket, and a
+  later run reminds then.
+- **The event is read BEFORE anything is claimed** (the public `GET /events/{id}`):
+  a claim is final, so a reminder claimed while event-service was unreachable
+  would go out nameless and never be corrected. An event that cannot be read
+  (unreachable, unpublished, rejected, deleted) is skipped this run and tried
+  again next run; one already over is skipped.
 - **Claim, commit, then send**: each (subscription, tier) is an `INSERT ... ON
   CONFLICT DO NOTHING` into `price_tier_reminders_sent`, committed before the
   send, so nobody hears twice on any number of replicas and a crash loses a
   message rather than repeating one. No send runs with a transaction open.
+- **The SMS fallback has its own text** (`smsText`): the gateway refuses `:` and
+  `;`, so it writes the time as `23.59` and separates with ` - ` and `, `, and
+  `PriceTierReminderServiceTest` asserts it round-trips `SmsTextSanitizer`.
 - **Ops:** hourly at :25 under ShedLock (`PriceTierReminderService.remind`);
   `BOOKING_TIER_REMINDER_CRON=-` switches it off, `BOOKING_TIER_REMINDER_WINDOW_HOURS`
   (24) sizes the window. seat-service unreachable skips the run (logged).

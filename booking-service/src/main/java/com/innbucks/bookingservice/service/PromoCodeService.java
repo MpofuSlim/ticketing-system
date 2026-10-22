@@ -307,8 +307,11 @@ public class PromoCodeService {
     /**
      * The caller must own the event: its {@code tenantUserUuid} is their
      * organizer uuid. Asked of event-service every time, never cached, and
-     * fail-closed: an unanswerable lookup is a 403, an unknown event a 404.
-     * Same model as {@code ScanReportController.requireEventOwnership}.
+     * fail-closed with a 403, as {@code BookingService.requireEventOwnership}
+     * does. An unknown event is a 403 too: the Feign fallback turns event-service's
+     * 404 and an outage into the same empty envelope, so the two cannot be told
+     * apart, and "Event not found" during an outage would tell an organizer their
+     * live event does not exist.
      */
     private void requireEventOwnership(UUID eventId, UUID callerOrganizerUuid) {
         if (callerOrganizerUuid == null) {
@@ -328,7 +331,8 @@ public class PromoCodeService {
             throw new AccessDeniedException("Cannot verify event ownership");
         }
         if (event == null) {
-            throw new NotFoundException("Event not found");
+            log.warn("Event ownership lookup returned no event eventId={}", eventId);
+            throw new AccessDeniedException("Cannot verify event ownership");
         }
         if (event.getTenantUserUuid() == null || !event.getTenantUserUuid().equals(callerOrganizerUuid)) {
             log.warn("Promo code ownership check failed eventId={} callerOrganizerUuid={} owner={}",

@@ -1248,8 +1248,10 @@ public class BookingController {
             summary = "Active tickets per price tier (internal, S2S)",
             description = "Internal endpoint used by seat-service to show each price tier's `sold` and " +
                     "`remaining`. Authenticated with the shared X-Internal-Token; denied at the gateway edge. " +
-                    "One row per (categoryId, priceTierId) with at least one PENDING or CONFIRMED ticket; " +
-                    "full-price tickets and tiers with nothing sold are absent. Display only: a booking " +
+                    "One row per (categoryId, priceTierId) with at least one PENDING or CONFIRMED ticket " +
+                    "(`count`) or one refunded after payment (`refunded`: CANCELLED by an admin reversal); " +
+                    "full-price tickets and tiers with neither are absent. A tier whose refunds do not reopen " +
+                    "its places counts `count + refunded` against its quantity. Display only: a booking " +
                     "counts its tiers itself, under the category's stock lock."
     )
     @ApiResponses({
@@ -1265,7 +1267,7 @@ public class BookingController {
                                       "message": "Price tier counts retrieved successfully",
                                       "data": [
                                         { "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
-                                          "priceTierId": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "count": 37 }
+                                          "priceTierId": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "count": 37, "refunded": 2 }
                                       ]
                                     }
                                     """)

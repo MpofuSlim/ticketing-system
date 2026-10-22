@@ -643,7 +643,11 @@ public class SeatCategoryService {
             if (startsAtUtc != null && endsAtUtc != null && !startsAtUtc.isBefore(endsAtUtc)) {
                 throw new BadRequestException("The start of \"" + name + "\" must be before its end.");
             }
-            inputs.add(new TierInput(tier.getId(), name, price, startsAtUtc, endsAtUtc, quantity, maxPerCustomer,
+            // At the column's scale: a JSON client sends 100 for a stored 100.00,
+            // and the price history compares snapshots, so an unchanged re-save
+            // must not read as a change. The checks above allow 2 decimals at most.
+            inputs.add(new TierInput(tier.getId(), name, price.setScale(2, RoundingMode.UNNECESSARY),
+                    startsAtUtc, endsAtUtc, quantity, maxPerCustomer,
                     tier.getRefundsReopen() == null || tier.getRefundsReopen()));
         }
         return inputs;

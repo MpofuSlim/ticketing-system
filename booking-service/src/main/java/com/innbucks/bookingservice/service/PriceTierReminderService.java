@@ -13,7 +13,9 @@ import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.EventReminderSubscription;
 import com.innbucks.bookingservice.exception.ApiProblemException;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
+import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
 import com.innbucks.bookingservice.repository.EventReminderSubscriptionRepository;
+import com.innbucks.bookingservice.util.SmsTextSanitizer;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,6 +36,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -66,10 +69,15 @@ public class PriceTierReminderService {
     static final String NO_PHONE = "NO_PHONE_CLAIM";
     static final String LIMIT = "REMINDER_LIMIT_REACHED";
 
-    private static final DateTimeFormatter WHEN = DateTimeFormatter.ofPattern("EEE d MMM 'at' HH:mm");
+    private static final DateTimeFormatter WHEN =
+            DateTimeFormatter.ofPattern("EEE d MMM 'at' HH:mm", Locale.ENGLISH);
+    /** The SMS gateway refuses ':' (SmsTextSanitizer), so the SMS writes the time as 23.59. */
+    private static final DateTimeFormatter SMS_WHEN =
+            DateTimeFormatter.ofPattern("EEE d MMM 'at' HH.mm", Locale.ENGLISH);
 
     private final EventReminderSubscriptionRepository subscriptions;
     private final BookingItemRepository bookingItems;
+    private final CategoryInventoryRepository inventory;
     private final SeatServiceClient seatService;
     private final EventServiceClient eventService;
     private final WhatsAppNotificationClient whatsApp;
@@ -83,6 +91,7 @@ public class PriceTierReminderService {
 
     public PriceTierReminderService(EventReminderSubscriptionRepository subscriptions,
                                     BookingItemRepository bookingItems,
+                                    CategoryInventoryRepository inventory,
                                     SeatServiceClient seatService,
                                     EventServiceClient eventService,
                                     WhatsAppNotificationClient whatsApp,
@@ -93,6 +102,7 @@ public class PriceTierReminderService {
                                     @Value("${app.booking.tier-reminder-window-hours:24}") long windowHours) {
         this.subscriptions = subscriptions;
         this.bookingItems = bookingItems;
+        this.inventory = inventory;
         this.seatService = seatService;
         this.eventService = eventService;
         this.whatsApp = whatsApp;
@@ -189,21 +199,36 @@ public class PriceTierReminderService {
         if (endingByEvent.isEmpty()) {
             return;
         }
-        List<EventReminderSubscription> subs = TransactionPhases.inTransaction(readTx,
-                () -> subscriptions.findByEventIdInAndUnsubscribedAtIsNull(endingByEvent.keySet()));
-        int sent = 0;
+        // Each event is looked up BEFORE anything is claimed: a claim is final,
+        // so a reminder claimed while event-service was unreachable would go out
+        // without the event's name and never be corrected. An event the public
+        // read cannot return (unreachable, unpublished, rejected, deleted) or one
+        // already over is skipped this run, and an unreachable one is tried
+        // again at the next run.
         Map<UUID, String> titles = new HashMap<>();
+        for (UUID eventId : endingByEvent.keySet()) {
+            String title = bookableEventTitle(eventId, now);
+            if (title != null) {
+                titles.put(eventId, title);
+            }
+        }
+        if (titles.isEmpty()) {
+            return;
+        }
+        List<EventReminderSubscription> subs = TransactionPhases.inTransaction(readTx,
+                () -> subscriptions.findByEventIdInAndUnsubscribedAtIsNull(titles.keySet()));
+        int sent = 0;
         for (EventReminderSubscription sub : subs) {
             List<Ending> fresh = claim(sub, endingByEvent.getOrDefault(sub.getEventId(), List.of()), now);
             if (fresh.isEmpty()) {
                 continue;
             }
-            String title = titles.computeIfAbsent(sub.getEventId(), this::eventTitle);
-            if (send(sub, reminderText(title, fresh))) {
+            String title = titles.get(sub.getEventId());
+            if (send(sub, reminderText(title, fresh), smsText(title, fresh))) {
                 sent++;
             }
         }
-        log.info("Price tier reminders sent={} subscriptions={} events={}", sent, subs.size(), endingByEvent.size());
+        log.info("Price tier reminders sent={} subscriptions={} events={}", sent, subs.size(), titles.size());
     }
 
     /**
@@ -232,8 +257,23 @@ public class PriceTierReminderService {
         return byEvent;
     }
 
-    /** The category's tier on sale now, when it ends before {@code until}; else null. */
+    /**
+     * The category's tier on sale now, when it ends before {@code until}; else
+     * null. A category with no tickets left is not on sale at any price: its
+     * stock row (seeded at its first booking) reads 0 while every ticket is
+     * held or sold, so no follower is told to book what nobody can buy. A held
+     * ticket that lapses frees its place, and a later run reminds then.
+     */
     private Ending endingOnSale(CategoryLookupDTO category, LocalDateTime now, LocalDateTime until) {
+        if (category.getSeatCategoryId() == null) {
+            return null;
+        }
+        boolean soldOut = inventory.findById(category.getSeatCategoryId())
+                .map(row -> row.getRemaining() <= 0)
+                .orElse(false);
+        if (soldOut) {
+            return null;
+        }
         PriceTierAllocator.Counts toCount = PriceTierAllocator.toCount(category, now);
         Map<UUID, Long> counted = new HashMap<>();
         if (!toCount.quantityTiers().isEmpty()) {
@@ -270,13 +310,13 @@ public class PriceTierReminderService {
     }
 
     /** WhatsApp, then SMS if WhatsApp fails. The phone came from the customer's own session. */
-    private boolean send(EventReminderSubscription sub, String text) {
+    private boolean send(EventReminderSubscription sub, String text, String smsText) {
         try {
             whatsApp.sendCustomNotification(sub.getPhoneNumber(), text);
             return true;
         } catch (RuntimeException whatsAppFailed) {
             try {
-                sms.sendSms(sub.getPhoneNumber(), text,
+                sms.sendSms(sub.getPhoneNumber(), smsText,
                         "TIER-RMD-" + UUID.randomUUID().toString().substring(0, 8));
                 return true;
             } catch (RuntimeException smsFailed) {
@@ -287,14 +327,28 @@ public class PriceTierReminderService {
         }
     }
 
-    private String eventTitle(UUID eventId) {
+    /**
+     * The event's title when it can be booked now: the public read returns it
+     * (so it is published and not deleted) and it has not ended. Null otherwise,
+     * including when event-service cannot be asked.
+     */
+    private String bookableEventTitle(UUID eventId, LocalDateTime now) {
+        EventLookupDTO event;
         try {
             ApiResult<EventLookupDTO> res = eventService.getEvent(eventId);
-            String title = res == null || res.getData() == null ? null : res.getData().getTitle();
-            return title == null || title.isBlank() ? "An event you follow" : title.trim();
+            event = res == null ? null : res.getData();
         } catch (RuntimeException e) {
-            return "An event you follow";
+            event = null;
         }
+        if (event == null) {
+            log.warn("Price tier reminders for eventId={} skipped this run: the event could not be read", eventId);
+            return null;
+        }
+        if (event.getEndDateTime() != null && !event.getEndDateTime().isAfter(now)) {
+            return null;
+        }
+        String title = event.getTitle();
+        return title == null || title.isBlank() ? "An event you follow" : title.trim();
     }
 
     /**
@@ -308,5 +362,19 @@ public class PriceTierReminderService {
                         + ") end " + WHEN.format(market.atMarketFromUtc(e.endsAtUtc())))
                 .collect(Collectors.joining("; "));
         return title + ": " + parts + ". Book on InnBucks before the price goes up.";
+    }
+
+    /**
+     * The same reminder for the SMS gateway, which refuses ':' and ';'
+     * ({@link SmsTextSanitizer}): "Harare Jazz Festival - Early bird tickets
+     * for VIP (100.00) end Mon 8 Sep at 23.59. Book on InnBucks before the
+     * price goes up." Names the organizer typed are sanitized too.
+     */
+    String smsText(String title, List<Ending> endings) {
+        String parts = endings.stream()
+                .map(e -> e.tierName() + " tickets for " + e.categoryName() + " (" + e.price().toPlainString()
+                        + ") end " + SMS_WHEN.format(market.atMarketFromUtc(e.endsAtUtc())))
+                .collect(Collectors.joining(", "));
+        return SmsTextSanitizer.toGsmSafe(title + " - " + parts + ". Book on InnBucks before the price goes up.");
     }
 }

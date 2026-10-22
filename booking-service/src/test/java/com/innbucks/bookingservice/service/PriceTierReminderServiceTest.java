@@ -10,10 +10,13 @@ import com.innbucks.bookingservice.dto.CategoryLookupDTO;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.EventReminderDTO;
 import com.innbucks.bookingservice.entity.Booking;
+import com.innbucks.bookingservice.entity.CategoryInventory;
 import com.innbucks.bookingservice.entity.EventReminderSubscription;
 import com.innbucks.bookingservice.exception.ApiProblemException;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
+import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
 import com.innbucks.bookingservice.repository.EventReminderSubscriptionRepository;
+import com.innbucks.bookingservice.util.SmsTextSanitizer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -47,6 +50,7 @@ class PriceTierReminderServiceTest {
 
     private EventReminderSubscriptionRepository subs;
     private BookingItemRepository items;
+    private CategoryInventoryRepository inventory;
     private SeatServiceClient seat;
     private EventServiceClient events;
     private WhatsAppNotificationClient whatsApp;
@@ -59,6 +63,7 @@ class PriceTierReminderServiceTest {
     void setUp() {
         subs = mock(EventReminderSubscriptionRepository.class);
         items = mock(BookingItemRepository.class);
+        inventory = mock(CategoryInventoryRepository.class);
         seat = mock(SeatServiceClient.class);
         events = mock(EventServiceClient.class);
         whatsApp = mock(WhatsAppNotificationClient.class);
@@ -68,8 +73,8 @@ class PriceTierReminderServiceTest {
                 claimed.add(List.of(inv.<UUID>getArgument(0), inv.<UUID>getArgument(1))) ? 1 : 0);
         when(events.getEvent(eventId)).thenReturn(ApiResult.ok(
                 EventLookupDTO.builder().eventId(eventId).title("Harare Jazz Festival").build()));
-        service = new PriceTierReminderService(subs, items, seat, events, whatsApp, sms, new MarketTimeZone("ZW"),
-                null, "internal", 24);
+        service = new PriceTierReminderService(subs, items, inventory, seat, events, whatsApp, sms,
+                new MarketTimeZone("ZW"), null, "internal", 24);
         service.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -158,6 +163,67 @@ class PriceTierReminderServiceTest {
 
         assertDoesNotThrow(() -> service.remind());
         verifyNoInteractions(whatsApp, sms, subs);
+    }
+
+    @Test
+    void aSoldOutCategory_isNotOnSale_soNothingIsSentOrClaimed() {
+        seatReports("2026-09-08T21:59:59Z");
+        sold(4);
+        follower();
+        when(inventory.findById(categoryId)).thenReturn(Optional.of(new CategoryInventory(categoryId, 0)));
+
+        service.remind();
+
+        verifyNoInteractions(whatsApp, sms);
+        verify(subs, never()).claimReminder(any(), any(), any());
+    }
+
+    @Test
+    void anEventThatCannotBeRead_isNotClaimed_andTheNextRunSendsWithItsName() {
+        seatReports("2026-09-08T21:59:59Z");
+        sold(4);
+        follower();
+        when(events.getEvent(eventId)).thenReturn(ApiResult.<EventLookupDTO>builder().code("503").build());
+
+        service.remind();
+
+        verifyNoInteractions(whatsApp, sms);
+        verify(subs, never()).claimReminder(any(), any(), any());
+
+        when(events.getEvent(eventId)).thenReturn(ApiResult.ok(
+                EventLookupDTO.builder().eventId(eventId).title("Harare Jazz Festival").build()));
+        service.remind();
+
+        verify(whatsApp).sendCustomNotification(eq(PHONE), startsWith("Harare Jazz Festival: Early bird"));
+    }
+
+    @Test
+    void anEventAlreadyOver_isNotAnnounced() {
+        seatReports("2026-09-08T21:59:59Z");
+        sold(4);
+        follower();
+        when(events.getEvent(eventId)).thenReturn(ApiResult.ok(EventLookupDTO.builder().eventId(eventId)
+                .title("Harare Jazz Festival").endDateTime(LocalDateTime.of(2026, 9, 8, 7, 0)).build()));
+
+        service.remind();
+
+        verifyNoInteractions(whatsApp, sms);
+        verify(subs, never()).claimReminder(any(), any(), any());
+    }
+
+    @Test
+    void theSmsText_survivesTheGatewaySanitizerUnchanged() {
+        PriceTierReminderService.Ending early = new PriceTierReminderService.Ending(earlyId, "Early bird", "VIP",
+                new BigDecimal("100.00"), LocalDateTime.of(2026, 9, 8, 21, 59, 59));
+        PriceTierReminderService.Ending phase = new PriceTierReminderService.Ending(phaseId, "Phase 1", "GA",
+                new BigDecimal("60.00"), LocalDateTime.of(2026, 9, 8, 20, 0));
+
+        String text = service.smsText("Harare Jazz Festival", List.of(early, phase));
+
+        assertEquals("Harare Jazz Festival - Early bird tickets for VIP (100.00) end Tue 8 Sep at 23.59, "
+                + "Phase 1 tickets for GA (60.00) end Tue 8 Sep at 22.00. Book on InnBucks before the price goes up.",
+                text);
+        assertEquals(text, SmsTextSanitizer.toGsmSafe(text));
     }
 
     @Test

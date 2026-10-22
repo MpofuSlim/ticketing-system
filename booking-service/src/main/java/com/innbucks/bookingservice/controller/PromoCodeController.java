@@ -127,14 +127,11 @@ public class PromoCodeController {
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Codes",
                             value = "{ \"code\": \"200 OK\", \"message\": \"Promo codes retrieved successfully\", "
                                     + "\"data\": [ " + CODE_EXAMPLE + " ] }"))),
-            @ApiResponse(responseCode = "403", description = "Not the event's organizer",
+            @ApiResponse(responseCode = "403", description = "Not the event's organizer, or the event could not "
+                    + "be checked (unknown, or event-service unreachable)",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Forbidden",
                             value = """
-                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }"""))),
-            @ApiResponse(responseCode = "404", description = "Unknown event",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Not found",
-                            value = """
-                                    { "code": "404 NOT_FOUND", "message": "Event not found", "data": null }""")))
+                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }""")))
     })
     public ResponseEntity<ApiResult<List<PromoCodeDTO>>> list(
             @Parameter(description = "Event UUID") @RequestParam UUID eventId, Authentication authentication) {

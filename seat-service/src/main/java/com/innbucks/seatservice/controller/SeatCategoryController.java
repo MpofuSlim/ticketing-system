@@ -497,8 +497,8 @@ public class SeatCategoryController {
                                     @ExampleObject(name = "Bad customer limit", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "The limit per customer for \\"Phase 2\\" must be at least 1.",
-                                              "data": null
+                                              "message": "Validation failed",
+                                              "data": { "tiers[2].maxPerCustomer": "Tier limit per customer must be at least 1" }
                                             }
                                             """),
                                     @ExampleObject(name = "Duplicate name", value = """

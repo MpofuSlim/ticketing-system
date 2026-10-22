@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -336,10 +337,10 @@ class SeatCategoryAnalyticsServiceTest {
         when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(vip));
         // Two paid at 100.00 and one held at 100.00, all at Early bird; one cancelled.
         when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of(
-                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("100.00"), LocalDateTime.now()),
-                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("100.00"), LocalDateTime.now()),
-                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.PENDING, new BigDecimal("100.00"), LocalDateTime.now()),
-                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CANCELLED, new BigDecimal("100.00"), LocalDateTime.now()))));
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("100.00"), LocalDateTime.now(ZoneOffset.UTC)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("100.00"), LocalDateTime.now(ZoneOffset.UTC)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.PENDING, new BigDecimal("100.00"), LocalDateTime.now(ZoneOffset.UTC)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CANCELLED, new BigDecimal("100.00"), LocalDateTime.now(ZoneOffset.UTC)))));
         when(tierRepo.findByCategoryIdInOrderByCategoryIdAscPositionAsc(List.of(CATEGORY_VIP))).thenReturn(List.of(
                 com.innbucks.seatservice.entity.SeatCategoryPriceTier.builder().id(early).categoryId(CATEGORY_VIP)
                         .position(0).name("Early bird").price(new BigDecimal("100.00")).quantity(5)
@@ -365,7 +366,7 @@ class SeatCategoryAnalyticsServiceTest {
         SeatCategory ga = category(CATEGORY_GA, "GA", 10, 9, new BigDecimal("60.00"));
         when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(ga));
         when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of(
-                booking(CATEGORY_GA, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("60.00"), LocalDateTime.now()))));
+                booking(CATEGORY_GA, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("60.00"), LocalDateTime.now(ZoneOffset.UTC)))));
         SeatCategoryAnalyticsService service = newService(categoryRepo, mock(SeatRepository.class), bookingClient);
 
         EventAnalyticsDTO result = service.getEventAnalytics(EVENT_ID, null, "admin@example.com", true, 0, 20, null);
