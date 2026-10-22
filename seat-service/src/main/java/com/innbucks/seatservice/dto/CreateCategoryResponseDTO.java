@@ -20,17 +20,21 @@ public class CreateCategoryResponseDTO {
     private String name;
     private String description;
 
-    /** The full ticket price — what an organizer edits. An early bird never changes it. */
+    /** The full ticket price — what an organizer edits. A price tier never changes it. */
     private BigDecimal price;
 
     /**
-     * What one ticket costs if booked now: the early-bird price while it runs,
-     * else {@code price}. booking-service charges this, so show it as the price.
+     * What one ticket costs if booked now: the open price tier's price, else
+     * {@code price}. Show it as the price. booking-service decides the price of
+     * each ticket itself, by the same rule, at the moment of the booking.
      */
     private BigDecimal currentPrice;
 
-    /** The category's early-bird offer, or null when it has none. */
-    private EarlyBirdDTO earlyBird;
+    /** The open price tier's name, or null when the full price applies. */
+    private String currentTierName;
+
+    /** The category's price tiers in the order they apply; empty when it has none. */
+    private List<PriceTierDTO> priceTiers;
 
     /**
      * Live tickets still sellable in this category: {@code totalSeats} minus the

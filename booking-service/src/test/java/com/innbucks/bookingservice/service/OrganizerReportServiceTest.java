@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.dto.report.BucketSize;
 import com.innbucks.bookingservice.dto.report.CategoryRevenueDTO;
+import com.innbucks.bookingservice.dto.report.PriceTierRevenueDTO;
 import com.innbucks.bookingservice.dto.report.EventRevenueDTO;
 import com.innbucks.bookingservice.dto.report.RevenueSummaryDTO;
 import com.innbucks.bookingservice.dto.report.SalesBucketDTO;
@@ -169,6 +170,52 @@ class OrganizerReportServiceTest {
         assertThat(rows.get(0).revenue()).isEqualByComparingTo("300.00");
         assertThat(rows.get(1).categoryName()).isEqualTo("General");
         assertThat(rows.get(1).revenue()).isEqualByComparingTo("100.00");
+    }
+
+    private BookingItem tiered(UUID categoryId, String price, UUID tierId, String tierName) {
+        BookingItem item = item(categoryId, "VIP", price);
+        item.setPriceTierId(tierId);
+        item.setPriceTierName(tierName);
+        return item;
+    }
+
+    @Test
+    void revenueByCategory_splitsEachClassByPriceTier_inTheOrderTheyFirstSold_fullPriceLast() {
+        OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
+        UUID early = UUID.randomUUID();
+        UUID phase = UUID.randomUUID();
+        LocalDateTime t = LocalDate.of(2026, 9, 1).atTime(9, 0);
+        when(repo.findConfirmedWithItems(eq(ORG), eq(EVENT_A), any(), any())).thenReturn(List.of(
+                confirmed(EVENT_A, "200.00", "200.00", null, t,
+                        tiered(CAT_VIP, "100.00", early, "Early bird"), tiered(CAT_VIP, "100.00", early, "Early bird")),
+                confirmed(EVENT_A, "270.00", "270.00", null, t.plusDays(1),
+                        tiered(CAT_VIP, "150.00", null, null), tiered(CAT_VIP, "120.00", phase, "Phase 1"))));
+
+        CategoryRevenueDTO vip = service(repo).revenueByCategory(ORG, EVENT_A, null, null).get(0);
+
+        assertThat(vip.ticketsSold()).isEqualTo(4);
+        assertThat(vip.revenue()).isEqualByComparingTo("470.00");
+        assertThat(vip.priceTiers()).extracting(PriceTierRevenueDTO::name)
+                .containsExactly("Early bird", "Phase 1", "Full price");
+        assertThat(vip.priceTiers().get(0).priceTierId()).isEqualTo(early);
+        assertThat(vip.priceTiers().get(0).ticketsSold()).isEqualTo(2);
+        assertThat(vip.priceTiers().get(0).revenue()).isEqualByComparingTo("200.00");
+        assertThat(vip.priceTiers().get(2).priceTierId()).isNull();
+        assertThat(vip.priceTiers().get(2).revenue()).isEqualByComparingTo("150.00");
+    }
+
+    @Test
+    void revenueByCategory_aClassWithoutTiers_isOneFullPriceRow() {
+        OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
+        LocalDateTime t = LocalDate.of(2026, 5, 10).atTime(9, 0);
+        when(repo.findConfirmedWithItems(eq(ORG), eq(EVENT_A), any(), any())).thenReturn(List.of(
+                confirmed(EVENT_A, "100.00", "100.00", null, t, item(CAT_GA, "General", "100.00"))));
+
+        CategoryRevenueDTO general = service(repo).revenueByCategory(ORG, EVENT_A, null, null).get(0);
+
+        assertThat(general.priceTiers()).hasSize(1);
+        assertThat(general.priceTiers().get(0).name()).isEqualTo("Full price");
+        assertThat(general.priceTiers().get(0).ticketsSold()).isEqualTo(1);
     }
 
     @Test

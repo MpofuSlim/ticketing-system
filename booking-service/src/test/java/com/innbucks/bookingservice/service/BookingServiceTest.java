@@ -4,6 +4,7 @@ import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
+import com.innbucks.bookingservice.dto.BookingItemDTO;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.CategoryLookupDTO;
@@ -19,10 +20,13 @@ import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
 import com.innbucks.common.ticket.TicketNumbers;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -446,44 +450,90 @@ class BookingServiceTest {
         verify(itemRepo, never()).saveAllAndFlush(any());
     }
 
-    @Test
-    void createBooking_chargesTheEarlyBirdPrice_seatServiceReportsAsCurrent() {
-        BookingRepository bookingRepo = mock(BookingRepository.class);
-        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
-        RequestFixture fx = request(new BigDecimal("150.00"));
-        SeatServiceClient client = mock(SeatServiceClient.class);
-        when(client.getCategory(DEFAULT_CATEGORY_ID)).thenReturn(ApiResult.ok("ok", CategoryLookupDTO.builder()
-                .seatCategoryId(DEFAULT_CATEGORY_ID).eventId(fx.eventId).name("VIP")
-                .price(new BigDecimal("150.00")).currentPrice(new BigDecimal("100.00"))
-                .totalSeats(DEFAULT_TOTAL_SEATS).availableSeats(DEFAULT_TOTAL_SEATS)
-                .build()));
-        BookingService service = newService(bookingRepo, itemRepo, client);
+    private static final UUID EARLY_TIER = UUID.fromString("6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f");
+    private static final UUID PHASE_TIER = UUID.fromString("7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a");
 
-        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
-
-        // The total and the ticket both freeze the early-bird price, so the
-        // ticket keeps it after the early bird ends.
-        assertEquals(0, new BigDecimal("100.00").compareTo(resp.getTotalAmount()));
-        assertEquals(0, new BigDecimal("100.00").compareTo(resp.getItems().get(0).getPriceAtBooking()));
-    }
-
-    @Test
-    void createBooking_fromASeatServiceWithoutCurrentPrice_chargesThePrice() {
-        BookingRepository bookingRepo = mock(BookingRepository.class);
-        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
-        RequestFixture fx = request(new BigDecimal("150.00"));
+    /** VIP at 150.00 with Early bird 100.00 (5 tickets) and Phase 1 120.00, both ending as given. */
+    private SeatServiceClient tieredClient(RequestFixture fx, String endsAt) {
         SeatServiceClient client = mock(SeatServiceClient.class);
         when(client.getCategory(DEFAULT_CATEGORY_ID)).thenReturn(ApiResult.ok("ok", CategoryLookupDTO.builder()
                 .seatCategoryId(DEFAULT_CATEGORY_ID).eventId(fx.eventId).name("VIP")
                 .price(new BigDecimal("150.00"))
+                .priceTiers(List.of(
+                        CategoryLookupDTO.PriceTier.builder().id(EARLY_TIER).name("Early bird")
+                                .price(new BigDecimal("100.00")).endsAt(endsAt).quantity(5).build(),
+                        CategoryLookupDTO.PriceTier.builder().id(PHASE_TIER).name("Phase 1")
+                                .price(new BigDecimal("120.00")).endsAt(endsAt).build()))
                 .totalSeats(DEFAULT_TOTAL_SEATS).availableSeats(DEFAULT_TOTAL_SEATS)
                 .build()));
-        BookingService service = newService(bookingRepo, itemRepo, client);
+        return client;
+    }
+
+    private static String inDays(int days) {
+        return LocalDateTime.now(ZoneOffset.UTC).plusDays(days).withNano(0) + "Z";
+    }
+
+    private static BookingItemRepository.TierActiveItemCount tierCount(UUID tierId, long count) {
+        return new BookingItemRepository.TierActiveItemCount() {
+            public UUID getPriceTierId() { return tierId; }
+            public Long getCount() { return count; }
+        };
+    }
+
+    @Test
+    void createBooking_countsTheTierAfterClaimingStock_andSplitsAtItsQuantity() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        CategoryInventoryRepository inventory = successfulInventory();
+        RequestFixture fx = request(nPrices(4));
+        when(itemRepo.countActiveByCategoryAndPriceTiers(DEFAULT_CATEGORY_ID, List.of(EARLY_TIER),
+                Booking.BookingStatus.CANCELLED)).thenReturn(List.of(tierCount(EARLY_TIER, 3)));
+        BookingService service = newService(bookingRepo, itemRepo, inventory, tieredClient(fx, inDays(7)),
+                mock(ApplicationEventPublisher.class));
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        // 3 of the 5 early-bird tickets are gone: two more at 100.00, then Phase 1.
+        assertEquals(List.of("Early bird", "Early bird", "Phase 1", "Phase 1"),
+                resp.getItems().stream().map(BookingItemDTO::getPriceTierName).toList());
+        assertEquals(0, new BigDecimal("440.00").compareTo(resp.getTotalAmount()));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BookingItem>> items = ArgumentCaptor.forClass(List.class);
+        verify(itemRepo).saveAllAndFlush(items.capture());
+        assertEquals(EARLY_TIER, items.getValue().get(0).getPriceTierId());
+        assertEquals(0, new BigDecimal("120.00").compareTo(items.getValue().get(3).getPriceAtBooking()));
+        // The count is only exact under the category's stock row lock.
+        InOrder order = inOrder(inventory, itemRepo);
+        order.verify(inventory).tryClaim(DEFAULT_CATEGORY_ID, 4);
+        order.verify(itemRepo).countActiveByCategoryAndPriceTiers(any(), any(), any());
+    }
+
+    @Test
+    void createBooking_afterEveryTierHasEnded_chargesThePrice_andCountsNothing() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(nPrices(2));
+        BookingService service = newService(bookingRepo, itemRepo, tieredClient(fx, inDays(-1)));
+
+        BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
+
+        assertEquals(0, new BigDecimal("300.00").compareTo(resp.getTotalAmount()));
+        assertNull(resp.getItems().get(0).getPriceTierName());
+        verify(itemRepo, never()).countActiveByCategoryAndPriceTiers(any(), any(), any());
+    }
+
+    @Test
+    void createBooking_withoutTiers_chargesThePrice_andCountsNothing() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(new BigDecimal("150.00"));
+        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx));
 
         BookingResponseDTO resp = service.createBooking("user@example.com", null, fx.request);
 
         assertEquals(0, new BigDecimal("150.00").compareTo(resp.getTotalAmount()));
-        assertEquals(0, new BigDecimal("150.00").compareTo(resp.getItems().get(0).getPriceAtBooking()));
+        assertNull(resp.getItems().get(0).getPriceTierName());
+        verify(itemRepo, never()).countActiveByCategoryAndPriceTiers(any(), any(), any());
     }
 
     @Test

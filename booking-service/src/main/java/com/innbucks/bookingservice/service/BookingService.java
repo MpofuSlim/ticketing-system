@@ -237,15 +237,10 @@ public class BookingService {
             categoryById.put(categoryId, category);
         }
 
-        // Total = sum over categories of price × quantity, at the price in
-        // force now (an early-bird price while one runs). The same lookup
-        // prices each ticket's priceAtBooking below, so the total and the
-        // tickets always agree, and a later price change never restates them.
-        BigDecimal total = BigDecimal.ZERO;
-        for (Map.Entry<UUID, Integer> e : qtyByCategory.entrySet()) {
-            BigDecimal price = categoryById.get(e.getKey()).priceNow();
-            total = total.add(price.multiply(BigDecimal.valueOf(e.getValue())));
-        }
+        // The total is NOT worked out here: a ticket's price can depend on how
+        // many tickets a price tier has already sold, which is only exact once
+        // the category's stock row is locked. persistBooking prices every
+        // ticket and sums the total inside the claim.
 
         // Capture the owning organizer's stable cross-service uuid so the
         // ticket scan path can authorize the redeemer (events.tenant_user_uuid
@@ -260,7 +255,7 @@ public class BookingService {
         UUID tenantUserUuid = eventLookup == null ? null : eventLookup.getTenantUserUuid();
 
         ClaimInputs inputs = new ClaimInputs(userEmail, customerName, phoneNumber, request.getEventId(),
-                tenantUserUuid, total, qtyByCategory, categoryById, ticketSpecs);
+                tenantUserUuid, qtyByCategory, categoryById, ticketSpecs);
 
         // === Write phase — the ONLY place a DB connection is held. ===
         return claimWithRetries(inputs);
@@ -273,7 +268,7 @@ public class BookingService {
      * same {@link Booking} a second time fails as an optimistic-lock error.
      */
     private record ClaimInputs(String userEmail, String customerName, String phoneNumber, UUID eventId,
-                               UUID tenantUserUuid, BigDecimal total, Map<UUID, Integer> qtyByCategory,
+                               UUID tenantUserUuid, Map<UUID, Integer> qtyByCategory,
                                Map<UUID, CategoryLookupDTO> categoryById, List<TicketSpec> ticketSpecs) {
     }
 
@@ -368,7 +363,6 @@ public class BookingService {
                 .tenantUserUuid(inputs.tenantUserUuid())
                 .confirmationNumber(references.nextConfirmationNumber())
                 .status(Booking.BookingStatus.PENDING)
-                .totalAmount(inputs.total())
                 .expiresAt(LocalDateTime.now(ZoneOffset.UTC).plusMinutes(holdTtlMinutes))
                 .build();
         return txTemplate.execute(status -> persistBooking(booking, inputs.qtyByCategory(),
@@ -535,6 +529,32 @@ public class BookingService {
             }
         }
 
+        // Price every ticket, now that each category's stock row is locked by
+        // this transaction: a price tier's quantity is counted from the items
+        // other bookings committed, and none can commit, cancel or expire a
+        // ticket of these categories until this transaction ends. The count is
+        // asked only for tiers that are open and limited by quantity.
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        Map<UUID, Deque<PriceTierAllocator.TicketPrice>> pricesByCategory = new HashMap<>();
+        BigDecimal total = BigDecimal.ZERO;
+        for (Map.Entry<UUID, Integer> e : qtyByCategory.entrySet()) {
+            CategoryLookupDTO category = categoryById.get(e.getKey());
+            List<UUID> counted = PriceTierAllocator.tiersToCount(category, now);
+            Map<UUID, Long> sold = new HashMap<>();
+            if (!counted.isEmpty()) {
+                bookingItemRepository.countActiveByCategoryAndPriceTiers(
+                                e.getKey(), counted, Booking.BookingStatus.CANCELLED)
+                        .forEach(row -> sold.put(row.getPriceTierId(), row.getCount() == null ? 0L : row.getCount()));
+            }
+            List<PriceTierAllocator.TicketPrice> prices =
+                    PriceTierAllocator.allocate(category, e.getValue(), sold, now);
+            for (PriceTierAllocator.TicketPrice price : prices) {
+                total = total.add(price.price());
+            }
+            pricesByCategory.put(e.getKey(), new ArrayDeque<>(prices));
+        }
+        booking.setTotalAmount(total);
+
         bookingRepository.save(booking);
 
         // One booking_item per ticket — each carries its own unique ticket
@@ -550,6 +570,7 @@ public class BookingService {
         int ticketIndex = 1;
         for (TicketSpec spec : ticketSpecs) {
             CategoryLookupDTO category = categoryById.get(spec.categoryId());
+            PriceTierAllocator.TicketPrice price = pricesByCategory.get(spec.categoryId()).poll();
             items.add(BookingItem.builder()
                     .booking(booking)
                     .seatId(UUID.randomUUID())
@@ -557,7 +578,9 @@ public class BookingService {
                     .rowLabel("GA")
                     .seatNumber(ticketIndex++)
                     .categoryName(category.getName())
-                    .priceAtBooking(category.priceNow())
+                    .priceAtBooking(price.price())
+                    .priceTierId(price.tierId())
+                    .priceTierName(price.tierName())
                     .ticketNumber(references.nextTicketNumber())
                     .attendeeName(spec.attendeeName())
                     .attendeeEmail(spec.attendeeEmail())
@@ -675,6 +698,26 @@ public class BookingService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Active tickets per price tier, for seat-service's display of each tier's
+     * sold / remaining. Display only: a booking counts its tiers itself, under
+     * the category's stock lock (persistBooking).
+     */
+    public List<CategoryTierCountDTO> getActiveTierCountsByCategories(Collection<UUID> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) {
+            return List.of();
+        }
+        return bookingItemRepository
+                .countActiveItemsByCategoryAndPriceTier(categoryIds, Booking.BookingStatus.CANCELLED)
+                .stream()
+                .map(p -> CategoryTierCountDTO.builder()
+                        .categoryId(p.getCategoryId())
+                        .priceTierId(p.getPriceTierId())
+                        .count(p.getCount() == null ? 0L : p.getCount())
+                        .build())
+                .collect(Collectors.toList());
+    }
+
     // Same shape as getBookingsByCategory but scoped to a whole event. Lets
     // seat-service build event-level analytics in one round trip instead of
     // calling per-category.
@@ -765,6 +808,7 @@ public class BookingService {
                 .seatNumber(item.getSeatNumber())
                 .ticketNumber(item.getTicketNumber())
                 .priceAtBooking(item.getPriceAtBooking())
+                .priceTierName(item.getPriceTierName())
                 .bookedAt(b.getCreatedAt())
                 .updatedAt(b.getUpdatedAt())
                 .expiresAt(b.getExpiresAt())
@@ -932,6 +976,7 @@ public class BookingService {
                                 .rowLabel(i.getRowLabel())
                                 .seatNumber(i.getSeatNumber())
                                 .priceAtBooking(i.getPriceAtBooking())
+                                .priceTierName(i.getPriceTierName())
                                 .ticketNumber(i.getTicketNumber())
                                 .qrCode(qrCodeGenerator.toDataUri(i.getTicketNumber()))
                                 .attendeeName(i.getAttendeeName())
@@ -1058,6 +1103,7 @@ public class BookingService {
                             .rowLabel(i.getRowLabel())
                             .seatNumber(i.getSeatNumber())
                             .priceAtBooking(i.getPriceAtBooking())
+                            .priceTierName(i.getPriceTierName())
                             .ticketNumber(confirmed ? i.getTicketNumber() : null)
                             .qrCode(confirmed ? qrCodeGenerator.toDataUri(i.getTicketNumber()) : null)
                             // Name only — public view; attendee contact stays server-side.

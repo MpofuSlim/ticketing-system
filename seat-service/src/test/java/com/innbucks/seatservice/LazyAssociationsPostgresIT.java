@@ -109,6 +109,7 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
 
     private void clean() {
         jdbc.update("DELETE FROM seats");
+        jdbc.update("DELETE FROM seat_category_price_tiers");
         jdbc.update("DELETE FROM seat_categories");
     }
 
@@ -131,9 +132,11 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
                             .andExpect(jsonPath("$.data[0].sections[1].imageUrl").value("https://cdn.example.com/box.png"))
                             .andExpect(jsonPath("$.data[*].availableSeats", everyItem(is(10)))));
         }
+        // Categories, their sections, and their price tiers: one query each,
+        // whatever the number of categories.
         assertThat(measured.get("[C=6] GET /seat-categories?eventId"))
                 .isEqualTo(measured.get("[C=2] GET /seat-categories?eventId"))
-                .isEqualTo(2);
+                .isEqualTo(3);
     }
 
     @Test

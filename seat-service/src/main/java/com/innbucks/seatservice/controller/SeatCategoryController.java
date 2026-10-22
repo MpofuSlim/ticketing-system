@@ -4,8 +4,8 @@ import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.CategoryCapacityDTO;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
-import com.innbucks.seatservice.dto.EarlyBirdRequestDTO;
 import com.innbucks.seatservice.dto.EventAnalyticsDTO;
+import com.innbucks.seatservice.dto.PriceTiersRequestDTO;
 import com.innbucks.seatservice.dto.UpdateCategoryRequestDTO;
 import com.innbucks.seatservice.security.JwtAuthDetails;
 import com.innbucks.seatservice.service.SeatCategoryAnalyticsService;
@@ -71,8 +71,10 @@ public class SeatCategoryController {
                     + "show tickets remaining per category and customers can track seats left as they sell. "
                     + "If booking-service is unreachable this degrades to the stored mirror rather than "
                     + "failing the listing. `price` is the full price; `currentPrice` is what a booking made "
-                    + "now pays (the early-bird price while `earlyBird.active`), so show `currentPrice` as the "
-                    + "ticket price. Public read.")
+                    + "now pays (the ACTIVE tier's price, named by `currentTierName`), so show `currentPrice` as "
+                    + "the ticket price. `priceTiers` lists every tier in the order they apply, each with "
+                    + "`sold`, `remaining` and `status` (ACTIVE / UPCOMING / ENDED / SOLD_OUT); counts are left "
+                    + "out when booking-service cannot be asked. Public read.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -92,11 +94,13 @@ public class SeatCategoryController {
                                           "description": "Front rows",
                                           "price": 150.00,
                                           "currentPrice": 100.00,
-                                          "earlyBird": {
-                                            "price": 100.00,
-                                            "endsAt": "2026-09-08T23:59:59+02:00",
-                                            "active": true
-                                          },
+                                          "currentTierName": "Early bird",
+                                          "priceTiers": [
+                                            { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
+                                              "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "sold": 37, "remaining": 63, "status": "ACTIVE" },
+                                            { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
+                                              "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                          ],
                                           "availableSeats": 13,
                                           "sections": [
                                             { "section": "A", "seatCount": 25 },
@@ -110,7 +114,8 @@ public class SeatCategoryController {
                                           "description": "General admission",
                                           "price": 60.00,
                                           "currentPrice": 60.00,
-                                          "earlyBird": null,
+                                          "currentTierName": null,
+                                          "priceTiers": [],
                                           "availableSeats": 38,
                                           "sections": [
                                             { "section": "F", "seatCount": 50 }
@@ -134,9 +139,10 @@ public class SeatCategoryController {
     @SecurityRequirements()
     @Operation(summary = "Get category capacity",
             description = "Returns a single category's capacity + pricing (totalSeats, availableSeats, price, "
-                    + "currentPrice, earlyBird, eventId). Used by booking-service to seed its per-category ticket "
-                    + "inventory counter and price a booking: it charges `currentPrice`, worked out at this read. "
-                    + "Public read.")
+                    + "priceTiers, eventId). Used by booking-service to seed its per-category ticket inventory "
+                    + "counter and price a booking: it prices each ticket from `priceTiers`, counting the tickets "
+                    + "each tier has sold itself. The tiers carry their terms only (no counts or status); the "
+                    + "list endpoint shows those. Public read.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -153,12 +159,12 @@ public class SeatCategoryController {
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "name": "VIP",
                                         "price": 150.00,
-                                        "currentPrice": 100.00,
-                                        "earlyBird": {
-                                          "price": 100.00,
-                                          "endsAt": "2026-09-08T23:59:59+02:00",
-                                          "active": true
-                                        },
+                                        "priceTiers": [
+                                          { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
+                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100 },
+                                          { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
+                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null }
+                                        ],
                                         "totalSeats": 50,
                                         "availableSeats": 50
                                       }
@@ -186,9 +192,11 @@ public class SeatCategoryController {
     @PostMapping
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(summary = "Create category",
-            description = "Creates a seat category for an event. Requires EVENT_ORGANIZER role. An optional "
-                    + "`earlyBird` ({ price, endsAt }) sells tickets at the lower price until endsAt, then at "
-                    + "`price`. endsAt is the organizer's local time with no zone, e.g. 2026-09-08T23:59:59.")
+            description = "Creates a seat category for an event. Requires EVENT_ORGANIZER role. Optional "
+                    + "`priceTiers` (each { name, price, endsAt?, quantity? }, in the order they apply) sell "
+                    + "tickets below `price` in phases: the first tier still open is the price, and a tier "
+                    + "closes at endsAt or after quantity tickets, whichever comes first. endsAt is the "
+                    + "organizer's local time with no zone, e.g. 2026-09-08T23:59:59.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -207,11 +215,13 @@ public class SeatCategoryController {
                                         "description": "Front rows",
                                         "price": 150.00,
                                         "currentPrice": 100.00,
-                                        "earlyBird": {
-                                          "price": 100.00,
-                                          "endsAt": "2026-09-08T23:59:59+02:00",
-                                          "active": true
-                                        },
+                                        "currentTierName": "Early bird",
+                                        "priceTiers": [
+                                          { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
+                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "sold": 0, "remaining": 100, "status": "ACTIVE" },
+                                          { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
+                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                        ],
                                         "availableSeats": 50,
                                         "sections": [
                                           { "section": "A", "seatCount": 25, "imageUrl": "https://cdn.innbucks.co.zw/sections/vip-a.png" },
@@ -228,17 +238,24 @@ public class SeatCategoryController {
                     description = "Validation or domain error",
                     content = @Content(mediaType = "application/json",
                             examples = {
-                                    @ExampleObject(name = "Early bird not lower", value = """
+                                    @ExampleObject(name = "Tier not below the price", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "The early-bird price must be lower than the ticket price (150.00).",
+                                              "message": "The price of \\"Early bird\\" must be lower than the ticket price (150.00).",
                                               "data": null
                                             }
                                             """),
-                                    @ExampleObject(name = "Early bird already over", value = """
+                                    @ExampleObject(name = "Tier never closes", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "The early-bird end must be in the future.",
+                                              "message": "\\"Early bird\\" needs an end date, a number of tickets, or both.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Tier already over", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "The end of \\"Early bird\\" must be in the future.",
                                               "data": null
                                             }
                                             """),
@@ -246,7 +263,7 @@ public class SeatCategoryController {
                                             {
                                               "code": "400 BAD_REQUEST",
                                               "message": "Validation failed",
-                                              "data": { "earlyBird.price": "Early-bird price must be greater than 0" }
+                                              "data": { "priceTiers[0].price": "Tier price must be greater than 0" }
                                             }
                                             """)
                             }))
@@ -294,11 +311,13 @@ public class SeatCategoryController {
                                         "description": "Premium front-row seats, now with lounge access",
                                         "price": 160.00,
                                         "currentPrice": 100.00,
-                                        "earlyBird": {
-                                          "price": 100.00,
-                                          "endsAt": "2026-09-08T23:59:59+02:00",
-                                          "active": true
-                                        },
+                                        "currentTierName": "Early bird",
+                                        "priceTiers": [
+                                          { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
+                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 100, "sold": 37, "remaining": 63, "status": "ACTIVE" },
+                                          { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
+                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                        ],
                                         "availableSeats": 37,
                                         "sections": [
                                           { "section": "A", "seatCount": 25 },
@@ -310,7 +329,7 @@ public class SeatCategoryController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation error (blank name, non-positive price, price not above a running early bird)",
+                    description = "Validation error (blank name, non-positive price, price not above an open price tier)",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "Bad price", value = """
@@ -320,10 +339,10 @@ public class SeatCategoryController {
                                               "data": null
                                             }
                                             """),
-                                    @ExampleObject(name = "Price not above the early bird", value = """
+                                    @ExampleObject(name = "Price not above an open tier", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "The ticket price must be higher than the early-bird price (100.00) while the early bird runs. Lower or remove the early bird first.",
+                                              "message": "The ticket price must be higher than the price tier \\"Phase 1\\" (120.00). Lower or remove that tier first.",
                                               "data": null
                                             }
                                             """)
@@ -368,39 +387,46 @@ public class SeatCategoryController {
         return ResponseEntity.ok(ApiResult.ok("Seat category updated successfully", updated));
     }
 
-    @PutMapping("/{id}/early-bird")
+    @PutMapping("/{id}/price-tiers")
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
-    @Operation(summary = "Set the early-bird price",
-            description = "Sets or replaces the category's early bird: tickets sell at `price` until `endsAt`, "
-                    + "then at the category's own price, with nothing to run when it ends. `endsAt` is the "
-                    + "organizer's local time with no zone (send 2026-09-08T23:59:59 to run through "
-                    + "8 September); a value with Z or an offset is that exact instant. The early-bird price "
-                    + "must be lower than the category's price and the end in the future. Tickets already "
-                    + "booked keep the price they were booked at. Requires the owning EVENT_ORGANIZER or "
-                    + "SUPER_ADMIN. Returns the category in the list endpoint's shape.")
+    @Operation(summary = "Set the price tiers",
+            description = "Replaces the category's price tiers with `tiers`, in the order they apply (e.g. Early "
+                    + "bird, then Phase 1); `[]` removes them all. The first tier still open is the price, and once "
+                    + "all have closed the category's `price` applies. A tier closes at `endsAt` or after "
+                    + "`quantity` tickets, whichever comes first; it needs at least one. **Send the `id` of every "
+                    + "tier you keep**, so the tickets it has sold still count toward its quantity; a tier without "
+                    + "an id is new, and a stored tier left out is deleted. `endsAt` is the organizer's local time "
+                    + "with no zone (2026-09-08T23:59:59 runs through 8 September). Each tier's price must be "
+                    + "lower than the category's price. Tickets already booked keep the price they were booked "
+                    + "at. Requires the owning EVENT_ORGANIZER or SUPER_ADMIN. Returns the category in the list "
+                    + "endpoint's shape.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Early bird set",
+                    description = "Price tiers set",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = CreateCategoryResponseDTO.class),
-                            examples = @ExampleObject(name = "Early bird set", value = """
+                            examples = @ExampleObject(name = "Price tiers set", value = """
                                     {
                                       "code": "200 OK",
-                                      "message": "Early-bird price set",
+                                      "message": "Price tiers set",
                                       "data": {
                                         "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "name": "VIP",
                                         "description": "Premium front-row seats, now with lounge access",
                                         "price": 160.00,
-                                        "currentPrice": 110.00,
-                                        "earlyBird": {
-                                          "price": 110.00,
-                                          "endsAt": "2026-09-15T23:59:59+02:00",
-                                          "active": true
-                                        },
+                                        "currentPrice": 100.00,
+                                        "currentTierName": "Early bird",
+                                        "priceTiers": [
+                                          { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
+                                            "endsAt": "2026-09-08T23:59:59+02:00", "quantity": 150, "sold": 37, "remaining": 113, "status": "ACTIVE" },
+                                          { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
+                                            "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" },
+                                          { "id": "8e3a4f5b-6c7d-4e8f-a0b1-2c3d4e5f6a7b", "name": "Phase 2", "price": 140.00,
+                                            "endsAt": "2026-09-27T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                        ],
                                         "availableSeats": 37,
                                         "sections": [
                                           { "section": "A", "seatCount": 25 },
@@ -410,27 +436,49 @@ public class SeatCategoryController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "The offer is not lower than the price, already over, or badly formed",
+                    description = "A tier is not below the price, never closes, is already over, is badly formed, "
+                            + "or names an id that is not this category's",
                     content = @Content(mediaType = "application/json",
                             examples = {
-                                    @ExampleObject(name = "Not lower than the price", value = """
+                                    @ExampleObject(name = "Not below the price", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "The early-bird price must be lower than the ticket price (160.00).",
+                                              "message": "The price of \\"Phase 2\\" must be lower than the ticket price (160.00).",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Never closes", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "\\"Phase 2\\" needs an end date, a number of tickets, or both.",
                                               "data": null
                                             }
                                             """),
                                     @ExampleObject(name = "End in the past", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "The early-bird end must be in the future.",
+                                              "message": "The end of \\"Phase 2\\" must be in the future.",
                                               "data": null
                                             }
                                             """),
                                     @ExampleObject(name = "Unreadable end", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "Early-bird end must be a date and time like 2026-09-08T23:59:59.",
+                                              "message": "The end of \\"Phase 2\\" must be a date and time like 2026-09-08T23:59:59.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Duplicate name", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Two price tiers are named \\"Phase 1\\". Give each tier its own name.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Not this category's tier", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Price tier 9f4b5a6c-7d8e-4f9a-b1c2-3d4e5f6a7b8c does not belong to this category.",
                                               "data": null
                                             }
                                             """),
@@ -438,7 +486,7 @@ public class SeatCategoryController {
                                             {
                                               "code": "400 BAD_REQUEST",
                                               "message": "Validation failed",
-                                              "data": { "endsAt": "Early-bird end date and time is required" }
+                                              "data": { "tiers[2].price": "Tier price must be greater than 0" }
                                             }
                                             """)
                             })),
@@ -461,83 +509,19 @@ public class SeatCategoryController {
                                     { "code": "404 NOT_FOUND", "message": "Seat category not found", "data": null }
                                     """)))
     })
-    public ResponseEntity<ApiResult<CreateCategoryResponseDTO>> setEarlyBird(
+    public ResponseEntity<ApiResult<CreateCategoryResponseDTO>> setPriceTiers(
             @Parameter(description = "Seat category UUID") @PathVariable UUID id,
-            @Valid @RequestBody EarlyBirdRequestDTO request,
+            @Valid @RequestBody PriceTiersRequestDTO request,
             Authentication authentication,
             HttpServletRequest httpRequest
     ) {
         String requesterEmail = authentication.getName();
         boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
-        log.info("PUT /seat-categories/{}/early-bird requesterEmail={} isAdmin={}", id, requesterEmail, isAdmin);
-        CreateCategoryResponseDTO updated = categoryService.setEarlyBird(id, request, organizerUuid(authentication),
+        log.info("PUT /seat-categories/{}/price-tiers tiers={} requesterEmail={} isAdmin={}", id,
+                request.getTiers() == null ? 0 : request.getTiers().size(), requesterEmail, isAdmin);
+        CreateCategoryResponseDTO updated = categoryService.setPriceTiers(id, request, organizerUuid(authentication),
                 requesterEmail, isAdmin, httpRequest.getHeader("Authorization"));
-        return ResponseEntity.ok(ApiResult.ok("Early-bird price set", updated));
-    }
-
-    @DeleteMapping("/{id}/early-bird")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
-    @Operation(summary = "Remove the early-bird price",
-            description = "Removes the category's early bird, running or ended: from now on every booking pays "
-                    + "the category's price. Tickets already booked keep their price. Removing when there is "
-                    + "none is not an error. Requires the owning EVENT_ORGANIZER or SUPER_ADMIN.")
-    @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200",
-                    description = "Early bird removed",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = CreateCategoryResponseDTO.class),
-                            examples = @ExampleObject(name = "Early bird removed", value = """
-                                    {
-                                      "code": "200 OK",
-                                      "message": "Early-bird price removed",
-                                      "data": {
-                                        "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
-                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                        "name": "VIP",
-                                        "description": "Premium front-row seats, now with lounge access",
-                                        "price": 160.00,
-                                        "currentPrice": 160.00,
-                                        "earlyBird": null,
-                                        "availableSeats": 37,
-                                        "sections": [
-                                          { "section": "A", "seatCount": 25 },
-                                          { "section": "B", "seatCount": 25 }
-                                        ]
-                                      }
-                                    }
-                                    """))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "Missing/invalid JWT",
-                    content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Invalid token", value = """
-                                    { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
-                                    """))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Not the owning EVENT_ORGANIZER / SUPER_ADMIN",
-                    content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Forbidden", value = """
-                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
-                                    """))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
-                    description = "Category not found",
-                    content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Not found", value = """
-                                    { "code": "404 NOT_FOUND", "message": "Seat category not found", "data": null }
-                                    """)))
-    })
-    public ResponseEntity<ApiResult<CreateCategoryResponseDTO>> removeEarlyBird(
-            @Parameter(description = "Seat category UUID") @PathVariable UUID id,
-            Authentication authentication,
-            HttpServletRequest httpRequest
-    ) {
-        String requesterEmail = authentication.getName();
-        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
-        log.info("DELETE /seat-categories/{}/early-bird requesterEmail={} isAdmin={}", id, requesterEmail, isAdmin);
-        CreateCategoryResponseDTO updated = categoryService.removeEarlyBird(id, organizerUuid(authentication),
-                requesterEmail, isAdmin, httpRequest.getHeader("Authorization"));
-        return ResponseEntity.ok(ApiResult.ok("Early-bird price removed", updated));
+        return ResponseEntity.ok(ApiResult.ok("Price tiers set", updated));
     }
 
     @GetMapping("/analytics")

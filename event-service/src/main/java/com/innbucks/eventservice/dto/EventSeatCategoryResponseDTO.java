@@ -18,11 +18,13 @@ public class EventSeatCategoryResponseDTO {
     /** The category's full price. */
     private BigDecimal categoryPrice;
     /**
-     * What one ticket costs if booked now: the early-bird price while it runs,
-     * else {@code categoryPrice}. booking-service charges the same.
+     * What one ticket costs if booked now: the ACTIVE price tier's price, else
+     * {@code categoryPrice}. booking-service prices each ticket by the same rule.
      */
     private BigDecimal currentPrice;
-    /** The category's early-bird offer, or null when it has none. */
-    private EventEarlyBirdDTO earlyBird;
+    /** The ACTIVE tier's name, or null when the full price applies. */
+    private String currentTierName;
+    /** The category's price tiers in the order they apply; empty when it has none. */
+    private List<EventPriceTierDTO> priceTiers;
     private List<EventSectionResponseDTO> sections;
 }

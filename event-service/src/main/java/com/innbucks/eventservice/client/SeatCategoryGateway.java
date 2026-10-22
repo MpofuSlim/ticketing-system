@@ -1,7 +1,7 @@
 package com.innbucks.eventservice.client;
 
 import com.innbucks.eventservice.dto.ApiResult;
-import com.innbucks.eventservice.dto.EventEarlyBirdDTO;
+import com.innbucks.eventservice.dto.EventPriceTierDTO;
 import com.innbucks.eventservice.dto.EventSeatCategoryResponseDTO;
 import com.innbucks.eventservice.dto.EventSectionResponseDTO;
 import com.innbucks.eventservice.dto.SeatCategorySectionDTO;
@@ -48,7 +48,7 @@ public class SeatCategoryGateway {
     private final CircuitBreaker circuitBreaker;
     private final String seatServiceBaseUrl;
     private final ReadThroughCache layoutCache;
-    /** Decides whether an early bird is still running. Tests move it. */
+    /** Decides whether a price tier is still open. Tests move it. */
     private Clock clock = Clock.systemUTC();
 
     @Autowired
@@ -81,7 +81,7 @@ public class SeatCategoryGateway {
      * a fresh copy.
      *
      * <p>What is cached is the static layout only — name, description, price,
-     * the early-bird offer, section labels and seat counts (the allocation, not remaining stock;
+     * the price tiers' terms and sold counts, section labels and seat counts (the allocation, not remaining stock;
      * this response has never carried live availability). Category writes
      * happen in seat-service, so nothing here can evict: a new, repriced or
      * deleted category reaches the public detail view within the TTL. The
@@ -198,9 +198,11 @@ public class SeatCategoryGateway {
     /**
      * The cached form of one event's categories: immutable records, rebuilt
      * into fresh DTOs on every read so no caller can mutate what the next one
-     * is served. Holds the early-bird offer, never which price applies:
-     * {@link #toDtos} works that out at the time of each read, so a cached
-     * copy can never keep an early bird running past its end.
+     * is served. Holds each price tier's terms and the sold count seat-service
+     * reported, never which tier applies: {@link #toDtos} works that out at the
+     * time of each read, so a cached copy can never keep a tier open past its
+     * end. A sold count can be up to the TTL old (display only; the booking is
+     * priced by booking-service itself).
      */
     record CategoryLayout(List<CategoryView> categories) {
 
@@ -213,11 +215,19 @@ public class SeatCategoryGateway {
                         sections.add(new SectionView(section.getSection(), section.getSeatCount()));
                     }
                 }
-                SeatCategoryServiceResponseDTO.EarlyBird earlyBird = category.getEarlyBird();
-                LocalDateTime earlyBirdEndsAt = earlyBird == null ? null : parseUtc(earlyBird.getEndsAt());
-                BigDecimal earlyBirdPrice = earlyBird == null || earlyBirdEndsAt == null ? null : earlyBird.getPrice();
+                List<TierView> tiers = new java.util.ArrayList<>();
+                if (category.getPriceTiers() != null) {
+                    for (SeatCategoryServiceResponseDTO.PriceTier tier : category.getPriceTiers()) {
+                        LocalDateTime endsAt = parseUtc(tier.getEndsAt());
+                        if (tier.getEndsAt() != null && !tier.getEndsAt().isBlank() && endsAt == null) {
+                            continue;
+                        }
+                        tiers.add(new TierView(tier.getName(), tier.getPrice(), endsAt, tier.getQuantity(),
+                                tier.getSold()));
+                    }
+                }
                 views.add(new CategoryView(category.getName(), category.getDescription(),
-                        category.getPrice(), earlyBirdPrice, earlyBirdEndsAt, List.copyOf(sections)));
+                        category.getPrice(), List.copyOf(tiers), List.copyOf(sections)));
             }
             return new CategoryLayout(List.copyOf(views));
         }
@@ -227,42 +237,72 @@ public class SeatCategoryGateway {
                 return Collections.emptyList();
             }
             return categories.stream()
-                    .map(c -> EventSeatCategoryResponseDTO.builder()
-                            .name(c.name())
-                            .description(c.description())
-                            .categoryPrice(c.price())
-                            .currentPrice(c.earlyBirdActive(nowUtc) ? c.earlyBirdPrice() : c.price())
-                            .earlyBird(c.earlyBirdPrice() == null ? null : EventEarlyBirdDTO.builder()
-                                    .price(c.earlyBirdPrice())
-                                    .endsAt(c.earlyBirdEndsAt())
-                                    .active(c.earlyBirdActive(nowUtc))
-                                    .build())
-                            .sections(c.sections().isEmpty()
-                                    ? Collections.emptyList()
-                                    : c.sections().stream()
-                                            .map(s -> EventSectionResponseDTO.builder()
-                                                    .section(s.section())
-                                                    .seatCount(s.seatCount())
-                                                    .price(c.price())
-                                                    .build())
-                                            .collect(Collectors.toList()))
-                            .build())
+                    .map(c -> {
+                        List<EventPriceTierDTO> tiers = c.priceTiers(nowUtc);
+                        EventPriceTierDTO active = tiers.stream()
+                                .filter(t -> t.getStatus() == EventPriceTierDTO.Status.ACTIVE)
+                                .findFirst().orElse(null);
+                        return EventSeatCategoryResponseDTO.builder()
+                                .name(c.name())
+                                .description(c.description())
+                                .categoryPrice(c.price())
+                                .currentPrice(active == null ? c.price() : active.getPrice())
+                                .currentTierName(active == null ? null : active.getName())
+                                .priceTiers(tiers)
+                                .sections(c.sections().isEmpty()
+                                        ? Collections.emptyList()
+                                        : c.sections().stream()
+                                                .map(s -> EventSectionResponseDTO.builder()
+                                                        .section(s.section())
+                                                        .seatCount(s.seatCount())
+                                                        .price(c.price())
+                                                        .build())
+                                                .collect(Collectors.toList()))
+                                .build();
+                    })
                     .collect(Collectors.toList());
         }
     }
 
-    record CategoryView(String name, String description, BigDecimal price,
-                        BigDecimal earlyBirdPrice, LocalDateTime earlyBirdEndsAt, List<SectionView> sections) {
+    record CategoryView(String name, String description, BigDecimal price, List<TierView> tiers,
+                        List<SectionView> sections) {
 
         /**
          * seat-service's rule (its {@code CategoryPricing}), kept in lock-step:
-         * the early-bird price applies before its end and only while it is
-         * below the full price.
+         * tiers apply in order, the first one neither past its end nor sold to
+         * its quantity (and below the full price) is ACTIVE.
          */
-        boolean earlyBirdActive(LocalDateTime nowUtc) {
-            return price != null && earlyBirdPrice != null && earlyBirdEndsAt != null
-                    && nowUtc.isBefore(earlyBirdEndsAt) && earlyBirdPrice.compareTo(price) < 0;
+        List<EventPriceTierDTO> priceTiers(LocalDateTime nowUtc) {
+            List<EventPriceTierDTO> out = new java.util.ArrayList<>(tiers.size());
+            boolean activeFound = false;
+            for (TierView tier : tiers) {
+                EventPriceTierDTO.Status status;
+                if (tier.endsAtUtc() != null && !nowUtc.isBefore(tier.endsAtUtc())) {
+                    status = EventPriceTierDTO.Status.ENDED;
+                } else if (tier.quantity() != null && tier.sold() != null && tier.sold() >= tier.quantity()) {
+                    status = EventPriceTierDTO.Status.SOLD_OUT;
+                } else if (!activeFound && price != null && tier.price() != null
+                        && tier.price().compareTo(price) < 0) {
+                    status = EventPriceTierDTO.Status.ACTIVE;
+                    activeFound = true;
+                } else {
+                    status = EventPriceTierDTO.Status.UPCOMING;
+                }
+                out.add(EventPriceTierDTO.builder()
+                        .name(tier.name())
+                        .price(tier.price())
+                        .endsAt(tier.endsAtUtc())
+                        .quantity(tier.quantity())
+                        .remaining(tier.quantity() == null || tier.sold() == null ? null
+                                : Math.max(0L, tier.quantity() - tier.sold()))
+                        .status(status)
+                        .build());
+            }
+            return out;
         }
+    }
+
+    record TierView(String name, BigDecimal price, LocalDateTime endsAtUtc, Integer quantity, Long sold) {
     }
 
     record SectionView(String section, Integer seatCount) {
@@ -272,8 +312,8 @@ public class SeatCategoryGateway {
      * seat-service's {@code endsAt} as a UTC wall clock: with a zone (it
      * renders the market offset unless told the caller is a service) that
      * instant, without one UTC, the S2S convention. Unreadable is null, which
-     * drops the offer: the page then shows the full price, and the booking is
-     * still priced by seat-service itself.
+     * drops that tier from the page; the booking is still priced by
+     * booking-service from seat-service's own answer.
      */
     static LocalDateTime parseUtc(String value) {
         if (value == null || value.isBlank()) {
@@ -285,7 +325,7 @@ public class SeatCategoryGateway {
             try {
                 return LocalDateTime.parse(value.trim());
             } catch (DateTimeParseException unreadable) {
-                log.warn("seatCategories early-bird end unreadable, offer dropped from the event page");
+                log.warn("seatCategories price tier end unreadable, tier dropped from the event page");
                 return null;
             }
         }

@@ -7,6 +7,7 @@ import com.innbucks.seatservice.config.PooledHttpClient;
 import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.CategoryActiveCountDTO;
 import com.innbucks.seatservice.dto.CategoryBookingDTO;
+import com.innbucks.seatservice.dto.CategoryTierCountDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
@@ -76,6 +77,53 @@ public class BookingServiceClient {
      * rather than failing — never let booking-service downtime 500 a public
      * category listing.
      */
+    /**
+     * Active (PENDING + CONFIRMED) tickets per price tier, keyed category →
+     * tier → count, for showing a tier's sold / remaining / SOLD_OUT. A tier
+     * with nothing sold is absent (read it as 0). Empty Optional on any failure,
+     * like {@link #fetchActiveCountsByCategories}: the listing then shows tiers
+     * without counts rather than failing. Display only — booking-service prices
+     * each ticket from its own count.
+     */
+    public Optional<Map<UUID, Map<UUID, Long>>> fetchTierSoldCounts(Collection<UUID> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) {
+            return Optional.of(Map.of());
+        }
+        try {
+            String body = restClient.get()
+                    .uri(uriBuilder -> {
+                        uriBuilder.path("/bookings/internal/categories/tier-counts");
+                        for (UUID id : categoryIds) {
+                            uriBuilder.queryParam("categoryIds", id.toString());
+                        }
+                        return uriBuilder.build();
+                    })
+                    .header("X-Internal-Token", internalToken)
+                    .retrieve()
+                    .body(String.class);
+            Map<UUID, Map<UUID, Long>> counts = new HashMap<>();
+            if (body == null) {
+                return Optional.of(counts);
+            }
+            ApiResult<List<CategoryTierCountDTO>> envelope = objectMapper.readValue(
+                    body,
+                    new TypeReference<ApiResult<List<CategoryTierCountDTO>>>() {}
+            );
+            if (envelope.getData() != null) {
+                for (CategoryTierCountDTO row : envelope.getData()) {
+                    if (row.getCategoryId() != null && row.getPriceTierId() != null) {
+                        counts.computeIfAbsent(row.getCategoryId(), k -> new HashMap<>())
+                                .put(row.getPriceTierId(), row.getCount());
+                    }
+                }
+            }
+            return Optional.of(counts);
+        } catch (Exception e) {
+            log.warn("booking-service tier counts unavailable categoryIds={} cause={}", categoryIds, e.toString());
+            return Optional.empty();
+        }
+    }
+
     public Optional<Map<UUID, Long>> fetchActiveCountsByCategories(Collection<UUID> categoryIds) {
         if (categoryIds == null || categoryIds.isEmpty()) {
             return Optional.of(Map.of());

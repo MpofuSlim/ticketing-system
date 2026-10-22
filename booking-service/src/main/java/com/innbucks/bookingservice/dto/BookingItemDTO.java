@@ -17,6 +17,13 @@ public class BookingItemDTO {
     private String rowLabel;
     private Integer seatNumber;
     private BigDecimal priceAtBooking;
+
+    /** The price tier the ticket was sold at (e.g. "Early bird"); absent at the full price. */
+    @Schema(example = "Early bird", nullable = true,
+            description = "Price tier this ticket was sold at; absent when it was sold at the full price.")
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String priceTierName;
+
     private String ticketNumber; // e.g. 20260419-7KQ4M-9XZ2B (legacy tickets: 20260419-48291X)
 
     // Per-seat scan code. Base64 PNG wrapped as a data URI so the frontend

@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.innbucks.bookingservice.entity.Booking;
 import lombok.*;
 
@@ -47,6 +48,9 @@ public class CategoryBookingDTO {
     private Integer seatNumber;
     private String ticketNumber;
     private BigDecimal priceAtBooking;
+    /** The price tier the ticket was sold at; absent at the full price. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String priceTierName;
     /**
      * Named attendee for THIS ticket (V22), when the purchaser gave one; null
      * = the purchaser's own ticket. This is the "who is actually coming"

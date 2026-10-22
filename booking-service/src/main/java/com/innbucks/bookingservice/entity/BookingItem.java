@@ -47,6 +47,18 @@ public class BookingItem {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal priceAtBooking;
 
+    /**
+     * The seat-service price tier this ticket was sold at (V26), null at the
+     * category's full price. Counted under the category's stock lock to close
+     * a tier after its quantity; see {@code PriceTierAllocator}.
+     */
+    @Column(name = "price_tier_id")
+    private java.util.UUID priceTierId;
+
+    /** The tier's name when the ticket was sold, kept if the tier is renamed or deleted. */
+    @Column(name = "price_tier_name", length = 60)
+    private String priceTierName;
+
     // The QR payload a gate scanner validates — an entry credential, unique
     // per ticket. Minted by BookingReferences as yyyyMMdd-XXXXX-XXXXX (UTC
     // date, ten Crockford base32 symbols, e.g. 20260419-7KQ4M-9XZ2B); tickets

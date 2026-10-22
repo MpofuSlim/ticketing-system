@@ -6,6 +6,7 @@ import com.innbucks.eventservice.config.PooledHttpClientProperties;
 import com.innbucks.eventservice.config.PooledHttpClient;
 import com.innbucks.eventservice.config.HttpClientConfig;
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.innbucks.eventservice.dto.EventPriceTierDTO;
 import com.innbucks.eventservice.dto.EventSeatCategoryResponseDTO;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -31,8 +32,6 @@ import java.util.function.Supplier;
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -175,7 +174,8 @@ class SeatCategoryGatewayContractTest {
         assertTrue(dead.fetchForEvent(UUID.randomUUID()).isEmpty());
     }
 
-    private static void stubVipWithEarlyBird(UUID eventId, String endsAt) {
+    /** VIP 150.00: Early bird 100.00 (100 tickets, sold as given) until earlyEnds, then Phase 1 120.00. */
+    private static void stubVipWithTiers(UUID eventId, String earlyEnds, long earlySold) {
         wireMock.stubFor(get(urlPathEqualTo("/seat-categories"))
                 .withQueryParam("eventId", equalTo(eventId.toString()))
                 .willReturn(aResponse().withStatus(200)
@@ -192,67 +192,86 @@ class SeatCategoryGatewayContractTest {
                                       "description": "Front rows",
                                       "price": 150.00,
                                       "currentPrice": 100.00,
-                                      "earlyBird": { "price": 100.00, "endsAt": "%s", "active": true },
+                                      "currentTierName": "Early bird",
+                                      "priceTiers": [
+                                        { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
+                                          "endsAt": "%s", "quantity": 100, "sold": %d, "remaining": 0, "status": "ACTIVE" },
+                                        { "id": "7d2f3e4a-5b6c-4d7e-9f8a-0b1c2d3e4f5a", "name": "Phase 1", "price": 120.00,
+                                          "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "sold": 0, "status": "UPCOMING" }
+                                      ],
                                       "availableSeats": 50,
                                       "sections": [ { "section": "A", "seatCount": 25 } ]
                                     }
                                   ]
                                 }
-                                """.formatted(eventId, endsAt))));
+                                """.formatted(eventId, earlyEnds, earlySold))));
     }
 
     private static Clock fixedAt(String instant) {
         return Clock.fixed(Instant.parse(instant), ZoneOffset.UTC);
     }
 
+    private static List<EventPriceTierDTO.Status> statuses(EventSeatCategoryResponseDTO category) {
+        return category.getPriceTiers().stream().map(EventPriceTierDTO::getStatus).toList();
+    }
+
     @Test
-    @DisplayName("Early bird running: currentPrice is the early-bird price, the full price stays categoryPrice")
-    void earlyBird_running_isTheCurrentPrice() {
+    @DisplayName("First open tier is the current price; the full price stays categoryPrice")
+    void priceTiers_firstOpenTier_isTheCurrentPrice() {
         UUID eventId = UUID.randomUUID();
-        stubVipWithEarlyBird(eventId, "2026-09-08T23:59:59+02:00");
+        stubVipWithTiers(eventId, "2026-09-08T23:59:59+02:00", 37);
         gateway.setClock(fixedAt("2026-09-01T08:00:00Z"));
 
         EventSeatCategoryResponseDTO vip = gateway.fetchForEvent(eventId).get(0);
 
         assertEquals(new BigDecimal("150.00"), vip.getCategoryPrice());
         assertEquals(new BigDecimal("100.00"), vip.getCurrentPrice());
-        assertTrue(vip.getEarlyBird().isActive());
-        assertEquals(LocalDateTime.of(2026, 9, 8, 21, 59, 59), vip.getEarlyBird().getEndsAt());
+        assertEquals("Early bird", vip.getCurrentTierName());
+        assertEquals(List.of(EventPriceTierDTO.Status.ACTIVE, EventPriceTierDTO.Status.UPCOMING), statuses(vip));
+        assertEquals(63L, vip.getPriceTiers().get(0).getRemaining());
+        assertEquals(LocalDateTime.of(2026, 9, 8, 21, 59, 59), vip.getPriceTiers().get(0).getEndsAt());
         assertEquals(new BigDecimal("150.00"), vip.getSections().get(0).getPrice());
     }
 
     @Test
-    @DisplayName("Early bird ended: event-service decides by the end itself, whatever seat-service's flag said")
-    void earlyBird_ended_isTheFullPrice() {
+    @DisplayName("A tier sold to its quantity or past its end hands over to the next, whatever seat-service's status said")
+    void priceTiers_soldOutOrEnded_handOverToTheNext() {
         UUID eventId = UUID.randomUUID();
-        stubVipWithEarlyBird(eventId, "2026-09-08T21:59:59Z");
+        stubVipWithTiers(eventId, "2026-09-08T23:59:59+02:00", 100);
+        gateway.setClock(fixedAt("2026-09-01T08:00:00Z"));
+        EventSeatCategoryResponseDTO soldOut = gateway.fetchForEvent(eventId).get(0);
+
+        UUID other = UUID.randomUUID();
+        stubVipWithTiers(other, "2026-09-08T21:59:59Z", 0);
         gateway.setClock(fixedAt("2026-09-08T21:59:59Z"));
+        EventSeatCategoryResponseDTO ended = gateway.fetchForEvent(other).get(0);
 
-        EventSeatCategoryResponseDTO vip = gateway.fetchForEvent(eventId).get(0);
-
-        assertEquals(new BigDecimal("150.00"), vip.getCurrentPrice());
-        assertFalse(vip.getEarlyBird().isActive());
+        assertEquals(new BigDecimal("120.00"), soldOut.getCurrentPrice());
+        assertEquals(List.of(EventPriceTierDTO.Status.SOLD_OUT, EventPriceTierDTO.Status.ACTIVE), statuses(soldOut));
+        assertEquals(new BigDecimal("120.00"), ended.getCurrentPrice());
+        assertEquals(EventPriceTierDTO.Status.ENDED, ended.getPriceTiers().get(0).getStatus());
     }
 
     @Test
-    @DisplayName("Unreadable early-bird end: the offer is dropped, the categories still render")
-    void earlyBird_unreadableEnd_dropsOnlyTheOffer() {
+    @DisplayName("Unreadable tier end: that tier is dropped, the categories still render")
+    void priceTiers_unreadableEnd_dropsOnlyThatTier() {
         UUID eventId = UUID.randomUUID();
-        stubVipWithEarlyBird(eventId, "next Tuesday");
+        stubVipWithTiers(eventId, "next Tuesday", 0);
         gateway.setClock(fixedAt("2026-09-01T08:00:00Z"));
 
         EventSeatCategoryResponseDTO vip = gateway.fetchForEvent(eventId).get(0);
 
-        assertNull(vip.getEarlyBird());
-        assertEquals(new BigDecimal("150.00"), vip.getCurrentPrice());
+        assertEquals(List.of("Phase 1"),
+                vip.getPriceTiers().stream().map(EventPriceTierDTO::getName).toList());
+        assertEquals(new BigDecimal("120.00"), vip.getCurrentPrice());
         assertEquals("VIP", vip.getName());
     }
 
     @Test
-    @DisplayName("A cached layout ends the early bird on time without asking seat-service again")
-    void cachedLayout_endsTheEarlyBirdOnTime() {
+    @DisplayName("A cached layout closes a tier on time without asking seat-service again")
+    void cachedLayout_closesATierOnTime() {
         UUID eventId = UUID.randomUUID();
-        stubVipWithEarlyBird(eventId, "2026-09-08T23:59:59+02:00");
+        stubVipWithTiers(eventId, "2026-09-08T23:59:59+02:00", 0);
         SeatCategoryGateway cached = new SeatCategoryGateway(restTemplate(), passThroughBreakerFactory(),
                 "http://localhost:" + wireMock.port(),
                 new ReadCacheConfig().readCacheManager(new ReadCacheProperties()));
@@ -263,7 +282,7 @@ class SeatCategoryGatewayContractTest {
         BigDecimal after = cached.fetchForEvent(eventId).get(0).getCurrentPrice();
 
         assertEquals(new BigDecimal("100.00"), during);
-        assertEquals(new BigDecimal("150.00"), after);
+        assertEquals(new BigDecimal("120.00"), after);
         wireMock.verify(1, getRequestedFor(urlPathEqualTo("/seat-categories")));
     }
 

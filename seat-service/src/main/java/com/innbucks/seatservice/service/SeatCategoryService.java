@@ -51,6 +51,8 @@ public class SeatCategoryService {
     public static final long MAX_TOTAL_SEATS_PER_CATEGORY = 500_000L;
 
     private final SeatCategoryRepository categoryRepository;
+    /** Null only in the plain-{@code new} unit tests that predate price tiers: no tiers then. */
+    private final SeatCategoryPriceTierRepository priceTierRepository;
     private final SeatRepository seatRepository;
     private final BookingServiceClient bookingServiceClient;
     private final ObjectProvider<EventServiceClient> eventClientProvider;
@@ -59,24 +61,35 @@ public class SeatCategoryService {
 
     @org.springframework.beans.factory.annotation.Autowired
     public SeatCategoryService(SeatCategoryRepository categoryRepository,
+                               SeatCategoryPriceTierRepository priceTierRepository,
                                SeatRepository seatRepository,
                                BookingServiceClient bookingServiceClient,
                                ObjectProvider<EventServiceClient> eventClientProvider,
                                @org.springframework.beans.factory.annotation.Qualifier(ReadCacheConfig.READ_CACHE_MANAGER)
                                org.springframework.cache.CacheManager cacheManager) {
         this.categoryRepository = categoryRepository;
+        this.priceTierRepository = priceTierRepository;
         this.seatRepository = seatRepository;
         this.bookingServiceClient = bookingServiceClient;
         this.eventClientProvider = eventClientProvider;
         this.layoutCache = ReadThroughCache.of(cacheManager, ReadCacheConfig.CATEGORY_LAYOUT);
     }
 
-    /** No layout cache: every listing reads Postgres. */
+    /** No price tiers. */
+    public SeatCategoryService(SeatCategoryRepository categoryRepository,
+                               SeatRepository seatRepository,
+                               BookingServiceClient bookingServiceClient,
+                               ObjectProvider<EventServiceClient> eventClientProvider,
+                               org.springframework.cache.CacheManager cacheManager) {
+        this(categoryRepository, null, seatRepository, bookingServiceClient, eventClientProvider, cacheManager);
+    }
+
+    /** No layout cache and no price tiers: every listing reads Postgres. */
     public SeatCategoryService(SeatCategoryRepository categoryRepository,
                                SeatRepository seatRepository,
                                BookingServiceClient bookingServiceClient,
                                ObjectProvider<EventServiceClient> eventClientProvider) {
-        this(categoryRepository, seatRepository, bookingServiceClient, eventClientProvider, null);
+        this(categoryRepository, null, seatRepository, bookingServiceClient, eventClientProvider, null);
     }
 
     /**
@@ -161,9 +174,7 @@ public class SeatCategoryService {
                     request.getEventId(), request.getName(), request.getPrice());
             throw new BadRequestException("Price must be greater than 0.");
         }
-        EarlyBird earlyBird = request.getEarlyBird() == null
-                ? null
-                : resolveEarlyBird(request.getEarlyBird(), request.getPrice());
+        List<TierInput> tierInputs = validateTiers(request.getPriceTiers(), request.getPrice(), Map.of());
 
         // Sum in long to dodge int overflow when validation has already
         // passed but section counts approach Integer.MAX_VALUE collectively.
@@ -196,14 +207,13 @@ public class SeatCategoryService {
                 .name(HtmlSanitizer.stripAll(request.getName()))
                 .description(HtmlSanitizer.stripAll(request.getDescription()))
                 .price(request.getPrice())
-                .earlyBirdPrice(earlyBird == null ? null : earlyBird.price())
-                .earlyBirdEndsAt(earlyBird == null ? null : earlyBird.endsAtUtc())
                 .totalSeats(totalSeats)
                 .availableSeats(totalSeats)
                 .deleted(false)
                 .build();
 
         categoryRepository.save(category);
+        List<SeatCategoryPriceTier> tiers = replaceTiers(category.getId(), tierInputs, List.of());
 
         // Auto-generate seats with per-section capacity, e.g. A1-A5, B1-B7, C1-C8
         List<Seat> seats = new ArrayList<>();
@@ -228,9 +238,10 @@ public class SeatCategoryService {
 
         log.info("Seat category created categoryId={} eventId={} name={} totalSeats={}",
                 category.getId(), request.getEventId(), request.getName(), totalSeats);
-        // Just created — no bookings yet, so the whole category is available.
-        // Skip the booking-service round trip on the create path.
-        return toCreateResponseDTO(category, request.getSections(), category.getAvailableSeats());
+        // Just created — no bookings yet, so the whole category is available
+        // and nothing is sold at any tier. Skip the booking-service round trip.
+        return toCreateResponseDTO(category, request.getSections(), category.getAvailableSeats(),
+                tiers, Map.of());
     }
 
     /**
@@ -259,19 +270,16 @@ public class SeatCategoryService {
         // number is surfaced on the FE-facing list endpoint (getCategoriesByEvent)
         // instead.
         //
-        // currentPrice is what the booking is charged, so it is worked out
-        // here, at the moment of the booking, from the row just read — never
-        // from a cache.
-        LocalDateTime now = nowUtc();
+        //
+        // The price tiers go out as terms only, read now, never from a cache:
+        // booking-service prices each ticket from them, counting what each tier
+        // has sold under its own stock lock.
         return CategoryCapacityDTO.builder()
                 .seatCategoryId(category.getId())
                 .eventId(category.getEventId())
                 .name(category.getName())
                 .price(category.getPrice())
-                .currentPrice(CategoryPricing.currentPrice(category.getPrice(), category.getEarlyBirdPrice(),
-                        category.getEarlyBirdEndsAt(), now))
-                .earlyBird(CategoryPricing.earlyBird(category.getPrice(), category.getEarlyBirdPrice(),
-                        category.getEarlyBirdEndsAt(), now))
+                .priceTiers(CategoryPricing.terms(tierTermsOf(tiersOf(categoryId))))
                 .totalSeats(category.getTotalSeats())
                 .availableSeats(category.getAvailableSeats())
                 .build();
@@ -322,17 +330,19 @@ public class SeatCategoryService {
                 throw new BadRequestException("Price must be greater than 0.");
             }
 
-            // While an early bird runs it must stay below the price, or the
-            // "offer" would cost the same or more. One that has ended no longer
-            // matters, so it never blocks a price change.
-            if (category.getEarlyBirdPrice() != null && category.getEarlyBirdEndsAt() != null
-                    && nowUtc().isBefore(category.getEarlyBirdEndsAt())
-                    && request.getPrice().compareTo(category.getEarlyBirdPrice()) <= 0) {
-                log.warn("Category update rejected, price not above the running early bird categoryId={} "
-                        + "price={} earlyBirdPrice={}", categoryId, request.getPrice(), category.getEarlyBirdPrice());
-                throw new BadRequestException("The ticket price must be higher than the early-bird price ("
-                        + money(category.getEarlyBirdPrice()) + ") while the early bird runs. "
-                        + "Lower or remove the early bird first.");
+            // Every tier that can still apply must stay below the price, or the
+            // "discount" would cost the same or more. A tier past its end no
+            // longer matters, so it never blocks a price change. A sold-out one
+            // still counts: an expired hold can reopen it.
+            LocalDateTime now = nowUtc();
+            for (SeatCategoryPriceTier tier : tiersOf(categoryId)) {
+                boolean ended = tier.getEndsAt() != null && !now.isBefore(tier.getEndsAt());
+                if (!ended && request.getPrice().compareTo(tier.getPrice()) <= 0) {
+                    log.warn("Category update rejected, price not above an open tier categoryId={} price={} "
+                            + "tierId={} tierPrice={}", categoryId, request.getPrice(), tier.getId(), tier.getPrice());
+                    throw new BadRequestException("The ticket price must be higher than the price tier \""
+                            + tier.getName() + "\" (" + money(tier.getPrice()) + "). Lower or remove that tier first.");
+                }
             }
 
             // Renaming onto a name another live category in the same event already
@@ -357,44 +367,28 @@ public class SeatCategoryService {
     }
 
     /**
-     * Set or replace a category's early bird: tickets sell at
-     * {@code request.price} until {@code request.endsAt}, then at the category's
-     * price. Same owner rule and phases as {@link #updateCategory}. Bookings
-     * already made keep the price they were made at ({@code priceAtBooking}), so
-     * changing an offer never restates a sold ticket.
+     * Replace a category's price tiers with {@code request.tiers}, in the order
+     * they apply; an empty list removes them all. A tier sent with its
+     * {@code id} is updated in place, so the tickets already sold at it still
+     * count toward its quantity; one without an id is new; a stored tier left
+     * out is deleted. Bookings already made keep their price
+     * ({@code priceAtBooking}), so no change here restates a sold ticket. Same
+     * owner rule and phases as {@link #updateCategory}.
      */
-    public CreateCategoryResponseDTO setEarlyBird(UUID categoryId,
-                                                  EarlyBirdRequestDTO request,
-                                                  UUID callerOrganizerUuid,
-                                                  String requesterEmail,
-                                                  boolean isAdmin,
-                                                  String authHeader) {
+    public CreateCategoryResponseDTO setPriceTiers(UUID categoryId,
+                                                   PriceTiersRequestDTO request,
+                                                   UUID callerOrganizerUuid,
+                                                   String requesterEmail,
+                                                   boolean isAdmin,
+                                                   String authHeader) {
         return editCategory(categoryId, callerOrganizerUuid, requesterEmail, isAdmin, authHeader, category -> {
-            EarlyBird earlyBird = resolveEarlyBird(request, category.getPrice());
-            category.setEarlyBirdPrice(earlyBird.price());
-            category.setEarlyBirdEndsAt(earlyBird.endsAtUtc());
-            log.info("Early-bird price set categoryId={} eventId={} earlyBirdPrice={} endsAtUtc={} "
-                            + "requesterEmail={} isAdmin={}", categoryId, category.getEventId(), earlyBird.price(),
-                    earlyBird.endsAtUtc(), requesterEmail, isAdmin);
-        });
-    }
-
-    /**
-     * Remove a category's early bird, running or ended: from now on every
-     * booking pays the category's price. Removing when there is none is not an
-     * error, so a retried call answers the same.
-     */
-    public CreateCategoryResponseDTO removeEarlyBird(UUID categoryId,
-                                                     UUID callerOrganizerUuid,
-                                                     String requesterEmail,
-                                                     boolean isAdmin,
-                                                     String authHeader) {
-        return editCategory(categoryId, callerOrganizerUuid, requesterEmail, isAdmin, authHeader, category -> {
-            log.info("Early-bird price removed categoryId={} eventId={} hadEarlyBird={} requesterEmail={} isAdmin={}",
-                    categoryId, category.getEventId(), category.getEarlyBirdPrice() != null,
-                    requesterEmail, isAdmin);
-            category.setEarlyBirdPrice(null);
-            category.setEarlyBirdEndsAt(null);
+            List<SeatCategoryPriceTier> existing = tiersOf(categoryId);
+            Map<UUID, SeatCategoryPriceTier> existingById = new LinkedHashMap<>();
+            existing.forEach(tier -> existingById.put(tier.getId(), tier));
+            List<TierInput> inputs = validateTiers(request.getTiers(), category.getPrice(), existingById);
+            List<SeatCategoryPriceTier> saved = replaceTiers(categoryId, inputs, existing);
+            log.info("Price tiers set categoryId={} eventId={} tiers={} replaced={} requesterEmail={} isAdmin={}",
+                    categoryId, category.getEventId(), saved.size(), existing.size(), requesterEmail, isAdmin);
         });
     }
 
@@ -403,7 +397,7 @@ public class SeatCategoryService {
      * transaction is open (see {@link #updateCategory}): an organizer's
      * ownership check with none open, then one write transaction that re-reads
      * the category (404 if it was deleted meanwhile), applies {@code change},
-     * saves and evicts the layout, then the live count for the response after
+     * saves and evicts the layout, then the live counts for the response after
      * the commit.
      */
     private CreateCategoryResponseDTO editCategory(UUID categoryId,
@@ -417,7 +411,7 @@ public class SeatCategoryService {
             requireEventOwnership(found.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
         }
 
-        record Edited(SeatCategory category, List<SectionSeatConfigDTO> sections) {
+        record Edited(SeatCategory category, List<SectionSeatConfigDTO> sections, List<SeatCategoryPriceTier> tiers) {
         }
         Edited edited = TransactionPhases.inTransaction(writeTx, () -> {
             SeatCategory category = loadLiveForUpdate(categoryId);
@@ -427,50 +421,177 @@ public class SeatCategoryService {
 
             // Return the same shape getCategoriesByEvent emits — sections rebuilt
             // from the persisted seats (unchanged by this edit).
-            return new Edited(category, sectionsForCategory(categoryId));
+            return new Edited(category, sectionsForCategory(categoryId), tiersOf(categoryId));
         });
 
-        // Live availability for the response, after the commit (degrades to the
-        // stored mirror if booking-service is down).
+        // Live availability and tier counts for the response, after the commit
+        // (each degrades rather than failing if booking-service is down).
         Map<UUID, Long> counts = bookingServiceClient
                 .fetchActiveCountsByCategories(List.of(categoryId))
                 .orElse(null);
         SeatCategory category = edited.category();
-        return toCreateResponseDTO(category, edited.sections(), liveAvailableSeats(category, counts));
+        Map<UUID, Long> sold = soldByTier(categoryId, tierSoldCounts(
+                Map.of(categoryId, tierTermsOf(edited.tiers()))));
+        return toCreateResponseDTO(category, edited.sections(), liveAvailableSeats(category, counts),
+                edited.tiers(), sold);
     }
 
-    /** A validated early bird, its end as the UTC wall clock the column stores. */
-    private record EarlyBird(BigDecimal price, LocalDateTime endsAtUtc) {
+    /** One validated tier before it is saved; {@code id} names the stored tier it updates, or is null. */
+    private record TierInput(UUID id, String name, BigDecimal price, LocalDateTime endsAtUtc, Integer quantity) {
     }
 
     /**
-     * Check an early-bird offer against the category's full price. Re-checks
-     * what bean validation checks too, for callers that skip it.
+     * Check a requested tier list against the category's full price. Re-checks
+     * what bean validation checks too, for callers that skip it. Nothing is
+     * written: every refusal comes before the first save.
+     *
+     * @param existingById the category's stored tiers, by id (empty on create)
      */
-    private EarlyBird resolveEarlyBird(EarlyBirdRequestDTO request, BigDecimal fullPrice) {
-        BigDecimal price = request.getPrice();
-        if (price == null || price.signum() <= 0) {
-            throw new BadRequestException("Early-bird price must be greater than 0.");
+    private List<TierInput> validateTiers(List<PriceTierRequestDTO> requested, BigDecimal fullPrice,
+                                          Map<UUID, SeatCategoryPriceTier> existingById) {
+        if (requested == null || requested.isEmpty()) {
+            return List.of();
         }
-        if (price.stripTrailingZeros().scale() > 2) {
-            throw new BadRequestException("Early-bird price can have at most 2 decimal places.");
+        if (requested.size() > PriceTiersRequestDTO.MAX_TIERS) {
+            throw new BadRequestException("At most " + PriceTiersRequestDTO.MAX_TIERS
+                    + " price tiers per category.");
         }
-        if (fullPrice != null && price.compareTo(fullPrice) >= 0) {
-            log.warn("Early bird rejected, not below the ticket price earlyBirdPrice={} price={}", price, fullPrice);
-            throw new BadRequestException("The early-bird price must be lower than the ticket price ("
-                    + money(fullPrice) + ").");
+        LocalDateTime now = nowUtc();
+        Set<String> names = new HashSet<>();
+        Set<UUID> ids = new HashSet<>();
+        List<TierInput> inputs = new ArrayList<>(requested.size());
+        for (PriceTierRequestDTO tier : requested) {
+            String name = tier == null || tier.getName() == null ? "" : HtmlSanitizer.stripAll(tier.getName()).trim();
+            if (name.isEmpty()) {
+                throw new BadRequestException("Every price tier needs a name.");
+            }
+            if (name.length() > 60) {
+                throw new BadRequestException("Tier name must be at most 60 characters.");
+            }
+            if (!names.add(name.toLowerCase(Locale.ROOT))) {
+                throw new BadRequestException("Two price tiers are named \"" + name
+                        + "\". Give each tier its own name.");
+            }
+            SeatCategoryPriceTier stored = null;
+            if (tier.getId() != null) {
+                if (!ids.add(tier.getId())) {
+                    throw new BadRequestException("Price tier " + tier.getId() + " is listed twice.");
+                }
+                stored = existingById.get(tier.getId());
+                if (stored == null) {
+                    log.warn("Price tiers rejected, foreign tier id tierId={}", tier.getId());
+                    throw new BadRequestException("Price tier " + tier.getId() + " does not belong to this category.");
+                }
+            }
+            BigDecimal price = tier.getPrice();
+            if (price == null || price.signum() <= 0) {
+                throw new BadRequestException("The price of \"" + name + "\" must be greater than 0.");
+            }
+            if (price.stripTrailingZeros().scale() > 2) {
+                throw new BadRequestException("The price of \"" + name + "\" can have at most 2 decimal places.");
+            }
+            if (fullPrice != null && price.compareTo(fullPrice) >= 0) {
+                log.warn("Price tiers rejected, tier not below the ticket price tierPrice={} price={}", price, fullPrice);
+                throw new BadRequestException("The price of \"" + name + "\" must be lower than the ticket price ("
+                        + money(fullPrice) + ").");
+            }
+            Integer quantity = tier.getQuantity();
+            if (quantity != null && quantity <= 0) {
+                throw new BadRequestException("The number of tickets for \"" + name + "\" must be at least 1.");
+            }
+            LocalDateTime endsAtUtc = null;
+            if (tier.getEndsAt() != null && !tier.getEndsAt().isBlank()) {
+                try {
+                    endsAtUtc = marketTimeZone.parseToUtc(tier.getEndsAt());
+                } catch (DateTimeParseException e) {
+                    throw new BadRequestException("The end of \"" + name
+                            + "\" must be a date and time like 2026-09-08T23:59:59.");
+                }
+                // A kept tier whose end has passed and is sent back unchanged is
+                // fine: the organizer is editing the tiers after it.
+                boolean unchanged = stored != null && endsAtUtc.equals(stored.getEndsAt());
+                if (!unchanged && !endsAtUtc.isAfter(now)) {
+                    log.warn("Price tiers rejected, end not in the future endsAtUtc={}", endsAtUtc);
+                    throw new BadRequestException("The end of \"" + name + "\" must be in the future.");
+                }
+            }
+            if (endsAtUtc == null && quantity == null) {
+                throw new BadRequestException("\"" + name + "\" needs an end date, a number of tickets, or both.");
+            }
+            inputs.add(new TierInput(tier.getId(), name, price, endsAtUtc, quantity));
         }
-        LocalDateTime endsAtUtc;
-        try {
-            endsAtUtc = marketTimeZone.parseToUtc(request.getEndsAt());
-        } catch (DateTimeParseException e) {
-            throw new BadRequestException("Early-bird end must be a date and time like 2026-09-08T23:59:59.");
+        return inputs;
+    }
+
+    /**
+     * Write {@code inputs} as the category's tiers, in order: kept tiers are
+     * updated in place, new ones inserted, and stored tiers left out deleted.
+     * The order constraint is deferred (V9), so a reorder never trips it mid-flush.
+     */
+    private List<SeatCategoryPriceTier> replaceTiers(UUID categoryId, List<TierInput> inputs,
+                                                     List<SeatCategoryPriceTier> existing) {
+        if (priceTierRepository == null) {
+            if (!inputs.isEmpty()) {
+                throw new IllegalStateException("Price tiers need the price tier repository");
+            }
+            return List.of();
         }
-        if (!endsAtUtc.isAfter(nowUtc())) {
-            log.warn("Early bird rejected, end not in the future endsAtUtc={}", endsAtUtc);
-            throw new BadRequestException("The early-bird end must be in the future.");
+        Map<UUID, SeatCategoryPriceTier> existingById = new LinkedHashMap<>();
+        existing.forEach(tier -> existingById.put(tier.getId(), tier));
+        Set<UUID> keptIds = new HashSet<>();
+        List<SeatCategoryPriceTier> rows = new ArrayList<>(inputs.size());
+        for (int position = 0; position < inputs.size(); position++) {
+            TierInput input = inputs.get(position);
+            SeatCategoryPriceTier row = input.id() == null
+                    ? SeatCategoryPriceTier.builder().categoryId(categoryId).build()
+                    : existingById.get(input.id());
+            if (input.id() != null) {
+                keptIds.add(input.id());
+            }
+            row.setPosition(position);
+            row.setName(input.name());
+            row.setPrice(input.price());
+            row.setEndsAt(input.endsAtUtc());
+            row.setQuantity(input.quantity());
+            rows.add(row);
         }
-        return new EarlyBird(price, endsAtUtc);
+        List<SeatCategoryPriceTier> removed = existing.stream()
+                .filter(tier -> !keptIds.contains(tier.getId()))
+                .toList();
+        if (!removed.isEmpty()) {
+            priceTierRepository.deleteAll(removed);
+        }
+        return rows.isEmpty() ? List.of() : priceTierRepository.saveAll(rows);
+    }
+
+    /** A category's stored tiers in the order they apply; empty without the repository. */
+    private List<SeatCategoryPriceTier> tiersOf(UUID categoryId) {
+        return priceTierRepository == null ? List.of()
+                : priceTierRepository.findByCategoryIdOrderByPositionAsc(categoryId);
+    }
+
+    private static List<CategoryPricing.Tier> tierTermsOf(List<SeatCategoryPriceTier> tiers) {
+        return tiers.stream().map(CategoryPricing.Tier::of).toList();
+    }
+
+    /**
+     * Tickets sold per tier, for display, asked of booking-service only for
+     * categories that have tiers. Null when it could not be asked (tiers then
+     * show without counts); an absent category or tier has sold nothing.
+     */
+    private Map<UUID, Map<UUID, Long>> tierSoldCounts(Map<UUID, List<CategoryPricing.Tier>> tiersByCategory) {
+        List<UUID> withTiers = tiersByCategory.entrySet().stream()
+                .filter(e -> !e.getValue().isEmpty())
+                .map(Map.Entry::getKey)
+                .toList();
+        if (withTiers.isEmpty()) {
+            return Map.of();
+        }
+        return bookingServiceClient.fetchTierSoldCounts(withTiers).orElse(null);
+    }
+
+    private static Map<UUID, Long> soldByTier(UUID categoryId, Map<UUID, Map<UUID, Long>> soldCounts) {
+        return soldCounts == null ? null : soldCounts.getOrDefault(categoryId, Map.of());
     }
 
     private static String money(BigDecimal amount) {
@@ -564,7 +685,7 @@ public class SeatCategoryService {
      * The event's live categories for the public listing.
      *
      * <p><b>Two halves, cached differently.</b> The LAYOUT — which categories,
-     * their name, description, price and early-bird offer, total seats and
+     * their name, description, price and price-tier terms, total seats and
      * section breakdown — is
      * cached per event ({@code seats.cache.category-layout.ttl}, 60s) and
      * evicted by this pod's create / update / delete of a category in that
@@ -574,8 +695,9 @@ public class SeatCategoryService {
      * booking-service cannot answer, the stored mirror is read from Postgres
      * now (or taken from the rows this very call loaded) rather than from the
      * cache. Another replica can serve the old layout for up to the TTL.
-     * {@code currentPrice} is not part of the layout: it is worked out per
-     * request from the cached offer, so an early bird ends on time everywhere.
+     * {@code currentPrice} and each tier's status are not part of the layout:
+     * they are worked out per request from the cached terms and live tier
+     * counts, so a tier closes on time everywhere.
      *
      * <p>None of the write guards read through this: the capacity-headroom
      * check queries the repository itself and the delete guard asks
@@ -587,9 +709,8 @@ public class SeatCategoryService {
         EventLayout layout = layoutCache.get(eventId, () -> {
             List<SeatCategory> categories = categoryRepository.findByEventIdAndDeletedFalse(eventId);
             categories.forEach(c -> mirrorLoadedNow.put(c.getId(), c.getAvailableSeats()));
-            return EventLayout.of(categories, sectionsByCategory(categories.stream()
-                    .map(SeatCategory::getId)
-                    .collect(Collectors.toList())));
+            List<UUID> ids = categories.stream().map(SeatCategory::getId).collect(Collectors.toList());
+            return EventLayout.of(categories, sectionsByCategory(ids), tiersByCategory(ids));
         });
         List<UUID> categoryIds = layout.categories().stream()
                 .map(CategoryLayout::id)
@@ -606,11 +727,17 @@ public class SeatCategoryService {
                 : (mirrorLoadedNow.isEmpty() ? storedMirror(categoryIds) : mirrorLoadedNow);
 
         // The price in force is worked out for THIS request, not when the
-        // layout was cached, so an early bird ends on time on every replica.
+        // layout was cached, so a tier closes on time on every replica. Tier
+        // counts are asked live, like availability, and only for categories
+        // that have tiers.
+        Map<UUID, List<CategoryPricing.Tier>> tiersByCategory = new LinkedHashMap<>();
+        layout.categories().forEach(c -> tiersByCategory.put(c.id(), c.tiers()));
+        Map<UUID, Map<UUID, Long>> soldCounts = tierSoldCounts(tiersByCategory);
         LocalDateTime now = nowUtc();
         return layout.categories().stream()
                 .map(category -> category.toDto(liveAvailableSeats(
-                        category.id(), category.totalSeats(), mirror.get(category.id()), counts), now))
+                        category.id(), category.totalSeats(), mirror.get(category.id()), counts),
+                        soldByTier(category.id(), soldCounts), now))
                 .collect(Collectors.toList());
     }
 
@@ -623,12 +750,26 @@ public class SeatCategoryService {
         return mirror;
     }
 
-    /** One event's cached layout: immutable, never availability. */
+    /** Several categories' tiers in one query, each in the order it applies. */
+    private Map<UUID, List<SeatCategoryPriceTier>> tiersByCategory(List<UUID> categoryIds) {
+        if (priceTierRepository == null || categoryIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, List<SeatCategoryPriceTier>> byCategory = new LinkedHashMap<>();
+        for (SeatCategoryPriceTier tier
+                : priceTierRepository.findByCategoryIdInOrderByCategoryIdAscPositionAsc(categoryIds)) {
+            byCategory.computeIfAbsent(tier.getCategoryId(), k -> new ArrayList<>()).add(tier);
+        }
+        return byCategory;
+    }
+
+    /** One event's cached layout: immutable, never availability, never which price applies. */
     record EventLayout(List<CategoryLayout> categories) {
-        static EventLayout of(List<SeatCategory> categories, Map<UUID, List<SectionSeatConfigDTO>> sections) {
+        static EventLayout of(List<SeatCategory> categories, Map<UUID, List<SectionSeatConfigDTO>> sections,
+                              Map<UUID, List<SeatCategoryPriceTier>> tiers) {
             return new EventLayout(categories.stream()
                     .map(c -> new CategoryLayout(c.getId(), c.getEventId(), c.getName(), c.getDescription(),
-                            c.getPrice(), c.getEarlyBirdPrice(), c.getEarlyBirdEndsAt(), c.getTotalSeats(),
+                            c.getPrice(), tierTermsOf(tiers.getOrDefault(c.getId(), List.of())), c.getTotalSeats(),
                             sections.getOrDefault(c.getId(), List.of()).stream()
                                     .map(sec -> new SectionLayout(sec.getSection(), sec.getSeatCount(),
                                             sec.getImageUrl()))
@@ -638,11 +779,11 @@ public class SeatCategoryService {
     }
 
     record CategoryLayout(UUID id, UUID eventId, String name, String description,
-                          BigDecimal price, BigDecimal earlyBirdPrice, LocalDateTime earlyBirdEndsAt,
+                          BigDecimal price, List<CategoryPricing.Tier> tiers,
                           Integer totalSeats, List<SectionLayout> sections) {
 
         /** A fresh response DTO, in exactly {@code toCreateResponseDTO}'s shape. */
-        CreateCategoryResponseDTO toDto(Integer availableSeats, LocalDateTime nowUtc) {
+        CreateCategoryResponseDTO toDto(Integer availableSeats, Map<UUID, Long> soldByTier, LocalDateTime nowUtc) {
             List<SectionSeatConfigDTO> sectionCopies = sections.stream()
                     .map(section -> {
                         SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
@@ -652,14 +793,16 @@ public class SeatCategoryService {
                         return dto;
                     })
                     .collect(Collectors.toList());
+            CategoryPricing.Priced priced = CategoryPricing.price(price, tiers, soldByTier, nowUtc);
             return CreateCategoryResponseDTO.builder()
                     .seatCategoryId(id)
                     .eventId(eventId)
                     .name(name)
                     .description(description)
                     .price(price)
-                    .currentPrice(CategoryPricing.currentPrice(price, earlyBirdPrice, earlyBirdEndsAt, nowUtc))
-                    .earlyBird(CategoryPricing.earlyBird(price, earlyBirdPrice, earlyBirdEndsAt, nowUtc))
+                    .currentPrice(priced.currentPrice())
+                    .currentTierName(priced.currentTierName())
+                    .priceTiers(priced.tiers())
                     .availableSeats(availableSeats)
                     .sections(sectionCopies)
                     .build();
@@ -882,7 +1025,9 @@ public class SeatCategoryService {
     private CreateCategoryResponseDTO toCreateResponseDTO(
             SeatCategory category,
             List<SectionSeatConfigDTO> sections,
-            Integer availableSeats
+            Integer availableSeats,
+            List<SeatCategoryPriceTier> tiers,
+            Map<UUID, Long> soldByTier
     ) {
         List<SectionSeatConfigDTO> sectionCopies = sections.stream()
                 .map(section -> {
@@ -894,17 +1039,17 @@ public class SeatCategoryService {
                 })
                 .collect(Collectors.toList());
 
-        LocalDateTime now = nowUtc();
+        CategoryPricing.Priced priced = CategoryPricing.price(category.getPrice(), tierTermsOf(tiers),
+                soldByTier, nowUtc());
         return CreateCategoryResponseDTO.builder()
                 .seatCategoryId(category.getId())
                 .eventId(category.getEventId())
                 .name(category.getName())
                 .description(category.getDescription())
                 .price(category.getPrice())
-                .currentPrice(CategoryPricing.currentPrice(category.getPrice(), category.getEarlyBirdPrice(),
-                        category.getEarlyBirdEndsAt(), now))
-                .earlyBird(CategoryPricing.earlyBird(category.getPrice(), category.getEarlyBirdPrice(),
-                        category.getEarlyBirdEndsAt(), now))
+                .currentPrice(priced.currentPrice())
+                .currentTierName(priced.currentTierName())
+                .priceTiers(priced.tiers())
                 .availableSeats(availableSeats)
                 .sections(sectionCopies)
                 .build();

@@ -119,28 +119,35 @@ class CreateCategoryRequestDTOValidationTest {
     }
 
     @Test
-    void earlyBird_isValidatedInsideTheCreateRequest() {
-        EarlyBirdRequestDTO earlyBird = new EarlyBirdRequestDTO();
-        earlyBird.setPrice(new BigDecimal("0.00"));
-        earlyBird.setEndsAt(" ");
+    void priceTiers_areValidatedInsideTheCreateRequest() {
+        PriceTierRequestDTO tier = new PriceTierRequestDTO();
+        tier.setName(" ");
+        tier.setPrice(new BigDecimal("0.00"));
+        tier.setQuantity(0);
         CreateCategoryRequestDTO req = request(List.of(section("A", 25)));
-        req.setEarlyBird(earlyBird);
+        req.setPriceTiers(List.of(tier));
 
         var violations = validator.validate(req);
 
-        assertTrue(hasViolationOnPath(violations, "earlyBird.price"), "zero early-bird price must be rejected");
-        assertTrue(hasViolationOnPath(violations, "earlyBird.endsAt"), "blank early-bird end must be rejected");
+        assertTrue(hasViolationOnPath(violations, "priceTiers[0].name"), "blank tier name must be rejected");
+        assertTrue(hasViolationOnPath(violations, "priceTiers[0].price"), "zero tier price must be rejected");
+        assertTrue(hasViolationOnPath(violations, "priceTiers[0].quantity"), "zero tier quantity must be rejected");
     }
 
     @Test
-    void earlyBird_withThreeDecimals_isRejected_andNoneAtAllIsFine() {
-        EarlyBirdRequestDTO earlyBird = new EarlyBirdRequestDTO();
-        earlyBird.setPrice(new BigDecimal("99.999"));
-        earlyBird.setEndsAt("2026-09-08T23:59:59");
+    void priceTiers_threeDecimalsOrMoreThanTen_areRejected_andNoneAtAllIsFine() {
+        PriceTierRequestDTO tier = new PriceTierRequestDTO();
+        tier.setName("Early bird");
+        tier.setPrice(new BigDecimal("99.999"));
+        tier.setQuantity(100);
         CreateCategoryRequestDTO req = request(List.of(section("A", 25)));
-        req.setEarlyBird(earlyBird);
+        req.setPriceTiers(List.of(tier));
+        assertTrue(hasViolationOnPath(validator.validate(req), "priceTiers[0].price"));
 
-        assertTrue(hasViolationOnPath(validator.validate(req), "earlyBird.price"));
+        tier.setPrice(new BigDecimal("99.00"));
+        req.setPriceTiers(java.util.Collections.nCopies(11, tier));
+        assertTrue(hasViolationOnPath(validator.validate(req), "priceTiers"));
+
         assertTrue(validator.validate(request(List.of(section("A", 25)))).isEmpty());
     }
 
