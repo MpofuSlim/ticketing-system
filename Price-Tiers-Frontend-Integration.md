@@ -41,7 +41,7 @@ Anchored to the merged code (master `37d8540`).
 | **Base URL** | the API gateway, e.g. `https://<host>/foundry` |
 | **Auth (writes)** | `Authorization: Bearer <JWT>` on `POST /seat-categories`, `PUT /seat-categories/{id}`, `PUT /seat-categories/{id}/price-tiers` and the organizer report |
 | **Roles (writes)** | `EVENT_ORGANIZER` (own events only) or `SUPER_ADMIN` (any event) |
-| **Public reads** | `GET /seat-categories?eventId=`, `GET /seat-categories/{id}`, `GET /events/{id}`, `GET /events`, `GET /events/active` need **no token** |
+| **Public reads** | `GET /seat-categories?eventId=`, `GET /seat-categories/{id}` and `GET /events/{id}` need **no token** |
 | **`X-Tenant-Id`** | **not used** by seat, event or booking service. Do not send it. |
 | **Gateway** | no new route — the existing `/seat-categories/**`, `/events/**`, `/bookings/**` and `/event-organizer/**` routes cover everything here |
 
@@ -231,7 +231,16 @@ sold at full price.
 
 ## 5. Super app / Ticketize web (customer side)
 
-### 5.1 Event page — `GET /events/{id}` (also `GET /events`, `GET /events/active`)
+### 5.1 Event page — `GET /events/{id}` only
+
+> [!WARNING]
+> **Correction (2026-10-22): the event LISTS carry no prices.** `GET /events`,
+> `GET /events/active`, search and by-country return `"seatCategories": null`
+> for every event. Only `GET /events/{id}` fills it, and so only the event page
+> can show tiers. The Swagger examples for the list endpoints showed
+> categories, which was wrong; the first version of this guide repeated it.
+> Event cards and Discover therefore have no price to show or filter on until
+> the backend adds one (not built yet).
 
 Each seat category gains three fields:
 
