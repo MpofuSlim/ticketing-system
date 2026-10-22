@@ -61,6 +61,11 @@ import java.util.Map;
  *       category deleted, or seat-service unreachable), so the buyer has paid
  *       with no ticket for now; payment-service retries every minute. Alert
  *       {@code ResurrectFailed}.</li>
+ *   <li>{@code booking.ticket_check{outcome}} — the partner yes/no ticket check
+ *       ({@code POST /bookings/ticket-check}). {@code held} / {@code not_held}:
+ *       answered. {@code invalid}: the key was right but the phone or event id
+ *       was not. {@code rejected}: a missing or wrong key; a steady stream of
+ *       these is someone guessing the key.</li>
  * </ul>
  */
 @Component
@@ -71,6 +76,7 @@ public class BookingMetrics {
     public static final String EXPIRY_SKIPPED = "booking.expiry.skipped";
     public static final String HOLD_EXTENSION_REFUSED = "booking.hold.extension_refused";
     public static final String CONFIRM_RESURRECTED = "booking.confirm.resurrected";
+    public static final String TICKET_CHECK = "booking.ticket_check";
 
     /** Which generated reference clashed; the {@code reference} tag of {@link #REFERENCE_COLLISION}. */
     public enum ReferenceKind {
@@ -107,6 +113,15 @@ public class BookingMetrics {
         }
     }
 
+    public enum TicketCheckOutcome {
+        HELD, NOT_HELD, INVALID, REJECTED;
+
+        String tag() {
+            return name().toLowerCase(Locale.ROOT);
+        }
+    }
+
+    private final Map<TicketCheckOutcome, Counter> ticketChecks = new EnumMap<>(TicketCheckOutcome.class);
     private final Map<ClaimRetryOutcome, Counter> claimRetries = new EnumMap<>(ClaimRetryOutcome.class);
     private final Counter expirySkipped;
     private final Map<HoldExtensionRefusal, Counter> holdExtensionRefusals = new EnumMap<>(HoldExtensionRefusal.class);
@@ -151,6 +166,16 @@ public class BookingMetrics {
             }
             resurrections.put(reason, byOutcome);
         }
+        for (TicketCheckOutcome outcome : TicketCheckOutcome.values()) {
+            ticketChecks.put(outcome, Counter.builder(TICKET_CHECK)
+                    .description("Partner ticket checks, by outcome")
+                    .tag("outcome", outcome.tag())
+                    .register(registry));
+        }
+    }
+
+    public void ticketCheck(TicketCheckOutcome outcome) {
+        ticketChecks.get(outcome).increment();
     }
 
     public void referenceCollision(ReferenceKind kind) {

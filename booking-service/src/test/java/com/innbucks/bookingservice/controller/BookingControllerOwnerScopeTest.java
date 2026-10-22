@@ -4,6 +4,9 @@ import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.BookingItemDTO;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
+import com.innbucks.bookingservice.dto.CustomerTicketDTO;
+import com.innbucks.bookingservice.dto.TicketWindow;
+import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.exception.NotFoundException;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.service.BookingService;
@@ -212,6 +215,34 @@ class BookingControllerOwnerScopeTest {
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         verify(bookingService).getActiveByPhoneNumber(OTHER_PHONE_E164);
+    }
+
+    // ---------------- GET /bookings/me/tickets ----------------
+
+    @Test
+    void myTickets_readsTheTokensPhone_inStoredForm_withTheFilter() {
+        BookingService bookingService = mock(BookingService.class);
+        when(bookingService.getPublicTicketsByPhoneNumber(OWNER_PHONE_E164, TicketWindow.UPCOMING))
+                .thenReturn(List.of());
+
+        // The claim in local form still reaches the service as E.164.
+        ResponseEntity<ApiResult<List<CustomerTicketDTO>>> resp = controller(bookingService)
+                .getMyTickets("upcoming", auth(OWNER_EMAIL, OWNER_PHONE_LOCAL, "ROLE_CUSTOMER"));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getHeaders().getCacheControl()).isEqualTo("no-store");
+        verify(bookingService).getPublicTicketsByPhoneNumber(OWNER_PHONE_E164, TicketWindow.UPCOMING);
+    }
+
+    @Test
+    void myTickets_aSessionWithNoPhone_is400_andReadsNothing() {
+        BookingService bookingService = mock(BookingService.class);
+
+        assertThatThrownBy(() -> controller(bookingService)
+                .getMyTickets(null, auth("admin@example.com", null, "ROLE_SUPER_ADMIN")))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessage("Your session has no phone number. Sign in with your phone to see your tickets.");
+        verify(bookingService, never()).getPublicTicketsByPhoneNumber(any(), any());
     }
 
     // ---------------- GET /bookings/confirmation/{number} ----------------

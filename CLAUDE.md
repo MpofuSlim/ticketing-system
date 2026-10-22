@@ -2105,6 +2105,26 @@ row matches no organizer. Ownership is read from the row, so no event-service
 call is made. `OrganizerBookingScopePostgresIT`. A new organizer read scopes
 the same way; never OR the organizer role into an admin flag.
 
+**Ticket lookups that replace `GET /bookings/public/phone/{phone}`.** That
+route returns any number's tickets with their QR codes to anyone, and closes
+once the super app and innvents confirm they are off it. Its two replacements:
+
+- **`GET /bookings/me/tickets`**: the same ticket-wallet shape, sort and
+  `?filter=`, for the phone on the caller's own token (400 without one).
+  `SecurityConfig` lists `/bookings/me/**` as authenticated BEFORE the public
+  ticket-artifact permit, because `/bookings/*/tickets/**` matches this path
+  too; moved below it, the wallet would be served with no session.
+  `TicketCheckAndMyTicketsPostgresIT` pins the 401.
+- **`POST /bookings/ticket-check`**: a yes/no for a partner server (the super
+  app's group-chat function). `X-Api-Key` = `app.booking.ticket-check-api-key`
+  (`BOOKINGS_TICKET_CHECK_API_KEY`, a per-host secret; blank = 404). The key is
+  checked before the body is read, so a caller without it never learns which
+  field was wrong. The phone rides the body, never the URL. It counts a
+  CONFIRMED booking of the event whose purchaser or named guest has the phone.
+  The answer is `hasTicket` and nothing more: no ticket number, no QR, no count.
+  The gateway's `booking-ticket-check-route` is POST-only, exact path, IP-keyed
+  and fail-safe. `booking.ticket_check{outcome}` counts `rejected` keys.
+
 **Writes are narrower and stay that way.** `callerMayPublishAnyEvent` is
 deliberately SUPER_ADMIN + PRODUCT_MANAGER only, because `PRODUCT_OFFICER` is
 read-only. Don't collapse the two sets: "may look at anyone's event" and "may

@@ -459,6 +459,28 @@ spring:
                     # control standing between an outage and a full ticket scrape.
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # The partner yes/no ticket check (POST /bookings/ticket-check), for the
+            # super app's group-chat function. Edge-REACHABLE on purpose (the caller
+            # is a server outside the cluster) and authenticated by its own
+            # X-Api-Key inside booking-service (TicketCheckController; SecurityConfig
+            # permits the exact path). IP-keyed and fail-safe for the
+            # device-security-partner reason: a shared-key surface whose limiter is
+            # the only brake on guessing the key. Before booking-service-route, which
+            # keys on the raw Authorization header the caller controls.
+            - id: booking-ticket-check-route
+              uri: lb://booking-service
+              predicates:
+                - Path=/bookings/ticket-check
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${BOOKINGS_TICKET_CHECK_RATE_LIMIT_REPLENISH_PER_SECOND:10}
+                    redis-rate-limiter.burstCapacity: ${BOOKINGS_TICKET_CHECK_RATE_LIMIT_BURST_CAPACITY:50}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: booking-service-route
               uri: lb://booking-service
               predicates:
