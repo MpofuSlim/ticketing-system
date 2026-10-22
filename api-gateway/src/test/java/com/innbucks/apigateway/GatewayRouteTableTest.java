@@ -53,6 +53,7 @@ class GatewayRouteTableTest {
             "event-internal-deny", "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-internal-deny", "seat-service-category-route",
             "booking-internal-deny", "booking-public-phone-route", "booking-ticket-check-route",
+            "booking-create-route",
             "booking-service-route", "booking-invoices-route", "booking-tickets-route",
             "scans-route", "brand-assets-route",
             "payment-internal-deny", "payment-service-read-route",
@@ -98,7 +99,7 @@ class GatewayRouteTableTest {
             "user-event-organizer-route", "booking-event-organizer-reports-route",
             "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
-            "booking-public-phone-route", "booking-ticket-check-route",
+            "booking-public-phone-route", "booking-ticket-check-route", "booking-create-route",
             "booking-service-route", "booking-invoices-route", "booking-tickets-route",
             "scans-route", "brand-assets-route",
             "payment-service-read-route", "payments-innbucks-write-route",
@@ -146,7 +147,10 @@ class GatewayRouteTableTest {
             "auth-device-security-route", "device-security-partner-route",
             // The partner ticket check: shared-key authenticated, so the
             // limiter is the only cap on guessing the key.
-            "booking-ticket-check-route");
+            "booking-ticket-check-route",
+            // Creating a booking: public, holds stock, and is what an EcoCash
+            // PIN prompt is sent for.
+            "booking-create-route");
 
     @Autowired
     RouteDefinitionLocator locator;
@@ -263,6 +267,11 @@ class GatewayRouteTableTest {
         assertThat(order.indexOf("booking-ticket-check-route"))
                 .as("booking-ticket-check-route must match before the /bookings/** catch-all")
                 .isBetween(0, order.indexOf("booking-service-route") - 1);
+        // And for creating a booking: under the catch-all it would get the
+        // general 50/s, keyed on an Authorization header the caller picks.
+        assertThat(order.indexOf("booking-create-route"))
+                .as("booking-create-route must match before the /bookings/** catch-all")
+                .isBetween(0, order.indexOf("booking-service-route") - 1);
     }
 
     @Test
@@ -279,6 +288,28 @@ class GatewayRouteTableTest {
                 .isTrue();
         assertThat(usesResilientLimiter("booking-ticket-check-route"))
                 .as("must fail SAFE: a Redis outage must not remove the only cap on guessing the key")
+                .isTrue();
+    }
+
+    @Test
+    void bookingCreateRouteIsPostOnlyExactPathIpKeyedTightAndFailsSafe() {
+        assertThat(predicateArgs("booking-create-route", "Method")).containsExactly("POST");
+        // Exact path: GET /bookings/{id}, the ticket pages and every other
+        // /bookings/** call stay on the catch-all.
+        assertThat(predicateArgs("booking-create-route", "Path")).containsExactly("/bookings");
+        var args = route("booking-create-route").getFilters().stream()
+                .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                .findFirst().orElseThrow().getArgs();
+        assertThat(args.get("key-resolver"))
+                .as("must key on IP, never the caller-chosen Authorization header")
+                .contains("preAuthIpKeyResolver");
+        // The defaults, as bound (BOOKINGS_CREATE_RATE_LIMIT_* override them):
+        // the payment write route's rate, since a booking nobody can pay for
+        // is only a hold.
+        assertThat(args.get("redis-rate-limiter.replenishRate")).isEqualTo("1");
+        assertThat(args.get("redis-rate-limiter.burstCapacity")).isEqualTo("10");
+        assertThat(usesResilientLimiter("booking-create-route"))
+                .as("must fail SAFE: a Redis outage must not drop the cap on new holds")
                 .isTrue();
     }
 

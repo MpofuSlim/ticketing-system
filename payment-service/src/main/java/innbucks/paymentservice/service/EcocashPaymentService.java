@@ -15,6 +15,7 @@ import innbucks.paymentservice.order.OrderGatewayRegistry;
 import innbucks.paymentservice.order.OrderSnapshot;
 import innbucks.paymentservice.order.OrderType;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
+import innbucks.paymentservice.util.MsisdnMasking;
 import jakarta.annotation.PostConstruct;
 import lombok.Builder;
 import lombok.RequiredArgsConstructor;
@@ -26,8 +27,10 @@ import java.math.BigDecimal;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -251,6 +254,7 @@ public class EcocashPaymentService {
                     capitalize(noun) + " has no payer phone number — create the " + noun
                             + " with a phone number before paying", 400);
         }
+        requirePromptRoomFor(customerMsisdn);
 
         // Product hold must outlive the prompt BEFORE any ledger write or
         // upstream call. The deadline is fixed ONCE, here: the hold is sized
@@ -334,6 +338,64 @@ public class EcocashPaymentService {
                 .failed(false)
                 .promptExpiresAt(promptExpiresAt)
                 .build();
+    }
+
+    /**
+     * The per-number prompt cap: at most {@code maxPromptsPerNumber} charges to
+     * one phone within the window, or 429. A charge pushes a PIN prompt to
+     * the order's payer phone, which is whatever the order was created with,
+     * so without this one caller could aim a stream of orders at someone
+     * else's number. Counted over every spelling of the number, so writing it
+     * differently on each order does not reset the count. Refused before the
+     * hold is extended or a ledger row opened, so nothing is held for it.
+     */
+    private void requirePromptRoomFor(String msisdn) {
+        int max = ecocashProperties.getMaxPromptsPerNumber();
+        if (max <= 0) {
+            return;
+        }
+        Duration window = ecocashProperties.getPromptsPerNumberWindow();
+        Instant now = Instant.now();
+        PaymentRecordService.RecentCharges recent =
+                paymentRecordService.recentEcocashCharges(spellingsOf(msisdn), now.minus(window));
+        if (recent.count() < max) {
+            return;
+        }
+        Instant frees = recent.oldest() == null ? now.plus(window) : recent.oldest().plus(window);
+        long minutes = Math.max(1, (Duration.between(now, frees).toSeconds() + 59) / 60);
+        metrics.incEcocashCharge("number_limited");
+        log.warn("[ecocash] charge refused: {} prompts to {} in the last {} (max {})",
+                recent.count(), MsisdnMasking.mask(msisdn), window, max);
+        throw new InvalidPaymentRequestException(
+                "Too many EcoCash payment requests to this number. Try again in " + minutes
+                        + (minutes == 1 ? " minute" : " minutes") + ", or pay with an InnBucks code.", 429);
+    }
+
+    /**
+     * The spellings a Zimbabwean number can be stored under ({@code +263…},
+     * {@code 263…}, {@code 0…}, the bare 9 digits), always including the value
+     * as given. EcoCash is Zimbabwe only (the charge sends countryCode ZW).
+     */
+    static Set<String> spellingsOf(String msisdn) {
+        Set<String> spellings = new LinkedHashSet<>();
+        String trimmed = msisdn.trim();
+        spellings.add(trimmed);
+        String digits = trimmed.replaceAll("\\D", "");
+        String subscriber = null;
+        if (digits.length() == 12 && digits.startsWith("263")) {
+            subscriber = digits.substring(3);
+        } else if (digits.length() == 10 && digits.startsWith("0")) {
+            subscriber = digits.substring(1);
+        } else if (digits.length() == 9) {
+            subscriber = digits;
+        }
+        if (subscriber != null) {
+            spellings.add("+263" + subscriber);
+            spellings.add("263" + subscriber);
+            spellings.add("0" + subscriber);
+            spellings.add(subscriber);
+        }
+        return spellings;
     }
 
     /** Outcome of a Query pass / instant check on an open EIP charge. */

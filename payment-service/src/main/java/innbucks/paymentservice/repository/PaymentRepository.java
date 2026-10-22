@@ -44,6 +44,18 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
             OrderType orderType, String orderRef, Collection<Payment.PaymentStatus> statuses);
 
     /**
+     * The EcoCash per-number prompt cap: charges on {@code rail} to any of
+     * {@code msisdns} (the spellings of one number) created after
+     * {@code since}. Uses idx_payment_msisdn_created (V17).
+     */
+    long countByPaymentRailAndCustomerMsisdnInAndCreatedAtAfter(
+            PaymentRail rail, Collection<String> msisdns, Instant since);
+
+    /** The oldest of those, so the refusal can say when a place frees up. */
+    Optional<Payment> findFirstByPaymentRailAndCustomerMsisdnInAndCreatedAtAfterOrderByCreatedAtAsc(
+            PaymentRail rail, Collection<String> msisdns, Instant since);
+
+    /**
      * Reconciler sweep: rows stuck in a non-terminal state (PENDING /
      * IN_DOUBT) past the staleness threshold.
      */

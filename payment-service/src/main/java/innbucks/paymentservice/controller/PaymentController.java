@@ -399,6 +399,19 @@ public class PaymentController {
                                             }
                                             """)
                             })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429",
+                    description = "ECOCASH only: the payer's number has had 5 EcoCash payment requests in the last "
+                            + "15 minutes (every spelling of the number counts). Nothing was held or charged and "
+                            + "no prompt was sent; the message says when to try again. Offer the InnBucks code "
+                            + "instead. The gateway's own per-caller 429 on POST /payments has an empty body.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Too many EcoCash prompts to this number", value = """
+                                    {
+                                      "code": "429 TOO_MANY_REQUESTS",
+                                      "message": "Too many EcoCash payment requests to this number. Try again in 12 minutes, or pay with an InnBucks code.",
+                                      "data": null
+                                    }
+                                    """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
                     description = "The product service (booking-service / marketplace-service / "
                             + "loyalty-service) could not be read, or could not extend the hold before "

@@ -188,6 +188,13 @@ app:
     # this line is what lets the env var reach it — relaxed binding does not
     # map BOOKING_MAX_SEATS_PER_BOOKING onto app.booking.max-seats-per-booking.
     max-seats-per-booking: ${BOOKING_MAX_SEATS_PER_BOOKING:20}
+    # Per-number cap on POST /bookings: at most `max` unpaid (PENDING or
+    # CANCELLED) bookings for one purchaser phone made within `window`; the
+    # next is 429 TOO_MANY_UNPAID_BOOKINGS. Paid bookings never count. A max of
+    # 0 or less switches it off.
+    unpaid-per-number:
+      max: ${BOOKING_UNPAID_PER_NUMBER_MAX:5}
+      window: ${BOOKING_UNPAID_PER_NUMBER_WINDOW:PT15M}
     # Hold caps on PATCH /bookings/internal/{id}/extend-hold (H2). Both REFUSE
     # (409, so payment-service mints nothing); neither clamps. ISO-8601.
     # max-total-hold: no hold may run past the booking's created_at + this
