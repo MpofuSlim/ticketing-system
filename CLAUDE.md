@@ -2094,6 +2094,17 @@ on `hasRole('SUPER_ADMIN')` — `/events/by-organizer` was the odd one out, whic
 403'd the console's organiser filter for exactly the staff whose remit is
 reviewing events.
 
+**EVENT_ORGANIZER is never a cross-organizer reader.** `GET /bookings/phone/{phone}`
+and `GET /bookings/confirmation/{number}` used to put the organizer role into
+their `isAdmin` flag, so any organizer token read every phone's bookings and
+scannable QR codes, across every organizer. Now only `isPlatformStaff` reads
+everything. An organizer gets the bookings whose `tenantUserUuid` (stamped from
+the event at booking time) is theirs, plus their own number's bookings as a
+customer. Any other booking is the same 404 a non-owner gets, and an unstamped
+row matches no organizer. Ownership is read from the row, so no event-service
+call is made. `OrganizerBookingScopePostgresIT`. A new organizer read scopes
+the same way; never OR the organizer role into an admin flag.
+
 **Writes are narrower and stay that way.** `callerMayPublishAnyEvent` is
 deliberately SUPER_ADMIN + PRODUCT_MANAGER only, because `PRODUCT_OFFICER` is
 read-only. Don't collapse the two sets: "may look at anyone's event" and "may

@@ -1479,6 +1479,86 @@ class BookingServiceTest {
         assertEquals("INN-20260502-AB12CD", dto.getConfirmationNumber());
     }
 
+    // ---- organizer scope: an EVENT_ORGANIZER reads only their own events ----
+
+    private static final UUID ORGANIZER = UUID.fromString("0b9e6d3c-5a4f-4e21-9c8b-7a6f5e4d3c2b");
+
+    private static Booking confirmedBookingOwnedBy(UUID tenantUserUuid) {
+        Booking booking = confirmedBooking("alice@example.com", "+263782606983");
+        booking.setTenantUserUuid(tenantUserUuid);
+        return booking;
+    }
+
+    @Test
+    void getByConfirmationNumber_organizerOfTheBookingsEvent_getsIt() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByConfirmationNumberWithItems("INN-20260502-AB12CD"))
+                .thenReturn(Optional.of(confirmedBookingOwnedBy(ORGANIZER)));
+
+        BookingResponseDTO dto = service.getByConfirmationNumber(
+                "INN-20260502-AB12CD", "org@example.com", null, false, ORGANIZER);
+
+        assertEquals("INN-20260502-AB12CD", dto.getConfirmationNumber());
+    }
+
+    @Test
+    void getByConfirmationNumber_organizerOfAnotherEvent_throwsNotFound() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByConfirmationNumberWithItems("INN-20260502-AB12CD"))
+                .thenReturn(Optional.of(confirmedBookingOwnedBy(UUID.randomUUID())));
+
+        // The same 404 a non-owner customer gets: no "exists, not yours" answer.
+        assertThrows(com.innbucks.bookingservice.exception.NotFoundException.class,
+                () -> service.getByConfirmationNumber(
+                        "INN-20260502-AB12CD", "org@example.com", null, false, ORGANIZER));
+    }
+
+    @Test
+    void getByConfirmationNumber_organizer_bookingWithNoOwnerStamp_throwsNotFound() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByConfirmationNumberWithItems("INN-20260502-AB12CD"))
+                .thenReturn(Optional.of(confirmedBookingOwnedBy(null)));
+
+        // A row with no tenantUserUuid belongs to nobody: fails closed.
+        assertThrows(com.innbucks.bookingservice.exception.NotFoundException.class,
+                () -> service.getByConfirmationNumber(
+                        "INN-20260502-AB12CD", "org@example.com", null, false, ORGANIZER));
+    }
+
+    @Test
+    void getActiveByPhoneNumberForOrganizer_queriesByOwner_andKeepsConfirmedOnly() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        Booking confirmed = confirmedBookingOwnedBy(ORGANIZER);
+        Booking pending = confirmedBookingOwnedBy(ORGANIZER);
+        pending.setStatus(Booking.BookingStatus.PENDING);
+        when(bookingRepo.findByPhoneNumberAndTenantUserUuidOrderByCreatedAtDesc("+263782606983", ORGANIZER))
+                .thenReturn(List.of(confirmed, pending));
+
+        List<BookingResponseDTO> result = service.getActiveByPhoneNumberForOrganizer("+263782606983", ORGANIZER);
+
+        assertEquals(1, result.size());
+        assertEquals(Booking.BookingStatus.CONFIRMED, result.get(0).getStatus());
+        verify(bookingRepo, never()).findByPhoneNumberOrderByCreatedAtDesc(any());
+    }
+
+    @Test
+    void getActiveByPhoneNumberForOrganizer_refusesANullOrganizer() {
+        BookingService service = newService(mock(BookingRepository.class),
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        // A null must never widen into the unscoped lookup.
+        assertThrows(NullPointerException.class,
+                () -> service.getActiveByPhoneNumberForOrganizer("+263782606983", null));
+    }
+
     @Test
     void getByConfirmationNumber_unknownNumber_throwsNotFound() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
