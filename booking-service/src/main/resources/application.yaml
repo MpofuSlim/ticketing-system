@@ -202,6 +202,11 @@ app:
     # CONFIRMED booking when its event starts within this window. Hourly cron.
     reminder-window-hours: ${BOOKING_REMINDER_WINDOW_HOURS:24}
     reminder-cron: ${BOOKING_REMINDER_CRON:0 10 * * * *}
+    # Opt-in price-tier reminders (PriceTierReminderService, V28): a follower
+    # hears about a tier on sale once it ends within this window. Hourly cron;
+    # "-" switches the job off.
+    tier-reminder-window-hours: ${BOOKING_TIER_REMINDER_WINDOW_HOURS:24}
+    tier-reminder-cron: ${BOOKING_TIER_REMINDER_CRON:0 25 * * * *}
   idempotency:
     store: ${IDEMPOTENCY_STORE:memory}
   # Platform -> event-organizer commission invoicing. Rates are percentages

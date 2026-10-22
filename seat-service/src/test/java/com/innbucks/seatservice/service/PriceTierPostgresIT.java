@@ -165,4 +165,21 @@ class PriceTierPostgresIT extends PostgresIntegrationTestBase {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM seat_category_price_changes WHERE category_id = ?",
                 Long.class, categoryId)).isEqualTo(2);
     }
+
+    @Test
+    void theCategoriesWithATierEndingInTheWindow_areListedWithEveryTier() {
+        UUID categoryId = seedCategory();
+        set(categoryId, tier(null, "Early bird", "100.00", 100), tier(null, "Phase 1", "120.00", null));
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        // Both tiers end in 30 days (see tier()).
+        assertThat(categoryService.categoriesWithTiersEnding(now, now.plusDays(29))).isEmpty();
+        List<com.innbucks.seatservice.dto.CategoryCapacityDTO> ending =
+                categoryService.categoriesWithTiersEnding(now.plusDays(29), now.plusDays(31));
+
+        assertThat(ending).hasSize(1);
+        assertThat(ending.get(0).getSeatCategoryId()).isEqualTo(categoryId);
+        assertThat(ending.get(0).getPriceTiers()).extracting(PriceTierDTO::getName)
+                .containsExactly("Early bird", "Phase 1");
+    }
 }

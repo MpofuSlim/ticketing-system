@@ -55,6 +55,9 @@ public class SeatCategoryController {
     private final SeatCategoryService categoryService;
     private final SeatCategoryAnalyticsService analyticsService;
 
+    @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
+    private String internalApiToken;
+
     /**
      * Upper bound on @RequestParam {@code size} across listing endpoints.
      * Stops a hostile {@code size=999999} from materialising the entire
@@ -552,6 +555,86 @@ public class SeatCategoryController {
         CreateCategoryResponseDTO updated = categoryService.setPriceTiers(id, request, organizerUuid(authentication),
                 requesterEmail, isAdmin, httpRequest.getHeader("Authorization"));
         return ResponseEntity.ok(ApiResult.ok("Price tiers set", updated));
+    }
+
+    /**
+     * S2S only: booking-service's hourly tier-ending reminder job. Off the
+     * internet (gateway {@code seat-internal-deny}); the GET is permitAll in
+     * SecurityConfig ({@code /seat-categories/**}), so this token check is the
+     * authentication.
+     */
+    @GetMapping("/internal/price-tiers/ending")
+    @Operation(summary = "Categories with a price tier ending soon (internal)",
+            description = "The live categories that have a price tier ending in [from, to) (instants, e.g. "
+                    + "2026-09-07T22:00:00Z; at most 7 days apart), each with its full price and every tier's "
+                    + "terms, in the shape of GET /seat-categories/{id}. Requires X-Internal-Token. "
+                    + "booking-service decides which tier is current from its own counts.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Categories",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Ending",
+                            value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Categories retrieved successfully",
+                                      "data": [
+                                        {
+                                          "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "name": "VIP",
+                                          "price": 150.00,
+                                          "priceTiers": [
+                                            { "id": "6c1e2d3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "name": "Early bird", "price": 100.00,
+                                              "startsAt": null, "endsAt": "2026-09-08T21:59:59Z", "quantity": 100, "maxPerCustomer": 4, "refundsReopen": true }
+                                          ],
+                                          "totalSeats": 50,
+                                          "availableSeats": 50
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Bad window",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Bad window",
+                            value = """
+                                    { "code": "400 BAD_REQUEST", "message": "from and to must be instants, from before to, at most 7 days apart.", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing or wrong X-Internal-Token",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Unauthorized",
+                            value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Unauthorized", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<CategoryCapacityDTO>>> categoriesWithTiersEnding(
+            @RequestParam("from") String from,
+            @RequestParam("to") String to,
+            @org.springframework.web.bind.annotation.RequestHeader(value = "X-Internal-Token", required = false)
+            String token) {
+        if (!internalTokenMatches(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Unauthorized"));
+        }
+        java.time.LocalDateTime fromUtc;
+        java.time.LocalDateTime toUtc;
+        try {
+            fromUtc = java.time.OffsetDateTime.parse(from).withOffsetSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
+            toUtc = java.time.OffsetDateTime.parse(to).withOffsetSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
+        } catch (java.time.format.DateTimeParseException e) {
+            fromUtc = null;
+            toUtc = null;
+        }
+        if (fromUtc == null || !fromUtc.isBefore(toUtc) || fromUtc.plusDays(7).isBefore(toUtc)) {
+            return ResponseEntity.badRequest().body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                    "from and to must be instants, from before to, at most 7 days apart."));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Categories retrieved successfully",
+                categoryService.categoriesWithTiersEnding(fromUtc, toUtc)));
+    }
+
+    private boolean internalTokenMatches(String token) {
+        if (token == null || internalApiToken == null || internalApiToken.isBlank()) {
+            return false;
+        }
+        return java.security.MessageDigest.isEqual(token.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                internalApiToken.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     @GetMapping("/{id}/price-history")

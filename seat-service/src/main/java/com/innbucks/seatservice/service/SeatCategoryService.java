@@ -509,6 +509,37 @@ public class SeatCategoryService {
                 .toList();
     }
 
+    /**
+     * The live categories that have a price tier ending in {@code [fromUtc,
+     * toUtc)}, each with its full price and every tier's terms (the shape of
+     * {@link #getCategoryCapacity}), for booking-service's tier-ending reminder
+     * job. Which tier is current is left to the caller, which counts what each
+     * tier sold itself.
+     */
+    @Transactional(readOnly = true)
+    public List<CategoryCapacityDTO> categoriesWithTiersEnding(LocalDateTime fromUtc, LocalDateTime toUtc) {
+        if (priceTierRepository == null) {
+            return List.of();
+        }
+        List<UUID> categoryIds = priceTierRepository.findCategoryIdsWithTierEndingBetween(fromUtc, toUtc);
+        if (categoryIds.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, List<SeatCategoryPriceTier>> tiers = tiersByCategory(categoryIds);
+        return categoryRepository.findAllById(categoryIds).stream()
+                .filter(c -> !c.isDeleted())
+                .map(c -> CategoryCapacityDTO.builder()
+                        .seatCategoryId(c.getId())
+                        .eventId(c.getEventId())
+                        .name(c.getName())
+                        .price(c.getPrice())
+                        .priceTiers(CategoryPricing.terms(tierTermsOf(tiers.getOrDefault(c.getId(), List.of()))))
+                        .totalSeats(c.getTotalSeats())
+                        .availableSeats(c.getAvailableSeats())
+                        .build())
+                .toList();
+    }
+
     /** One validated tier before it is saved; {@code id} names the stored tier it updates, or is null. */
     private record TierInput(UUID id, String name, BigDecimal price, LocalDateTime startsAtUtc,
                              LocalDateTime endsAtUtc, Integer quantity, Integer maxPerCustomer,

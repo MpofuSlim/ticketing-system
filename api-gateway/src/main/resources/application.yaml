@@ -404,6 +404,15 @@ spring:
                     redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
+
+            # seat-service's S2S surface (booking-service's price-tier
+            # reminder job). The controller checks X-Internal-Token too; this
+            # keeps it off the internet, ahead of the /seat-categories/** route.
+            - id: seat-internal-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/seat-categories/internal/**
+
             - id: seat-service-category-route
               uri: lb://seat-service
               predicates:

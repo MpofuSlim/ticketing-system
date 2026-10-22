@@ -39,6 +39,9 @@ public class SecurityConfig {
                         .requestMatchers("/error").permitAll()
                         // Public — anyone can view seats and categories
                         .requestMatchers(HttpMethod.GET, "/seats/**").permitAll()
+                        // Covers GET /seat-categories/internal/** too (booking-service's
+                        // tier-ending reminders): the controller checks X-Internal-Token
+                        // and the gateway's seat-internal-deny keeps it off the internet.
                         .requestMatchers(HttpMethod.GET, "/seat-categories/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
