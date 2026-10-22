@@ -12,7 +12,7 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
- * One change to a category's price or price tiers (V10), written in the same
+ * One change to a category's price or price tiers (V11), written in the same
  * transaction as the change. Append-only: {@link Immutable} here, and a trigger
  * in Postgres refuses UPDATE and DELETE.
  *

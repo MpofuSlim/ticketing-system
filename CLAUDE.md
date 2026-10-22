@@ -2601,7 +2601,8 @@ runs when a tier closes: every read works out the price in force at that moment.
 - **Deploy booking-service before an organizer sets a tier.** An older booking
   image ignores `priceTiers` and charges `price`: no harm, but the tier is not
   honoured until it runs the new build.
-- **A tier can start, cap one buyer, and keep refunds counted.** `starts_at`
+- **A tier can start, cap one buyer, and keep refunds counted (seat-service V10;
+  V9 is never edited).** `starts_at`
   (inclusive; before it the tier is UPCOMING and the next open tier is the price).
   `max_per_customer`: one buyer's tickets at the tier, counted by the
   purchaser's phone, else email (`countActiveFor{Phone,Email}ByCategoryAndPriceTiers`),
@@ -2626,7 +2627,7 @@ runs when a tier closes: every read works out the price in force at that moment.
   `CategoryPricing.valueIfSoldNow`). `potentialRevenue` keeps meaning every seat
   at the full price. Null when booking-service could not be asked; the tier counts
   are fetched after the read transaction closes.
-- **Every price change is on the record (seat-service V10).**
+- **Every price change is on the record (seat-service V11).**
   `seat_category_price_changes`, written in the same transaction as the change:
   CREATED (price and tiers), PRICE_CHANGED (old/new full price; a rename records
   nothing), TIERS_CHANGED (both sides' terms as JSON, as they were; an unchanged

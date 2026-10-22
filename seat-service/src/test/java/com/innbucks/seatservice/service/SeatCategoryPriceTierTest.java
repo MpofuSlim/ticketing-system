@@ -64,7 +64,7 @@ class SeatCategoryPriceTierTest {
     private final UUID eventId = UUID.randomUUID();
     private final UUID owner = UUID.randomUUID();
     private final List<SeatCategoryPriceTier> store = new ArrayList<>();
-    /** What the service recorded as price changes (V10). */
+    /** What the service recorded as price changes (V11). */
     private final List<SeatCategoryPriceChange> changes = new ArrayList<>();
 
     private SeatCategoryRepository catRepo;
@@ -502,7 +502,7 @@ class SeatCategoryPriceTierTest {
         verify(bookings, never()).fetchTierSoldCounts(anyCollection());
     }
 
-    // --- price history (V10) ---
+    // --- price history (V11) ---
 
     @Test
     void create_recordsThePriceAndTiersItWasCreatedWith() {

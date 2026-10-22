@@ -120,7 +120,7 @@ public class SeatCategoryService {
     }
 
     /**
-     * Where each price change is recorded (V10). A setter, not required, like
+     * Where each price change is recorded (V11). A setter, not required, like
      * the ones above: the plain-{@code new} tests that predate it record nothing.
      */
     private SeatCategoryPriceChangeRepository priceChangeRepository;

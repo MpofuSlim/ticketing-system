@@ -39,7 +39,7 @@ import static org.mockito.Mockito.when;
 /**
  * V9 on real Postgres: a replacement that reorders tiers and inserts one where
  * another is leaving commits (the order constraint is deferred), kept tiers
- * keep their ids, and the CHECKs refuse a tier that could never close. V10:
+ * keep their ids, and the CHECKs refuse a tier that could never close (V10 adds the start/cap/refund terms). V11:
  * every price change is recorded, and the record refuses UPDATE and DELETE.
  */
 class PriceTierPostgresIT extends PostgresIntegrationTestBase {

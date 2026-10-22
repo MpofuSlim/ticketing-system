@@ -13,7 +13,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * The tier snapshots a price change stores (V10), and their reading back.
+ * The tier snapshots a price change stores (V11), and their reading back.
  * Dates are stored as the UTC wall clock with no zone, the columns' own
  * convention, so the response renders them at the market offset like every
  * other date a person reads.
