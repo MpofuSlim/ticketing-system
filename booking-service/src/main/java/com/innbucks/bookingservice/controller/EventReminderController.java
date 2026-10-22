@@ -3,7 +3,7 @@ package com.innbucks.bookingservice.controller;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.EventReminderDTO;
 import com.innbucks.bookingservice.dto.EventReminderRequestDTO;
-import com.innbucks.bookingservice.security.JwtAuthDetails;
+import com.innbucks.bookingservice.security.AuthenticatedCaller;
 import com.innbucks.bookingservice.service.PriceTierReminderService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -111,7 +111,6 @@ public class EventReminderController {
     }
 
     private static String phoneOf(Authentication authentication) {
-        Object details = authentication == null ? null : authentication.getDetails();
-        return details instanceof JwtAuthDetails d ? d.phoneNumber() : null;
+        return AuthenticatedCaller.phoneNumber(authentication);
     }
 }

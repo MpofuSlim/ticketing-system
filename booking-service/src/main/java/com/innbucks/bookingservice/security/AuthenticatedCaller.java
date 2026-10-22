@@ -57,6 +57,11 @@ public final class AuthenticatedCaller {
         return details == null ? null : details.organizerUuid();
     }
 
+    public static String phoneNumber(Authentication auth) {
+        JwtAuthDetails details = details(auth);
+        return details == null ? null : details.phoneNumber();
+    }
+
     private static JwtAuthDetails details(Authentication auth) {
         if (auth == null) return null;
         Object details = auth.getDetails();

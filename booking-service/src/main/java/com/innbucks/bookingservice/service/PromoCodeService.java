@@ -299,7 +299,7 @@ public class PromoCodeService {
                 .active(code.isActive())
                 .uses(usage == null || usage.getUses() == null ? 0L : usage.getUses())
                 .discountGiven(usage == null || usage.getDiscountGiven() == null
-                        ? BigDecimal.ZERO.setScale(2) : usage.getDiscountGiven())
+                        ? BigDecimal.ZERO.setScale(2, java.math.RoundingMode.UNNECESSARY) : usage.getDiscountGiven())
                 .createdAt(code.getCreatedAt())
                 .build();
     }
