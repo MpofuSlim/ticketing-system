@@ -416,6 +416,9 @@ public class EventService {
         response.setSeatCategories(owner
                 ? seatCategoryGateway.fetchForEventUncached(eventId)
                 : seatCategoryGateway.fetchForEvent(eventId));
+        // The same answer the lists give. For the public it comes from the
+        // layout fetchForEvent just cached; it is still worked out now.
+        response.setPriceFrom(priceFrom(List.of(eventId)).get(eventId));
         // Keep the organizer's internal id for the owner/admin who act on it;
         // strip it for anonymous/other-organizer (public) consumption.
         return owner ? response : stripInternalIds(response);
@@ -580,14 +583,31 @@ public class EventService {
                 .filter(Objects::nonNull)
                 .map(EventSnapshot::tenantUserUuid)
                 .toList());
+        Map<UUID, EventPriceFromDTO> prices = priceFrom(ids);
         return page.map(snapshot -> {
             EventResponseDTO dto = snapshot.toDto();
             applyLiveAvailability(dto, snapshot.eventId(), snapshot.totalCapacity(), finalCounts);
             if (snapshot.tenantUserUuid() != null) {
                 dto.setOrganizer(organizers.get(snapshot.tenantUserUuid()));
             }
+            if (snapshot.eventId() != null) {
+                dto.setPriceFrom(prices.get(snapshot.eventId()));
+            }
             return dto;
         });
+    }
+
+    /**
+     * Each event's "from" price for a list page: one seat-service call for the
+     * events not in this pod's category cache, worked out now, never cached.
+     * Empty when seat-service could not be asked: the page still serves.
+     */
+    private Map<UUID, EventPriceFromDTO> priceFrom(List<UUID> eventIds) {
+        if (eventIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<UUID, EventPriceFromDTO> prices = seatCategoryGateway.fetchPriceFrom(eventIds);
+        return prices == null ? Collections.emptyMap() : prices;
     }
 
     private Page<EventResponseDTO> enrichWithAvailability(Page<Event> page) {
@@ -602,9 +622,13 @@ public class EventService {
         if (activeCounts == null) activeCounts = Collections.emptyMap();
         Map<UUID, Long> finalCounts = activeCounts;
         Map<UUID, OrganizerDTO> organizers = resolveOrganizers(content);
+        Map<UUID, EventPriceFromDTO> prices = priceFrom(ids);
         return page.map(e -> {
             EventResponseDTO dto = toDtoWithAvailability(e, finalCounts);
             attachOrganizer(dto, e, organizers);
+            if (e.getEventId() != null) {
+                dto.setPriceFrom(prices.get(e.getEventId()));
+            }
             return dto;
         });
     }

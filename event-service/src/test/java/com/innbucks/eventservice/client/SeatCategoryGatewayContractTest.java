@@ -329,6 +329,114 @@ class SeatCategoryGatewayContractTest {
         wireMock.verify(1, getRequestedFor(urlPathEqualTo("/seat-categories")));
     }
 
+    // --- the "from" price on list pages (GET /seat-categories/by-events) ---
+
+    private static String category(UUID eventId, String name, String price, Integer availableSeats, String tiers) {
+        return """
+                { "eventId": "%s", "name": "%s", "price": %s, "availableSeats": %s, "priceTiers": %s, "sections": [] }"""
+                .formatted(eventId, name, price, availableSeats, tiers);
+    }
+
+    private static void stubByEvents(String eventIds, String... categories) {
+        wireMock.stubFor(get(urlPathEqualTo("/seat-categories/by-events"))
+                .withQueryParam("eventIds", equalTo(eventIds))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json")
+                        .withBody("{ \"code\": \"200 OK\", \"message\": \"Categories retrieved successfully\", "
+                                + "\"data\": [" + String.join(",", categories) + "] }")));
+    }
+
+    private static SeatCategoryGateway cachedGateway() {
+        SeatCategoryGateway cached = new SeatCategoryGateway(restTemplate(), passThroughBreakerFactory(),
+                "http://localhost:" + wireMock.port(),
+                new ReadCacheConfig().readCacheManager(new ReadCacheProperties()));
+        cached.setClock(fixedAt("2026-09-08T08:00:00Z"));
+        return cached;
+    }
+
+    @Test
+    @DisplayName("priceFrom: one call for the events not cached, the cheapest ticket now, cached for the next page")
+    void priceFrom_oneCallForTheEventsNotCached() {
+        UUID cachedEvent = UUID.randomUUID();
+        UUID onSale = UUID.randomUUID();
+        UUID noCategories = UUID.randomUUID();
+        stubVipWithTiers(cachedEvent, "2026-09-08T23:59:59+02:00", 0);
+        stubByEvents(onSale + "," + noCategories,
+                category(onSale, "VIP", "150.00", 13, """
+                        [ { "name": "Early bird", "price": 100.00, "endsAt": "2026-09-08T23:59:59+02:00",
+                            "quantity": 100, "sold": 37 } ]"""),
+                category(onSale, "Balcony", "120.00", 40, "[]"));
+        SeatCategoryGateway gateway = cachedGateway();
+        gateway.fetchForEvent(cachedEvent);
+
+        java.util.Map<UUID, com.innbucks.eventservice.dto.EventPriceFromDTO> prices =
+                gateway.fetchPriceFrom(List.of(cachedEvent, onSale, noCategories));
+
+        com.innbucks.eventservice.dto.EventPriceFromDTO from = prices.get(onSale);
+        assertEquals(new BigDecimal("100.00"), from.getCurrentPrice());
+        assertEquals(new BigDecimal("150.00"), from.getFullPrice());
+        assertEquals("Early bird", from.getTierName());
+        assertEquals("VIP", from.getCategoryName());
+        assertTrue(prices.containsKey(cachedEvent));
+        assertTrue(!prices.containsKey(noCategories));
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/seat-categories/by-events")));
+
+        gateway.fetchPriceFrom(List.of(onSale, noCategories));
+        gateway.fetchForEvent(onSale);
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/seat-categories/by-events")));
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/seat-categories")));
+    }
+
+    @Test
+    @DisplayName("priceFrom: a sold-out category is skipped; an event wholly sold out is flagged")
+    void priceFrom_skipsSoldOutCategories() {
+        UUID event = UUID.randomUUID();
+        UUID soldOut = UUID.randomUUID();
+        stubByEvents(event + "," + soldOut,
+                category(event, "GA", "60.00", 0, "[]"),
+                category(event, "VIP", "150.00", null, "[]"),
+                category(soldOut, "GA", "60.00", 0, "[]"),
+                category(soldOut, "VIP", "150.00", 0, "[]"));
+
+        java.util.Map<UUID, com.innbucks.eventservice.dto.EventPriceFromDTO> prices =
+                cachedGateway().fetchPriceFrom(List.of(event, soldOut));
+
+        assertEquals("VIP", prices.get(event).getCategoryName());
+        assertTrue(!prices.get(event).isSoldOut());
+        assertEquals("GA", prices.get(soldOut).getCategoryName());
+        assertEquals(new BigDecimal("60.00"), prices.get(soldOut).getCurrentPrice());
+        assertTrue(prices.get(soldOut).isSoldOut());
+    }
+
+    @Test
+    @DisplayName("priceFrom: on the same price now, the lower full price wins")
+    void priceFrom_aTieGoesToTheLowerFullPrice() {
+        UUID event = UUID.randomUUID();
+        stubByEvents(event.toString(),
+                category(event, "VIP", "150.00", 5, """
+                        [ { "name": "Early bird", "price": 100.00, "quantity": 10, "sold": 0 } ]"""),
+                category(event, "Standard", "100.00", 5, "[]"));
+
+        com.innbucks.eventservice.dto.EventPriceFromDTO from = cachedGateway().fetchPriceFrom(List.of(event)).get(event);
+
+        assertEquals("Standard", from.getCategoryName());
+        assertEquals(null, from.getTierName());
+    }
+
+    @Test
+    @DisplayName("priceFrom: seat-service down gives no price and caches nothing")
+    void priceFrom_seatServiceDown_cachesNothing() {
+        UUID event = UUID.randomUUID();
+        wireMock.stubFor(get(urlPathEqualTo("/seat-categories/by-events"))
+                .willReturn(aResponse().withStatus(503)));
+        SeatCategoryGateway gateway = cachedGateway();
+
+        assertTrue(gateway.fetchPriceFrom(List.of(event)).isEmpty());
+
+        stubByEvents(event.toString(), category(event, "GA", "60.00", 10, "[]"));
+        assertEquals(new BigDecimal("60.00"), gateway.fetchPriceFrom(List.of(event)).get(event).getCurrentPrice());
+        wireMock.verify(2, getRequestedFor(urlPathEqualTo("/seat-categories/by-events")));
+    }
+
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static CircuitBreakerFactory passThroughBreakerFactory() {
         CircuitBreakerFactory factory = mock(CircuitBreakerFactory.class);

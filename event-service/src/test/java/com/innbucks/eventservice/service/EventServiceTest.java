@@ -265,6 +265,40 @@ class EventServiceTest {
     }
 
     @Test
+    void aListAndTheDetail_carryEachEventsFromPrice_fromOneGatewayCallPerPage() {
+        EventRepository repo = mock(EventRepository.class);
+        SeatCategoryGateway seats = mock(SeatCategoryGateway.class);
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"),
+                new EventMapper(), seats, mock(BookingGateway.class), mock(OrganizerGateway.class),
+                mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        UUID onSale = UUID.randomUUID();
+        UUID noPrice = UUID.randomUUID();
+        java.util.function.Function<UUID, Event> event = id -> Event.builder().eventId(id).tenantUserUuid(ORGANIZER_A)
+                .title("T").venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1).plusHours(2))
+                .totalCapacity(100).availableTickets(100).active(true).deleted(false).build();
+        com.innbucks.eventservice.dto.EventPriceFromDTO from = com.innbucks.eventservice.dto.EventPriceFromDTO.builder()
+                .currentPrice(new java.math.BigDecimal("100.00")).fullPrice(new java.math.BigDecimal("150.00"))
+                .tierName("Early bird").categoryName("VIP").build();
+        when(seats.fetchPriceFrom(java.util.List.of(onSale, noPrice))).thenReturn(java.util.Map.of(onSale, from));
+        when(repo.findByTenantUserUuid(eq(ORGANIZER_A), any(), any(), any(), any()))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(
+                        java.util.List.of(event.apply(onSale), event.apply(noPrice))));
+
+        java.util.List<EventResponseDTO> page =
+                service.getMyEvents(ORGANIZER_A, null, null, null, 0, 10, null).getContent();
+
+        assertEquals(from, page.get(0).getPriceFrom());
+        assertNull(page.get(1).getPriceFrom());
+        verify(seats, times(1)).fetchPriceFrom(anyCollection());
+
+        when(repo.findByEventIdAndDeletedFalse(onSale)).thenReturn(Optional.of(event.apply(onSale)));
+        when(seats.fetchPriceFrom(java.util.List.of(onSale))).thenReturn(java.util.Map.of(onSale, from));
+        assertEquals(from, service.getEventById(onSale).getPriceFrom());
+    }
+
+    @Test
     void getEventById_recomputesAvailableTicketsFromBookingGateway() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = new EventMapper();

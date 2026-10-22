@@ -2316,8 +2316,8 @@ sibling services per request.
 |---|---|---|---|---|
 | `public-event-pages` (event) | query kind + from/to + venue + country + category + search text + page + size + sort | 30s / 5000 **events** | ANY event write on this pod: update, activate, deactivate, reject, approve, banner replace/delete, delete | another replica can list an event as it was (incl. just unpublished/rejected/deleted, or just past its end) for ≤30s |
 | `organizers` (event) | organizer `userUuid` | 5m / 5000 | nothing (user-service owns it) | organizer business name/address/email ≤5m old |
-| `seat-categories` (event) | eventId | 30s / 5000 | nothing (seat-service owns it) | **public** event detail's category layout ≤30s behind seat-service's answer, which can itself be ≤60s old (next row): ≤90s worst case. The owner and staff read it live |
-| `category-layout` (seat) | eventId | 60s / 5000 | create / update / delete of a category in that event, on this pod | another replica serves the old name/price/sections ≤60s |
+| `seat-categories` (event) | eventId | 30s / 5000 | nothing (seat-service owns it) | **public** event detail's category layout ≤30s behind seat-service's answer, which can itself be ≤60s old (next row): ≤90s worst case. The owner and staff read it live. Also filled by the list pages' `priceFrom` lookup, and holds each category's seats left for it (display only) |
+| `category-layout` (seat) | eventId | 60s / 5000 | create / update / delete of a category in that event, on this pod | another replica serves the old name/price/sections ≤60s. `GET /seat-categories/by-events` reads and fills the same entries |
 | `event-lookups` (booking) | eventId | 60s / 5000 | nothing (event-service owns it) | ticket list title/venue/dates, and its UPCOMING/LIVE/PAST label, ≤60s old |
 
 - **What is cached is immutable snapshots, never entities or JSON.** Records
@@ -2627,6 +2627,18 @@ runs when a tier closes: every read works out the price in force at that moment.
   `CategoryPricing.valueIfSoldNow`). `potentialRevenue` keeps meaning every seat
   at the full price. Null when booking-service could not be asked; the tier counts
   are fetched after the read transaction closes.
+- **Every event list carries a "from" price** (`EventResponseDTO.priceFrom`: the
+  cheapest ticket booked now, its full price, tier and category, `soldOut` when
+  every category is). event-service makes ONE call per list page for the events
+  not in its `seat-categories` cache, `GET /seat-categories/by-events?eventIds=`
+  (≤ 100; seat-service answers from its own layout cache plus three batched
+  queries, and asks booking-service once for availability and once for tier
+  counts), caches each event's layout as `fetchForEvent` would, and works the
+  price out on every request (`CategoryLayout.priceFrom`), never caching it. A
+  category with no seats left is skipped; its seats-left count is cached with
+  the layout (≤ 30s, display only, no sale reads it). `GET /events/{id}` carries
+  the same field; the lists' `seatCategories` stays null. seat-service
+  unreachable = `priceFrom: null`, the list still serves.
 - **Every price change is on the record (seat-service V11).**
   `seat_category_price_changes`, written in the same transaction as the change:
   CREATED (price and tiers), PRICE_CHANGED (old/new full price; a rename records

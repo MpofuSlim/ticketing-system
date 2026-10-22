@@ -135,6 +135,70 @@ class SeatCategoryServiceCachingTest {
         verify(catRepo, times(1)).findByEventIdAndDeletedFalse(otherEvent);
     }
 
+    // --- several events at once (GET /seat-categories/by-events) ---
+
+    @Test
+    void byEvents_loadsOnlyTheEventsNotCached_inOneQuery_andAsksBookingServiceOnce() {
+        UUID second = UUID.randomUUID();
+        UUID third = UUID.randomUUID();
+        SeatCategory ga = SeatCategory.builder().id(UUID.randomUUID()).eventId(second).name("General")
+                .description("desc").price(new BigDecimal("5.00")).totalSeats(50).availableSeats(50)
+                .deleted(false).build();
+        when(catRepo.findByEventIdInAndDeletedFalse(anyCollection())).thenReturn(List.of(ga));
+        when(bookings.fetchActiveCountsByCategories(anyCollection()))
+                .thenReturn(Optional.of(Map.of(vip.getId(), 5L, ga.getId(), 10L)));
+        service.getCategoriesByEvent(eventId); // eventId's layout is now cached
+        clearInvocations(catRepo, bookings, seatRepo);
+
+        List<CreateCategoryResponseDTO> listing = service.getCategoriesByEvents(List.of(eventId, second, third));
+
+        assertEquals(List.of("VIP", "General"), listing.stream().map(CreateCategoryResponseDTO::getName).toList());
+        assertEquals(eventId, listing.get(0).getEventId());
+        assertEquals(second, listing.get(1).getEventId());
+        assertEquals(45, listing.get(0).getAvailableSeats());
+        assertEquals(40, listing.get(1).getAvailableSeats());
+        verify(catRepo).findByEventIdInAndDeletedFalse(List.of(second, third));
+        verify(catRepo, never()).findByEventIdAndDeletedFalse(any());
+        verify(seatRepo, times(1)).countSections(anyCollection());
+        verify(bookings, times(1)).fetchActiveCountsByCategories(anyCollection());
+
+        // The two events loaded now are cached too, the empty one included.
+        clearInvocations(catRepo);
+        service.getCategoriesByEvents(List.of(second, third));
+        verify(catRepo, never()).findByEventIdInAndDeletedFalse(anyCollection());
+    }
+
+    @Test
+    void byEvents_whenBookingServiceIsDown_everyCategoryReadsItsStoredMirror() {
+        UUID second = UUID.randomUUID();
+        SeatCategory ga = SeatCategory.builder().id(UUID.randomUUID()).eventId(second).name("General")
+                .description("desc").price(new BigDecimal("5.00")).totalSeats(50).availableSeats(7)
+                .deleted(false).build();
+        when(catRepo.findByEventIdInAndDeletedFalse(anyCollection())).thenReturn(List.of(ga));
+        service.getCategoriesByEvent(eventId); // VIP cached: its mirror is not among the rows loaded now
+        when(bookings.fetchActiveCountsByCategories(anyCollection())).thenReturn(Optional.empty());
+        when(catRepo.findAllById(anyList())).thenReturn(List.of(category(vip.getId(), "VIP", 50, 12)));
+
+        List<CreateCategoryResponseDTO> listing = service.getCategoriesByEvents(List.of(eventId, second));
+
+        assertEquals(12, listing.get(0).getAvailableSeats());
+        assertEquals(7, listing.get(1).getAvailableSeats());
+        verify(catRepo).findAllById(List.of(vip.getId()));
+    }
+
+    @Test
+    void byEvents_refusesMoreThanAHundredEvents_andIgnoresRepeats() {
+        List<UUID> tooMany = java.util.stream.Stream.generate(UUID::randomUUID).limit(101).toList();
+        assertEquals("At most 100 events per request.",
+                assertThrows(com.innbucks.seatservice.exception.BadRequestException.class,
+                        () -> service.getCategoriesByEvents(tooMany)).getMessage());
+
+        when(catRepo.findByEventIdInAndDeletedFalse(anyCollection())).thenReturn(List.of(vip));
+        assertEquals(1, service.getCategoriesByEvents(List.of(eventId, eventId)).size());
+        verify(catRepo).findByEventIdInAndDeletedFalse(List.of(eventId));
+        assertTrue(service.getCategoriesByEvents(List.of()).isEmpty());
+    }
+
     @Test
     void create_evictsThatEventsLayout() {
         service.getCategoriesByEvent(eventId);
