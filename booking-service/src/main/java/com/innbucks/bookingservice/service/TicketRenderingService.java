@@ -90,7 +90,7 @@ public class TicketRenderingService {
             if (holder != null && !holder.isBlank()) {
                 sb.append("<div class=\"who\">Ticket for ").append(esc(holder)).append("</div>");
             }
-            sb.append("<div class=\"cat\">").append(esc(nullSafe(item.getCategoryName(), "Ticket"))).append("</div>");
+            sb.append("<div class=\"cat\">").append(esc(nullSafe(item.ticketTypeLabel(), "Ticket"))).append("</div>");
             if (item.getRowLabel() != null || item.getSeatNumber() != null) {
                 sb.append("<div class=\"seat\">Row ").append(esc(nullSafe(item.getRowLabel(), "-")))
                         .append(", Seat ").append(item.getSeatNumber() == null ? "-" : item.getSeatNumber())
@@ -135,7 +135,7 @@ public class TicketRenderingService {
                         .append(esc(holder)).append("</div>");
             }
             sb.append("<div style=\"font-weight:bold;margin-top:8px\">")
-                    .append(esc(nullSafe(item.getCategoryName(), "Ticket"))).append("</div>");
+                    .append(esc(nullSafe(item.ticketTypeLabel(), "Ticket"))).append("</div>");
             if (item.getRowLabel() != null || item.getSeatNumber() != null) {
                 sb.append("<div style=\"color:#475569;font-size:14px\">Row ")
                         .append(esc(nullSafe(item.getRowLabel(), "-"))).append(", Seat ")

@@ -102,6 +102,22 @@ public class BookingItem {
         return booking == null ? null : booking.getCustomerName();
     }
 
+    /**
+     * The ticket type as a ticket or receipt prints it: the category, and the
+     * price tier it was sold at (seat-service V9), e.g. "VIP (Early bird)".
+     * Just the category at the full price; null only when neither is known.
+     * Plain ASCII: it goes into plain-text email, and the notification API has
+     * refused typographic characters before.
+     */
+    public String ticketTypeLabel() {
+        boolean hasCategory = categoryName != null && !categoryName.isBlank();
+        boolean hasTier = priceTierName != null && !priceTierName.isBlank();
+        if (hasCategory && hasTier) {
+            return categoryName + " (" + priceTierName + ")";
+        }
+        return hasCategory ? categoryName : (hasTier ? priceTierName : null);
+    }
+
     /** True when at least one attendee contact (phone or email) is present. */
     public boolean hasAttendeeContact() {
         return (attendeePhone != null && !attendeePhone.isBlank())
