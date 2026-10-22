@@ -121,6 +121,42 @@ public final class CategoryPricing {
                 current == null ? null : current.name(), out);
     }
 
+    /**
+     * What {@code unsold} tickets would bring in if they all sold at
+     * {@code nowUtc}: the tiers open now fill in order up to what each has
+     * left (a tier without a quantity takes the rest), then the full price.
+     * A per-customer cap never limits the total, so it is ignored. Null when a
+     * quantity-limited tier is open and its count is unknown
+     * ({@code soldByTier} null), or the full price is unknown.
+     */
+    public static BigDecimal valueIfSoldNow(BigDecimal fullPrice, List<Tier> tiers, Map<UUID, Sold> soldByTier,
+                                            long unsold, LocalDateTime nowUtc) {
+        if (fullPrice == null) {
+            return null;
+        }
+        long left = Math.max(0L, unsold);
+        BigDecimal value = BigDecimal.ZERO;
+        for (Tier tier : tiers) {
+            if (left == 0) {
+                break;
+            }
+            if (tier.ended(nowUtc) || tier.notStarted(nowUtc) || !belowFullPrice(tier, fullPrice)) {
+                continue;
+            }
+            long room = left;
+            if (tier.quantity() != null) {
+                if (soldByTier == null) {
+                    return null;
+                }
+                room = Math.max(0L, tier.quantity() - tier.counted(soldByTier.getOrDefault(tier.id(), Sold.NONE)));
+            }
+            long take = Math.min(room, left);
+            value = value.add(tier.price().multiply(BigDecimal.valueOf(take)));
+            left -= take;
+        }
+        return value.add(fullPrice.multiply(BigDecimal.valueOf(left)));
+    }
+
     /** The tiers' terms alone, for the booking read: no counts, no status. */
     public static List<PriceTierDTO> terms(List<Tier> tiers) {
         return tiers.stream()

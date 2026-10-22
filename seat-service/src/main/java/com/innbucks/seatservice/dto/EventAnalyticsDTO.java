@@ -56,6 +56,8 @@ public class EventAnalyticsDTO {
         private BigDecimal pendingRevenue;   // sum priceAtBooking for PENDING — money on hold, not booked yet
         private BigDecimal paidRevenue;      // sum priceAtBooking for CONFIRMED — actual money in
         private BigDecimal potentialRevenue; // sum (totalSeats × price) per category — ceiling
+        // Sum of each category's projectedRevenue; null when any category's is unknown.
+        private BigDecimal projectedRevenue;
         private LocalDateTime mostRecentBookingAt;
     }
 
@@ -117,6 +119,11 @@ public class EventAnalyticsDTO {
         private BigDecimal pendingRevenue;   // sum priceAtBooking for PENDING — money on hold, not booked yet
         private BigDecimal paidRevenue;      // sum priceAtBooking for CONFIRMED — actual money in
         private BigDecimal potentialRevenue; // totalSeats × price (max if every seat sold)
+        // Revenue if every remaining ticket sold now: the tickets held or sold
+        // at the price they were booked at, plus the unsold ones at the price
+        // each would cost now (the open price tiers in order, then the full
+        // price). Null when booking-service could not be asked.
+        private BigDecimal projectedRevenue;
         private LocalDateTime mostRecentBookingAt;
         // Pagination metadata for the items slice below.
         private int pageNumber;

@@ -322,4 +322,73 @@ class SeatCategoryAnalyticsServiceTest {
         assertEquals(2, vip.getSeatStatusCounts().getBooked());
         assertNotNull(result.getFetchedAt());
     }
+
+    // --- projected revenue at the tier prices ---
+
+    @Test
+    void projectedRevenue_pricesTheUnsoldTicketsAtTheOpenTiersThenTheFullPrice() {
+        SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
+        BookingServiceClient bookingClient = mock(BookingServiceClient.class);
+        com.innbucks.seatservice.repository.SeatCategoryPriceTierRepository tierRepo =
+                mock(com.innbucks.seatservice.repository.SeatCategoryPriceTierRepository.class);
+        SeatCategory vip = category(CATEGORY_VIP, "VIP", 20, 17, new BigDecimal("150.00"));
+        UUID early = UUID.randomUUID();
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(vip));
+        // Two paid at 100.00 and one held at 100.00, all at Early bird; one cancelled.
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of(
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("100.00"), LocalDateTime.now()),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("100.00"), LocalDateTime.now()),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.PENDING, new BigDecimal("100.00"), LocalDateTime.now()),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CANCELLED, new BigDecimal("100.00"), LocalDateTime.now()))));
+        when(tierRepo.findByCategoryIdInOrderByCategoryIdAscPositionAsc(List.of(CATEGORY_VIP))).thenReturn(List.of(
+                com.innbucks.seatservice.entity.SeatCategoryPriceTier.builder().id(early).categoryId(CATEGORY_VIP)
+                        .position(0).name("Early bird").price(new BigDecimal("100.00")).quantity(5)
+                        .endsAt(LocalDateTime.now(java.time.ZoneOffset.UTC).plusDays(7)).build()));
+        when(bookingClient.fetchTierSoldCounts(List.of(CATEGORY_VIP))).thenReturn(Optional.of(
+                java.util.Map.of(CATEGORY_VIP, java.util.Map.of(early, new CategoryPricing.Sold(3, 0)))));
+        SeatCategoryAnalyticsService service = newService(categoryRepo, mock(SeatRepository.class), bookingClient);
+        service.setPriceTierRepository(tierRepo);
+
+        EventAnalyticsDTO result = service.getEventAnalytics(EVENT_ID, null, "admin@example.com", true, 0, 20, null);
+
+        // 300.00 taken or held + 2 unsold at the early-bird 100.00 + 15 at the full 150.00.
+        EventAnalyticsDTO.BookingStats stats = result.getCategories().get(0).getBookings();
+        assertEquals(0, new BigDecimal("2750.00").compareTo(stats.getProjectedRevenue()));
+        assertEquals(0, new BigDecimal("3000.00").compareTo(stats.getPotentialRevenue()));
+        assertEquals(0, new BigDecimal("2750.00").compareTo(result.getTotals().getProjectedRevenue()));
+    }
+
+    @Test
+    void projectedRevenue_withoutTiers_isTheFullPriceForWhatIsLeft_andNeverAsksForTierCounts() {
+        SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
+        BookingServiceClient bookingClient = mock(BookingServiceClient.class);
+        SeatCategory ga = category(CATEGORY_GA, "GA", 10, 9, new BigDecimal("60.00"));
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(ga));
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of(
+                booking(CATEGORY_GA, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("60.00"), LocalDateTime.now()))));
+        SeatCategoryAnalyticsService service = newService(categoryRepo, mock(SeatRepository.class), bookingClient);
+
+        EventAnalyticsDTO result = service.getEventAnalytics(EVENT_ID, null, "admin@example.com", true, 0, 20, null);
+
+        assertEquals(0, new BigDecimal("600.00").compareTo(
+                result.getCategories().get(0).getBookings().getProjectedRevenue()));
+        verify(bookingClient, never()).fetchTierSoldCounts(any());
+    }
+
+    @Test
+    void projectedRevenue_isNull_whenBookingServiceCannotBeAsked() {
+        SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        BookingServiceClient bookingClient = mock(BookingServiceClient.class);
+        SeatCategory ga = category(CATEGORY_GA, "GA", 10, 9, new BigDecimal("60.00"));
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(ga));
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.empty());
+        when(seatRepo.findByCategoryId(CATEGORY_GA)).thenReturn(List.of());
+
+        EventAnalyticsDTO result = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, null, "admin@example.com", true, 0, 20, null);
+
+        assertNull(result.getCategories().get(0).getBookings().getProjectedRevenue());
+        assertNull(result.getTotals().getProjectedRevenue());
+    }
 }

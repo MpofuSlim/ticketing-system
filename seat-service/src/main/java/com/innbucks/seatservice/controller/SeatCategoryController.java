@@ -564,7 +564,12 @@ public class SeatCategoryController {
                     "Tolerates booking-service downtime — `bookingServiceReachable=false` indicates " +
                     "the bookings sections reflect no-data, not zero-bookings. " +
                     "Pagination applies per-category: each category's `bookings.items` is sliced to " +
-                    "the requested page; the aggregate counts/revenue stay computed across the full set."
+                    "the requested page; the aggregate counts/revenue stay computed across the full set. " +
+                    "`potentialRevenue` is every seat at the full price; `projectedRevenue` is what the " +
+                    "category would take if every remaining ticket sold now: the tickets held or sold at the " +
+                    "price they were booked at, plus the unsold ones at the price each would cost now (the " +
+                    "open price tiers in order, e.g. 10 left at the early-bird price, then the full price). " +
+                    "Null when booking-service could not be asked."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -589,9 +594,10 @@ public class SeatCategoryController {
                                           "pendingBookings": 3,
                                           "paidBookings": 47,
                                           "cancelledBookings": 3,
-                                          "pendingRevenue": 300.00,
-                                          "paidRevenue": 4700.00,
+                                          "pendingRevenue": 260.00,
+                                          "paidRevenue": 4140.00,
                                           "potentialRevenue": 8000.00,
+                                          "projectedRevenue": 7800.00,
                                           "mostRecentBookingAt": "2026-05-02T15:45:00"
                                         },
                                         "categories": [
@@ -616,6 +622,7 @@ public class SeatCategoryController {
                                               "pendingRevenue": 200.00,
                                               "paidRevenue": 3300.00,
                                               "potentialRevenue": 5000.00,
+                                              "projectedRevenue": 4800.00,
                                               "mostRecentBookingAt": "2026-05-02T15:45:00",
                                               "pageNumber": 0,
                                               "pageSize": 20,
@@ -676,9 +683,10 @@ public class SeatCategoryController {
                                               "pendingRecords": 1,
                                               "paidRecords": 14,
                                               "cancelledRecords": 0,
-                                              "pendingRevenue": 100.00,
-                                              "paidRevenue": 1400.00,
+                                              "pendingRevenue": 60.00,
+                                              "paidRevenue": 840.00,
                                               "potentialRevenue": 3000.00,
+                                              "projectedRevenue": 3000.00,
                                               "mostRecentBookingAt": "2026-05-02T14:00:00",
                                               "pageNumber": 0,
                                               "pageSize": 20,
