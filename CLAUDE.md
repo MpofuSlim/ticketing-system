@@ -3297,6 +3297,25 @@ staged rollout, NOT a code-only PR**):
   the edge. `06-networkpolicy.yaml` is segmentation, not encryption. Needs a
   mesh or per-hop TLS + cert management.
 
+## Shop checkout spends points; it never earns (2026-10-22)
+
+**`POST /payments/shop-checkout` accepts `paymentMethod=POINTS` only.**
+`CASH` and `CASH_AND_POINTS` are a 400 from `PaymentController.validateAmounts`,
+before loyalty is called. Its cash amount was whatever the customer typed:
+nothing here collects it and no till records the sale, so earning on it
+credited points for money nobody saw (InnRewards audit finding F01).
+
+- **Loyalty refuses it too** (`400 CASH_EARN_NOT_ACCEPTED` on
+  `/loyalty/internal/shop-checkout`, InnRewards #204), so either service can
+  deploy first.
+- **Cash earns only where the shop vouches for the sale**: the till's guest
+  checkout and a merchant QR, both in loyalty-service. Don't reopen a cash leg
+  here without a COMPLETED payment that loyalty re-reads and binds to the earn.
+- `CASH` / `CASH_AND_POINTS` stay on `PaymentMethod` so an older client gets
+  the clear 400 rather than an unreadable-body error; `payment.shop_checkout`
+  still counts them as `outcome=validation_failed`, `mode=cash|mixed`.
+- Pinned by the `shopCheckout_*` cases in `PaymentControllerTest`.
+
 ## Core banking — none (Oradian removed)
 
 **There is no server-side core-banking integration.** The Oradian middleware

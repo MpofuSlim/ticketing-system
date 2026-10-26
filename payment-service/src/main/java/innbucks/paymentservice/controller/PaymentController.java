@@ -61,10 +61,9 @@ import java.util.UUID;
  *       replay: a double-tap on an already-paid/in-flight order returns that
  *       payment's receipt (with the live code if still awaiting approval),
  *       never an error.</li>
- *   <li>{@code POST /payments/shop-checkout} — pay at a shop with cash,
- *       loyalty points, or a mix. <b>Moves real loyalty points</b> via
- *       loyalty-service (earn on the cash leg, burn on the points leg —
- *       both committed atomically).</li>
+ *   <li>{@code POST /payments/shop-checkout} — pay at a shop with loyalty
+ *       points. <b>Burns real loyalty points</b> via loyalty-service. A cash
+ *       leg is refused: nothing here collects the cash, so it cannot earn.</li>
  * </ul>
  */
 @RestController
@@ -72,7 +71,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Slf4j
 @Tag(name = "Payments", description = "Customer payment endpoints. POST /payments moves real money via the "
-        + "InnBucks Bank API; shop checkout moves real loyalty points.")
+        + "InnBucks Bank API; shop checkout spends real loyalty points.")
 public class PaymentController {
 
     private final LoyaltyServiceClient loyaltyServiceClient;
@@ -888,15 +887,13 @@ public class PaymentController {
 
     @PostMapping("/shop-checkout")
     @Operation(
-            summary = "Pay at a shop (cash / points / mixed)",
-            description = "Authenticated endpoint. Delegates to loyalty-service's internal shop-checkout to " +
-                    "move REAL loyalty points: the cash portion earns points per the merchant's loyalty rules " +
-                    "(the existing earn rule + any active campaign multiplier); the points portion is burned " +
-                    "from the customer's main wallet. Both legs commit atomically inside loyalty-service. " +
-                    "The cash amount itself is not collected here — it is reported informationally (presumably " +
-                    "settled at the shop counter). " +
-                    "Set the amounts according to `paymentMethod`: CASH → only `cashAmount`; POINTS → only " +
-                    "`pointsAmount`; CASH_AND_POINTS → both."
+            summary = "Pay at a shop with points",
+            description = "Authenticated endpoint. The customer spends loyalty points at a shop: " +
+                    "`pointsAmount` is burned from their main wallet through loyalty-service's internal " +
+                    "shop-checkout. Send `paymentMethod=POINTS` with `pointsAmount` > 0 and no `cashAmount`. " +
+                    "`CASH` and `CASH_AND_POINTS` are refused with 400: this endpoint collects no money, so " +
+                    "it cannot award points for cash. Points for a cash purchase are earned at the till or " +
+                    "by scanning the shop's QR code."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -904,7 +901,7 @@ public class PaymentController {
                     description = "Checkout complete",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ShopCheckoutResponse.class),
-                            examples = @ExampleObject(name = "Cash + points", value = """
+                            examples = @ExampleObject(name = "Points", value = """
                                     {
                                       "code": "200 OK",
                                       "message": "Shop checkout processed successfully",
@@ -913,24 +910,32 @@ public class PaymentController {
                                         "shopId": "5b1c2d3e-4567-890a-bcde-f01234567890",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "msisdn": "0712345678",
-                                        "paymentMethod": "CASH_AND_POINTS",
-                                        "cashAmount": 10.00,
+                                        "paymentMethod": "POINTS",
+                                        "cashAmount": 0,
                                         "pointsRedeemed": 200.0000,
-                                        "pointsEarned": 12.5000,
+                                        "pointsEarned": 0,
                                         "processedAt": "2026-05-14T10:30:00",
                                         "reference": "SHOP-7c9e6679-7425-40de-944b-e07fc1f90ae7"
                                       }
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure, amounts inconsistent with paymentMethod, or " +
-                            "loyalty-service rejected the call (inactive shop/merchant, insufficient balance, etc.)",
+                    description = "Validation failure, a cash payment method, amounts inconsistent with " +
+                            "paymentMethod, or loyalty-service rejected the call (inactive shop/merchant, " +
+                            "insufficient balance, etc.)",
                     content = @Content(mediaType = "application/json",
                             examples = {
+                                    @ExampleObject(name = "Cash not accepted", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "paymentMethod=CASH is not accepted: points for a cash purchase are earned at the till or by scanning the shop's QR code. Use paymentMethod=POINTS to pay with points.",
+                                              "data": null
+                                            }
+                                            """),
                                     @ExampleObject(name = "Amounts inconsistent", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "paymentMethod=CASH requires cashAmount > 0 and pointsAmount must be null/zero",
+                                              "message": "paymentMethod=POINTS requires pointsAmount > 0 and cashAmount must be null/zero",
                                               "data": null
                                             }
                                             """),
@@ -1089,27 +1094,26 @@ public class PaymentController {
     /**
      * Cross-field validation between {@code paymentMethod} and the two amount
      * fields — bean validation can't express this on its own.
+     *
+     * <p>Only POINTS is accepted. A cash amount here is whatever the customer
+     * typed: this endpoint collects nothing and no till records the sale, so
+     * earning on it would credit points for money nobody saw. Points for a cash
+     * sale are earned where the shop vouches for it — the till's checkout or
+     * the shop's QR code. CASH and CASH_AND_POINTS stay on the enum so an older
+     * client gets this 400 rather than an unreadable-body error.
      */
     private static void validateAmounts(ShopCheckoutRequest r) {
         boolean cash = r.getCashAmount() != null && r.getCashAmount().signum() > 0;
         boolean points = r.getPointsAmount() != null && r.getPointsAmount().signum() > 0;
         switch (r.getPaymentMethod()) {
-            case CASH -> {
-                if (!cash || points) {
-                    throw new BadRequestException(
-                            "paymentMethod=CASH requires cashAmount > 0 and pointsAmount must be null/zero");
-                }
-            }
+            case CASH, CASH_AND_POINTS -> throw new BadRequestException(
+                    "paymentMethod=" + r.getPaymentMethod() + " is not accepted: points for a cash purchase "
+                            + "are earned at the till or by scanning the shop's QR code. "
+                            + "Use paymentMethod=POINTS to pay with points.");
             case POINTS -> {
                 if (!points || cash) {
                     throw new BadRequestException(
                             "paymentMethod=POINTS requires pointsAmount > 0 and cashAmount must be null/zero");
-                }
-            }
-            case CASH_AND_POINTS -> {
-                if (!cash || !points) {
-                    throw new BadRequestException(
-                            "paymentMethod=CASH_AND_POINTS requires both cashAmount > 0 and pointsAmount > 0");
                 }
             }
         }

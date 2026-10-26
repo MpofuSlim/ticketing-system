@@ -109,8 +109,8 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
         ShopCheckoutRequest body = new ShopCheckoutRequest();
         body.setShopId(UUID.randomUUID());
         body.setMsisdn("0712345678");
-        body.setPaymentMethod(PaymentMethod.CASH);
-        body.setCashAmount(new BigDecimal("10.00"));
+        body.setPaymentMethod(PaymentMethod.POINTS);
+        body.setPointsAmount(new BigDecimal("200"));
 
         mockMvc.perform(post("/payments/shop-checkout")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -123,8 +123,8 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
         ShopCheckoutRequest body = new ShopCheckoutRequest();
         body.setShopId(UUID.randomUUID());
         body.setMsisdn("0712345678");
-        body.setPaymentMethod(PaymentMethod.CASH);
-        body.setCashAmount(new BigDecimal("10.00"));
+        body.setPaymentMethod(PaymentMethod.POINTS);
+        body.setPointsAmount(new BigDecimal("200"));
 
         // Mint with the wrong key → signature won't verify.
         SecretKey wrongKey = Keys.hmacShaKeyFor("not-the-right-secret-not-the-right-secret".getBytes(StandardCharsets.UTF_8));
@@ -149,8 +149,8 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
     void shopCheckout_withValidJwtButNoPhoneClaim_returns401() throws Exception {
         ShopCheckoutRequest body = new ShopCheckoutRequest();
         body.setShopId(UUID.randomUUID());
-        body.setPaymentMethod(PaymentMethod.CASH);
-        body.setCashAmount(new BigDecimal("10.00"));
+        body.setPaymentMethod(PaymentMethod.POINTS);
+        body.setPointsAmount(new BigDecimal("200"));
 
         // Signature-valid but no phoneNumber claim — staff token shape.
         SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
@@ -181,8 +181,8 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
         ShopCheckoutRequest body = new ShopCheckoutRequest();
         body.setShopId(UUID.randomUUID());
         body.setMsisdn("9999999999"); // attacker tries to redirect to someone else
-        body.setPaymentMethod(PaymentMethod.CASH);
-        body.setCashAmount(new BigDecimal("10.00"));
+        body.setPaymentMethod(PaymentMethod.POINTS);
+        body.setPointsAmount(new BigDecimal("200"));
 
         SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
         String token = Jwts.builder()
