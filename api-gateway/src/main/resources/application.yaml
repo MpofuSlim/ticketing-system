@@ -797,6 +797,38 @@ spring:
                     key-resolver: "#{@preAuthIpKeyResolver}"
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # Partner voucher API (InnRewards V62). The InnBucks middleware
+            # generates, inquires about and redeems vouchers for a partner
+            # merchant (MWOS first) here. Every body is a JWS signed by the
+            # middleware's key, so these calls carry no Authorization header,
+            # and under the /loyalty/** catch-all the whole internet would share
+            # one bucket keyed on the empty string. Hence an IP-keyed route.
+            #
+            # Fail-SAFE like the other machine routes: loyalty itself refuses
+            # these calls when Redis is down (its jti replay check), so keeping
+            # the cap during an outage costs the partner nothing.
+            #
+            # POST and the three exact paths, so anything added under
+            # /loyalty/partner/vouchers later falls through to the catch-all
+            # deliberately rather than inheriting this shape.
+            #
+            # Rate: ONE source address carries a whole merchant's traffic (every
+            # MWOS till and its website, through the middleware), so the budget
+            # is far above the per-person routes. Tunable per host.
+            - id: loyalty-voucher-partner-route
+              uri: lb://loyalty-service
+              predicates:
+                - Path=/loyalty/partner/vouchers/generate,/loyalty/partner/vouchers/inquire,/loyalty/partner/vouchers/redeem
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${LOYALTY_VOUCHER_PARTNER_RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${LOYALTY_VOUCHER_PARTNER_RATE_LIMIT_BURST_CAPACITY:200}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: loyalty-service-route
               uri: lb://loyalty-service
               predicates:

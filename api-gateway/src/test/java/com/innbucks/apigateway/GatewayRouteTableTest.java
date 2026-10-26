@@ -60,7 +60,7 @@ class GatewayRouteTableTest {
             "payments-innbucks-write-route", "ecocash-notify-write-route",
             "payment-service-write-route",
             "loyalty-internal-deny", "loyalty-partner-registration-route",
-            "loyalty-session-refresh-route", "loyalty-service-route",
+            "loyalty-session-refresh-route", "loyalty-voucher-partner-route", "loyalty-service-route",
             "marketplace-internal-deny", "marketplace-service-route",
             "loans-forgot-password-deny", "loans-service-route",
             "user-service-proxy-route", "event-service-proxy-route",
@@ -105,6 +105,7 @@ class GatewayRouteTableTest {
             "payment-service-read-route", "payments-innbucks-write-route",
             "ecocash-notify-write-route", "payment-service-write-route",
             "loyalty-partner-registration-route", "loyalty-session-refresh-route",
+            "loyalty-voucher-partner-route",
             "loyalty-service-route", "marketplace-service-route", "loans-service-route");
 
     private static final List<String> API_DOCS_PROXY_ROUTES = List.of(
@@ -141,6 +142,10 @@ class GatewayRouteTableTest {
             // its body. The limiter is the only thing capping how fast refresh
             // tokens can be guessed.
             "loyalty-session-refresh-route",
+            // The partner voucher API (InnRewards V62): signed machine calls with
+            // no Authorization header. Loyalty refuses them anyway while Redis
+            // is down, so keeping the cap costs the partner nothing.
+            "loyalty-voucher-partner-route",
             // DTX device security: the app-facing surface sends real OTPs (SMS
             // cost), and the partner surface is shared-key authenticated — the
             // loyalty-partner-registration hazard exactly.
@@ -428,6 +433,37 @@ class GatewayRouteTableTest {
         assertThat(route("loyalty-session-refresh-route").getUri())
                 .as("targets loyalty-service by Eureka name, like every other service route")
                 .hasToString("lb://loyalty-service");
+    }
+
+    @Test
+    void loyaltyVoucherPartnerRouteIsIpKeyedFailsSafeAndPrecedesTheCatchAll() {
+        // The partner voucher API (InnRewards V62): the InnBucks middleware's
+        // signed generate / inquire / redeem calls. The JWS is in the body and
+        // no Authorization header is sent, so under the /loyalty/** catch-all
+        // every caller would share the empty-string bucket.
+        List<String> order = orderedIds();
+        int partner = order.indexOf("loyalty-voucher-partner-route");
+        assertThat(partner).as("loyalty-voucher-partner-route must be defined").isGreaterThanOrEqualTo(0);
+        assertThat(partner)
+                .as("must match before the /loyalty/** catch-all, or it inherits the bearer-keyed limiter")
+                .isLessThan(order.indexOf("loyalty-service-route"));
+
+        boolean ipKeyed = route("loyalty-voucher-partner-route").getFilters().stream()
+                .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                .flatMap(f -> f.getArgs().values().stream())
+                .anyMatch(v -> v != null && v.contains("preAuthIpKeyResolver"));
+        assertThat(ipKeyed).as("must key on IP: these calls send no Authorization header").isTrue();
+        assertThat(usesResilientLimiter("loyalty-voucher-partner-route"))
+                .as("must fail SAFE, like every other machine route")
+                .isTrue();
+
+        // POST and the three exact paths. A prefix here would pull the rest of
+        // /loyalty/partner (the registrations route included) onto this shape.
+        assertThat(predicateArgs("loyalty-voucher-partner-route", "Method")).containsExactly("POST");
+        assertThat(predicateArgs("loyalty-voucher-partner-route", "Path")).containsExactlyInAnyOrder(
+                "/loyalty/partner/vouchers/generate", "/loyalty/partner/vouchers/inquire",
+                "/loyalty/partner/vouchers/redeem");
+        assertThat(route("loyalty-voucher-partner-route").getUri()).hasToString("lb://loyalty-service");
     }
 
     @Test
