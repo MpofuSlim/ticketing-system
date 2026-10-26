@@ -51,11 +51,16 @@ FROM eclipse-temurin:21-jre-alpine AS runtime
 #   NOTE: the previous floor of 2.8.2-r0 was SATISFIED by the vulnerable
 #   2.8.3-r0, so apk had no reason to upgrade and both CVEs shipped. That is
 #   precisely why the floor exists and must be raised per CVE, not left behind.
+# brotli-libs >= 1.2.1-r0
+#   CVE-2026-111497 (HIGH) — out-of-bounds write in the Brotli decoder. The
+#   alpine 3.24.3 base ships 1.2.0-r1; failed the Release Trivy gate for all
+#   six images on the #729 merge.
 RUN apk update \
  && apk add --no-cache --upgrade \
       'libssl3>=3.5.8-r0' 'libcrypto3>=3.5.8-r0' 'openssl>=3.5.8-r0' \
       'p11-kit>=0.26.2-r0' 'p11-kit-trust>=0.26.2-r0' \
       'libexpat>=2.9.0-r0' \
+      'brotli-libs>=1.2.1-r0' \
  && addgroup -S app && adduser -S -G app app
 WORKDIR /app
 USER app
