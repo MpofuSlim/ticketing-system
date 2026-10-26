@@ -85,4 +85,16 @@ public class EcocashProperties {
      * the EcoCash POC answers the open question in docs/api/ecocash-eip.md.
      */
     private Duration chargeTtl = Duration.ofMinutes(5);
+
+    /**
+     * Per-number cap on PIN prompts: at most this many EcoCash charges to one
+     * phone number in {@link #promptsPerNumberWindow}, counted over every
+     * spelling of the number. The order's payer phone is whatever the order
+     * was created with, so without a cap one caller could make a stream of
+     * orders for someone else's number and send a prompt for each. Zero or
+     * less switches it off.
+     */
+    private int maxPromptsPerNumber = 5;
+
+    private Duration promptsPerNumberWindow = Duration.ofMinutes(15);
 }

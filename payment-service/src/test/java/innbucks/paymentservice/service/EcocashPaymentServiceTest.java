@@ -65,6 +65,12 @@ import static org.mockito.Mockito.when;
 class EcocashPaymentServiceTest {
 
     private final PaymentRecordService records = mock(PaymentRecordService.class);
+
+    {
+        // No recent prompts to the number unless a test says otherwise.
+        when(records.recentEcocashCharges(any(), any()))
+                .thenReturn(new PaymentRecordService.RecentCharges(0, null));
+    }
     private final EcocashEipClient client = mock(EcocashEipClient.class);
     private final EcocashProperties properties = new EcocashProperties();
     private final OrderGatewayRegistry gateways = mock(OrderGatewayRegistry.class);
@@ -199,6 +205,79 @@ class EcocashPaymentServiceTest {
         verify(bookings).extendHold(eq(bookingId), hold.capture());
         assertThat(hold.getValue()).isBetween(
                 before.plus(Duration.ofMinutes(10)), after.plus(Duration.ofMinutes(10)));
+    }
+
+    @Test
+    @DisplayName("a number at its prompt cap is 429: no hold, no ledger row, no prompt")
+    void startCharge_numberAtItsPromptCap_is429_andHoldsNothing() {
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        when(client.canStartCharge()).thenReturn(true);
+        when(client.isConfigured()).thenReturn(true);
+        OrderGateway gateway = payableGateway();
+        // Five prompts in the window; the oldest leaves it in about 12 minutes.
+        when(records.recentEcocashCharges(any(), any())).thenReturn(new PaymentRecordService.RecentCharges(
+                5, Instant.now().minus(Duration.ofMinutes(3))));
+
+        assertThatThrownBy(() -> service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString()))
+                .isInstanceOf(InvalidPaymentRequestException.class)
+                .hasMessage("Too many EcoCash payment requests to this number. Try again in 12 minutes, "
+                        + "or pay with an InnBucks code.")
+                .extracting("statusCode").isEqualTo(429);
+
+        verify(gateway, never()).extendHold(anyString(), any(Instant.class));
+        verify(records, never()).openPending(any());
+        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("the cap counts every spelling of the payer's number, over the configured window")
+    @SuppressWarnings("unchecked")
+    void startCharge_promptCap_countsEverySpellingOfTheNumber() {
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        when(client.canStartCharge()).thenReturn(true);
+        when(client.isConfigured()).thenReturn(true);
+        payableGateway();
+        when(records.openPending(any(Payment.class))).thenReturn(openEcocashRow(null));
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
+                .thenReturn(status(EcocashChargeStatus.Outcome.PENDING, "0.0", "3.00", "USD"));
+        Instant before = Instant.now();
+
+        service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString());
+
+        var spellings = org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
+        var since = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(records).recentEcocashCharges(spellings.capture(), since.capture());
+        assertThat((java.util.Collection<String>) spellings.getValue())
+                .containsExactlyInAnyOrder("+263777222093", "263777222093", "0777222093", "777222093");
+        assertThat(since.getValue()).isBetween(before.minus(Duration.ofMinutes(15)).minusSeconds(1),
+                Instant.now().minus(Duration.ofMinutes(15)));
+    }
+
+    @Test
+    @DisplayName("a cap of 0 switches it off: nothing is counted")
+    void startCharge_promptCapOff_countsNothing() {
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        properties.setMaxPromptsPerNumber(0);
+        when(client.canStartCharge()).thenReturn(true);
+        when(client.isConfigured()).thenReturn(true);
+        payableGateway();
+        when(records.openPending(any(Payment.class))).thenReturn(openEcocashRow(null));
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
+                .thenReturn(status(EcocashChargeStatus.Outcome.PENDING, "0.0", "3.00", "USD"));
+
+        assertThat(service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString()).failed()).isFalse();
+
+        verify(records, never()).recentEcocashCharges(any(), any());
+    }
+
+    @Test
+    @DisplayName("spellings: each Zimbabwean form maps to all four; anything else only to itself")
+    void spellingsOf_coversTheZimbabweanForms() {
+        for (String given : List.of("+263777222093", "263777222093", "0777222093", " 0777 222 093 ")) {
+            assertThat(EcocashPaymentService.spellingsOf(given))
+                    .contains("+263777222093", "263777222093", "0777222093", "777222093");
+        }
+        assertThat(EcocashPaymentService.spellingsOf("+447700900123")).containsExactly("+447700900123");
     }
 
     @Test

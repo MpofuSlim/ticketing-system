@@ -273,6 +273,11 @@ ecocash:
   connect-timeout-ms: ${ECOCASH_CONNECT_TIMEOUT_MS:3000}
   read-timeout-ms: ${ECOCASH_READ_TIMEOUT_MS:15000}
   charge-ttl: ${ECOCASH_CHARGE_TTL:PT5M}
+  # Per-number cap on PIN prompts (EcocashPaymentService): at most this many
+  # charges to one phone, any spelling, within the window; the next is 429.
+  # 0 or less switches it off.
+  max-prompts-per-number: ${ECOCASH_MAX_PROMPTS_PER_NUMBER:5}
+  prompts-per-number-window: ${ECOCASH_PROMPTS_PER_NUMBER_WINDOW:PT15M}
 
 payments:
   innbucks:

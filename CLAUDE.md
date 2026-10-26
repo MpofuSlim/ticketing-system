@@ -2974,6 +2974,45 @@ CANCELLED booking was cancelled (CHECK: `EXPIRED`, `CUSTOMER_CANCELLED`,
   in `BookingErrorExamplesPostgresIT`. `LazyAssociationsPostgresIT`: extend-hold
   is 3 statements (lock, items, update).
 
+## New bookings and EcoCash prompts are capped, per caller and per number
+
+**`POST /bookings` takes any phone the caller types, and a booking is what
+`POST /payments` sends an EcoCash PIN prompt for.** Under the `/bookings/**`
+catch-all, booking creation got 50/s per caller, so one caller could aim a stream
+of bookings, and so of PIN prompts, at someone else's number. Three limits, each
+answering a different way round it:
+
+- **Gateway `booking-create-route`**: POST, exact path `/bookings`, IP-keyed
+  (`preAuthIpKeyResolver`), fail-safe, 1/s burst 10
+  (`BOOKINGS_CREATE_RATE_LIMIT_*`). The same rate as `payment-service-write-route`:
+  a booking nobody can pay for is only a hold. IP, not the catch-all's raw
+  `Authorization` key, which the caller picks. Tills and the super app book with
+  no session, so they were IP-keyed already. Pinned in `GatewayRouteTableTest`.
+- **booking-service, per purchaser phone**: at most 5 unpaid (PENDING or
+  CANCELLED) bookings made in 15 minutes (`app.booking.unpaid-per-number.*`,
+  `BOOKING_UNPAID_PER_NUMBER_MAX` / `_WINDOW`; 0 = off). The next is `429
+  TOO_MANY_UNPAID_BOOKINGS` with `data.retryAfterSeconds`, before anything is
+  looked up or held. A paid booking never counts, so a buyer is never stopped by
+  their own purchases; a cancelled one does, so cancel-and-rebook does not reset
+  it. Soft by design: two requests at the same instant can both pass the count,
+  and the gateway limit bounds that. **The `it` and `test` profiles switch it
+  off** (the stock and concurrency ITs book hundreds of times on one phone);
+  `UnpaidBookingsPerNumberPostgresIT` switches it back on.
+- **payment-service, per payer number, every order type**: at most 5 EcoCash
+  charges to one number in 15 minutes (`ecocash.max-prompts-per-number` /
+  `prompts-per-number-window`, `ECOCASH_MAX_PROMPTS_PER_NUMBER` / `_WINDOW`;
+  0 = off), counted over every spelling (`+263…`, `263…`, `0…`, the bare nine
+  digits; EcoCash is ZW only), because marketplace and voucher orders store the
+  payer phone as typed. The next is `429` "Try again in N minutes, or pay with an
+  InnBucks code.", refused before the hold is extended or a ledger row opened.
+  Counted on `idx_payment_msisdn_created` (V17), a plain index: the rail is a bind
+  parameter, which a generic plan cannot match to a partial index.
+- Metrics: `booking.create.unpaid_per_number_refused` (registered at 0),
+  `payment.payments.ecocash_charge{outcome=number_limited}`.
+- **Not the loyalty POS guide's concern**: nothing here touches `/loyalty/**` or
+  `/auth/pos/token`. It does change the ticket-selling POS guide's rate-limit
+  table, if one has been sent to a partner.
+
 ## Scan reports: `to` is widened server-side, and why
 
 `GET /scans/**` takes `from` + an **optional** `to`. A supplied `to` is rounded

@@ -481,6 +481,29 @@ spring:
                     key-resolver: "#{@preAuthIpKeyResolver}"
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # Creating a booking (POST /bookings, exact path). It is public (guests,
+            # the super app and merchant tills book with no session), it holds stock
+            # for whatever phone the body names, and it is what POST /payments
+            # sends an EcoCash PIN prompt for. Under the catch-all it got 50/s per
+            # caller. Now: per source IP, the same rate as the payment write route
+            # (a booking nobody can pay for is only a hold), fail-safe. IP-keyed
+            # like the other public booking routes: the catch-all keys on the raw
+            # Authorization header, which the caller picks. booking-service also
+            # caps unpaid bookings per phone number (TOO_MANY_UNPAID_BOOKINGS).
+            - id: booking-create-route
+              uri: lb://booking-service
+              predicates:
+                - Path=/bookings
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${BOOKINGS_CREATE_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${BOOKINGS_CREATE_RATE_LIMIT_BURST_CAPACITY:10}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: booking-service-route
               uri: lb://booking-service
               predicates:

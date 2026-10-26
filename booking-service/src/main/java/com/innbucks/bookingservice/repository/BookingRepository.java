@@ -37,6 +37,26 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     List<Booking> findByPhoneNumberAndTenantUserUuidOrderByCreatedAtDesc(String phoneNumber,
                                                                          UUID tenantUserUuid);
 
+    // POST /bookings, the per-number cap: bookings for this purchaser phone
+    // created after `since` that are not `paid` (PENDING or CANCELLED). Uses
+    // idx_bookings_phone_number; one phone has few rows.
+    @Query("""
+            SELECT COUNT(b) FROM Booking b
+            WHERE b.phoneNumber = :phone AND b.status <> :paid AND b.createdAt > :since
+            """)
+    long countUnpaidSince(@Param("phone") String phone,
+                          @Param("paid") Booking.BookingStatus paid,
+                          @Param("since") LocalDateTime since);
+
+    // The oldest of those, so the refusal can say when a place frees up.
+    @Query("""
+            SELECT MIN(b.createdAt) FROM Booking b
+            WHERE b.phoneNumber = :phone AND b.status <> :paid AND b.createdAt > :since
+            """)
+    LocalDateTime oldestUnpaidSince(@Param("phone") String phone,
+                                    @Param("paid") Booking.BookingStatus paid,
+                                    @Param("since") LocalDateTime since);
+
     // POST /bookings/ticket-check: bookings of the event in `status` whose
     // ticket the phone holds, as the purchaser or as a named attendee with
     // their own phone. Both phones are stored in E.164.

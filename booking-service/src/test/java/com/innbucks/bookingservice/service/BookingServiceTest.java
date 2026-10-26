@@ -245,6 +245,66 @@ class BookingServiceTest {
                 "the ceiling message must not mention tiers — they no longer gate booking");
     }
 
+    // ---- per-number cap on unpaid bookings ----
+    // A booking is what POST /payments sends an EcoCash PIN prompt for, and
+    // POST /bookings takes any phone the caller types.
+
+    private static final String CAPPED_PHONE = "+263771234567";
+
+    @Test
+    void createBooking_aNumberWithFiveUnpaidBookings_is429_andNothingIsLookedUpOrHeld() {
+        RequestFixture fx = request(BigDecimal.TEN);
+        BookingRepository repo = mock(BookingRepository.class);
+        SeatServiceClient seats = mock(SeatServiceClient.class);
+        when(repo.countUnpaidSince(eq(CAPPED_PHONE), eq(Booking.BookingStatus.CONFIRMED), any())).thenReturn(5L);
+        // The oldest of the five leaves the 15-minute window in about 9 minutes.
+        when(repo.oldestUnpaidSince(eq(CAPPED_PHONE), eq(Booking.BookingStatus.CONFIRMED), any()))
+                .thenReturn(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(6));
+        BookingService service = newService(repo, mock(BookingItemRepository.class), seats);
+
+        com.innbucks.bookingservice.exception.ApiProblemException ex = assertThrows(
+                com.innbucks.bookingservice.exception.ApiProblemException.class,
+                () -> service.createBooking("u@example.com", CAPPED_PHONE, fx.request));
+
+        assertEquals(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS, ex.getStatus());
+        assertEquals(BookingService.TOO_MANY_UNPAID_BOOKINGS, ex.getErrorCode());
+        assertEquals("This phone number has too many unpaid bookings. Pay for one of them, or try again later.",
+                ex.getMessage());
+        long retryAfter = (Long) ex.getExtra().get("retryAfterSeconds");
+        assertTrue(retryAfter > 530 && retryAfter <= 541, "about nine minutes, was " + retryAfter);
+        org.mockito.Mockito.verifyNoInteractions(seats);
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void createBooking_belowTheCap_books_andCountsOnlyUnpaidOnesInTheLast15Minutes() {
+        RequestFixture fx = request(BigDecimal.TEN);
+        BookingRepository repo = mock(BookingRepository.class);
+        when(repo.countUnpaidSince(eq(CAPPED_PHONE), any(), any())).thenReturn(4L);
+        BookingService service = newService(repo, mock(BookingItemRepository.class), stubClient(fx));
+        java.time.LocalDateTime before = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
+
+        assertEquals(1, service.createBooking("u@example.com", CAPPED_PHONE, fx.request).getItems().size());
+
+        org.mockito.ArgumentCaptor<java.time.LocalDateTime> since =
+                org.mockito.ArgumentCaptor.forClass(java.time.LocalDateTime.class);
+        verify(repo).countUnpaidSince(eq(CAPPED_PHONE), eq(Booking.BookingStatus.CONFIRMED), since.capture());
+        assertFalse(since.getValue().isBefore(before.minusMinutes(15)));
+        assertFalse(since.getValue().isAfter(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(15)));
+    }
+
+    @Test
+    void createBooking_withTheCapSwitchedOff_countsNothing() {
+        RequestFixture fx = request(BigDecimal.TEN);
+        BookingRepository repo = mock(BookingRepository.class);
+        BookingService service = newService(repo, mock(BookingItemRepository.class), stubClient(fx));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "maxUnpaidPerNumber", 0);
+
+        service.createBooking("u@example.com", CAPPED_PHONE, fx.request);
+
+        verify(repo, never()).countUnpaidSince(any(), any(), any());
+    }
+
     @Test
     void createBooking_doesNotConsultRegistrationTier_soAnUnregisteredCallerBooksNormally() {
         // The pre-change service blocked anyone whose tier wasn't 2/3/4
