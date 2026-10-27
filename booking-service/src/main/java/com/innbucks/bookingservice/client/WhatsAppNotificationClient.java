@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.client;
 
+import com.innbucks.common.ticket.TicketNumbers;
 import com.innbucks.bookingservice.config.WhatsAppProperties;
 import com.innbucks.bookingservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
@@ -61,7 +62,7 @@ public class WhatsAppNotificationClient {
             log.info("WhatsApp notification sent to={}", MsisdnMasking.mask(to));
         } catch (RestClientResponseException ex) {
             log.warn("WhatsApp gateway rejected notification to={} status={} body={}",
-                    MsisdnMasking.mask(to), ex.getStatusCode(), ex.getResponseBodyAsString());
+                    MsisdnMasking.mask(to), ex.getStatusCode(), TicketNumbers.redactIn(ex.getResponseBodyAsString()));
             throw new NotificationDeliveryException(
                     "WhatsApp gateway rejected the message: HTTP " + ex.getStatusCode().value(), ex);
         } catch (RuntimeException ex) {
@@ -109,10 +110,10 @@ public class WhatsAppNotificationClient {
                     .body(Map.of("to", to, "eventName", eventName, "qrCodePath", qrCodePath))
                     .retrieve()
                     .toBodilessEntity();
-            log.info("WhatsApp e-ticket QR sent to={} qrCodePath={}", MsisdnMasking.mask(to), qrCodePath);
+            log.info("WhatsApp e-ticket QR sent to={} qrCodePath={}", MsisdnMasking.mask(to), TicketNumbers.redactIn(qrCodePath));
         } catch (RestClientResponseException ex) {
             log.warn("WhatsApp gateway rejected e-ticket QR to={} status={} body={}",
-                    MsisdnMasking.mask(to), ex.getStatusCode(), ex.getResponseBodyAsString());
+                    MsisdnMasking.mask(to), ex.getStatusCode(), TicketNumbers.redactIn(ex.getResponseBodyAsString()));
             throw new NotificationDeliveryException(
                     "WhatsApp gateway rejected the e-ticket QR: HTTP " + ex.getStatusCode().value(), ex);
         } catch (RuntimeException ex) {

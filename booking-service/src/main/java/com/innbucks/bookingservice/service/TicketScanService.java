@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.common.ticket.TicketNumbers;
 import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.config.CountryMdcConfig;
 import com.innbucks.bookingservice.dto.ApiResult;
@@ -256,7 +257,7 @@ public class TicketScanService {
                 () -> bookingItemRepository.findByTicketNumberWithBooking(ticketNumber))
                 .orElse(null);
         if (item == null) {
-            log.info("Ticket scan miss ticketNumber={} scanner={}", ticketNumber, scannerEmail);
+            log.info("Ticket scan miss ticketNumber={} scanner={}", TicketNumbers.forLog(ticketNumber), scannerEmail);
             ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
                     .status(ScanTicketResponseDTO.Status.TICKET_NOT_FOUND)
                     .ticketNumber(ticketNumber)
@@ -271,7 +272,7 @@ public class TicketScanService {
         Booking booking = item.getBooking();
         if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
             log.info("Ticket scan rejected, booking not confirmed ticketNumber={} status={} scanner={}",
-                    ticketNumber, booking.getStatus(), scannerEmail);
+                    TicketNumbers.forLog(ticketNumber), booking.getStatus(), scannerEmail);
             ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
                     .status(ScanTicketResponseDTO.Status.BOOKING_NOT_CONFIRMED)
                     .ticketNumber(ticketNumber)
@@ -285,7 +286,7 @@ public class TicketScanService {
         if (!scannerOwnsEvent(booking, scannerOrganizerUuid)) {
             log.warn("Ticket scan rejected, organizer mismatch ticketNumber={} scannerEmail={} " +
                             "scannerOrganizerUuid={} bookingTenantUserUuid={}",
-                    ticketNumber, scannerEmail, scannerOrganizerUuid,
+                    TicketNumbers.forLog(ticketNumber), scannerEmail, scannerOrganizerUuid,
                     booking.getTenantUserUuid());
             ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
                     .status(ScanTicketResponseDTO.Status.WRONG_ORGANIZER)
@@ -340,14 +341,14 @@ public class TicketScanService {
                 // ticket is not audited as WRONG_EVENT_DAY when we do not know
                 // that it is.
                 log.warn("Ticket scan unverifiable, event window unavailable ticketNumber={} eventId={} by={}",
-                        ticketNumber, booking.getEventId(), scannerEmail);
+                        TicketNumbers.forLog(ticketNumber), booking.getEventId(), scannerEmail);
                 throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                         "Could not confirm the event's date. Please try again.");
             }
             if (verdict == EventDayRule.Verdict.OFF_DAY) {
                 LocalDate eventDay = eventFirstLocalDay(booking.getEventId());
                 log.info("Ticket scan rejected, not the event's day ticketNumber={} eventId={} eventDay={} by={}",
-                        ticketNumber, booking.getEventId(), eventDay, scannerEmail);
+                        TicketNumbers.forLog(ticketNumber), booking.getEventId(), eventDay, scannerEmail);
                 ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
                         .status(ScanTicketResponseDTO.Status.WRONG_EVENT_DAY)
                         .ticketNumber(ticketNumber)
@@ -390,7 +391,7 @@ public class TicketScanService {
             BookingItem reloaded = bookingItemRepository.findByTicketNumberWithBooking(ticketNumber)
                     .orElse(item);
             log.info("Ticket scan rejected, already redeemed ticketNumber={} firstScanAt={} firstScanBy={} retryBy={}",
-                    ticketNumber, reloaded.getRedeemedAt(), reloaded.getRedeemedByName(), scannerEmail);
+                    TicketNumbers.forLog(ticketNumber), reloaded.getRedeemedAt(), reloaded.getRedeemedByName(), scannerEmail);
             ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
                     .status(ScanTicketResponseDTO.Status.ALREADY_REDEEMED)
                     .ticketNumber(ticketNumber)
@@ -405,7 +406,7 @@ public class TicketScanService {
         }
 
         log.info("Ticket scan allowed ticketNumber={} bookingItemId={} scanner={} at={}",
-                ticketNumber, item.getId(), scannerEmail, now);
+                TicketNumbers.forLog(ticketNumber), item.getId(), scannerEmail, now);
         ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
                 .status(ScanTicketResponseDTO.Status.ALLOWED)
                 .ticketNumber(ticketNumber)
@@ -535,7 +536,7 @@ public class TicketScanService {
             scanAttemptRepository.save(attempt);
         } catch (Exception e) {
             log.warn("Failed to record scan_attempts audit row ticketNumber={} outcome={} scanner={} cause={}",
-                    ticketNumber, outcome, scannerEmail, e.toString());
+                    TicketNumbers.forLog(ticketNumber), outcome, scannerEmail, TicketNumbers.redactIn(e.toString()));
             MeterRegistry registry = meterRegistryProvider == null
                     ? null : meterRegistryProvider.getIfAvailable();
             if (registry != null) {
@@ -594,7 +595,7 @@ public class TicketScanService {
             return data.isAllowed();
         }
         log.warn("Assignment check unavailable, applying failOpen={} ticketNumber={} scanner={} eventId={}",
-                assignmentCheckFailOpen, ticketNumber, scannerEmail, eventId);
+                assignmentCheckFailOpen, TicketNumbers.forLog(ticketNumber), scannerEmail, eventId);
         return assignmentCheckFailOpen;
     }
 

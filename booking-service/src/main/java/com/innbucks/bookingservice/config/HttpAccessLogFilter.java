@@ -4,6 +4,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import com.innbucks.bookingservice.util.RequestPaths;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -53,10 +54,13 @@ public class HttpAccessLogFilter {
                 long start = System.currentTimeMillis();
                 String method = request.getMethod();
                 String query = request.getQueryString();
-                String fullPath = query == null ? path
+                // Ticket numbers and phones in the path itself are masked too:
+                // every WhatsApp ticket is a Twilio fetch of
+                // /bookings/{id}/tickets/{ticketNumber}/qr.png.
+                String fullPath = RequestPaths.forLog(query == null ? path
                         : path + "?" + query.replaceAll(
                                 "(?i)(msisdn|phoneNumber|phone|identifier|nationalId|national_id|pin|password|otp|token)=[^&]*",
-                                "$1=***");
+                                "$1=***"));
                 log.info(">> {} {}", method, fullPath);
 
                 if (!bodies) {

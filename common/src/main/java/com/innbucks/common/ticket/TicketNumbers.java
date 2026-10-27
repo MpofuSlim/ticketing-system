@@ -74,7 +74,77 @@ public final class TicketNumbers {
     /** Hyphen, the Unicode dash family and the minus sign: a paste from a document turns '-' into these. */
     private static final Pattern DASH_VARIANTS = Pattern.compile("[\\u2010-\\u2015\\u2212]");
 
+    /**
+     * Anything shaped like a current number inside free text, case and alphabet
+     * ignored on purpose: a log redaction errs towards hiding, so a near-miss
+     * (an O typed for a 0) is hidden too. The look-arounds keep it off longer
+     * runs of letters and digits.
+     */
+    private static final Pattern CURRENT_IN_TEXT = Pattern.compile(
+            "(?<![0-9A-Za-z])\\d{8}-[0-9A-Za-z]{5}-[0-9A-Za-z]{5}(?![0-9A-Za-z])");
+
+    /** Anything shaped like a legacy number inside free text. */
+    private static final Pattern LEGACY_IN_TEXT = Pattern.compile(
+            "(?<![0-9A-Za-z])\\d{8}-\\d{5}[A-Za-z](?![0-9A-Za-z])");
+
     private TicketNumbers() {
+    }
+
+    /**
+     * A ticket number as a log line may carry it: the issue date and the last
+     * few symbols, e.g. {@code 20261013-*****-**Z2B} (current) or
+     * {@code 20260419-****1X} (legacy, which has far less randomness, so only
+     * two symbols show). Enough to tell tickets apart in an incident; not
+     * enough to get through a gate. Logs are read by more people, kept longer
+     * and copied further than the database, and a full number admits whoever
+     * holds it.
+     *
+     * <p>A value that is not a ticket number, e.g. whatever a scanner read on a
+     * scan miss, is never echoed: it may be a real number with one symbol
+     * wrong, or text crafted to forge a log line. Only its length is given.
+     * Never throws.
+     */
+    public static String forLog(String value) {
+        if (value == null || value.isBlank()) {
+            return "(none)";
+        }
+        if (isTicketNumber(value)) {
+            return masked(value);
+        }
+        Optional<String> issued = canonical(value);
+        if (issued.isEmpty()) {
+            return "(not a ticket number, " + value.length() + " chars)";
+        }
+        return masked(issued.get());
+    }
+
+    /**
+     * {@code text} with every ticket-number-shaped run masked as
+     * {@link #forLog} would mask it: for request paths
+     * ({@code /bookings/{id}/tickets/{ticketNumber}/qr.png}) and for an
+     * upstream's error body, which may echo what we sent. Null stays null.
+     * Never throws.
+     */
+    public static String redactIn(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        String s = CURRENT_IN_TEXT.matcher(text).replaceAll(m -> Matcher.quoteReplacement(maskCurrent(m.group())));
+        return LEGACY_IN_TEXT.matcher(s).replaceAll(m -> Matcher.quoteReplacement(maskLegacy(m.group())));
+    }
+
+    private static String masked(String issued) {
+        return isLegacy(issued) ? maskLegacy(issued) : maskCurrent(issued);
+    }
+
+    /** {@code yyyyMMdd-XXXXX-XXXXX} to {@code yyyyMMdd-*****-**XXX}. */
+    private static String maskCurrent(String value) {
+        return value.substring(0, 9) + "*****-**" + value.substring(17);
+    }
+
+    /** {@code yyyyMMdd-DDDDDL} to {@code yyyyMMdd-****DL}. */
+    private static String maskLegacy(String value) {
+        return value.substring(0, 9) + "****" + value.substring(13);
     }
 
     /** True for a current-shape number exactly as issued. */

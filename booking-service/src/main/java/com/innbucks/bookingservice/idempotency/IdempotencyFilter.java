@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.idempotency;
 
 import jakarta.servlet.FilterChain;
+import com.innbucks.bookingservice.util.RequestPaths;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -74,14 +75,14 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             IdempotencyEntry entry = existing.get();
             if (entry instanceof IdempotencyEntry.Completed completed) {
                 log.info("Idempotency hit key={} scope={} method={} path={} replayStatus={}",
-                        key, scope, request.getMethod(), request.getRequestURI(),
+                        key, scope, request.getMethod(), RequestPaths.forLog(request.getRequestURI()),
                         completed.response().status());
                 replay(completed.response(), response);
                 return;
             }
             // Reserved: another request with this key is in flight.
             log.info("Idempotency in-progress key={} scope={} method={} path={}",
-                    key, scope, request.getMethod(), request.getRequestURI());
+                    key, scope, request.getMethod(), RequestPaths.forLog(request.getRequestURI()));
             writeConflict(response);
             return;
         }
@@ -90,7 +91,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             // Lost a race between get() and tryReserve(): another caller
             // claimed the slot in between.
             log.info("Idempotency reservation lost key={} scope={} method={} path={}",
-                    key, scope, request.getMethod(), request.getRequestURI());
+                    key, scope, request.getMethod(), RequestPaths.forLog(request.getRequestURI()));
             writeConflict(response);
             return;
         }

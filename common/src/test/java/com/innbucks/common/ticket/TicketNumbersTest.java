@@ -144,4 +144,68 @@ class TicketNumbersTest {
     void anythingElse_hasNoCanonicalForm(String typed) {
         assertThat(TicketNumbers.canonical(typed)).isEmpty();
     }
+
+    // ---- What a log line may carry ----
+
+    @Test
+    void forLog_keepsTheDateAndTheLastThreeSymbols_ofACurrentNumber() {
+        assertThat(TicketNumbers.forLog("20261013-7KQ4M-9XZ2B")).isEqualTo("20261013-*****-**Z2B");
+    }
+
+    @Test
+    void forLog_keepsOnlyTheLastTwo_ofALegacyNumber() {
+        // Five digits and a letter: showing three would leave a thousand a day.
+        assertThat(TicketNumbers.forLog("20260419-48291X")).isEqualTo("20260419-****1X");
+    }
+
+    @Test
+    void forLog_masksATypedSpelling_asTheNumberItIs() {
+        assertThat(TicketNumbers.forLog("20261013 7kq4m 9xz2b")).isEqualTo("20261013-*****-**Z2B");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "20261013-7KQ4M-9XZ2O",          // one symbol off a real number
+            "20261013-12345-67890",          // all digits: never issued
+            "4111111111111111",
+            "x\nINFO forged log line",
+            "INN-20261013-ABC123"
+    })
+    void forLog_neverEchoesAValueThatIsNotATicketNumber(String value) {
+        String logged = TicketNumbers.forLog(value);
+        assertThat(logged).isEqualTo("(not a ticket number, " + value.length() + " chars)");
+        assertThat(logged).doesNotContain("\n");
+    }
+
+    @Test
+    void forLog_saysNoneForNullOrBlank() {
+        assertThat(TicketNumbers.forLog(null)).isEqualTo("(none)");
+        assertThat(TicketNumbers.forLog("  ")).isEqualTo("(none)");
+    }
+
+    @Test
+    void redactIn_masksEveryTicketNumberInAPathOrABody() {
+        assertThat(TicketNumbers.redactIn("/bookings/1f0e9c3a-7b2d-4e5f-9a1b-2c3d4e5f6a7b/tickets/20261013-7KQ4M-9XZ2B/qr.png"))
+                .isEqualTo("/bookings/1f0e9c3a-7b2d-4e5f-9a1b-2c3d4e5f6a7b/tickets/20261013-*****-**Z2B/qr.png");
+        assertThat(TicketNumbers.redactIn("{\"error\":\"bad qrCodePath /bookings/9/tickets/20260419-48291X/qr\"}"))
+                .isEqualTo("{\"error\":\"bad qrCodePath /bookings/9/tickets/20260419-****1X/qr\"}");
+        assertThat(TicketNumbers.redactIn("20261013-7KQ4M-9XZ2B and 20261013-ABCDE-FGH12"))
+                .isEqualTo("20261013-*****-**Z2B and 20261013-*****-**H12");
+    }
+
+    @Test
+    void redactIn_hidesNearMissesToo_andIsIdempotent() {
+        // An O typed for a 0 is not a ticket number, but it is one symbol from one.
+        assertThat(TicketNumbers.redactIn("t=20261013-7KQ4M-9XZ2O")).isEqualTo("t=20261013-*****-**Z2O");
+        String once = TicketNumbers.redactIn("/t/20261013-7KQ4M-9XZ2B");
+        assertThat(TicketNumbers.redactIn(once)).isEqualTo(once);
+    }
+
+    @Test
+    void redactIn_leavesConfirmationNumbersUuidsAndLongerRunsAlone() {
+        String text = "INN-20261013-ABC123 1f0e9c3a-7b2d-4e5f-9a1b-2c3d4e5f6a7b x20261013-7KQ4M-9XZ2B 20261013-7KQ4M-9XZ2BB";
+        assertThat(TicketNumbers.redactIn(text)).isEqualTo(text);
+        assertThat(TicketNumbers.redactIn(null)).isNull();
+        assertThat(TicketNumbers.redactIn("")).isEmpty();
+    }
 }
