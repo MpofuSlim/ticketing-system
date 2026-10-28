@@ -155,8 +155,10 @@ public class PasswordResetService {
      * {@link #requestReset} would silently no-op, so the caller can say so
      * instead of claiming a code is on its way.
      *
+     * Support's own per-account quota is the caller's; this never counts
+     * against the address's forgot-password limit.
+     *
      * @param onDelivery told, after commit, whether the email was accepted
-     * @throws OtpService.OtpRateLimitException too many codes to this address recently
      */
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
     public boolean requestResetForSupport(String email, java.util.function.Consumer<Boolean> onDelivery) {

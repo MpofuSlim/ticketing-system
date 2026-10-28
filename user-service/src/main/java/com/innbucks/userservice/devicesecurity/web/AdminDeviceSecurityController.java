@@ -1,5 +1,6 @@
 package com.innbucks.userservice.devicesecurity.web;
 
+import com.innbucks.userservice.devicesecurity.DeviceSecurityException;
 import com.innbucks.userservice.devicesecurity.DeviceSecurityRequests;
 import com.innbucks.userservice.devicesecurity.DeviceSupportService;
 import com.innbucks.userservice.devicesecurity.dto.SupportDTOs.ActionResult;
@@ -18,6 +19,7 @@ import com.innbucks.userservice.security.PermissionCatalog;
 import com.innbucks.userservice.service.AuditContext;
 import com.innbucks.userservice.support.DeviceSecurityReadAccess;
 import com.innbucks.userservice.support.SupportCustomerKeys;
+import com.innbucks.userservice.support.SupportProperties;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -29,6 +31,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
@@ -81,6 +84,23 @@ public class AdminDeviceSecurityController {
      * looked at a customer through these existing tools.
      */
     private final DeviceSecurityReadAccess access;
+    /**
+     * {@code support.legacy-device-writes-enabled}: the seven WRITES below run
+     * with no lookup binding, no per-agent limit and no idempotency. Their bound
+     * twins are under {@code /admin/support/innbucks-app}; switched off, these
+     * answer {@code 410 use_support_endpoints} before anything is read or changed.
+     */
+    private final SupportProperties supportProperties;
+
+    static final String USE_SUPPORT_ENDPOINTS = "use_support_endpoints";
+    static final String USE_SUPPORT_ENDPOINTS_MESSAGE = "This action has moved to customer support. Search for the "
+            + "customer, then act from their InnBucks app section.";
+    private static final String GONE_EXAMPLE = """
+            { "code": "410 GONE", "message": "This action has moved to customer support. Search for the customer, then act from their InnBucks app section.", "data": { "errorCode": "use_support_endpoints", "use": "/admin/support/innbucks-app" } }
+            """;
+    private static final String MOVED = " Being retired: use the same action under /admin/support/innbucks-app, which "
+            + "is bound to your search for the customer. Where SUPPORT_LEGACY_DEVICE_WRITES_ENABLED=false this answers "
+            + "410 use_support_endpoints.";
 
     // ---- look up -------------------------------------------------------------------
 
@@ -294,12 +314,12 @@ public class AdminDeviceSecurityController {
 
     @PostMapping("/devices/{deviceId}/block")
     @PreAuthorize("hasAuthority('" + PermissionCatalog.DEVICE_SECURITY_MANAGE + "')")
-    @Operation(summary = "Block a phone",
+    @Operation(deprecated = true, summary = "Block a phone",
             description = "`UNTIL_UNLOCKED` for a lost or stolen phone: blocked from this account until the customer "
                     + "unlocks it on *569# (Unlock device) or support lifts it. `TEMPORARY` pauses sign-in for "
                     + "`durationMinutes` (15 min – 7 days) and lifts on its own. Either way the phone's open codes and "
                     + "login tickets die at once, a silent renewal cuts it off within 15 minutes, and the customer gets "
-                    + "an SMS with the reference.")
+                    + "an SMS with the reference." + MOVED)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Blocked",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -323,10 +343,13 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "409", description = "Already blocked",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "409 CONFLICT", "message": "This phone is already blocked (reference SEC-5T9W1H).", "data": { "errorCode": "device_already_blocked" } }
-                            """)))
+                            """))),
+            @ApiResponse(responseCode = "410", description = "Retired on this server (SUPPORT_LEGACY_DEVICE_WRITES_ENABLED=false)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = GONE_EXAMPLE)))
     })
     public ResponseEntity<ApiResult<ActionResult>> block(@PathVariable UUID deviceId, @Valid @RequestBody BlockRequest body,
                                                          Authentication auth, HttpServletRequest request) {
+        requireLegacyWrites();
         ActionResult r = service.block(deviceId, body, auth.getName(), audit(request));
         log.info("Support blocked device={} mode={} by={}", deviceId, body.mode(), auth.getName());
         return ResponseEntity.ok(ApiResult.ok("Phone blocked", r));
@@ -334,9 +357,9 @@ public class AdminDeviceSecurityController {
 
     @PostMapping("/devices/{deviceId}/ban")
     @PreAuthorize("hasAuthority('" + PermissionCatalog.DEVICE_SECURITY_FRAUD + "')")
-    @Operation(summary = "Ban a phone for fraud (fraud desk)",
+    @Operation(deprecated = true, summary = "Ban a phone for fraud (fraud desk)",
             description = "`FRAUD_SUSPECTED` bans this account on this phone; the customer can unlock on *569# after 24 "
-                    + "hours. `CONFIRMED_FRAUD` and `SHARED_DEVICE` ban the PHONE for every account on it, support only.")
+                    + "hours. `CONFIRMED_FRAUD` and `SHARED_DEVICE` ban the PHONE for every account on it, support only." + MOVED)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Banned",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -345,10 +368,13 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "403", description = "Missing device-security:fraud",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
-                            """)))
+                            """))),
+            @ApiResponse(responseCode = "410", description = "Retired on this server (SUPPORT_LEGACY_DEVICE_WRITES_ENABLED=false)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = GONE_EXAMPLE)))
     })
     public ResponseEntity<ApiResult<ActionResult>> ban(@PathVariable UUID deviceId, @Valid @RequestBody BanRequest body,
                                                        Authentication auth, HttpServletRequest request) {
+        requireLegacyWrites();
         ActionResult r = service.ban(deviceId, body, auth.getName(), audit(request));
         log.info("Support banned device={} reason={} by={}", deviceId, body.reason(), auth.getName());
         return ResponseEntity.ok(ApiResult.ok("Phone banned", r));
@@ -356,10 +382,10 @@ public class AdminDeviceSecurityController {
 
     @PostMapping("/devices/{deviceId}/unlock")
     @PreAuthorize("hasAuthority('" + PermissionCatalog.DEVICE_SECURITY_MANAGE + "')")
-    @Operation(summary = "Unlock a paused or blocked phone",
+    @Operation(deprecated = true, summary = "Unlock a paused or blocked phone",
             description = "Lifts a pause or a block. The phone does NOT go straight back to trusted: the next sign-in "
                     + "asks for a code, then the PIN. Bans only the fraud desk may lift (SHARED_DEVICE, CONFIRMED_FRAUD, "
-                    + "SIM_SWAP, any ban on every account) additionally need device-security:fraud.")
+                    + "SIM_SWAP, any ban on every account) additionally need device-security:fraud." + MOVED)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Unlocked",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -372,10 +398,13 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "409", description = "Not blocked",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "409 CONFLICT", "message": "This phone isn't blocked, so there is nothing to unlock.", "data": { "errorCode": "device_not_blocked" } }
-                            """)))
+                            """))),
+            @ApiResponse(responseCode = "410", description = "Retired on this server (SUPPORT_LEGACY_DEVICE_WRITES_ENABLED=false)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = GONE_EXAMPLE)))
     })
     public ResponseEntity<ApiResult<ActionResult>> unlock(@PathVariable UUID deviceId, @Valid @RequestBody NoteRequest body,
                                                           Authentication auth, HttpServletRequest request) {
+        requireLegacyWrites();
         boolean fraud = auth.getAuthorities().stream()
                 .anyMatch(a -> PermissionCatalog.DEVICE_SECURITY_FRAUD.equals(a.getAuthority()));
         ActionResult r = service.unlock(deviceId, body.note(), auth.getName(), audit(request), fraud);
@@ -385,9 +414,9 @@ public class AdminDeviceSecurityController {
 
     @PostMapping("/devices/{deviceId}/revoke")
     @PreAuthorize("hasAuthority('" + PermissionCatalog.DEVICE_SECURITY_MANAGE + "')")
-    @Operation(summary = "Remove a phone from the account",
+    @Operation(deprecated = true, summary = "Remove a phone from the account",
             description = "Same as the customer removing it in Your devices: signed out within 15 minutes, and signing "
-                    + "in on it again needs a code. A blocked phone can't be removed (it would start again as new).")
+                    + "in on it again needs a code. A blocked phone can't be removed (it would start again as new)." + MOVED)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Removed",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -396,10 +425,13 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "409", description = "Already removed, or blocked",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "409 CONFLICT", "message": "This phone has already been removed from the account.", "data": { "errorCode": "device_already_removed" } }
-                            """)))
+                            """))),
+            @ApiResponse(responseCode = "410", description = "Retired on this server (SUPPORT_LEGACY_DEVICE_WRITES_ENABLED=false)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = GONE_EXAMPLE)))
     })
     public ResponseEntity<ApiResult<ActionResult>> revoke(@PathVariable UUID deviceId, @Valid @RequestBody NoteRequest body,
                                                           Authentication auth, HttpServletRequest request) {
+        requireLegacyWrites();
         ActionResult r = service.revoke(deviceId, body.note(), auth.getName(), audit(request));
         log.info("Support revoked device={} by={}", deviceId, auth.getName());
         return ResponseEntity.ok(ApiResult.ok("Phone removed", r));
@@ -407,19 +439,22 @@ public class AdminDeviceSecurityController {
 
     @PostMapping("/devices/{deviceId}/reset-trust")
     @PreAuthorize("hasAuthority('" + PermissionCatalog.DEVICE_SECURITY_MANAGE + "')")
-    @Operation(summary = "Reset a phone to brand-new (the §14 trust-reset tool)",
+    @Operation(deprecated = true, summary = "Reset a phone to brand-new (the §14 trust-reset tool)",
             description = "Forgets the pairing: the next sign-in is a first sign-in (code, PIN, new-phone notice). "
                     + "For testing the new-device path on staging and for support cases like a phone that changed hands. "
-                    + "Silent — the customer is not messaged.")
+                    + "Silent — the customer is not messaged." + MOVED)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Reset",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "200 OK", "message": "Phone reset", "data": { "device": { "deviceId": "0f8d2c3a-5b6e-4f71-8a9b-0c1d2e3f4a5b", "msisdn": "+263771234512", "label": "Samsung SM-A155F · Android 15", "platform": "android", "osVersion": "15", "model": "SM-A155F", "manufacturer": "samsung", "appVersion": "2.4.0", "state": "NEW", "stateReason": null, "blockedAt": null, "blockedUntil": null, "supportRef": null, "ussdUnlockable": false, "unlockableAfter": null, "trustedUntil": null, "boundAt": null, "coolingUntil": null, "otpVerifiedAt": "2026-07-02T08:15:52+02:00", "firstSeenAt": "2026-07-02T08:14:03+02:00", "lastSeenAt": "2026-09-29T16:14:51+02:00", "lastSeenNear": "Harare", "lastIp": "41.221.147.12", "lastUnlockedAt": null, "deviceWideBan": null, "otherAccountsOnDevice": 0, "agentGuidance": "This phone tried to sign in but was never confirmed. If the customer doesn't recognise it, block it (UNTIL_UNLOCKED)." }, "whatHappensNext": "Reset. The next sign-in on this phone is treated as a brand-new phone (code, then PIN)." } }
-                            """)))
+                            """))),
+            @ApiResponse(responseCode = "410", description = "Retired on this server (SUPPORT_LEGACY_DEVICE_WRITES_ENABLED=false)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = GONE_EXAMPLE)))
     })
     public ResponseEntity<ApiResult<ActionResult>> resetTrust(@PathVariable UUID deviceId,
                                                               @Valid @RequestBody NoteRequest body,
                                                               Authentication auth, HttpServletRequest request) {
+        requireLegacyWrites();
         ActionResult r = service.resetTrust(deviceId, body.note(), auth.getName(), audit(request));
         log.info("Support reset device trust device={} by={}", deviceId, auth.getName());
         return ResponseEntity.ok(ApiResult.ok("Phone reset", r));
@@ -427,39 +462,52 @@ public class AdminDeviceSecurityController {
 
     @PutMapping("/customers/{msisdn}/fraud-flag")
     @PreAuthorize("hasAuthority('" + PermissionCatalog.DEVICE_SECURITY_FRAUD + "')")
-    @Operation(summary = "Set or clear a customer's fraud flag (fraud desk)",
+    @Operation(deprecated = true, summary = "Set or clear a customer's fraud flag (fraud desk)",
             description = "A flagged customer's phones are trusted for 30 days instead of 90 (applied immediately), and "
-                    + "every sign-in scores higher.")
+                    + "every sign-in scores higher." + MOVED)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Updated",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "200 OK", "message": "Fraud flag updated", "data": { "preferredChannel": "WHATSAPP", "fraudFlagged": true, "fraudFlaggedAt": "2026-09-29T17:05:00+02:00", "fraudFlagNote": "Customer was the victim of a SIM-swap attempt on 2026-09-20.", "pinIssuedAt": "2026-07-02T08:15:30+02:00", "lastSignInAt": "2026-09-29T11:58:14+02:00" } }
-                            """)))
+                            """))),
+            @ApiResponse(responseCode = "410", description = "Retired on this server (SUPPORT_LEGACY_DEVICE_WRITES_ENABLED=false)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = GONE_EXAMPLE)))
     })
     public ResponseEntity<ApiResult<ProfileView>> fraudFlag(@PathVariable String msisdn,
                                                             @Valid @RequestBody FraudFlagRequest body,
                                                             Authentication auth, HttpServletRequest request) {
+        requireLegacyWrites();
         return ResponseEntity.ok(ApiResult.ok("Fraud flag updated",
                 service.setFraudFlag(msisdn, body, auth.getName(), audit(request))));
     }
 
     @PostMapping("/customers/{msisdn}/cancel-codes")
     @PreAuthorize("hasAuthority('" + PermissionCatalog.DEVICE_SECURITY_MANAGE + "')")
-    @Operation(summary = "Cancel every open code for a number",
+    @Operation(deprecated = true, summary = "Cancel every open code for a number",
             description = "For \"I got a code I didn't ask for\": whoever asked for it can no longer use it. Tell the "
-                    + "caller never to share a code, and consider blocking the phone that asked (see the events).")
+                    + "caller never to share a code, and consider blocking the phone that asked (see the events)." + MOVED)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Cancelled",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "200 OK", "message": "1 open code cancelled", "data": { "cancelled": 1 } }
-                            """)))
+                            """))),
+            @ApiResponse(responseCode = "410", description = "Retired on this server (SUPPORT_LEGACY_DEVICE_WRITES_ENABLED=false)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = GONE_EXAMPLE)))
     })
     public ResponseEntity<ApiResult<Map<String, Object>>> cancelCodes(@PathVariable String msisdn,
                                                                       @Valid @RequestBody NoteRequest body,
                                                                       Authentication auth, HttpServletRequest request) {
+        requireLegacyWrites();
         int n = service.voidCodes(msisdn, body.note(), auth.getName(), audit(request));
         return ResponseEntity.ok(ApiResult.ok(n + (n == 1 ? " open code" : " open codes") + " cancelled",
                 Map.of("cancelled", n)));
+    }
+
+    private void requireLegacyWrites() {
+        if (!supportProperties.isLegacyDeviceWritesEnabled()) {
+            throw new DeviceSecurityException(HttpStatus.GONE, USE_SUPPORT_ENDPOINTS, USE_SUPPORT_ENDPOINTS_MESSAGE,
+                    Map.of("use", "/admin/support/innbucks-app"), null);
+        }
     }
 
     private static SupportCustomerKeys phoneKeys(String msisdn) {

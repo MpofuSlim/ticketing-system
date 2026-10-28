@@ -279,14 +279,16 @@ class AdminSupportDispatchTest {
     }
 
     @Test
-    @DisplayName("429 reset_code_limited carries no Retry-After and no data.retryAfterSeconds, as documented")
-    void resetCodeLimitedHasNoRetryAfter() throws Exception {
+    @DisplayName("429 reset_code_limited carries its wait: Retry-After and data.retryAfterSeconds, as documented")
+    void resetCodeLimitedCarriesItsWait() throws Exception {
         when(actions.execute(eq(ConsoleSupportActions.Op.SEND_PASSWORD_RESET), any(), eq(1042L), any(), any(), any()))
-                .thenThrow(SupportPolicyException.resetCodeLimited());
+                .thenThrow(SupportPolicyException.resetCodeLimited(2400));
         write("send-password-reset").andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.message").value("Too many reset codes have gone to this account recently. "
+                        + "Ask the caller to use the latest one, or try again in 40 minutes."))
                 .andExpect(jsonPath("$.data.errorCode").value("reset_code_limited"))
-                .andExpect(jsonPath("$.data.retryAfterSeconds").doesNotExist())
-                .andExpect(header().doesNotExist("Retry-After"))
+                .andExpect(jsonPath("$.data.retryAfterSeconds").value(2400))
+                .andExpect(header().string("Retry-After", "2400"))
                 .andExpect(header().string("Cache-Control", "no-store"));
     }
 

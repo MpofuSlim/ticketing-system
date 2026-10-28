@@ -77,9 +77,6 @@ public class SupportPolicyException extends RuntimeException {
     public static final String MFA_NOT_ENROLLED_MESSAGE =
             "This account hasn't set up two-factor sign-in, so there is nothing to reset.";
     public static final String RESET_CODE_LIMITED = "reset_code_limited";
-    public static final String RESET_CODE_LIMITED_MESSAGE =
-            "Too many reset codes have gone to this account recently. Ask the caller to use the latest one, "
-                    + "or try again later.";
     public static final String NOTE_REQUIRED = "note_required";
     public static final String NOTE_REQUIRED_MESSAGE =
             "Write a note saying why, for example how you verified the caller. Markup on its own doesn't count.";
@@ -192,8 +189,16 @@ public class SupportPolicyException extends RuntimeException {
         return new SupportPolicyException(HttpStatus.CONFLICT, MFA_NOT_ENROLLED, MFA_NOT_ENROLLED_MESSAGE);
     }
 
-    public static SupportPolicyException resetCodeLimited() {
-        return new SupportPolicyException(HttpStatus.TOO_MANY_REQUESTS, RESET_CODE_LIMITED, RESET_CODE_LIMITED_MESSAGE);
+    /**
+     * 429 {@code reset_code_limited} from support's own per-account quota, which
+     * knows its wait: {@code Retry-After} and {@code data.retryAfterSeconds}.
+     */
+    public static SupportPolicyException resetCodeLimited(long retryAfterSeconds) {
+        long seconds = Math.max(1, retryAfterSeconds);
+        return new SupportPolicyException(HttpStatus.TOO_MANY_REQUESTS, RESET_CODE_LIMITED,
+                "Too many reset codes have gone to this account recently. Ask the caller to use the latest one, "
+                        + "or try again in " + StaffPolicyException.humanDurationPublic(seconds) + ".",
+                Map.of("retryAfterSeconds", seconds), seconds);
     }
 
     /**

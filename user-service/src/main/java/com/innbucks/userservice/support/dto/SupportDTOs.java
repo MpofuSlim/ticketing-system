@@ -5,7 +5,11 @@ import com.innbucks.userservice.devicesecurity.dto.SupportDTOs.EventView;
 import com.innbucks.userservice.devicesecurity.dto.SupportDTOs.ProfileView;
 import com.innbucks.userservice.devicesecurity.dto.SupportDTOs.SupportDeviceView;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalDateTime;
@@ -263,5 +267,115 @@ public final class SupportDTOs {
                     + "request with the same Idempotency-Key — nothing was done twice.") boolean replayed,
             @Schema(description = "The account as it is now (a staff stub if it has become a staff account since; "
                     + "null if it no longer exists).", nullable = true) ConsoleAccountEntry account) {
+    }
+
+    // ---- InnBucks app (DTX) writes, bound to a lookup ----------------------------------------
+
+    /** The fields every InnBucks app write carries; see {@link WriteRequest} for their rules. */
+    @Schema(name = "SupportAppDeviceWrite", description = "unlock, revoke and reset-trust on one phone of the lookup.")
+    public record AppDeviceWrite(
+            @Size(max = 16, message = "lookupId must be 16 characters or fewer")
+            @Schema(example = "SLK-7Q2M9X", requiredMode = Schema.RequiredMode.REQUIRED,
+                    description = "The lookupId of YOUR search for this customer, at most 30 minutes old.")
+            String lookupId,
+            @NotBlank(message = "note is required")
+            @Size(max = 500, message = "note must be 500 characters or fewer")
+            @Schema(example = "Caller verified (date of birth and last transaction). The paused phone is theirs.",
+                    requiredMode = Schema.RequiredMode.REQUIRED, maxLength = 500)
+            String note,
+            @Size(max = 64, message = "caseId must be 64 characters or fewer")
+            @Schema(example = "null", nullable = true) String caseId) {
+    }
+
+    @Schema(name = "SupportAppBlockWrite")
+    public record AppBlockWrite(
+            @Size(max = 16, message = "lookupId must be 16 characters or fewer")
+            @Schema(example = "SLK-7Q2M9X", requiredMode = Schema.RequiredMode.REQUIRED) String lookupId,
+            @NotBlank(message = "mode is required")
+            @Pattern(regexp = "TEMPORARY|UNTIL_UNLOCKED", message = "mode must be TEMPORARY or UNTIL_UNLOCKED")
+            @Schema(example = "UNTIL_UNLOCKED", requiredMode = Schema.RequiredMode.REQUIRED,
+                    description = "TEMPORARY: paused for durationMinutes, lifts on its own. UNTIL_UNLOCKED: a "
+                            + "lost or stolen phone, blocked until the customer unlocks it on *569# or support "
+                            + "lifts it.")
+            String mode,
+            @Min(value = 15, message = "durationMinutes must be at least 15")
+            @Max(value = 10080, message = "durationMinutes must be at most 10080 (7 days)")
+            @Schema(example = "60", description = "TEMPORARY only.") Integer durationMinutes,
+            @NotBlank(message = "note is required")
+            @Size(max = 500, message = "note must be 500 characters or fewer")
+            @Schema(example = "Customer reports the phone stolen this morning.",
+                    requiredMode = Schema.RequiredMode.REQUIRED, maxLength = 500) String note,
+            @Size(max = 64, message = "caseId must be 64 characters or fewer")
+            @Schema(example = "null", nullable = true) String caseId) {
+    }
+
+    @Schema(name = "SupportAppBanWrite")
+    public record AppBanWrite(
+            @Size(max = 16, message = "lookupId must be 16 characters or fewer")
+            @Schema(example = "SLK-7Q2M9X", requiredMode = Schema.RequiredMode.REQUIRED) String lookupId,
+            @NotBlank(message = "reason is required")
+            @Pattern(regexp = "FRAUD_SUSPECTED|CONFIRMED_FRAUD|SHARED_DEVICE",
+                    message = "reason must be FRAUD_SUSPECTED, CONFIRMED_FRAUD or SHARED_DEVICE")
+            @Schema(example = "FRAUD_SUSPECTED", requiredMode = Schema.RequiredMode.REQUIRED,
+                    description = "FRAUD_SUSPECTED: this account on this phone, unlockable on *569# after 24 "
+                            + "hours. CONFIRMED_FRAUD and SHARED_DEVICE: the PHONE, for every account on it, "
+                            + "support only.")
+            String reason,
+            @NotBlank(message = "note is required")
+            @Size(max = 500, message = "note must be 500 characters or fewer")
+            @Schema(example = "Linked to case FR-2026-0412: three mule accounts cashed out from this handset.",
+                    requiredMode = Schema.RequiredMode.REQUIRED, maxLength = 500) String note,
+            @Size(max = 64, message = "caseId must be 64 characters or fewer")
+            @Schema(example = "null", nullable = true) String caseId) {
+    }
+
+    @Schema(name = "SupportAppPhoneWrite", description = "cancel-codes and sign-out on one number of the lookup. "
+            + "The number rides in the body, never the URL.")
+    public record AppPhoneWrite(
+            @Size(max = 16, message = "lookupId must be 16 characters or fewer")
+            @Schema(example = "SLK-7Q2M9X", requiredMode = Schema.RequiredMode.REQUIRED) String lookupId,
+            @NotBlank(message = "phone is required")
+            @Size(max = 32, message = "phone must be 32 characters or fewer")
+            @Schema(example = "+263771234567", requiredMode = Schema.RequiredMode.REQUIRED,
+                    description = "One of the numbers the search returned in innbucksApp, in any spelling.")
+            String phone,
+            @NotBlank(message = "note is required")
+            @Size(max = 500, message = "note must be 500 characters or fewer")
+            @Schema(example = "Customer reports the phone and SIM stolen; SIM block requested at the network.",
+                    requiredMode = Schema.RequiredMode.REQUIRED, maxLength = 500) String note,
+            @Size(max = 64, message = "caseId must be 64 characters or fewer")
+            @Schema(example = "null", nullable = true) String caseId) {
+    }
+
+    @Schema(name = "SupportAppFraudFlagWrite")
+    public record AppFraudFlagWrite(
+            @Size(max = 16, message = "lookupId must be 16 characters or fewer")
+            @Schema(example = "SLK-7Q2M9X", requiredMode = Schema.RequiredMode.REQUIRED) String lookupId,
+            @NotBlank(message = "phone is required")
+            @Size(max = 32, message = "phone must be 32 characters or fewer")
+            @Schema(example = "+263771234567", requiredMode = Schema.RequiredMode.REQUIRED) String phone,
+            @NotNull(message = "flagged is required")
+            @Schema(example = "true", requiredMode = Schema.RequiredMode.REQUIRED,
+                    description = "true caps every phone's trust at 30 days and raises the risk score; false "
+                            + "clears it.")
+            Boolean flagged,
+            @NotBlank(message = "note is required")
+            @Size(max = 500, message = "note must be 500 characters or fewer")
+            @Schema(example = "Customer was the victim of a SIM-swap attempt on 2026-09-20.",
+                    requiredMode = Schema.RequiredMode.REQUIRED, maxLength = 500) String note,
+            @Size(max = 64, message = "caseId must be 64 characters or fewer")
+            @Schema(example = "null", nullable = true) String caseId) {
+    }
+
+    @Schema(name = "SupportAppActionResult")
+    public record AppActionResult(
+            @Schema(example = "SUCCESS") String outcome,
+            @Schema(example = "The phone is blocked from this account until the customer unlocks it on *569# (or "
+                    + "support lifts it). The customer has been sent an SMS with reference SEC-5T9W1H.")
+            String whatHappensNext,
+            @Schema(example = "false", description = "True when this answer is the stored outcome of an earlier "
+                    + "request with the same Idempotency-Key: nothing was done twice.") boolean replayed,
+            @Schema(description = "The number acted on, as the search's innbucksApp section shows it now (addresses "
+                    + "masked).") InnbucksAppPhoneView phone) {
     }
 }

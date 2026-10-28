@@ -77,6 +77,11 @@ class SupportResponseAllowListTest {
                 .containsExactly("registrationTier", "verified", "phoneVerified", "phoneVerifiedAt");
         assertThat(names(SupportDTOs.InnbucksAppPhoneView.class))
                 .containsExactly("msisdn", "customerProfile", "deviceSecurity");
+        // A write answers with the same masked view, never the raw DTX one.
+        assertThat(names(SupportDTOs.AppActionResult.class))
+                .containsExactly("outcome", "whatHappensNext", "replayed", "phone");
+        assertThat(SupportDTOs.AppActionResult.class.getRecordComponents()[3].getType())
+                .isEqualTo(SupportDTOs.InnbucksAppPhoneView.class);
     }
 
     @Test
