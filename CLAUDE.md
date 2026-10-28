@@ -857,6 +857,15 @@ permission, where "holds everything it holds" would be vacuously true.
   - **Marketplace dispute DECISIONS stay with SUPER_ADMIN/finance** (owner's call, 2026-09-30). Resolving a dispute as REFUND records a transfer reference, i.e. asserts money already left. So V43's "dispute decisions" for the supervisor does not reach marketplace until a decide-then-pay step exists.
   - **A new code grants nothing until the other service ships its endpoint.** A grant is also picked up only at the agent's next sign-in or refresh: a grant does not bump `tokenVersion`.
   - **Deploy order:** either repo can deploy first. The support endpoints simply 403 until tokens carry the codes.
+- **Read-only platform access, enforced outside user-service too:**
+  `loyalty-reports:read` and `marketplace-reports:read` (PLATFORM). Each lets a
+  holder read its product as SUPER_ADMIN sees it, through GET endpoints only,
+  never a voucher or collection code, payout details or a single customer's
+  record. loyalty-service and marketplace-service enforce them; user-service
+  only defines them. No built-in role is granted them: they exist for a custom
+  role (e.g. `DEV_READONLY`, for developers), next to `PRODUCT_OFFICER`, which
+  is booking's and event's read-only reader. Like any PLATFORM code, the role
+  that holds them is a staff role.
 - **Staff reset their password by EMAIL only.** `PasswordResetService` makes both
   phone steps no-ops (the generic 200 / "Invalid or expired code") for any
   staff-role holder — a phone on a staff account is a takeover path.
