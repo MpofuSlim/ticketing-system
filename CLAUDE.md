@@ -1321,6 +1321,20 @@ organizer's bookings view from a list of MSISDNs into a guest list.
 - **`holderName`** (= attendee if named, else purchaser) is on `CategoryBookingDTO`
   and on the scan response (`ALLOWED` / `ALREADY_REDEEMED`) so the gate can greet
   or ID-check the holder; the ticket HTML/email print "Ticket for <holder>".
+- **A guest's email links ONLY their own ticket, and nothing a guest receives
+  names the booking.** The booking's page (`GET /bookings/{id}/tickets`) shows
+  every ticket's QR, and a ticket number is the QR payload, so whoever holds the
+  booking id can enter on any guest's ticket: that id goes to the purchaser
+  alone. A named guest's email links `GET /bookings/tickets/{itemId}`
+  (`TicketRenderingService.holderTicketPath`): one ticket, keyed by the item's
+  own UUID, with its QR at `.../qr.png` by the same id, so neither the link nor
+  the page's image address carries the booking id (dropping the last segment
+  must never reach the whole booking). No reference, total or other tickets on
+  it. `SecurityConfig` permits exactly those three paths. **Never add a booking
+  id or a booking-keyed URL to anything sent to a guest.** The
+  WhatsApp QR's media path still names the booking: Twilio fetches it, and the
+  guest sees only the image. Guest emails sent before this still carry the
+  booking link.
 - The organizer CSV export gained `customerName` + `attendees` (names, `; `-joined)
   and stays one row per BOOKING — it is the accountant's ledger; the per-ticket
   guest list with contacts is `GET /bookings/by-event/{id}`.

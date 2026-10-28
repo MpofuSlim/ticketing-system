@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
+import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,12 +27,14 @@ class TicketRenderingServiceTest {
     private static final String BASE = "https://api.test";
 
     private BookingRepository repo;
+    private BookingItemRepository itemRepo;
     private TicketRenderingService service;
 
     @BeforeEach
     void setUp() {
         repo = mock(BookingRepository.class);
-        service = new TicketRenderingService(repo, new QrCodeGenerator());
+        itemRepo = mock(BookingItemRepository.class);
+        service = new TicketRenderingService(repo, new QrCodeGenerator(), itemRepo);
     }
 
     private static Booking booking(Booking.BookingStatus status) {
@@ -229,5 +232,84 @@ class TicketRenderingServiceTest {
         String html = service.ticketPageHtml(b.getId(), BASE).orElseThrow();
 
         assertThat(html).contains("INN-&lt;script&gt;").doesNotContain("INN-<script>");
+    }
+
+    // -- one ticket, for its holder: nothing on it opens the booking ----------
+
+    /** A CONFIRMED booking with two tickets: the buyer's own, and a named guest's. */
+    private static Booking twoTicketBooking(Booking.BookingStatus status) {
+        Booking b = booking(status);
+        b.setCustomerName("Alice Moyo");
+        BookingItem own = b.getItems().get(0);
+        own.setId(UUID.randomUUID());
+        own.setBooking(b);
+        BookingItem guest = new BookingItem();
+        guest.setId(UUID.randomUUID());
+        guest.setTicketNumber("20260610-GUEST");
+        guest.setCategoryName("VIP");
+        guest.setRowLabel("A");
+        guest.setSeatNumber(13);
+        guest.setAttendeeName("Tendai Ncube");
+        guest.setBooking(b);
+        b.setItems(List.of(own, guest));
+        return b;
+    }
+
+    @Test
+    void holderPage_showsOnlyThatTicket_andNothingThatOpensTheBooking() {
+        Booking b = twoTicketBooking(Booking.BookingStatus.CONFIRMED);
+        BookingItem guest = b.getItems().get(1);
+        when(itemRepo.findByIdWithBooking(guest.getId())).thenReturn(Optional.of(guest));
+
+        String html = service.holderTicketPageHtml(guest.getId(), BASE).orElseThrow();
+
+        assertThat(html)
+                .contains("Ticket for Tendai Ncube")
+                .contains("20260610-GUEST")
+                .contains("Row A, Seat 13")
+                .contains("src=\"" + BASE + "/bookings/tickets/" + guest.getId() + "/qr.png\"");
+        // The booking's id opens every guest's QR, so it appears nowhere: not
+        // in a link, not in an image address. Nor do the other tickets, the
+        // booking reference or what the buyer paid.
+        assertThat(html)
+                .doesNotContain(b.getId().toString())
+                .doesNotContain("20260610-T1")
+                .doesNotContain(b.getItems().get(0).getId().toString())
+                .doesNotContain("INN-20260610-A1B2C3")
+                .doesNotContain("Total paid")
+                .doesNotContain("50.00");
+    }
+
+    @Test
+    void holderPage_unconfirmedUnknownOrNull_isEmpty() {
+        Booking pending = twoTicketBooking(Booking.BookingStatus.PENDING);
+        BookingItem guest = pending.getItems().get(1);
+        when(itemRepo.findByIdWithBooking(guest.getId())).thenReturn(Optional.of(guest));
+        UUID unknown = UUID.randomUUID();
+        when(itemRepo.findByIdWithBooking(unknown)).thenReturn(Optional.empty());
+
+        assertThat(service.holderTicketPageHtml(guest.getId(), BASE)).isEmpty();
+        assertThat(service.holderTicketPageHtml(unknown, BASE)).isEmpty();
+        assertThat(service.holderTicketPageHtml(null, BASE)).isEmpty();
+    }
+
+    @Test
+    void holderQr_isTheQrOfThatTicket_forAConfirmedBookingOnly() {
+        Booking b = twoTicketBooking(Booking.BookingStatus.CONFIRMED);
+        BookingItem guest = b.getItems().get(1);
+        when(itemRepo.findByIdWithBooking(guest.getId())).thenReturn(Optional.of(guest));
+
+        assertThat(service.holderTicketQrPng(guest.getId()))
+                .hasValueSatisfying(png -> assertThat(png).isEqualTo(new QrCodeGenerator().toPngBytes("20260610-GUEST")));
+
+        b.setStatus(Booking.BookingStatus.CANCELLED);
+        assertThat(service.holderTicketQrPng(guest.getId())).isEmpty();
+    }
+
+    @Test
+    void holderTicketPath_carriesTheTicketsIdAndNoBookingId() {
+        UUID itemId = UUID.randomUUID();
+
+        assertThat(TicketRenderingService.holderTicketPath(itemId)).isEqualTo("/bookings/tickets/" + itemId);
     }
 }

@@ -74,9 +74,10 @@ public class TicketDeliveryService {
     private final EventServiceClient eventServiceClient;
 
     /**
-     * Public edge base for the hosted ticket page — the same value
-     * {@code TicketController} uses. Only consulted for the attendee email,
-     * which links the guest to their ticket online in case the WhatsApp QR
+     * Public edge base for the hosted ticket pages — the same value
+     * {@code TicketController} uses. The purchaser's email links the whole
+     * booking; an attendee's email links only that attendee's ticket
+     * ({@link TicketRenderingService#holderTicketPath}), in case the WhatsApp QR
      * never lands. Blank (unit tests, unprovisioned cell) = no link, the email
      * still carries the ticket number.
      */
@@ -543,9 +544,12 @@ public class TicketDeliveryService {
         } else {
             sb.append("\nPresent your ticket number at the gate.");
         }
-        if (publicBaseUrl != null && !publicBaseUrl.isBlank()) {
-            sb.append("\nView the tickets online: ").append(publicBaseUrl)
-              .append("/bookings/").append(booking.getId()).append("/tickets");
+        // Their OWN ticket, never the booking's page: that one shows every
+        // guest's QR, so a guest holding it could enter on someone else's
+        // ticket. The link carries no booking id for the same reason.
+        if (publicBaseUrl != null && !publicBaseUrl.isBlank() && item.getId() != null) {
+            sb.append("\nView your ticket online: ").append(publicBaseUrl)
+              .append(TicketRenderingService.holderTicketPath(item.getId()));
         }
         return sb.toString();
     }

@@ -255,6 +255,52 @@ class TicketDeliveryServiceTest {
     }
 
     @Test
+    void anAttendeesEmail_linksOnlyTheirOwnTicket_neverTheBookingsPage() {
+        Fixture f = fixture();
+        org.springframework.test.util.ReflectionTestUtils.setField(f.service(), "publicBaseUrl",
+                "https://dtx.example/foundry");
+        Booking booking = bookingWithOneTicket();
+        booking.setCustomerName("Alice Moyo");
+        booking.setUserEmail("alice@example.com");
+        BookingItem rudo = ticketFor("TN-RUDO", "Rudo Sibanda", "rudo@example.com", "+263771111111");
+        BookingItem tendai = ticketFor("TN-TENDAI", "Tendai Ncube", "tendai@example.com", "+263772222222");
+        booking.setItems(List.of(rudo, tendai));
+
+        f.service().deliver(booking);
+
+        ArgumentCaptor<String> rudoBody = ArgumentCaptor.forClass(String.class);
+        verify(f.email()).sendEmail(eq("rudo@example.com"), anyString(), rudoBody.capture(), startsWith("ATT-"));
+        String text = rudoBody.getValue();
+        assertTrue(text.contains("View your ticket online: https://dtx.example/foundry/bookings/tickets/"
+                + rudo.getId()), text);
+        // Nothing in a guest's email opens the booking: not its page, not its id.
+        assertFalse(text.contains(BOOKING_ID.toString()), text);
+        assertFalse(text.contains("/tickets\n") || text.endsWith("/tickets"), text);
+        assertFalse(text.contains("TN-TENDAI"), text);
+        assertFalse(text.contains(tendai.getId().toString()), text);
+
+        // The purchaser paid for the whole booking, so their receipt still links it.
+        ArgumentCaptor<String> receipt = ArgumentCaptor.forClass(String.class);
+        verify(f.email()).sendEmail(eq("alice@example.com"), anyString(), receipt.capture(), startsWith("CONF-"));
+        assertTrue(receipt.getValue().contains("https://dtx.example/foundry/bookings/" + BOOKING_ID + "/tickets"),
+                receipt.getValue());
+    }
+
+    @Test
+    void anAttendeesEmail_withNoPublicBaseUrl_carriesNoLink() {
+        Fixture f = fixture();
+        Booking booking = bookingWithOneTicket();
+        booking.setItems(List.of(ticketFor("TN-RUDO", "Rudo Sibanda", "rudo@example.com", null)));
+
+        f.service().deliver(booking);
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(f.email()).sendEmail(eq("rudo@example.com"), anyString(), body.capture(), startsWith("ATT-"));
+        assertFalse(body.getValue().contains("online"), body.getValue());
+        assertTrue(body.getValue().contains("TN-RUDO"), body.getValue());
+    }
+
+    @Test
     void attendeeWithEmailOnly_getsAOneTicketEmail_namingWhoBookedIt() {
         Fixture f = fixture();
         Booking booking = bookingWithOneTicket();

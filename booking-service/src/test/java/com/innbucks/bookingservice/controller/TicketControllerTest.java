@@ -111,4 +111,37 @@ class TicketControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.TEXT_HTML));
     }
+
+    @Test
+    void holderPage_andQr_servedByTheTicketsOwnId() throws Exception {
+        UUID itemId = UUID.randomUUID();
+        byte[] png = {(byte) 0x89, 'P', 'N', 'G'};
+        when(rendering.holderTicketPageHtml(itemId, "https://api.test")).thenReturn(Optional.of("<html>one</html>"));
+        when(rendering.holderTicketQrPng(itemId)).thenReturn(Optional.of(png));
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mvc.perform(get("/bookings/tickets/" + itemId))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.TEXT_HTML))
+                .andExpect(content().string("<html>one</html>"));
+        for (String path : new String[]{
+                "/bookings/tickets/" + itemId + "/qr",
+                "/bookings/tickets/" + itemId + "/qr.png"}) {
+            mvc.perform(get(path))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(MediaType.IMAGE_PNG))
+                    .andExpect(content().bytes(png));
+        }
+    }
+
+    @Test
+    void holderPage_andQr_empty_return404() throws Exception {
+        UUID itemId = UUID.randomUUID();
+        when(rendering.holderTicketPageHtml(itemId, "https://api.test")).thenReturn(Optional.empty());
+        when(rendering.holderTicketQrPng(itemId)).thenReturn(Optional.empty());
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mvc.perform(get("/bookings/tickets/" + itemId)).andExpect(status().isNotFound());
+        mvc.perform(get("/bookings/tickets/" + itemId + "/qr.png")).andExpect(status().isNotFound());
+    }
 }

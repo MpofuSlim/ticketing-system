@@ -82,6 +82,11 @@ public class SecurityConfig {
                         // renders CONFIRMED bookings. NOT under /bookings/internal/**,
                         // so it routes through the public gateway normally.
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/bookings/*/tickets/**").permitAll()
+                        // One ticket's page and QR, for its holder (a named guest's
+                        // email links here). Keyed by the ticket's own UUID, the same
+                        // bearer model; the exact three paths, nothing wider.
+                        .requestMatchers(HttpMethod.GET, "/bookings/tickets/*",
+                                "/bookings/tickets/*/qr", "/bookings/tickets/*/qr.png").permitAll()
                         // Brand assets — public PNGs served from classpath:/static/brand/
                         // (e.g. /brand/innbucks-logo.png) for the FE's WhatsApp templates,
                         // HTML emails, etc. Same anonymous-public model as the ticket QR.

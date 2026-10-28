@@ -27,7 +27,11 @@ import java.util.UUID;
  *       QR as a PNG (so an email's {@code <img src>} renders reliably, unlike
  *       a stripped data-URI);</li>
  *   <li>{@code GET /bookings/{id}/tickets} — a self-contained HTML page with
- *       every seat's QR (the link sent on WhatsApp/SMS).</li>
+ *       every seat's QR (the purchaser's link);</li>
+ *   <li>{@code GET /bookings/tickets/{itemId}} (and its QR at
+ *       {@code .../qr.png}) — ONE ticket, for its holder: the link a named
+ *       guest's email carries. No booking id in it, so a guest cannot reach the
+ *       booking's page and the other guests' tickets.</li>
  * </ul>
  *
  * <p><b>Public</b> (no JWT) — guests must open these from an email/WhatsApp
@@ -112,6 +116,57 @@ public class TicketController {
                         .contentType(MediaType.TEXT_HTML)
                         .cacheControl(CacheControl.noCache())
                         .body(html))
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+    }
+
+    // ONE ticket, for its holder: what a named guest's email links to. Keyed by
+    // the ticket's own row id with no booking id in the path, because the
+    // booking's page above shows every guest's QR, and a guest who could reach
+    // it could enter on someone else's ticket. Its QR is served by the same id
+    // for the same reason. SecurityConfig permits exactly these three paths.
+    @GetMapping(value = "/bookings/tickets/{itemId}", produces = MediaType.TEXT_HTML_VALUE)
+    @SecurityRequirements({})
+    @Operation(summary = "One ticket's page, for its holder (HTML)",
+            description = "Public. A self-contained page with ONE ticket of a CONFIRMED booking: its QR, who it "
+                    + "is for, its type and seat, and its number. Nothing else of the booking (no reference, no "
+                    + "total, no other tickets). The link sent to a named guest. `itemId` is the ticket's id "
+                    + "(`items[].id` on a booking), never its number. 404 if the ticket is unknown or its "
+                    + "booking isn't CONFIRMED.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "HTML page", content = @Content(mediaType = MediaType.TEXT_HTML_VALUE)),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Unknown ticket, or its booking isn't CONFIRMED", content = @Content)
+    })
+    public ResponseEntity<String> holderTicketPage(@PathVariable UUID itemId) {
+        return ticketRenderingService.holderTicketPageHtml(itemId, publicBaseUrl)
+                .map(html -> ResponseEntity.ok()
+                        .contentType(MediaType.TEXT_HTML)
+                        .cacheControl(CacheControl.noCache())
+                        .body(html))
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+    }
+
+    @GetMapping(
+            value = {"/bookings/tickets/{itemId}/qr", "/bookings/tickets/{itemId}/qr.png"},
+            produces = MediaType.IMAGE_PNG_VALUE)
+    @SecurityRequirements({})
+    @Operation(summary = "One ticket's QR, by the ticket's id (PNG)",
+            description = "Public. The QR image on the holder's page (`/bookings/tickets/{itemId}`), addressed by "
+                    + "the ticket's id so the page never names the booking. Served at `/qr` and `/qr.png`. 404 "
+                    + "if the ticket is unknown or its booking isn't CONFIRMED.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "PNG image", content = @Content(mediaType = MediaType.IMAGE_PNG_VALUE)),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Unknown ticket, or its booking isn't CONFIRMED", content = @Content)
+    })
+    public ResponseEntity<byte[]> holderTicketQr(@PathVariable UUID itemId) {
+        return ticketRenderingService.holderTicketQrPng(itemId)
+                .map(png -> ResponseEntity.ok()
+                        .contentType(MediaType.IMAGE_PNG)
+                        .cacheControl(CacheControl.maxAge(Duration.ofHours(12)).cachePrivate())
+                        .body(png))
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
     }
 

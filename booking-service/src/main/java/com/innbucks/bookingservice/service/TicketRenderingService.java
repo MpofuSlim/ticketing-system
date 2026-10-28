@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
+import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,15 +15,19 @@ import java.util.UUID;
 
 /**
  * Renders the customer-facing ticket artifacts the notification channels link
- * to: a scannable QR PNG per ticket, and a self-contained HTML ticket page for
- * the whole booking. Both are derived (the QR is just the ticket number
- * encoded), so nothing extra is stored.
+ * to: a scannable QR PNG per ticket, a self-contained HTML ticket page for the
+ * whole booking (the purchaser's), and a page with one ticket on it (a named
+ * guest's). All are derived (the QR is just the ticket number encoded), so
+ * nothing extra is stored.
  *
  * <p>Only <b>CONFIRMED</b> bookings render — a pending/cancelled booking must
- * never hand out a scannable ticket. Access control is the unguessable booking
- * UUID in the URL (tickets are bearer instruments — the link IS the ticket,
- * same trust model as forwarding the confirmation email); gate validation of
- * the scanned code is a separate concern.
+ * never hand out a scannable ticket. Access control is the unguessable UUID in
+ * the URL (tickets are bearer instruments — the link IS the ticket, same trust
+ * model as forwarding the confirmation email); gate validation of the scanned
+ * code is a separate concern. The booking's id opens every ticket on it, so it
+ * goes only to the purchaser; a guest gets their ticket's own id
+ * ({@link #holderTicketPath}), and nothing on the guest's page names the
+ * booking.
  */
 @Slf4j
 @Service
@@ -31,6 +36,7 @@ public class TicketRenderingService {
 
     private final BookingRepository bookingRepository;
     private final QrCodeGenerator qrCodeGenerator;
+    private final BookingItemRepository bookingItemRepository;
 
     /** PNG bytes of the QR for one ticket of a CONFIRMED booking, or empty. */
     @Transactional(readOnly = true)
@@ -57,11 +63,81 @@ public class TicketRenderingService {
         return Optional.of(renderHtml(booking, publicBaseUrl));
     }
 
+    /**
+     * The path of ONE ticket's page, for its holder: keyed by the ticket's own
+     * row id, with no booking id in it. A guest's message links here, never to
+     * the booking's page, which shows every ticket's QR: a guest who could reach
+     * that page could enter on another guest's ticket.
+     */
+    public static String holderTicketPath(UUID itemId) {
+        return "/bookings/tickets/" + itemId;
+    }
+
+    /**
+     * PNG bytes of one ticket's QR, addressed by the ticket's row id, for a
+     * CONFIRMED booking; else empty. The holder's page uses this rather than the
+     * booking-keyed QR, so nothing on that page names the booking.
+     */
+    @Transactional(readOnly = true)
+    public Optional<byte[]> holderTicketQrPng(UUID itemId) {
+        return confirmedItem(itemId)
+                .map(item -> qrCodeGenerator.toPngBytes(item.getTicketNumber()));
+    }
+
+    /**
+     * A page with ONE ticket on it, for its holder (a named guest): the QR, who
+     * it is for, its type and seat, and its number. Not the booking's reference,
+     * total or other tickets. CONFIRMED bookings only, else empty.
+     */
+    @Transactional(readOnly = true)
+    public Optional<String> holderTicketPageHtml(UUID itemId, String publicBaseUrl) {
+        return confirmedItem(itemId).map(item -> renderHolderHtml(item, publicBaseUrl));
+    }
+
+    private Optional<BookingItem> confirmedItem(UUID itemId) {
+        BookingItem item = itemId == null ? null : bookingItemRepository.findByIdWithBooking(itemId).orElse(null);
+        if (item == null || item.getBooking() == null
+                || item.getBooking().getStatus() != Booking.BookingStatus.CONFIRMED
+                || item.getTicketNumber() == null || item.getTicketNumber().isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(item);
+    }
+
     private String renderHtml(Booking booking, String baseUrl) {
         StringBuilder sb = new StringBuilder(2048);
+        appendHead(sb, "InnBucks Tickets — " + esc(booking.getConfirmationNumber()));
+        sb.append("<h1>Your tickets are confirmed</h1>")
+                .append("<p class=\"sub\">Booking ").append(esc(booking.getConfirmationNumber()))
+                .append(" — show each QR at the gate.</p>");
+
+        for (BookingItem item : items(booking)) {
+            appendTicket(sb, item, esc(baseUrl) + "/bookings/" + booking.getId()
+                    + "/tickets/" + esc(item.getTicketNumber()) + "/qr");
+        }
+        if (booking.getTotalAmount() != null) {
+            sb.append("<p class=\"tot\">Total paid: ").append(esc(booking.getTotalAmount().toPlainString()))
+                    .append("</p>");
+        }
+        sb.append("</div></body></html>");
+        return sb.toString();
+    }
+
+    private String renderHolderHtml(BookingItem item, String baseUrl) {
+        StringBuilder sb = new StringBuilder(1536);
+        appendHead(sb, "InnBucks Ticket");
+        sb.append("<h1>Your ticket</h1>")
+                .append("<p class=\"sub\">Show this QR at the gate.</p>");
+        appendTicket(sb, item, esc(baseUrl) + holderTicketPath(item.getId()) + "/qr.png");
+        sb.append("</div></body></html>");
+        return sb.toString();
+    }
+
+    /** The page head and opening wrapper. {@code title} is already escaped. */
+    private static void appendHead(StringBuilder sb, String title) {
         sb.append("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">")
                 .append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
-                .append("<title>InnBucks Tickets — ").append(esc(booking.getConfirmationNumber())).append("</title>")
+                .append("<title>").append(title).append("</title>")
                 .append("<style>")
                 .append("body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;")
                 .append("background:#0b1f33;color:#fff;margin:0;padding:24px}")
@@ -75,35 +151,26 @@ public class TicketRenderingService {
                 .append(".tn{font-family:monospace;font-size:13px;color:#93c5fd;margin-top:6px}")
                 .append(".tot{color:#cbd5e1;font-size:14px;text-align:center;margin-top:8px}")
                 .append("</style></head><body><div class=\"wrap\">");
-        sb.append("<h1>Your tickets are confirmed</h1>")
-                .append("<p class=\"sub\">Booking ").append(esc(booking.getConfirmationNumber()))
-                .append(" — show each QR at the gate.</p>");
+    }
 
-        for (BookingItem item : items(booking)) {
-            String tn = item.getTicketNumber();
-            sb.append("<div class=\"tkt\">")
-                    .append("<img alt=\"QR for ticket ").append(esc(tn)).append("\" src=\"")
-                    .append(esc(baseUrl)).append("/bookings/").append(booking.getId())
-                    .append("/tickets/").append(esc(tn)).append("/qr\">");
-            // Who holds this ticket (V22): the named attendee, else the buyer.
-            String holder = item.holderName();
-            if (holder != null && !holder.isBlank()) {
-                sb.append("<div class=\"who\">Ticket for ").append(esc(holder)).append("</div>");
-            }
-            sb.append("<div class=\"cat\">").append(esc(nullSafe(item.ticketTypeLabel(), "Ticket"))).append("</div>");
-            if (item.getRowLabel() != null || item.getSeatNumber() != null) {
-                sb.append("<div class=\"seat\">Row ").append(esc(nullSafe(item.getRowLabel(), "-")))
-                        .append(", Seat ").append(item.getSeatNumber() == null ? "-" : item.getSeatNumber())
-                        .append("</div>");
-            }
-            sb.append("<div class=\"tn\">").append(esc(tn)).append("</div></div>");
+    /** One ticket's card. {@code qrSrc} is already escaped. */
+    private static void appendTicket(StringBuilder sb, BookingItem item, String qrSrc) {
+        String tn = item.getTicketNumber();
+        sb.append("<div class=\"tkt\">")
+                .append("<img alt=\"QR for ticket ").append(esc(tn)).append("\" src=\"")
+                .append(qrSrc).append("\">");
+        // Who holds this ticket (V22): the named attendee, else the buyer.
+        String holder = item.holderName();
+        if (holder != null && !holder.isBlank()) {
+            sb.append("<div class=\"who\">Ticket for ").append(esc(holder)).append("</div>");
         }
-        if (booking.getTotalAmount() != null) {
-            sb.append("<p class=\"tot\">Total paid: ").append(esc(booking.getTotalAmount().toPlainString()))
-                    .append("</p>");
+        sb.append("<div class=\"cat\">").append(esc(nullSafe(item.ticketTypeLabel(), "Ticket"))).append("</div>");
+        if (item.getRowLabel() != null || item.getSeatNumber() != null) {
+            sb.append("<div class=\"seat\">Row ").append(esc(nullSafe(item.getRowLabel(), "-")))
+                    .append(", Seat ").append(item.getSeatNumber() == null ? "-" : item.getSeatNumber())
+                    .append("</div>");
         }
-        sb.append("</div></body></html>");
-        return sb.toString();
+        sb.append("<div class=\"tn\">").append(esc(tn)).append("</div></div>");
     }
 
     /**
