@@ -14,7 +14,6 @@ import com.innbucks.userservice.service.AuditContext;
 import com.innbucks.userservice.service.AuditEventType;
 import com.innbucks.userservice.service.AuditService;
 import com.innbucks.userservice.service.MfaService;
-import com.innbucks.userservice.service.OtpService;
 import com.innbucks.userservice.service.PasswordResetService;
 import com.innbucks.userservice.support.dto.SupportDTOs.ActionResult;
 import com.innbucks.userservice.support.dto.SupportDTOs.WriteRequest;
@@ -369,12 +368,34 @@ class ConsoleSupportActionsTest {
     }
 
     @Test
-    @DisplayName("send-password-reset maps the OTP quota to 429 reset_code_limited")
+    @DisplayName("send-password-reset: support's OWN quota — 3 codes an hour per account — is 429 reset_code_limited with its wait")
     void resetQuota() {
-        when(passwordReset.requestResetForSupport(any(), any())).thenThrow(new OtpService.OtpRateLimitException("quota"));
+        LocalDateTime now = LocalDateTime.parse("2026-09-30T10:00:00");
+        when(actions.successTimesSince(eq("1042"), eq("CONSOLE_SEND_PASSWORD_RESET"), eq(now.minusHours(1))))
+                .thenReturn(List.of(now.minusMinutes(20), now.minusMinutes(10), now.minusMinutes(5)));
+
         assertThatThrownBy(() -> run(ConsoleSupportActions.Op.SEND_PASSWORD_RESET, agentWithManage(), KEY))
-                .satisfies(e -> assertThat(code(e)).isEqualTo("reset_code_limited"));
+                .isInstanceOfSatisfying(SupportPolicyException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("reset_code_limited");
+                    // The oldest send leaves the hour first: 40 minutes from now.
+                    assertThat(e.getRetryAfterSeconds()).isEqualTo(2400L);
+                    assertThat(e.getExtra()).containsEntry("retryAfterSeconds", 2400L);
+                    assertThat(e.getMessage()).endsWith("or try again in 40 minutes.");
+                });
+        verifyNoInteractions(passwordReset);
         verify(audit, never()).recordRequired(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("send-password-reset: under support's quota it sends, whatever the customer's own forgot-password count")
+    void resetUnderQuota() {
+        LocalDateTime now = LocalDateTime.parse("2026-09-30T10:00:00");
+        when(actions.successTimesSince(eq("1042"), eq("CONSOLE_SEND_PASSWORD_RESET"), eq(now.minusHours(1))))
+                .thenReturn(List.of(now.minusMinutes(20), now.minusMinutes(10)));
+
+        run(ConsoleSupportActions.Op.SEND_PASSWORD_RESET, agentWithManage(), KEY);
+
+        verify(passwordReset).requestResetForSupport(eq("tariro@example.com"), any());
     }
 
     @Test

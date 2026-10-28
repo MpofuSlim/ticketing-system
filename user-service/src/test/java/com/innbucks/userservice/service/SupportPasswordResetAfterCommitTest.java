@@ -4,6 +4,7 @@ import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.Otp;
+import com.innbucks.userservice.entity.OtpRetryAttempt;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
@@ -20,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -37,7 +39,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * S4: customer support's reset code is ISSUED inside the caller's transaction
- * (quota counted, the OTP row written) and EMAILED only after that transaction
+ * (the OTP row written) and EMAILED only after that transaction
  * commits — never while the support action still holds the account's row lock,
  * and never for an action whose seal then failed and rolled back.
  */
@@ -46,6 +48,7 @@ class SupportPasswordResetAfterCommitTest {
     private static final OtpHasher HASHER = new OtpHasher("test-otp-hmac-secret-unit-tests-0123456789");
 
     private OtpRepository otps;
+    private OtpRetryAttemptRepository retries;
     private EmailNotificationClient email;
     private OtpService otpService;
     private final List<Boolean> delivered = new ArrayList<>();
@@ -53,7 +56,7 @@ class SupportPasswordResetAfterCommitTest {
     @BeforeEach
     void setUp() {
         otps = mock(OtpRepository.class);
-        OtpRetryAttemptRepository retries = mock(OtpRetryAttemptRepository.class);
+        retries = mock(OtpRetryAttemptRepository.class);
         when(retries.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
         email = mock(EmailNotificationClient.class);
         otpService = new OtpService(otps, HASHER, retries, mock(UserRepository.class),
@@ -94,6 +97,19 @@ class SupportPasswordResetAfterCommitTest {
         String code = body.getValue().replaceAll(".*code is (\\d{6}).*", "$1");
         assertThat(row.getValue().getCode()).isEqualTo(HASHER.hash(code));
         assertThat(delivered).containsExactly(true);
+    }
+
+    @Test
+    @DisplayName("a support send never reads or counts the address's own forgot-password quota, even when it is locked")
+    void supportSendLeavesTheCustomersQuotaAlone() {
+        when(retries.findByPhoneNumber("tariro@example.com")).thenReturn(Optional.of(OtpRetryAttempt.builder()
+                .phoneNumber("tariro@example.com").attemptCount(4).windowStartsAt(Instant.now())
+                .lockedUntil(Instant.now().plusSeconds(1800)).build()));
+
+        otpService.sendPasswordResetOtpToEmailAfterCommit("tariro@example.com", delivered::add);
+
+        verify(otps).save(any(Otp.class));
+        verifyNoInteractions(retries);
     }
 
     @Test

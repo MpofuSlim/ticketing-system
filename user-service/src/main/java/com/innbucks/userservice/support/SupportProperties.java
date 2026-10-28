@@ -38,6 +38,32 @@ public class SupportProperties implements InitializingBean {
 
     private Assertion assertion = new Assertion();
 
+    private ResetCodes resetCodes = new ResetCodes();
+
+    /**
+     * {@code SUPPORT_LEGACY_DEVICE_WRITES_ENABLED}: the seven unbound writes on
+     * {@code /admin/device-security/**}. Their lookup-bound twins are under
+     * {@code /admin/support/innbucks-app}; true keeps the old ones working until
+     * the console has moved, false answers them {@code 410
+     * use_support_endpoints}. The reads there are not affected.
+     */
+    private boolean legacyDeviceWritesEnabled = true;
+
+    /**
+     * Support's own quota for console password-reset codes, per account. It is
+     * kept apart from the customer's forgot-password limit on purpose: support
+     * sends used to count against that limit, so four of them in ten minutes
+     * locked the address out of its own reset for half an hour.
+     */
+    @Getter
+    @Setter
+    public static class ResetCodes {
+        /** {@code SUPPORT_RESET_CODES_PER_ACCOUNT}: codes support may send one account per window, by any agent. */
+        private int perAccount = 3;
+        /** {@code SUPPORT_RESET_CODE_WINDOW}: the sliding window. */
+        private Duration window = Duration.ofHours(1);
+    }
+
     @Getter
     @Setter
     public static class Limiter {
@@ -77,6 +103,11 @@ public class SupportProperties implements InitializingBean {
         }
         if (limiter.shortWindowMax < 1 || limiter.dailyMax < 1) {
             throw new IllegalStateException("support.limiter.short-window-max and daily-max must be at least 1");
+        }
+        if (resetCodes.perAccount < 1 || resetCodes.window == null || resetCodes.window.isNegative()
+                || resetCodes.window.isZero() || resetCodes.window.compareTo(Duration.ofDays(1)) > 0) {
+            throw new IllegalStateException(
+                    "support.reset-codes.per-account must be at least 1 and window positive and at most a day");
         }
         if (assertion.ttl == null || assertion.ttl.isNegative() || assertion.ttl.isZero()
                 || assertion.ttl.compareTo(Duration.ofSeconds(60)) > 0) {

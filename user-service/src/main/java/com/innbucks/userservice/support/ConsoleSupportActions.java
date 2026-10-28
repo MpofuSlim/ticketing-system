@@ -340,7 +340,7 @@ public class ConsoleSupportActions {
         Map<String, Object> metadata = new LinkedHashMap<>();
         String next = switch (op) {
             case UNLOCK -> unlock(user, metadata);
-            case SEND_PASSWORD_RESET -> sendPasswordReset(user, metadata);
+            case SEND_PASSWORD_RESET -> sendPasswordReset(user, metadata, now);
             case MFA_RESET -> resetMfa(user, metadata, now);
         };
 
@@ -378,25 +378,36 @@ public class ConsoleSupportActions {
     }
 
     /**
-     * Issues the reset code inside this transaction (the OTP row and the quota
-     * commit with the seal, or not at all) and sends it only AFTER commit, off the
-     * request thread: the users row lock is never held across the email gateway,
-     * and a seal that fails rolls the code back unsent. So the agent is told the
-     * email is on its way — delivery is known only later, as the
+     * Issues the reset code inside this transaction (the OTP row commits with the
+     * seal, or not at all) and sends it only AFTER commit, off the request thread:
+     * the users row lock is never held across the email gateway, and a seal that
+     * fails rolls the code back unsent. So the agent is told the email is on its
+     * way — delivery is known only later, as the
      * {@code user.support.reset_delivery{outcome}} meter and a log line.
+     *
+     * <p><b>Support's own quota</b> ({@code support.reset-codes}): at most
+     * {@code per-account} codes per {@code window} to one account, by any agent,
+     * counted from this table's SUCCESS rows under the account's row lock (so two
+     * agents cannot both squeeze under it). It used to be the customer's own
+     * forgot-password limit, so four support sends in ten minutes locked the
+     * address out of its own reset for half an hour; support now never counts
+     * against, or is refused by, that limit.
      */
-    private String sendPasswordReset(User user, Map<String, Object> metadata) {
+    private String sendPasswordReset(User user, Map<String, Object> metadata, LocalDateTime now) {
         String email = user.getEmail();
         if (email == null || email.isBlank()) throw SupportPolicyException.noEmailOnAccount();
-        boolean issued;
-        try {
-            // ONLY the account's email: passing the phone at all is how a reset
-            // would be aimed at a number support never verified.
-            issued = passwordResetService.requestResetForSupport(email,
-                    delivered -> metrics.resetDelivery(delivered ? "sent" : "failed"));
-        } catch (OtpService.OtpRateLimitException e) {
-            throw SupportPolicyException.resetCodeLimited();
+        SupportProperties.ResetCodes quota = properties.getResetCodes();
+        List<LocalDateTime> recent = actions.successTimesSince(String.valueOf(user.getId()),
+                Op.SEND_PASSWORD_RESET.operation(), now.minus(quota.getWindow()));
+        if (recent.size() >= quota.getPerAccount()) {
+            // The oldest counted send leaves the window first.
+            long wait = java.time.Duration.between(now, recent.get(0).plus(quota.getWindow())).toSeconds();
+            throw SupportPolicyException.resetCodeLimited(wait);
         }
+        // ONLY the account's email: passing the phone at all is how a reset
+        // would be aimed at a number support never verified.
+        boolean issued = passwordResetService.requestResetForSupport(email,
+                delivered -> metrics.resetDelivery(delivered ? "sent" : "failed"));
         if (!issued) {
             // PasswordResetService refused to issue (deactivated, or an invite
             // pending) — execute() checked the first, and staff never get here.

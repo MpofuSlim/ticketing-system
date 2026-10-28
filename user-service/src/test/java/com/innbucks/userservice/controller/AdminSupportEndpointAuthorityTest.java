@@ -77,4 +77,29 @@ class AdminSupportEndpointAuthorityTest {
         expected.forEach((m, v) -> assertThat(method(AdminDeviceSecurityController.class, m)
                 .getAnnotation(PreAuthorize.class).value()).as(m).isEqualTo(v));
     }
+
+    @Test
+    @DisplayName("each InnBucks app support write is a POST gated on exactly its device-security code; a number rides the body")
+    void innbucksAppWritesAreGated() {
+        assertThat(AdminSupportAppController.class.getAnnotation(RequestMapping.class).value())
+                .containsExactly("/admin/support/innbucks-app");
+        Map<String, String[]> expected = new LinkedHashMap<>();
+        expected.put("block", new String[]{"/devices/{deviceId}/block", "hasAuthority('device-security:manage')"});
+        expected.put("ban", new String[]{"/devices/{deviceId}/ban", "hasAuthority('device-security:fraud')"});
+        expected.put("unlock", new String[]{"/devices/{deviceId}/unlock", "hasAuthority('device-security:manage')"});
+        expected.put("revoke", new String[]{"/devices/{deviceId}/revoke", "hasAuthority('device-security:manage')"});
+        expected.put("resetTrust",
+                new String[]{"/devices/{deviceId}/reset-trust", "hasAuthority('device-security:manage')"});
+        expected.put("fraudFlag", new String[]{"/fraud-flag", "hasAuthority('device-security:fraud')"});
+        expected.put("cancelCodes", new String[]{"/cancel-codes", "hasAuthority('device-security:manage')"});
+        expected.put("signOut", new String[]{"/sign-out", "hasAuthority('device-security:manage')"});
+        expected.forEach((name, pathAndRule) -> {
+            Method m = method(AdminSupportAppController.class, name);
+            assertThat(m.getAnnotation(PostMapping.class).value()).as(name).containsExactly(pathAndRule[0]);
+            assertThat(m.getAnnotation(PreAuthorize.class).value()).as(name).isEqualTo(pathAndRule[1]);
+        });
+        long publicHandlers = Arrays.stream(AdminSupportAppController.class.getDeclaredMethods())
+                .filter(m -> Modifier.isPublic(m.getModifiers())).count();
+        assertThat(publicHandlers).as("a new public handler must be added here, gated").isEqualTo(expected.size());
+    }
 }

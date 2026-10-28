@@ -61,61 +61,61 @@ import java.util.List;
 @SecurityRequirement(name = "bearerAuth")
 public class AdminSupportController {
 
-    private static final String LIMITED_EXAMPLE = """
+    static final String LIMITED_EXAMPLE = """
             { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
             """;
-    private static final String FORBIDDEN_EXAMPLE = """
+    static final String FORBIDDEN_EXAMPLE = """
             { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
             """;
-    private static final String DISABLED_EXAMPLE = """
+    static final String DISABLED_EXAMPLE = """
             { "code": "404 NOT_FOUND", "message": "Customer support isn't available on this server.", "data": { "errorCode": "support_disabled" } }
             """;
-    private static final String LOOKUP_EXPIRED_EXAMPLE = """
+    static final String LOOKUP_EXPIRED_EXAMPLE = """
             { "code": "409 CONFLICT", "message": "Search for the customer again.", "data": { "errorCode": "lookup_expired" } }
             """;
-    private static final String LOOKUP_MISSING_SECTION_EXAMPLE = """
+    static final String LOOKUP_MISSING_SECTION_EXAMPLE = """
             { "code": "409 CONFLICT", "message": "Search for the customer again.", "data": { "errorCode": "lookup_expired", "reason": "section_not_in_lookup" } }
             """;
-    private static final String AGENT_NOT_RESOLVED_EXAMPLE = """
+    static final String AGENT_NOT_RESOLVED_EXAMPLE = """
             { "code": "403 FORBIDDEN", "message": "Your account couldn't be verified. Sign in again.", "data": { "errorCode": "agent_not_resolved" } }
             """;
-    private static final String LOOKUP_ID_TOO_LONG_EXAMPLE = """
+    static final String LOOKUP_ID_TOO_LONG_EXAMPLE = """
             { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "lookupId": "lookupId must be 16 characters or fewer" } }
             """;
-    private static final String CASE_ID_TOO_LONG_EXAMPLE = """
+    static final String CASE_ID_TOO_LONG_EXAMPLE = """
             { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "caseId": "caseId must be 64 characters or fewer" } }
             """;
-    private static final String LOOKUP_REQUIRED_EXAMPLE = """
+    static final String LOOKUP_REQUIRED_EXAMPLE = """
             { "code": "400 BAD_REQUEST", "message": "Search for the customer first, then send the lookupId that search returned.", "data": { "errorCode": "lookup_required" } }
             """;
-    private static final String TARGET_NOT_FOUND_EXAMPLE = """
+    static final String TARGET_NOT_FOUND_EXAMPLE = """
             { "code": "404 NOT_FOUND", "message": "That account isn't part of this search. Search for the customer again.", "data": { "errorCode": "target_not_found" } }
             """;
-    private static final String SELF_EXAMPLE = """
+    static final String SELF_EXAMPLE = """
             { "code": "403 FORBIDDEN", "message": "You can't act on your own account. Ask a colleague.", "data": { "errorCode": "support_self_action" } }
             """;
-    private static final String STAFF_TARGET_EXAMPLE = """
+    static final String STAFF_TARGET_EXAMPLE = """
             { "code": "403 FORBIDDEN", "message": "This search matches an InnBucks staff account. Ask a supervisor.", "data": { "errorCode": "staff_target_requires_supervisor" } }
             """;
-    private static final String CONSOLE_STAFF_EXAMPLE = """
+    static final String CONSOLE_STAFF_EXAMPLE = """
             { "code": "403 FORBIDDEN", "message": "This is an InnBucks staff account; ask a SUPER_ADMIN.", "data": { "errorCode": "console_staff_account" } }
             """;
-    private static final String IDEMPOTENCY_REQUIRED_EXAMPLE = """
+    static final String IDEMPOTENCY_REQUIRED_EXAMPLE = """
             { "code": "400 BAD_REQUEST", "message": "Send an Idempotency-Key header holding a new UUID for each action.", "data": { "errorCode": "idempotency_key_required", "field": "Idempotency-Key" } }
             """;
-    private static final String NOTE_REQUIRED_EXAMPLE = """
+    static final String NOTE_REQUIRED_EXAMPLE = """
             { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "note": "note is required" } }
             """;
-    private static final String NOTE_EMPTY_EXAMPLE = """
+    static final String NOTE_EMPTY_EXAMPLE = """
             { "code": "400 BAD_REQUEST", "message": "Write a note saying why, for example how you verified the caller. Markup on its own doesn't count.", "data": { "errorCode": "note_required", "field": "note" } }
             """;
     private static final String ACCOUNT_INACTIVE_EXAMPLE = """
             { "code": "409 CONFLICT", "message": "This account isn't active, so support can't change it. An administrator decides whether to approve or reactivate it.", "data": { "errorCode": "account_inactive" } }
             """;
-    private static final String IDEMPOTENCY_REUSED_EXAMPLE = """
+    static final String IDEMPOTENCY_REUSED_EXAMPLE = """
             { "code": "409 CONFLICT", "message": "This Idempotency-Key was already used for a different action. Send a new one.", "data": { "errorCode": "idempotency_key_reused" } }
             """;
-    private static final String AUDIT_UNAVAILABLE_EXAMPLE = """
+    static final String AUDIT_UNAVAILABLE_EXAMPLE = """
             { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this change, so it wasn't made. Try again.", "data": { "errorCode": "audit_unavailable" } }
             """;
     private static final String LOG_UNAVAILABLE_EXAMPLE = """
@@ -441,7 +441,9 @@ public class AdminSupportController {
                     + "never an address the caller gives you. The code is issued with the action and emailed only "
                     + "AFTER the action is recorded on the audit chain, so a 200 means the email is on its way, not "
                     + "that it arrived; a recording failure (503) sends nothing. Same lookupId, note and "
-                    + "Idempotency-Key rules as unlock.")
+                    + "Idempotency-Key rules as unlock. Support may send one account 3 codes an hour, by any agent "
+                    + "(SUPPORT_RESET_CODES_PER_ACCOUNT / SUPPORT_RESET_CODE_WINDOW); that quota is support's own and "
+                    + "never counts against, or locks, the customer's own Forgot password.")
     @Parameter(name = "Idempotency-Key", in = ParameterIn.HEADER, required = true,
             example = "8a1d2e3f-4b5c-4d6e-9f70-81a2b3c4d5e6")
     @ApiResponses({
@@ -482,11 +484,11 @@ public class AdminSupportController {
                             @ExampleObject(name = "section_not_in_lookup", value = LOOKUP_MISSING_SECTION_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_reused", value = IDEMPOTENCY_REUSED_EXAMPLE)
                     })),
-            @ApiResponse(responseCode = "429", description = "Your lookup limit (with Retry-After and data.retryAfterSeconds), or too many codes to this account — reset_code_limited carries NO Retry-After and NO retryAfterSeconds: the wait isn't known here, so ask the caller to use the latest code or try later",
+            @ApiResponse(responseCode = "429", description = "Your lookup limit, or support's 3 codes an hour to this account. Both carry Retry-After and data.retryAfterSeconds",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "lookup_rate_limited", value = LIMITED_EXAMPLE),
                             @ExampleObject(name = "reset_code_limited", value = """
-                                    { "code": "429 TOO_MANY_REQUESTS", "message": "Too many reset codes have gone to this account recently. Ask the caller to use the latest one, or try again later.", "data": { "errorCode": "reset_code_limited" } }
+                                    { "code": "429 TOO_MANY_REQUESTS", "message": "Too many reset codes have gone to this account recently. Ask the caller to use the latest one, or try again in 40 minutes.", "data": { "errorCode": "reset_code_limited", "retryAfterSeconds": 2400 } }
                                     """)
                     })),
             @ApiResponse(responseCode = "503", description = "The change could not be sealed, so it was not made",

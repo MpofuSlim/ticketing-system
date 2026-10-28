@@ -32,8 +32,10 @@ import java.util.Optional;
  * are the risk engine's inputs, not something an agent acts on). Install ids
  * never reach this view at all — {@link SupportDeviceView} has no field for one.
  *
- * <p>Writes stay on {@code /admin/device-security/**}: their contract shipped
- * with the console and is keyed by the msisdn and an opaque device id.
+ * <p>Writes: {@code /admin/support/innbucks-app/**} ({@link InnbucksAppSupportActions}),
+ * bound to a lookup of this section. The older {@code /admin/device-security/**}
+ * writes stay until the console has moved, behind
+ * {@code support.legacy-device-writes-enabled}.
  */
 @Component
 public class InnbucksAppSupportSection {
@@ -85,6 +87,19 @@ public class InnbucksAppSupportSection {
                 guidance == null ? "Nothing is stopping this customer's phones. If the app still refuses them, "
                         + "check the recent events." : guidance,
                 new InnbucksAppSectionData(views));
+    }
+
+    /**
+     * One number as the section shows it, now — what a support write on the
+     * number answers with, so the console can redraw that phone's panel.
+     */
+    public InnbucksAppPhoneView phone(String msisdn, Optional<User> account) {
+        CustomerOverview overview = deviceSupport.overview(msisdn);
+        CustomerProfileView profile = account
+                .flatMap(u -> customerProfiles.findByUserId(u.getId()))
+                .map(InnbucksAppSupportSection::profile)
+                .orElse(null);
+        return new InnbucksAppPhoneView(overview.msisdn(), profile, mask(overview));
     }
 
     static CustomerProfileView profile(CustomerProfile p) {

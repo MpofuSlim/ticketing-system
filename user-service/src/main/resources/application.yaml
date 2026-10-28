@@ -279,6 +279,15 @@ support:
     short-window: ${SUPPORT_LIMIT_SHORT_WINDOW:PT10M}
     short-window-max: ${SUPPORT_LIMIT_SHORT_WINDOW_MAX:60}
     daily-max: ${SUPPORT_LIMIT_DAILY_MAX:400}
+  # Console password-reset codes support may send one account, by any agent,
+  # per sliding window. Support's own quota: it never counts against (or
+  # locks) the customer's own forgot-password limit.
+  reset-codes:
+    per-account: ${SUPPORT_RESET_CODES_PER_ACCOUNT:3}
+    window: ${SUPPORT_RESET_CODE_WINDOW:PT1H}
+  # The unbound /admin/device-security WRITES. false = 410 use_support_endpoints
+  # (the lookup-bound twins live under /admin/support/innbucks-app). Reads stay.
+  legacy-device-writes-enabled: ${SUPPORT_LEGACY_DEVICE_WRITES_ENABLED:true}
   assertion:
     # RSA PKCS#8 PEM. Blank = HALF-PROVISIONED (boot ERROR); malformed = boot fails.
     private-key: ${SUPPORT_ASSERTION_PRIVATE_KEY:}

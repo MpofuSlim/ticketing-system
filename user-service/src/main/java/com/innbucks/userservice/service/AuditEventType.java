@@ -334,6 +334,21 @@ public enum AuditEventType {
     SUPPORT_CONSOLE_PASSWORD_RESET_SENT,
     SUPPORT_CONSOLE_MFA_RESET,
     /**
+     * An InnBucks app (DTX) write made through customer support
+     * ({@code /admin/support/innbucks-app/**}): block, ban, unlock, remove,
+     * reset trust, fraud flag or cancel codes. REQUIRED, sealed last like the
+     * console writes; metadata names the {@code op}, the lookup, the
+     * Idempotency-Key and the cleaned note. The state change itself also has its
+     * own {@code DEVICE_SECURITY_*} row, written by the device-security code.
+     */
+    SUPPORT_INNBUCKS_APP_ACTION,
+    /**
+     * "Sign out of the Super app": every session of the number's account ended
+     * (token version bumped, refresh families revoked) and its phones blocked.
+     * REQUIRED, sealed last. Target = the number, masked.
+     */
+    SUPPORT_SUPER_APP_SIGNED_OUT,
+    /**
      * A support write refused for who it was aimed at — the agent's own account
      * ({@code support_self_action}) or an InnBucks staff account
      * ({@code staff_target_requires_supervisor}, {@code console_staff_account}).

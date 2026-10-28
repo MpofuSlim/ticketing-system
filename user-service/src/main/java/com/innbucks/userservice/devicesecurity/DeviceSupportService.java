@@ -303,6 +303,37 @@ public class DeviceSupportService {
                 p.getFraudFlaggedAt(), p.getFraudFlagNote(), p.getPinIssuedAt(), p.getLastSignInAt());
     }
 
+    /**
+     * The device-security half of "sign out of the Super app" (customer
+     * support): blocks every phone of the number that is not already blocked or
+     * removed — UNTIL_UNLOCKED, as for a lost or stolen phone, so each one's open
+     * codes and login tickets die and a silent renewal cuts it off within 15
+     * minutes — and cancels every open code for the number. Under the number's
+     * lock, taken first as every bind does.
+     *
+     * @return how many phones were blocked by this call
+     */
+    @Transactional
+    public int blockForSignOut(String rawMsisdn, String note, String agent, AuditContext ctx) {
+        String msisdn = normalise(rawMsisdn);
+        LocalDateTime now = now();
+        numberLock.lock(msisdn, now, NumberLock.STAFF);
+        DeviceEnforcement.Actor actor = actor(agent, ctx);
+        int blocked = 0;
+        for (CustomerDevice d : devices.findByMsisdnOrderByLastSeenAtDesc(msisdn)) {
+            enforcement.refresh(d, false);
+            if (d.getState() == DeviceState.BANNED || d.getState() == DeviceState.REVOKED) continue;
+            enforcement.ban(d, BanReason.CUSTOMER_REPORTED, actor, note, null);
+            blocked++;
+        }
+        int voided = otp.voidForNumber(msisdn);
+        if (voided > 0) {
+            events.record(SecurityEventType.OTP_VOIDED, ActorType.SUPPORT, agent, msisdn, null,
+                    b -> b.note(DeviceSecurityEventLog.truncate(note, 1000)).reason(String.valueOf(voided)));
+        }
+        return blocked;
+    }
+
     /** Kills every open code for a number — "I got a code I didn't ask for". */
     @Transactional
     public int voidCodes(String rawMsisdn, String note, String agent, AuditContext ctx) {

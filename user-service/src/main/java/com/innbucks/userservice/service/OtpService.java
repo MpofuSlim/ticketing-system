@@ -195,12 +195,15 @@ public class OtpService {
      * The code never leaves this class; {@code onDelivery} hears only whether the
      * send succeeded, and never throws into it.
      *
-     * @throws OtpRateLimitException the address has had too many codes recently
+     * <p>It does NOT touch the address's own retry quota ({@code otp_retry_attempts}):
+     * support keeps its own per-account quota ({@code support.reset-codes}, checked
+     * by the caller). Counting support sends there let four of them lock the
+     * customer out of their own forgot-password for half an hour, and let a
+     * customer's own attempts refuse support's.
      */
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
     public void sendPasswordResetOtpToEmailAfterCommit(String email, java.util.function.Consumer<Boolean> onDelivery) {
         Instant now = Instant.now();
-        enforceRetryQuota(email, now);
         String code = generateCode();
         replaceOtp(email, now, otpHasher.hash(code));
         org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(

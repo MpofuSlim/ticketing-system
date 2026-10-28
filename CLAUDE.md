@@ -2111,6 +2111,15 @@ agent token can call directly — it would bypass all of it.
   seal rolled back. So the agent is told the code is ON ITS WAY, not delivered:
   `reset_delivery_failed` (502) is gone, and delivery shows up only as
   `user.support.reset_delivery{outcome}`.
+- **Support's reset codes have their own quota, never the customer's.**
+  `send-password-reset` is limited to `SUPPORT_RESET_CODES_PER_ACCOUNT` (3) per
+  account per `SUPPORT_RESET_CODE_WINDOW` (1 h), by any agent, counted from the
+  `support_actions` SUCCESS rows under the account's row lock: `429
+  reset_code_limited` with `Retry-After` and `data.retryAfterSeconds` (when the
+  oldest falls out). The support send no longer touches `otp_retry_attempts`: it
+  used to, so four support sends in ten minutes locked the customer out of their
+  own forgot-password for half an hour, and the customer's own attempts refused
+  support's. `SupportPasswordResetAfterCommitTest` pins that it stays apart.
 - **A staff account (SUPER_ADMIN included) is a STUB in the console section** —
   `staffAccount: true`, the "ask a SUPER_ADMIN" guidance, no actions — never its
   id, roles, second factor, lockout, sign-in or contact details, and its id is
@@ -2148,6 +2157,39 @@ agent token can call directly — it would bypass all of it.
   READS were brought under the limit and the access log without any other change
   — they still take no `lookupId` — and stay under both when `SUPPORT_ENABLED=false`
   (that switch removes the new screen, not the record of who looked).
+- **The DTX WRITES are bound too, under `/admin/support/innbucks-app`**
+  (`InnbucksAppSupportActions`, the console's order step for step): block, ban,
+  unlock, revoke, reset-trust (`/devices/{deviceId}/…`), and fraud-flag,
+  cancel-codes, sign-out (the number in the BODY). The target NUMBER must be one
+  the agent's own fresh lookup returned in `innbucksApp`; a device is resolved to
+  its number first, and an unknown device and one on another number are the same
+  `404 target_not_found`. Self (the agent's own phone or contact phone), staff
+  targets, `Idempotency-Key`, the per-agent limit, and a REQUIRED seal as the last
+  statement (`SUPPORT_INNBUCKS_APP_ACTION`) all apply. The act is
+  `DeviceSupportService` unchanged (its guards and notices), and its
+  `DeviceSecurityException`s keep their codes and words in the support envelope
+  (`asSupportRefusal`; that exception's advice is scoped to `devicesecurity.web`).
+  The answer carries the number as it now is (`InnbucksAppPhoneView`, masked).
+- **The old unbound writes under `/admin/device-security/**` retire behind
+  `SUPPORT_LEGACY_DEVICE_WRITES_ENABLED`** (true until the console has moved;
+  false = `410 use_support_endpoints` before anything is read, Swagger
+  `deprecated`). Their reads are untouched. Flip it per cell once the console
+  calls the bound routes.
+- **"Sign out of the Super app"** (`POST /admin/support/innbucks-app/sign-out`,
+  `device-security:manage`) is for a lost or stolen phone, in one transaction:
+  `DeviceSupportService.blockForSignOut` bans every phone of the number not
+  already BANNED or REVOKED as `CUSTOMER_REPORTED` (until unlocked: *569# or
+  support; one SMS per phone) and voids its open codes, under the number lock
+  taken first; then the account on that number (by `users.phone_number`) is
+  locked and `AccountSessionRevoker.signOutEverywhere` ends every session (token
+  version bumped and published after commit, every refresh family revoked,
+  device trust and reset codes cleared; never deactivated); sealed
+  `SUPPORT_SUPER_APP_SIGNED_OUT`. A staff or SUPER_ADMIN account is `403
+  console_staff_account` (a backstop: staff have no sign-in phone). It ends a
+  dual-role customer's portal sessions too, which is the safe side for a stolen
+  phone. Not reached, and said in the answer: Rewards' own sessions (loyalty has
+  its own sign-out), and the platform's session on the handset, which dies at its
+  next renewal (≤ 15 minutes) because the phone is blocked.
 - **Never shown**: passwords, OTPs, TOTP secrets, install ids, voucher/collection
   codes, full ticket numbers. Masked: DTX `lastIp`/event addresses, third-party
   contacts. The customer's own phone/email are shown whole (the agent verifies the
