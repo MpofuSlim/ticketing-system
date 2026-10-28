@@ -707,4 +707,102 @@ class EcocashPaymentServiceTest {
         assertThat(service.resolveOpenCharge(p)).isEqualTo(EcocashCheckOutcome.PENDING);
         verify(client, never()).query(anyString(), anyString());
     }
+
+    // -- the decline: EcoCash's reason is kept, and a declined order is not charged again at once --
+
+    private static Payment declinedRow(Instant completedAt, String code, String message) {
+        return Payment.builder()
+                .id(UUID.randomUUID())
+                .paymentReference("TKZ-PINKRUN26-0E734514DE7B")
+                .paymentRail(PaymentRail.ECOCASH)
+                .status(Payment.PaymentStatus.FAILED)
+                .upstreamErrorCode(code)
+                .upstreamErrorMessage(message)
+                .completedAt(completedAt)
+                .customerMsisdn("+263777222093")
+                .amount(new BigDecimal("3.00"))
+                .currency("USD")
+                .build();
+    }
+
+    @Test
+    @DisplayName("FAILED with EcoCash's reason: the reason is what the row keeps")
+    void resolve_failedKeepsEcocashsReason() {
+        Payment p = openEcocashRow(Instant.now().plus(Duration.ofMinutes(4)));
+        when(client.query(p.getCustomerMsisdn(), CORRELATOR)).thenReturn(new EcocashChargeStatus(
+                EcocashChargeStatus.Outcome.FAILED, "FAILED", "MP261028.1647.T9162268",
+                new BigDecimal("3.00"), new BigDecimal("3.00"), "USD",
+                "You have insufficient funds to complete this transaction."));
+
+        service.resolveOpenCharge(p);
+
+        verify(records).markFailed(p.getId(), "subscriber_rejected",
+                "You have insufficient funds to complete this transaction.");
+    }
+
+    @Test
+    @DisplayName("a charge EcoCash declined a minute ago: no new charge, no SMS — its reason comes back instead")
+    void startCharge_afterARecentDecline_isRefusedWithTheReason() {
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        when(client.canStartCharge()).thenReturn(true);
+        payableGateway();
+        Payment declined = declinedRow(Instant.now().minus(Duration.ofSeconds(60)), "subscriber_rejected",
+                "You have insufficient funds to complete this transaction.");
+        when(records.latestOnRail(eq(OrderType.BOOKING), anyString(), eq(PaymentRail.ECOCASH)))
+                .thenReturn(java.util.Optional.of(declined));
+
+        assertThatThrownBy(() -> service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString()))
+                .isInstanceOfSatisfying(EcocashPaymentService.EcocashDeclinedException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(400);
+                    assertThat(e.declined()).isSameAs(declined);
+                    assertThat(e.reason()).isEqualTo("You have insufficient funds to complete this transaction.");
+                    assertThat(e.retryAfterSeconds()).isBetween(55L, 60L);
+                    assertThat(e.getMessage()).isEqualTo("EcoCash: You have insufficient funds to complete this "
+                            + "transaction. Try again in 1 minute, or pay with an InnBucks code.");
+                });
+        verify(records, never()).openPending(any(Payment.class));
+        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("past the hold, a declined order can be charged again")
+    void startCharge_afterTheHold_charges() {
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        when(client.canStartCharge()).thenReturn(true);
+        payableGateway();
+        when(records.latestOnRail(eq(OrderType.BOOKING), anyString(), eq(PaymentRail.ECOCASH)))
+                .thenReturn(java.util.Optional.of(declinedRow(Instant.now().minus(Duration.ofMinutes(3)),
+                        "subscriber_rejected", "You have insufficient funds to complete this transaction.")));
+        when(records.openPending(any(Payment.class))).thenReturn(openEcocashRow(null));
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
+                .thenReturn(status(EcocashChargeStatus.Outcome.PENDING, "0.0", "3.00", "USD"));
+
+        assertThat(service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString()).failed()).isFalse();
+        verify(client).charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("only EcoCash's own decline holds: a refusal before any prompt, or a switched-off hold, does not")
+    void declineHold_onlyForEcocashDeclines() {
+        Payment refused = declinedRow(Instant.now(), "ecocash_refused", "400 Bad Request");
+        assertThat(service.declineHoldRemaining(refused)).isNull();
+
+        Payment declined = declinedRow(Instant.now(), "subscriber_rejected", null);
+        assertThat(service.declineHoldRemaining(declined)).isBetween(115L, 120L);
+        assertThat(EcocashPaymentService.declineReason(declined)).isNull();
+
+        properties.setDeclineHold(Duration.ZERO);
+        assertThat(service.declineHoldRemaining(declined)).isNull();
+    }
+
+    @Test
+    @DisplayName("an EcoCash FAILED without words of its own is never shown as the customer's reason")
+    void declineReason_hidesOurOwnPlaceholder() {
+        assertThat(EcocashPaymentService.declineReason(declinedRow(Instant.now(), "subscriber_rejected",
+                EcocashPaymentService.DECLINED_WITHOUT_REASON))).isNull();
+        assertThat(EcocashPaymentService.EcocashDeclinedException.message(null, 30))
+                .isEqualTo("EcoCash declined the payment. Try again in 1 minute, or pay with an InnBucks code.");
+        assertThat(EcocashPaymentService.EcocashDeclinedException.message("Wrong PIN", 119))
+                .isEqualTo("EcoCash: Wrong PIN. Try again in 2 minutes, or pay with an InnBucks code.");
+    }
 }

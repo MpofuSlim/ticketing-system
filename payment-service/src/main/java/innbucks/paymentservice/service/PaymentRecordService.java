@@ -112,6 +112,14 @@ public class PaymentRecordService {
         return repository.existsByOrderTypeAndOrderRefAndStatusIn(orderType, orderRef, ACTIVE_OR_SUCCEEDED);
     }
 
+    /** The order's most recent payment on {@code rail}, whatever its status. */
+    @Transactional(readOnly = true)
+    public java.util.Optional<Payment> latestOnRail(OrderType orderType, String orderRef,
+                                                     innbucks.paymentservice.entity.PaymentRail rail) {
+        return repository.findFirstByOrderTypeAndOrderRefAndPaymentRailOrderByCreatedAtDesc(
+                orderType, orderRef, rail);
+    }
+
     /**
      * EcoCash charges to any of {@code msisdns} created after {@code since},
      * and the creation time of the oldest (null when there are none): the

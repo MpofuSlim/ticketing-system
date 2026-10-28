@@ -427,7 +427,7 @@ public class EcocashEipClient {
                 };
             }
             return new EcocashChargeStatus(outcome, rawStatus, reference,
-                    amountEcho, totalCharged, currencyEcho);
+                    amountEcho, totalCharged, currencyEcho, customerMessage(text(root, "responseMessage")));
         } catch (Exception e) {
             log.warn("ecocash response unparseable: {}", e.toString());
             return new EcocashChargeStatus(EcocashChargeStatus.Outcome.UNKNOWN,
@@ -490,6 +490,18 @@ public class EcocashEipClient {
 
     private static String truncate(String s, int max) {
         return s.length() <= max ? s : s.substring(0, max) + "…";
+    }
+
+    /**
+     * EcoCash's {@code responseMessage}, made safe to show a customer: control,
+     * format and line-separator characters become spaces, runs of spaces
+     * collapse, and it is capped at 200 characters. Null when nothing is left.
+     */
+    static String customerMessage(String raw) {
+        if (raw == null) return null;
+        String cleaned = raw.replaceAll("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]", " ")
+                .replaceAll("\\s+", " ").strip();
+        return cleaned.isEmpty() ? null : truncate(cleaned, 200);
     }
 
     /** Registers {@link EcocashProperties} for binding. */

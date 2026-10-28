@@ -105,6 +105,24 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void paymentStatusRead_withoutJwt_isOpen_andAnUnknownIdIs404() throws Exception {
+        // The payer polls their own attempt by the transactionId POST /payments
+        // returned — no login, like the POST. 404 (not 401) proves the
+        // security layer let it through to the controller.
+        mockMvc.perform(get("/payments/" + UUID.randomUUID()))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/payments/not-a-uuid"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void getUnderPayments_deeperThanOneSegment_stillNeedsAJwt() throws Exception {
+        // The permit is one path segment only; nothing else under /payments opens.
+        mockMvc.perform(get("/payments/" + UUID.randomUUID() + "/anything"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void shopCheckout_withoutJwt_returns401() throws Exception {
         ShopCheckoutRequest body = new ShopCheckoutRequest();
         body.setShopId(UUID.randomUUID());

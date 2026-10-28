@@ -116,6 +116,25 @@ starting a NEW charge additionally requires the notify URL
 reason: a half-provisioned rail must refuse at the gate, not strand a row
 holding the order's only payment slot.
 
+## A decline arrives before the prompt (production, 2026-10-28)
+
+A wallet that cannot cover the amount is declined by EcoCash itself, about two
+seconds after the charge and before any PIN prompt reaches the phone. The
+customer gets an SMS from EcoCash for it; we get the notify call and, on Query:
+
+```json
+{ "transactionOperationStatus": "FAILED", "source": "RMP_INIT",
+  "ecocashResponseCode": "FAILED",
+  "responseMessage": "You have insufficient funds to complete this transaction." }
+```
+
+`startTime` and `endTime` are 1–2 s apart. We keep `responseMessage` on the
+FAILED row and show it to the customer. For two minutes after a decline
+(`ECOCASH_DECLINE_HOLD`), a new EcoCash charge for the same order is refused
+with that reason instead of being sent, so the customer gets one SMS, not one
+per retry. Whether the balance check can come after the prompt is a question
+for EcoCash (asked 2026-10-28).
+
 ## Not yet modelled
 
 - **Refunds** (`/transactions/refund`, `tranType` + `originalEcocashReference`)

@@ -3941,6 +3941,33 @@ back). Non-negotiables:
 - Refunds ARE supported upstream (`/transactions/refund` keyed by
   `originalEcocashReference` — persisted as `payment.ecocash_reference`)
   but are NOT modelled yet; operator procedure, same as the card rail.
+- **A wallet without the funds is FAILED before any PIN prompt** (measured on
+  production 2026-10-28: about 2 s after the charge, `source: RMP_INIT`,
+  `responseMessage: "You have insufficient funds to complete this
+  transaction."`). EcoCash still sends the customer an SMS for it, so every
+  charge costs one. Three things keep that to one SMS per tap:
+  - **EcoCash's reason is kept** (`EcocashChargeStatus.responseMessage`, cleaned
+    by `EcocashEipClient.customerMessage`) on the FAILED row
+    (`upstream_error_message`, code `subscriber_rejected`). Only that code's
+    message is ever shown to a customer (`EcocashPaymentService.declineReason`);
+    our own placeholder for a reason-less FAILED never is.
+  - **The decline hold** (`ecocash.decline-hold`, `ECOCASH_DECLINE_HOLD`, PT2M,
+    0 = off): while the order's latest EcoCash attempt is an EcoCash decline
+    younger than the hold, `POST /payments` with ECOCASH starts no charge and
+    answers `400` with that decline (`stage: DECLINED`, `failureReason`,
+    `retryAfterSeconds`). It sits after the active-payment check and before the
+    order is read. An EXPIRED prompt does not hold (the customer may simply have
+    missed it), nor does a refusal before any prompt (`ecocash_refused`).
+    Without it a website that re-POSTed every 4 s sent one customer ~20 SMSes.
+  - **`GET /payments/{transactionId}`** (public, like the POST; one path segment
+    only in `SecurityConfig`): the attempt as the POST replays it, plus terminal
+    rows (`DECLINED` for FAILED, `LAPSED` for EXPIRED/REJECTED, both
+    `fundsCaptured: false`). Read-only: it never queries EcoCash, so it is safe to
+    poll. Clients poll THIS, never `POST /payments`, which starts a new payment
+    once an attempt has ended.
+  Pinned by `EcocashPaymentServiceTest` (the decline cases),
+  `PaymentDeclineAndStatusTest`, `PaymentStageTest` and the
+  insufficient-funds shape in `EcocashEipClientContractTest`.
 
 ## Veengu API reference — source of truth for payment integrations
 
