@@ -140,4 +140,23 @@ class AuditServiceTest {
         assertNotEquals(genesis, service.computeChainHmac("deadbeef".repeat(8), rowHmac),
                 "a different predecessor chain must yield a different link");
     }
+
+    @Test
+    void record_sealsATimeTheColumnCanHoldExactly() {
+        // Postgres keeps occurred_at to the microsecond. A sealed time with
+        // nanoseconds reads back different and fails its own HMAC.
+        for (int i = 0; i < 20; i++) {
+            service.recordSuccess(
+                    AuditEventType.values()[0],
+                    "system", AuditService.ACTOR_TYPE_SYSTEM,
+                    "t-" + i, "TARGET", null, AuditContext.none());
+        }
+        ArgumentCaptor<AuditEvent> saved = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(repo, times(20)).save(saved.capture());
+        for (AuditEvent row : saved.getAllValues()) {
+            assertEquals(0, row.getOccurredAt().getNano() % 1_000,
+                    "occurred_at must be whole microseconds: " + row.getOccurredAt());
+            assertEquals(service.computeHmac(row), row.getRowHmac());
+        }
+    }
 }

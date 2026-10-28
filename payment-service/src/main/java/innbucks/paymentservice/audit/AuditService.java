@@ -15,6 +15,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.Map;
 
@@ -108,7 +109,11 @@ public class AuditService {
                        Map<String, Object> metadata,
                        AuditContext context) {
         AuditEvent event = AuditEvent.builder()
-                .occurredAt(Instant.now())
+                // Postgres keeps occurred_at to the MICROSECOND, and the JVM's clock
+                // reads nanoseconds. Sealed at nanoseconds, a row read back can never
+                // match its own HMAC, so every row looked tampered. Truncate first:
+                // the sealed value is then exactly the stored one.
+                .occurredAt(Instant.now().truncatedTo(ChronoUnit.MICROS))
                 .eventType(type.name())
                 .outcome(outcome)
                 .actorId(actorId)
@@ -214,8 +219,53 @@ public class AuditService {
      * (DB-assigned) and {@code rowHmac} itself.
      */
     public String computeHmac(AuditEvent e) {
-        String canonical = String.valueOf(e.getOccurredAt()) + SEP
-                + nz(e.getEventType()) + SEP
+        return hmacHex(String.valueOf(e.getOccurredAt()) + canonicalAfterTime(e));
+    }
+
+    /**
+     * True when {@code e}'s stored HMAC was sealed over an {@code occurred_at}
+     * that Postgres then cut to the microsecond. Before the time was truncated
+     * at write, the JVM sealed nanoseconds (e.g. {@code .868363512Z}) and the
+     * column kept {@code .868363Z}; the nanoseconds are gone, so this tries each
+     * time the stored one could have come from, within the driver's rounding
+     * (500 ns either side, and up to 999 ns above it for a driver that truncates).
+     *
+     * <p>It still needs the key: only a row sealed by this service, with every
+     * other field unchanged, can match. What it gives up is under a microsecond
+     * of the timestamp, which no reader of an audit row can tell apart anyway.
+     * Only a row whose stored time is a whole microsecond is tried, and each
+     * try is one HMAC over a short string.
+     */
+    public boolean sealedBeforeMicrosecondTruncation(AuditEvent e) {
+        String stored = e.getRowHmac();
+        Instant at = e.getOccurredAt();
+        if (stored == null || stored.isBlank() || at == null || at.getNano() % 1_000 != 0) {
+            return false;
+        }
+        byte[] rest = canonicalAfterTime(e).getBytes(StandardCharsets.UTF_8);
+        HexFormat hex = HexFormat.of();
+        try {
+            Mac mac = Mac.getInstance(HMAC_ALGORITHM);
+            mac.init(hmacKey);
+            for (long delta = -500; delta <= 999; delta++) {
+                if (delta == 0) {
+                    continue;                       // the exact time was already compared
+                }
+                mac.update(String.valueOf(at.plusNanos(delta)).getBytes(StandardCharsets.UTF_8));
+                mac.update(rest);
+                if (stored.equals(hex.formatHex(mac.doFinal()))) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (GeneralSecurityException ex) {
+            throw new IllegalStateException("Failed to compute audit HMAC", ex);
+        }
+    }
+
+    /** Every sealed field after {@code occurred_at}, each preceded by {@link #SEP}. */
+    private static String canonicalAfterTime(AuditEvent e) {
+        return SEP + nz(e.getEventType()) + SEP
                 + nz(e.getOutcome()) + SEP
                 + nz(e.getActorId()) + SEP
                 + nz(e.getActorType()) + SEP
@@ -226,7 +276,6 @@ public class AuditService {
                 + nz(e.getFailureReason()) + SEP
                 + nz(e.getCorrelationId()) + SEP
                 + nz(e.getMetadata());
-        return hmacHex(canonical);
     }
 
     /**
