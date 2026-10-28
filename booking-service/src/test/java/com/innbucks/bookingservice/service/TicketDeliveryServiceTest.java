@@ -6,6 +6,7 @@ import com.innbucks.bookingservice.client.NotificationDeliveryException;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
+import com.innbucks.bookingservice.util.SmsTextSanitizer;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -203,7 +204,13 @@ class TicketDeliveryServiceTest {
         verify(f.whatsApp(), never()).sendEventQrCode(eq("+263772000000"), anyString(), contains("TN-ALICE"));
         assertTrue(eventName.getValue().contains("ticket for Tendai Ncube"), eventName.getValue());
         assertTrue(eventName.getValue().contains("booked by Alice Moyo"), eventName.getValue());
+        assertTrue(eventName.getValue().contains("TN-TENDAI"), eventName.getValue());
         assertFalse(eventName.getValue().contains("\n"), "WhatsApp template variable must be single-line");
+        // The confirmation number opens every ticket of the booking at the
+        // gate lookup: a guest gets their own ticket number and nothing more.
+        assertFalse(eventName.getValue().contains(booking.getConfirmationNumber()), eventName.getValue());
+        assertEquals("your event (ticket for Tendai Ncube, booked by Alice Moyo, TN-TENDAI)",
+                eventName.getValue());
 
         assertEquals(1, outcome.qrTicketsSent(), "purchaser-routed QRs only");
         assertEquals(1, outcome.qrTicketsTotal());
@@ -268,22 +275,34 @@ class TicketDeliveryServiceTest {
 
         f.service().deliver(booking);
 
+        ArgumentCaptor<String> rudoSubject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> rudoBody = ArgumentCaptor.forClass(String.class);
-        verify(f.email()).sendEmail(eq("rudo@example.com"), anyString(), rudoBody.capture(), startsWith("ATT-"));
+        verify(f.email()).sendEmail(eq("rudo@example.com"), rudoSubject.capture(), rudoBody.capture(),
+                startsWith("ATT-"));
         String text = rudoBody.getValue();
         assertTrue(text.contains("View your ticket online: https://dtx.example/foundry/bookings/tickets/"
                 + rudo.getId()), text);
-        // Nothing in a guest's email opens the booking: not its page, not its id.
+        // Nothing in a guest's email opens the booking: not its page, not its
+        // id, not its confirmation number (the gate lookup's key to every
+        // ticket of the booking).
         assertFalse(text.contains(BOOKING_ID.toString()), text);
         assertFalse(text.contains("/tickets\n") || text.endsWith("/tickets"), text);
         assertFalse(text.contains("TN-TENDAI"), text);
         assertFalse(text.contains(tendai.getId().toString()), text);
+        assertFalse(text.contains(booking.getConfirmationNumber()), text);
+        assertEquals("Your InnBucks ticket for your event", rudoSubject.getValue());
 
-        // The purchaser paid for the whole booking, so their receipt still links it.
+        // The purchaser paid for the whole booking, so their receipt still
+        // links it and names its reference.
+        ArgumentCaptor<String> receiptSubject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> receipt = ArgumentCaptor.forClass(String.class);
-        verify(f.email()).sendEmail(eq("alice@example.com"), anyString(), receipt.capture(), startsWith("CONF-"));
+        verify(f.email()).sendEmail(eq("alice@example.com"), receiptSubject.capture(), receipt.capture(),
+                startsWith("CONF-"));
         assertTrue(receipt.getValue().contains("https://dtx.example/foundry/bookings/" + BOOKING_ID + "/tickets"),
                 receipt.getValue());
+        assertTrue(receipt.getValue().contains("Booking reference: " + booking.getConfirmationNumber()),
+                receipt.getValue());
+        assertTrue(receiptSubject.getValue().contains(booking.getConfirmationNumber()), receiptSubject.getValue());
     }
 
     @Test
@@ -309,8 +328,13 @@ class TicketDeliveryServiceTest {
 
         TicketDeliveryService.Outcome outcome = f.service().deliver(booking);
 
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(f.email()).sendEmail(eq("rudo@example.com"), contains("ticket"), body.capture(), startsWith("ATT-"));
+        verify(f.email()).sendEmail(eq("rudo@example.com"), subject.capture(), body.capture(), startsWith("ATT-"));
+        // The subject names the event, not the booking.
+        assertEquals("Your InnBucks ticket for your event", subject.getValue());
+        assertFalse(body.getValue().contains(booking.getConfirmationNumber()), body.getValue());
+        assertFalse(body.getValue().contains("Booking reference"), body.getValue());
         assertTrue(body.getValue().contains("Hi Rudo Sibanda"), body.getValue());
         assertTrue(body.getValue().contains("Alice Moyo has booked a ticket for you"), body.getValue());
         assertTrue(body.getValue().contains("TN-RUDO"), body.getValue());
@@ -370,18 +394,21 @@ class TicketDeliveryServiceTest {
         // TENDAI (delivered to their own phone) sits before BAD (fell back to
         // the buyer), so BAD is 3rd of the buyer's messages but 4th of the
         // booking: "ticket i of n" must count the booking, as the receipt does.
+        // SELF is "I'm bringing myself": the buyer named themselves on a ticket
+        // with their own number.
         booking.setItems(List.of(
                 ticketFor("TN-ALICE", null, null, null),
                 ticketFor("TN-RUDO", "Rudo Sibanda", "rudo@example.com", null),
                 ticketFor("TN-TENDAI", "Tendai Ncube", null, "+263772000000"),
-                ticketFor("TN-BAD", "Bad Number", null, "+263779999999")));
+                ticketFor("TN-BAD", "Bad Number", null, "+263779999999"),
+                ticketFor("TN-SELF", "Alice Moyo", null, "+263782606983")));
         doThrow(new NotificationDeliveryException("gateway said no"))
                 .when(f.whatsApp()).sendEventQrCode(eq("+263779999999"), anyString(), anyString());
 
         f.service().deliver(booking);
 
-        List<String> all = List.of("TN-ALICE", "TN-RUDO", "TN-BAD", "TN-TENDAI");
-        for (String own : List.of("TN-ALICE", "TN-RUDO", "TN-BAD")) {
+        List<String> all = List.of("TN-ALICE", "TN-RUDO", "TN-BAD", "TN-TENDAI", "TN-SELF");
+        for (String own : List.of("TN-ALICE", "TN-RUDO", "TN-BAD", "TN-SELF")) {
             ArgumentCaptor<String> caption = ArgumentCaptor.forClass(String.class);
             verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), caption.capture(), contains(own));
             assertTrue(caption.getValue().contains(own), caption.getValue());
@@ -393,13 +420,43 @@ class TicketDeliveryServiceTest {
             }
             assertFalse(caption.getValue().contains("\n"), "WhatsApp template variable must be single-line");
         }
+        // A guest's QR (email-only RUDO, fallback BAD) carries no booking
+        // reference: the buyer forwards it, and the reference opens every
+        // ticket of the booking at the gate lookup.
+        String reference = booking.getConfirmationNumber();
         ArgumentCaptor<String> rudo = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), rudo.capture(), contains("TN-RUDO"));
-        assertTrue(rudo.getValue().contains("ticket 2 of 4"), rudo.getValue());
-        assertTrue(rudo.getValue().contains("TN-RUDO (Rudo Sibanda)"), rudo.getValue());
+        assertEquals("your event (ticket 2 of 5 — TN-RUDO (Rudo Sibanda))", rudo.getValue());
         ArgumentCaptor<String> bad = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), bad.capture(), contains("TN-BAD"));
-        assertTrue(bad.getValue().contains("ticket 4 of 4"), bad.getValue());
+        assertEquals("your event (ticket 4 of 5 — TN-BAD (Bad Number))", bad.getValue());
+        assertFalse(bad.getValue().contains(reference), bad.getValue());
+        // The buyer's own ticket and the one they named themselves on keep it.
+        ArgumentCaptor<String> alice = ArgumentCaptor.forClass(String.class);
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), alice.capture(), contains("TN-ALICE"));
+        assertEquals("your event (booking " + reference + ", ticket 1 of 5 — TN-ALICE)", alice.getValue());
+        ArgumentCaptor<String> self = ArgumentCaptor.forClass(String.class);
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), self.capture(), contains("TN-SELF"));
+        assertEquals("your event (booking " + reference + ", ticket 5 of 5 — TN-SELF (Alice Moyo))",
+                self.getValue());
+    }
+
+    @Test
+    void aTicketNamingTheBuyerByEmail_isTheBuyers_andKeepsTheReference() {
+        // "I'm bringing myself" by email alone: the attendee email is the
+        // buyer's (in another case), so it is not a guest's ticket.
+        Fixture f = fixture();
+        Booking booking = bookingWithOneTicket();
+        booking.setUserEmail("alice@example.com");
+        booking.setTotalAmount(new java.math.BigDecimal("60.00"));
+        booking.setItems(List.of(ticketFor("TN-SELF", "Alice Moyo", "ALICE@example.com", null)));
+
+        f.service().deliver(booking);
+
+        ArgumentCaptor<String> caption = ArgumentCaptor.forClass(String.class);
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), caption.capture(), contains("TN-SELF"));
+        assertEquals("your event (booking " + booking.getConfirmationNumber()
+                + ", 1 ticket, total 60.00 — TN-SELF (Alice Moyo))", caption.getValue());
     }
 
     @Test
@@ -460,7 +517,55 @@ class TicketDeliveryServiceTest {
         verify(f.email()).sendSms(eq("+263782606983"), sms.capture(), anyString());
         assertTrue(sms.getValue().contains(booking.getConfirmationNumber()), sms.getValue());
         assertTrue(sms.getValue().contains("guests' tickets were sent"), sms.getValue());
+        assertEquals("Booking INN-20260825-31D117 confirmed for your event."
+                + " Your guests' tickets were sent to their WhatsApp numbers.", sms.getValue());
+        assertEquals(sms.getValue(), SmsTextSanitizer.toGsmSafe(sms.getValue()),
+                "the SMS must survive the gateway's sanitiser unchanged");
         verify(f.email(), never()).sendEmail(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void phoneOnlyBuyer_whoseWhatsAppHoldsOnlyGuestsTickets_getsAnSmsReceiptWithTheReference() {
+        // A guest's QR caption carries no booking reference, so a buyer with no
+        // email whose WhatsApp got only guests' QRs (to forward) would see the
+        // reference nowhere. The SMS receipt carries it, and says truthfully
+        // where each QR went.
+        Fixture f = fixture();
+        Booking booking = bookingWithOneTicket();
+        booking.setUserEmail(null);
+        booking.setCustomerName("Alice Moyo");
+        booking.setItems(List.of(
+                ticketFor("TN-RUDO", "Rudo Sibanda", null, null),
+                ticketFor("TN-TENDAI", "Tendai Ncube", null, "+263772000000")));
+
+        f.service().deliver(booking);
+
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), anyString(), contains("TN-RUDO"));
+        ArgumentCaptor<String> sms = ArgumentCaptor.forClass(String.class);
+        verify(f.email()).sendSms(eq("+263782606983"), sms.capture(), startsWith("CONF-"));
+        assertEquals("Booking INN-20260825-31D117 confirmed for your event."
+                + " 1 guest ticket was sent to your WhatsApp - please forward each one to its guest."
+                + " The others went to their guests' own WhatsApp.", sms.getValue());
+        assertEquals(sms.getValue(), SmsTextSanitizer.toGsmSafe(sms.getValue()),
+                "the SMS must survive the gateway's sanitiser unchanged");
+    }
+
+    @Test
+    void smsReceipt_neverClaimsAWhatsAppSendThatFailed() {
+        // Every guest QR fell back to the buyer, and the buyer's WhatsApp
+        // failed too: the SMS still carries the reference, and promises nothing.
+        Fixture f = fixture();
+        Booking booking = bookingWithOneTicket();
+        booking.setUserEmail(null);
+        booking.setItems(List.of(ticketFor("TN-BAD", "Bad Number", null, "+263779999999")));
+        doThrow(new NotificationDeliveryException("gateway said no"))
+                .when(f.whatsApp()).sendEventQrCode(anyString(), anyString(), anyString());
+
+        f.service().deliver(booking);
+
+        ArgumentCaptor<String> sms = ArgumentCaptor.forClass(String.class);
+        verify(f.email()).sendSms(eq("+263782606983"), sms.capture(), anyString());
+        assertEquals("Booking INN-20260825-31D117 confirmed for your event.", sms.getValue());
     }
 
     @Test
@@ -479,6 +584,25 @@ class TicketDeliveryServiceTest {
         ownTicket.setUserEmail(null);
         f2.service().deliver(ownTicket);
         verify(f2.email(), never()).sendSms(anyString(), anyString(), anyString());
+
+        // Case 3: no email, a guest's QR to forward AND an unnamed spare: the
+        // spare's caption carries the reference.
+        Fixture f3 = fixture();
+        Booking mixed = bookingWithOneTicket();
+        mixed.setUserEmail(null);
+        mixed.setItems(List.of(
+                ticketFor("TN-RUDO", "Rudo Sibanda", null, null),
+                ticketFor("TN-SPARE", null, null, null)));
+        f3.service().deliver(mixed);
+        verify(f3.email(), never()).sendSms(anyString(), anyString(), anyString());
+
+        // Case 4: no email, the buyer named themselves on their only ticket.
+        Fixture f4 = fixture();
+        Booking self = bookingWithOneTicket();
+        self.setUserEmail(null);
+        self.setItems(List.of(ticketFor("TN-SELF", "Alice Moyo", null, "+263782606983")));
+        f4.service().deliver(self);
+        verify(f4.email(), never()).sendSms(anyString(), anyString(), anyString());
     }
 
     @Test

@@ -220,19 +220,34 @@ public class TicketDeliveryService {
                 log.warn("Booking-confirm email failed bookingId={} (booking still CONFIRMED): {}",
                         booking.getId(), ex.getMessage());
             }
-        } else if (purchaserHasPhone && total == 0 && !items.isEmpty()) {
-            // ---- 3b. SMS receipt — ONLY when the buyer would otherwise hear
-            // NOTHING: no email on file and no QR routed to their WhatsApp
-            // (every ticket went to its attendee). WhatsApp-first customers
-            // routinely book with no email; without this the person who PAID
-            // gets zero messages. One bounded SMS, only in this exact case.
+        } else if (purchaserHasPhone && !items.isEmpty()
+                && purchaserQueue.stream().allMatch(item -> isGuestTicket(booking, item))) {
+            // ---- 3b. SMS receipt — ONLY when the buyer would otherwise never
+            // see their booking reference: no email on file, and no QR caption
+            // on their WhatsApp carried it. That is every ticket routed to its
+            // attendee (no QR reached the buyer at all), or every QR the buyer
+            // got being a guest's, whose caption omits the reference (see
+            // buildEventNameField). WhatsApp-first customers routinely book
+            // with no email; without this the person who PAID never learns the
+            // reference. One bounded SMS, only in this case. It says only what
+            // happened: guest QRs that reached the buyer to forward, and those
+            // that went to the guests' own WhatsApp.
+            StringBuilder sms = new StringBuilder("Booking ").append(booking.getConfirmationNumber())
+                    .append(" confirmed for ").append(singleLine(eventTitle)).append('.');
+            if (sent > 0) {
+                sms.append(' ').append(sent).append(sent == 1 ? " guest ticket was" : " guest tickets were")
+                        .append(" sent to your WhatsApp - please forward each one to its guest.");
+            }
+            if (!routedOk.isEmpty()) {
+                sms.append(sent > 0
+                        ? " The others went to their guests' own WhatsApp."
+                        : " Your guests' tickets were sent to their WhatsApp numbers.");
+            }
             try {
-                email.sendSms(phone,
-                        "Booking " + booking.getConfirmationNumber() + " confirmed for " + eventTitle
-                                + ". Your guests' tickets were sent to their WhatsApp numbers.",
+                email.sendSms(phone, sms.toString(),
                         "CONF-" + booking.getConfirmationNumber().replaceAll("[^A-Za-z0-9-]", "")
                                 + "-" + java.util.UUID.randomUUID().toString().substring(0, 4) + "S");
-                log.info("Booking-confirm SMS receipt sent bookingId={} (no email, all QRs attendee-routed)",
+                log.info("Booking-confirm SMS receipt sent bookingId={} (no email, no reference on the buyer's WhatsApp)",
                         booking.getId());
             } catch (RuntimeException ex) {
                 log.warn("Booking-confirm SMS receipt failed bookingId={}: {}",
@@ -342,6 +357,31 @@ public class TicketDeliveryService {
     }
 
     /**
+     * True when this ticket belongs to a guest rather than the buyer: it names
+     * an attendee, and that attendee's phone and email are not the buyer's.
+     * Its QR caption then omits the booking's confirmation number, because the
+     * buyer forwards it and the number opens every ticket of the booking at the
+     * gate lookup ({@code POST /tickets/lookup}).
+     *
+     * <p>Unlike {@link #deliverableToAttendee}, a name-only guest counts: they
+     * have no contact of their own, so their QR goes to the buyer to forward,
+     * and that forward is exactly the message that must not carry the number.
+     * The buyer's own tickets, unnamed spares and "I'm bringing myself" tickets
+     * (attendee contact = the buyer's) are not guests' and keep it.
+     */
+    private static boolean isGuestTicket(Booking booking, BookingItem item) {
+        if (item.getAttendeeName() == null || item.getAttendeeName().isBlank()) {
+            return false;
+        }
+        boolean phoneIsPurchasers = item.getAttendeePhone() != null
+                && item.getAttendeePhone().equals(booking.getPhoneNumber());
+        boolean emailIsPurchasers = item.getAttendeeEmail() != null
+                && booking.getUserEmail() != null
+                && item.getAttendeeEmail().equalsIgnoreCase(booking.getUserEmail());
+        return !phoneIsPurchasers && !emailIsPurchasers;
+    }
+
+    /**
      * The email half of an attendee delivery: a one-ticket confirmation to the
      * attendee's own address (skipped when it is the purchaser's). The QR half
      * lives in {@link #deliver}'s routing loop, because a failed attendee QR
@@ -356,8 +396,15 @@ public class TicketDeliveryService {
             return false;
         }
         try {
+            // The subject names the event, never the booking: its confirmation
+            // number opens every ticket of the booking at the gate lookup.
+            // singleLine is load-bearing: event-service keeps a title's line
+            // breaks, SES puts the subject in a mail header untouched, and the
+            // notification API's sanitiser keeps \r \n \t. The ATT- reference
+            // still names the booking; it travels only as the notification
+            // API's own field, never in the subject or body.
             email.sendEmail(attendeeEmail,
-                    "Your InnBucks ticket - booking " + booking.getConfirmationNumber(),
+                    "Your InnBucks ticket for " + singleLine(eventTitle),
                     buildAttendeeConfirmationText(booking, item, eventTitle, qrDelivered, purchaserHasPhone),
                     "ATT-" + booking.getConfirmationNumber() + "-"
                             + java.util.UUID.randomUUID().toString().substring(0, 6));
@@ -376,7 +423,14 @@ public class TicketDeliveryService {
      * <em>"Event confirmed! Here is your e-ticket entry for {eventName}. Only
      * present this ticket at the gate."</em> — so this must read as a noun
      * phrase, e.g.
-     * <pre>InnBucks Annual Gala 2025 (booking INN-..., ticket 2 of 3, total 30.00 — TN2 (Rudo Sibanda))</pre>
+     * <pre>InnBucks Annual Gala 2025 (booking INN-..., ticket 2 of 3, total 30.00 — TN2)</pre>
+     *
+     * <p><b>A guest's ticket carries no booking reference</b>
+     * ({@link #isGuestTicket}):
+     * <pre>InnBucks Annual Gala 2025 (ticket 2 of 3, total 30.00 — TN2 (Rudo Sibanda))</pre>
+     * The buyer forwards it to that guest, and the confirmation number opens
+     * every ticket of the booking at the gate lookup. The buyer's own tickets
+     * and unnamed spares keep it.
      *
      * <p><b>It names this message's ticket and no other.</b> A ticket number is
      * the gate credential, and the buyer forwards these messages: a guest's QR
@@ -403,23 +457,27 @@ public class TicketDeliveryService {
      */
     private String buildEventNameField(Booking booking, BookingItem item, String eventTitle) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
-        StringBuilder sb = new StringBuilder(singleLine(eventTitle))
-                .append(" (booking ").append(booking.getConfirmationNumber());
+        List<String> facts = new ArrayList<>();
+        if (!isGuestTicket(booking, item)) {
+            facts.add("booking " + booking.getConfirmationNumber());
+        }
         int position = positionOf(items, item);
         if (items.size() == 1) {
-            sb.append(", 1 ticket");
+            facts.add("1 ticket");
         } else if (position > 0) {
-            sb.append(", ticket ").append(position).append(" of ").append(items.size());
+            facts.add("ticket " + position + " of " + items.size());
         } else if (items.size() > 1) {
-            sb.append(", ").append(items.size()).append(" tickets");
+            facts.add(items.size() + " tickets");
         }
         BigDecimal total = booking.getTotalAmount();
         if (total != null) {
-            sb.append(", total ").append(total.toPlainString());
+            facts.add("total " + total.toPlainString());
         }
+        StringBuilder sb = new StringBuilder(singleLine(eventTitle))
+                .append(" (").append(String.join(", ", facts));
         // This ticket's number as the gate reference, after an em-dash. Single
         // line, no newlines (WhatsApp template-variable rule).
-        sb.append(" — ").append(item.getTicketNumber());
+        sb.append(facts.isEmpty() ? "" : " ").append("— ").append(item.getTicketNumber());
         String who = item.getAttendeeName();
         if (who != null && !who.isBlank()) {
             sb.append(" (").append(singleLine(who)).append(')');
@@ -440,8 +498,9 @@ public class TicketDeliveryService {
 
     /**
      * The attendee's variant of {@link #buildEventNameField}: ONE ticket, in
-     * their name, with who booked it — same single-line rule.
-     * <pre>Harare Jazz Festival (ticket for Tendai Ncube, booked by Alice Moyo, booking INN-..., 20260502-3FQ7M-X9K2D)</pre>
+     * their name, with who booked it — same single-line rule. No booking
+     * reference: it opens every ticket of the booking at the gate lookup.
+     * <pre>Harare Jazz Festival (ticket for Tendai Ncube, booked by Alice Moyo, 20260502-3FQ7M-X9K2D)</pre>
      */
     private String buildAttendeeEventNameField(Booking booking, BookingItem item, String eventTitle) {
         StringBuilder sb = new StringBuilder(singleLine(eventTitle))
@@ -449,8 +508,7 @@ public class TicketDeliveryService {
         if (booking.getCustomerName() != null && !booking.getCustomerName().isBlank()) {
             sb.append(", booked by ").append(singleLine(booking.getCustomerName()));
         }
-        sb.append(", booking ").append(booking.getConfirmationNumber())
-          .append(", ").append(item.getTicketNumber())
+        sb.append(", ").append(item.getTicketNumber())
           .append(')');
         return sb.toString();
     }
@@ -550,7 +608,8 @@ public class TicketDeliveryService {
             sb.append("A ticket has been booked for you.\n\n");
         }
         sb.append("Event: ").append(eventTitle).append('\n');
-        sb.append("Booking reference: ").append(booking.getConfirmationNumber()).append('\n');
+        // No "Booking reference" line: it opens every ticket of the booking at
+        // the gate lookup. The guest's own ticket number is their reference.
         sb.append("Your ticket number: ").append(item.getTicketNumber()).append('\n');
         if (item.ticketTypeLabel() != null) {
             sb.append("Ticket type: ").append(item.ticketTypeLabel()).append('\n');

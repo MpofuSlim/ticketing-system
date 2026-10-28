@@ -1312,8 +1312,11 @@ organizer's bookings view from a list of MSISDNs into a guest list.
   resend endpoint recover a mistyped guest number (re-run → fails again → buyer
   gets it to forward). Attendee sends run BEFORE the purchaser's receipt email,
   which therefore reports actual outcomes (delivered directly / fell back), not
-  intentions. A buyer with no email whose tickets were ALL attendee-routed gets
-  one SMS receipt so the payer never hears nothing. The purchaser's email stays
+  intentions. A buyer with no email gets one SMS receipt carrying the booking
+  reference when no QR caption on their WhatsApp carried it: every ticket went
+  to its attendee, or every QR they got is a guest's (whose caption omits the
+  reference, below). It says only what happened: how many guest QRs reached
+  them to forward, and whether the others went to the guests' own WhatsApp. The purchaser's email stays
   the full-booking receipt; an attendee with an email also gets a one-ticket
   email. `Outcome.qrTicketsTotal` counts PURCHASER-routed QRs (own + fallbacks)
   and `attendeeDeliveriesSent/Total` the attendee-contactable tickets — the
@@ -1321,11 +1324,18 @@ organizer's bookings view from a list of MSISDNs into a guest list.
 - **`holderName`** (= attendee if named, else purchaser) is on `CategoryBookingDTO`
   and on the scan response (`ALLOWED` / `ALREADY_REDEEMED`) so the gate can greet
   or ID-check the holder; the ticket HTML/email print "Ticket for <holder>".
-- **A guest gets ONLY their own ticket: nothing sent to a guest carries the
-  booking's id or a URL keyed by it.** The booking's page
+- **A guest gets ONLY their own ticket: nothing sent to a guest, or routed
+  through the buyer for a guest, carries the booking's id, its confirmation
+  number, or a URL keyed by either.** The booking's page
   (`GET /bookings/{id}/tickets`) shows every ticket's QR, and a ticket number is
   the QR payload, so whoever holds the booking id can enter on any guest's
-  ticket: that id goes to the purchaser alone. A named guest's email links
+  ticket: that id goes to the purchaser alone. The confirmation number is the
+  gate lookup's key (`POST /tickets/lookup` lists every ticket of the booking by
+  holder name), so it goes to the purchaser alone too: the guest's email subject
+  names the event (`Your InnBucks ticket for <title>`, flattened by
+  `singleLine`), its body has no `Booking reference` line, the guest's own
+  WhatsApp caption omits it, and so does the buyer's caption for a guest's
+  ticket (`TicketDeliveryService.isGuestTicket`, below). A named guest's email links
   `GET /bookings/tickets/{itemId}` (`TicketRenderingService.holderTicketPath`):
   one ticket, keyed by the item's own UUID, with its QR at `.../qr` and
   `.../qr.png` by the same id, so neither the link nor the page's image address
@@ -1333,13 +1343,24 @@ organizer's bookings view from a list of MSISDNs into a guest list.
   booking). No reference, total or other tickets on it. `SecurityConfig` permits
   exactly those three paths, and the mappings pin `itemId` to a canonical UUID:
   unpinned, `/bookings/tickets/tickets` tied with the booking page and was a
-  500. **Never add a booking id or a booking-keyed URL to anything sent to a
-  guest.** The WhatsApp QR's media path still names the booking: Twilio fetches
-  it, and the guest sees only the image.
+  500. **Never add a booking id, a confirmation number or a URL keyed by either
+  to anything sent to a guest or to a buyer's message for a guest's ticket.**
+  Two exceptions, neither in a message we compose: the WhatsApp QR's media path
+  still names the booking (Twilio fetches it, and the guest sees only the
+  image), and the notification API's delivery reference for a guest's email
+  (`ATT-<confirmation>-…`) still names it (it travels as the API's own
+  `reference` field, never in the subject or body, and the SES path drops it).
 - **Every WhatsApp QR the purchaser receives names only its own ticket**
   (`<title> (booking INN-…, ticket 2 of 3, total … — <its number> (<holder>))`,
   the holder only when the ticket names one, `1 ticket` for a one-ticket
-  booking). The buyer forwards these (a guest's QR that fell back to them, an
+  booking). **A guest's ticket omits the booking segment**
+  (`<title> (ticket 2 of 3, total … — <its number> (<holder>))`): a ticket is a
+  guest's when it names an attendee whose phone is not the buyer's and whose
+  email is not the buyer's (case-insensitive) — name-only, email-only and
+  fallen-back guests alike (`isGuestTicket`, which unlike
+  `deliverableToAttendee` counts a name-only guest: no contact, still a guest).
+  The buyer's own tickets, unnamed spares and "I'm bringing myself" tickets keep
+  it. The buyer forwards these (a guest's QR that fell back to them, an
   email-only guest's, the spares of a booking that named nobody), and when
   every caption listed every ticket number, one forward handed the recipient
   everyone's entry. The full list is the purchaser's receipt email and wallet. "i of n" holds within
@@ -1347,12 +1368,17 @@ organizer's bookings view from a list of MSISDNs into a guest list.
   ticket differently. The title is flattened (`singleLine`) like the holder's
   name, because a line break or a run of spaces in it made Twilio refuse every
   QR of that event (63021). Still open, stated rather than hidden:
-  - Guest messages (email subject and body, the guest's WhatsApp caption) and
-    forwarded QRs still show the confirmation number. At the gate,
-    `POST /tickets/lookup` (the event's organizer and gate team only) lists
-    every ticket of that booking by holder name, so the operator's name or ID
-    check is the guard. Dropping the number from guest messages is the owner's
-    call.
+  - The buyer's own and unnamed tickets' captions carry the confirmation number,
+    so a buyer who forwards a spare forwards it too: that is the buyer's choice.
+    Guest messages sent before this change still carry it. Where it still
+    reaches a guest, `POST /tickets/lookup` (the event's organizer and gate team
+    only) lists every ticket of that booking by holder name, so the operator's
+    name or ID check remains the guard.
+  - **The gate fallback a guest is left with** is their exact ticket number at
+    `POST /tickets/scan` (matched as issued) or their own ticket link. Whether
+    the scanner app accepts a typed number is the scanner team's to answer; the
+    forgiving ticket-number lookup (task file Part 2) is parked until the owner
+    decides.
   - `GET /bookings/public/phone/{phone}` returns every ticket of the buyer's
     bookings to anyone who knows the buyer's number, until it closes (see
     "Ticket lookups that replace …" below).
