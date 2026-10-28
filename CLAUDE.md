@@ -1321,20 +1321,43 @@ organizer's bookings view from a list of MSISDNs into a guest list.
 - **`holderName`** (= attendee if named, else purchaser) is on `CategoryBookingDTO`
   and on the scan response (`ALLOWED` / `ALREADY_REDEEMED`) so the gate can greet
   or ID-check the holder; the ticket HTML/email print "Ticket for <holder>".
-- **A guest's email links ONLY their own ticket, and nothing a guest receives
-  names the booking.** The booking's page (`GET /bookings/{id}/tickets`) shows
-  every ticket's QR, and a ticket number is the QR payload, so whoever holds the
-  booking id can enter on any guest's ticket: that id goes to the purchaser
-  alone. A named guest's email links `GET /bookings/tickets/{itemId}`
-  (`TicketRenderingService.holderTicketPath`): one ticket, keyed by the item's
-  own UUID, with its QR at `.../qr.png` by the same id, so neither the link nor
-  the page's image address carries the booking id (dropping the last segment
-  must never reach the whole booking). No reference, total or other tickets on
-  it. `SecurityConfig` permits exactly those three paths. **Never add a booking
-  id or a booking-keyed URL to anything sent to a guest.** The
-  WhatsApp QR's media path still names the booking: Twilio fetches it, and the
-  guest sees only the image. Guest emails sent before this still carry the
-  booking link.
+- **A guest gets ONLY their own ticket: nothing sent to a guest carries the
+  booking's id or a URL keyed by it.** The booking's page
+  (`GET /bookings/{id}/tickets`) shows every ticket's QR, and a ticket number is
+  the QR payload, so whoever holds the booking id can enter on any guest's
+  ticket: that id goes to the purchaser alone. A named guest's email links
+  `GET /bookings/tickets/{itemId}` (`TicketRenderingService.holderTicketPath`):
+  one ticket, keyed by the item's own UUID, with its QR at `.../qr` and
+  `.../qr.png` by the same id, so neither the link nor the page's image address
+  carries the booking id (dropping the last segment must never reach the whole
+  booking). No reference, total or other tickets on it. `SecurityConfig` permits
+  exactly those three paths, and the mappings pin `itemId` to a canonical UUID:
+  unpinned, `/bookings/tickets/tickets` tied with the booking page and was a
+  500. **Never add a booking id or a booking-keyed URL to anything sent to a
+  guest.** The WhatsApp QR's media path still names the booking: Twilio fetches
+  it, and the guest sees only the image.
+- **Every WhatsApp QR the purchaser receives names only its own ticket**
+  (`booking INN-…, ticket 2 of 3, total …, <its number> (<holder>)`). The buyer
+  forwards these (a guest's QR that fell back to them, an email-only guest's,
+  the spares of a booking that named nobody), and when every caption listed
+  every ticket number, one forward handed the recipient everyone's entry. The
+  full list is the purchaser's receipt email and wallet. Still open, stated
+  rather than hidden:
+  - Guest messages (email subject and body, the guest's WhatsApp caption) and
+    forwarded QRs still show the confirmation number. At the gate,
+    `POST /tickets/lookup` (staff only) lists every ticket of that booking by
+    holder name, so the operator's name or ID check is the guard. Dropping the
+    number from guest messages is the owner's call.
+  - `GET /bookings/public/phone/{phone}` returns every ticket of the buyer's
+    bookings to anyone who knows the buyer's number, until it closes (see
+    "Ticket lookups that replace …" below).
+  - Guest emails sent before this carry the booking link, valid for the life of
+    the booking (the id cannot rotate). They are the CONFIRMED bookings created
+    before the deploy with an item whose `lower(attendee_email)` differs from
+    `lower(coalesce(user_email, ''))`.
+  - The item link lives as long as its row. Changing a ticket's attendee rotates
+    neither the ticket number nor the link, so a future "re-issue on
+    reassignment" must rotate the link's key too.
 - The organizer CSV export gained `customerName` + `attendees` (names, `; `-joined)
   and stays one row per BOOKING — it is the accountant's ledger; the per-ticket
   guest list with contacts is `GET /bookings/by-event/{id}`.

@@ -359,6 +359,44 @@ class TicketDeliveryServiceTest {
     }
 
     @Test
+    void everyQrTheBuyerMayForward_namesOnlyItsOwnTicket() {
+        // The buyer forwards these: a guest's QR that fell back to them, an
+        // email-only guest's, and the spare tickets of a booking that named
+        // nobody. A ticket number is the gate credential, so a forwarded
+        // message must not carry anyone else's.
+        Fixture f = fixture();
+        Booking booking = bookingWithOneTicket();
+        booking.setCustomerName("Alice Moyo");
+        booking.setItems(List.of(
+                ticketFor("TN-ALICE", null, null, null),
+                ticketFor("TN-RUDO", "Rudo Sibanda", "rudo@example.com", null),
+                ticketFor("TN-BAD", "Bad Number", null, "+263779999999"),
+                ticketFor("TN-TENDAI", "Tendai Ncube", null, "+263772000000")));
+        doThrow(new NotificationDeliveryException("gateway said no"))
+                .when(f.whatsApp()).sendEventQrCode(eq("+263779999999"), anyString(), anyString());
+
+        f.service().deliver(booking);
+
+        List<String> all = List.of("TN-ALICE", "TN-RUDO", "TN-BAD", "TN-TENDAI");
+        for (String own : List.of("TN-ALICE", "TN-RUDO", "TN-BAD")) {
+            ArgumentCaptor<String> caption = ArgumentCaptor.forClass(String.class);
+            verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), caption.capture(), contains(own));
+            assertTrue(caption.getValue().contains(own), caption.getValue());
+            for (String other : all) {
+                if (!other.equals(own)) {
+                    assertFalse(caption.getValue().contains(other),
+                            own + "'s message carries " + other + ": " + caption.getValue());
+                }
+            }
+            assertFalse(caption.getValue().contains("\n"), "WhatsApp template variable must be single-line");
+        }
+        ArgumentCaptor<String> rudo = ArgumentCaptor.forClass(String.class);
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), rudo.capture(), contains("TN-RUDO"));
+        assertTrue(rudo.getValue().contains("ticket 2 of 4"), rudo.getValue());
+        assertTrue(rudo.getValue().contains("TN-RUDO (Rudo Sibanda)"), rudo.getValue());
+    }
+
+    @Test
     void failedAttendeeQr_theirEmailAdmitsIt_insteadOfClaimingWhatsAppDelivery() {
         // The QR send runs before the email is built, so the email must report
         // the outcome: a guest told "it's on your WhatsApp" when it isn't
@@ -455,12 +493,15 @@ class TicketDeliveryServiceTest {
         assertTrue(emailBody.getValue().contains("TN-2 (Tendai Ncube)"), emailBody.getValue());
         assertTrue(emailBody.getValue().contains("sent directly to their WhatsApp"), emailBody.getValue());
 
-        // The purchaser's own QR send still carries the booking-level receipt
-        // summary, guests' ticket numbers included — the receipt is theirs
-        // even though Tendai's QR image is not.
+        // The purchaser's QR message names ITS ticket only. It used to list
+        // every guest's number as the buyer's receipt, but these messages get
+        // forwarded and a ticket number is the gate credential. The full list
+        // is the receipt email above (and the buyer's wallet).
         ArgumentCaptor<String> waName = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp(), atLeastOnce()).sendEventQrCode(eq("+263782606983"), waName.capture(), contains("TN-1"));
-        assertTrue(waName.getValue().contains("TN-2 (Tendai Ncube)"), waName.getValue());
+        assertTrue(waName.getValue().contains("ticket 1 of 2"), waName.getValue());
+        assertTrue(waName.getValue().contains("TN-1"), waName.getValue());
+        assertFalse(waName.getValue().contains("TN-2"), waName.getValue());
     }
 
     @Test
