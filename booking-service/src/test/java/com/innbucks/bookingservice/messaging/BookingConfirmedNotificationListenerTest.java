@@ -157,11 +157,19 @@ class BookingConfirmedNotificationListenerTest {
         Booking b = bookingFixture("+263771234567", null, 2);
         b.getItems().get(1).setAttendeeName("Tendai Ncube");
         b.getItems().get(1).setAttendeePhone("+263772000000");
+        b.getItems().get(1).setAttendeeEmail("tendai@example.com");
         when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
         when(m.events().getEvent(b.getEventId())).thenReturn(ApiResult.ok(
                 EventLookupDTO.builder().title("Harare Jazz\r\nFestival\t     2026 ").build()));
 
         m.listener().onBookingConfirmed(eventFor(b));
+
+        // The guest's email subject names the event, flattened: SES puts the
+        // subject in a mail header as given, and the notification API's
+        // sanitiser keeps line breaks. And it never names the booking.
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        verify(m.email()).sendEmail(eq("tendai@example.com"), subject.capture(), anyString(), anyString());
+        assertThat(subject.getValue()).isEqualTo("Your InnBucks ticket for Harare Jazz Festival 2026");
 
         ArgumentCaptor<String> buyer = ArgumentCaptor.forClass(String.class);
         verify(m.wa()).sendEventQrCode(eq("+263771234567"), buyer.capture(), anyString());
