@@ -380,6 +380,9 @@ public class EcocashPaymentService {
      */
     private void requireNoRecentDecline(OrderType orderType, String orderRef) {
         Payment last = paymentRecordService.latestOnRail(orderType, orderRef, PaymentRail.ECOCASH).orElse(null);
+        if (last == null) {
+            return;
+        }
         Long seconds = declineHoldRemaining(last);
         if (seconds == null) {
             return;

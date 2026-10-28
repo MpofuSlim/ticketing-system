@@ -783,6 +783,11 @@ public class PaymentController {
     }
 
     private ResponseEntity<ApiResult<PaymentResponse>> toReplayResponse(Payment p, OrderKey key) {
+        return ResponseEntity.ok(replayResult(p, key));
+    }
+
+    /** The replay receipt and its prose, for {@link #toReplayResponse} and the reads built on it. */
+    private ApiResult<PaymentResponse> replayResult(Payment p, OrderKey key) {
         PaymentResponse.Status status = switch (p.getStatus()) {
             case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
             // Terminal unpaid attempts — read by GET /payments/{id} only.
@@ -908,7 +913,7 @@ public class PaymentController {
                     : "The payment didn't go through. Nothing was charged.";
             case LAPSED -> "The payment wasn't completed in time. Nothing was charged; you can pay again.";
         };
-        return ResponseEntity.ok(ApiResult.ok(message, response));
+        return ApiResult.ok(message, response);
     }
 
     /**
@@ -917,7 +922,7 @@ public class PaymentController {
      * wait before a new EcoCash attempt is accepted.
      */
     private PaymentResponse terminalResponse(Payment p, OrderKey key, Long retryAfterSeconds) {
-        PaymentResponse body = toReplayResponse(p, key).getBody().getData();
+        PaymentResponse body = replayResult(p, key).getData();
         if (retryAfterSeconds != null) {
             body.setRetryAfterSeconds(retryAfterSeconds);
         }
@@ -1020,13 +1025,12 @@ public class PaymentController {
         if (p == null || p.getOrderType() == null || p.getOrderRef() == null) {
             return error(HttpStatus.NOT_FOUND, "Payment not found");
         }
-        ResponseEntity<ApiResult<PaymentResponse>> answer =
-                toReplayResponse(p, new OrderKey(p.getOrderType(), p.getOrderRef()));
+        ApiResult<PaymentResponse> answer = replayResult(p, new OrderKey(p.getOrderType(), p.getOrderRef()));
         Long hold = ecocashPaymentService.declineHoldRemaining(p);
         if (hold != null) {
-            answer.getBody().getData().setRetryAfterSeconds(hold);
+            answer.getData().setRetryAfterSeconds(hold);
         }
-        return answer;
+        return ResponseEntity.ok(answer);
     }
 
     /**
