@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.controller;
 
+import com.innbucks.bookingservice.exception.GlobalExceptionHandler;
 import com.innbucks.bookingservice.service.TicketRenderingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,9 +16,11 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -110,5 +113,63 @@ class TicketControllerTest {
         mvc.perform(get("/bookings/" + id + "/tickets"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.TEXT_HTML));
+    }
+
+    @Test
+    void holderPage_andQr_servedByTheTicketsOwnId() throws Exception {
+        UUID itemId = UUID.randomUUID();
+        byte[] png = {(byte) 0x89, 'P', 'N', 'G'};
+        when(rendering.holderTicketPageHtml(itemId, "https://api.test")).thenReturn(Optional.of("<html>one</html>"));
+        when(rendering.holderTicketQrPng(itemId)).thenReturn(Optional.of(png));
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mvc.perform(get("/bookings/tickets/" + itemId))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.TEXT_HTML))
+                .andExpect(content().string("<html>one</html>"));
+        for (String path : new String[]{
+                "/bookings/tickets/" + itemId + "/qr",
+                "/bookings/tickets/" + itemId + "/qr.png"}) {
+            mvc.perform(get(path))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(MediaType.IMAGE_PNG))
+                    .andExpect(content().bytes(png));
+        }
+    }
+
+    @Test
+    void holderPage_andQr_empty_return404() throws Exception {
+        UUID itemId = UUID.randomUUID();
+        when(rendering.holderTicketPageHtml(itemId, "https://api.test")).thenReturn(Optional.empty());
+        when(rendering.holderTicketQrPng(itemId)).thenReturn(Optional.empty());
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mvc.perform(get("/bookings/tickets/" + itemId)).andExpect(status().isNotFound());
+        mvc.perform(get("/bookings/tickets/" + itemId + "/qr.png")).andExpect(status().isNotFound());
+    }
+
+    // `/bookings/tickets/{itemId}` and `/bookings/{bookingId}/tickets` are
+    // equally specific, so without the UUID pattern on itemId the literal
+    // `/bookings/tickets/tickets` matched both and Spring threw "Ambiguous
+    // handler methods": a 500 any anonymous caller could produce. It must stay
+    // the booking page's 400 it always was, and a non-UUID item id a 404.
+    @Test
+    void holderPaths_neverTieWithTheBookingPage_andTakeOnlyAUuid() throws Exception {
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        mvc.perform(get("/bookings/tickets/tickets"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.bookingId").value("Must be a valid UUID."));
+        for (String path : new String[]{
+                "/bookings/tickets/not-a-uuid",
+                "/bookings/tickets/not-a-uuid/qr",
+                "/bookings/tickets/not-a-uuid/qr.png",
+                // UUID.fromString takes this; the path must not.
+                "/bookings/tickets/1-1-1-1-1"}) {
+            mvc.perform(get(path)).andExpect(status().isNotFound());
+        }
+        verifyNoInteractions(rendering);
     }
 }

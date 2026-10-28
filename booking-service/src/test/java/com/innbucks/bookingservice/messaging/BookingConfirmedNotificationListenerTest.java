@@ -112,7 +112,7 @@ class BookingConfirmedNotificationListenerTest {
     // ---- eventName: single-line noun phrase, NO newlines (WhatsApp 63021) ----
 
     @Test
-    void eventName_isSingleLineNounPhrase_withTitleSummaryAndTicketNumbers() {
+    void eventName_isSingleLineNounPhrase_namingOnlyThatMessagesTicket() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", null, 2);
         when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
@@ -120,24 +120,61 @@ class BookingConfirmedNotificationListenerTest {
         m.listener().onBookingConfirmed(eventFor(b));
 
         ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
-        verify(m.wa(), times(2)).sendEventQrCode(eq("+263771234567"), name.capture(), anyString());
-        String eventName = name.getAllValues().get(0);
+        ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
+        verify(m.wa(), times(2)).sendEventQrCode(eq("+263771234567"), name.capture(), path.capture());
 
-        // Reads as: "InnBucks Gala 2026 (booking INN-..., 2 tickets, total 50.00 — T1, T2)"
-        assertThat(eventName)
-                .startsWith("InnBucks Gala 2026 (booking INN-20260610-A1B2C3")
-                .contains("2 tickets")
-                .contains("total 50.00")
-                .contains("20260610-T1")
-                .contains("20260610-T2")
-                .endsWith(")");
-        // CRITICAL: WhatsApp template variables reject newlines / tabs / >4
-        // consecutive spaces (Twilio 63021). Guard all three.
-        assertThat(eventName)
-                .doesNotContain("\n")
-                .doesNotContain("\t")
-                .doesNotContain("    ")
-                .doesNotContain("http");
+        // Reads as: "InnBucks Gala 2026 (booking INN-..., ticket 1 of 2, total 50.00 — T1)".
+        // Each message names ITS ticket only: the buyer forwards these, and a
+        // ticket number is the gate credential, so one forward must not carry
+        // every guest's entry.
+        for (int i = 0; i < 2; i++) {
+            String eventName = name.getAllValues().get(i);
+            String own = path.getAllValues().get(i).contains("20260610-T1") ? "20260610-T1" : "20260610-T2";
+            String other = own.equals("20260610-T1") ? "20260610-T2" : "20260610-T1";
+            assertThat(eventName)
+                    .startsWith("InnBucks Gala 2026 (booking INN-20260610-A1B2C3")
+                    .contains("ticket " + (own.endsWith("T1") ? 1 : 2) + " of 2")
+                    .contains("total 50.00")
+                    .contains(own)
+                    .doesNotContain(other)
+                    .endsWith(")");
+            // CRITICAL: WhatsApp template variables reject newlines / tabs / >4
+            // consecutive spaces (Twilio 63021). Guard all three.
+            assertThat(eventName)
+                    .doesNotContain("\n")
+                    .doesNotContain("\t")
+                    .doesNotContain("    ")
+                    .doesNotContain("http");
+        }
+    }
+
+    // event-service stores a title's line breaks and runs of spaces as typed,
+    // and either one in the template variable makes Twilio refuse the whole
+    // message (63021): every QR of that event, the buyer's and the guests'.
+    @Test
+    void eventName_titleWithLineBreaksOrSpaceRuns_isFlattenedForEveryRecipient() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", null, 2);
+        b.getItems().get(1).setAttendeeName("Tendai Ncube");
+        b.getItems().get(1).setAttendeePhone("+263772000000");
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
+        when(m.events().getEvent(b.getEventId())).thenReturn(ApiResult.ok(
+                EventLookupDTO.builder().title("Harare Jazz\r\nFestival\t     2026 ").build()));
+
+        m.listener().onBookingConfirmed(eventFor(b));
+
+        ArgumentCaptor<String> buyer = ArgumentCaptor.forClass(String.class);
+        verify(m.wa()).sendEventQrCode(eq("+263771234567"), buyer.capture(), anyString());
+        ArgumentCaptor<String> guest = ArgumentCaptor.forClass(String.class);
+        verify(m.wa()).sendEventQrCode(eq("+263772000000"), guest.capture(), anyString());
+        for (String eventName : List.of(buyer.getValue(), guest.getValue())) {
+            assertThat(eventName)
+                    .startsWith("Harare Jazz Festival 2026 (")
+                    .doesNotContain("\n")
+                    .doesNotContain("\r")
+                    .doesNotContain("\t")
+                    .doesNotContain("  ");
+        }
     }
 
     @Test

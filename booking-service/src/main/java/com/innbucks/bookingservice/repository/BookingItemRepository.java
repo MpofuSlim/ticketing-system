@@ -124,6 +124,18 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
     Optional<BookingItem> findByTicketNumberWithBooking(@Param("ticketNumber") String ticketNumber);
 
     /**
+     * One ticket by its row id, with its booking in the same statement: the
+     * holder's own ticket page and QR read the booking's status and nothing
+     * else of it.
+     */
+    @Query("""
+        SELECT i FROM BookingItem i
+        JOIN FETCH i.booking
+        WHERE i.id = :id
+    """)
+    Optional<BookingItem> findByIdWithBooking(@Param("id") UUID id);
+
+    /**
      * Atomically claims the ticket for the calling scanner. The WHERE
      * clause makes redemption single-shot: once {@link BookingItem#getRedeemedAt()}
      * is non-null, this UPDATE matches zero rows on every subsequent call

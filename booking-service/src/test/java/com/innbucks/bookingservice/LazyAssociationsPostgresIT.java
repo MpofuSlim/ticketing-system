@@ -274,6 +274,16 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
                 r -> r.andExpect(status().isOk()));
         measure("GET /bookings/{id}/tickets/{n}/qr", get("/bookings/" + b.getId() + "/tickets/" + ownTicket + "/qr"),
                 r -> r.andExpect(status().isOk()));
+        // The guest's own page and QR: no session (the security chain permits
+        // them), the item and its booking in one statement, and nothing on the
+        // page that names the booking or the buyer's ticket.
+        UUID guestItemId = b.getItems().get(1).getId();
+        String holderPage = measure("GET /bookings/tickets/{itemId} (HTML)", get("/bookings/tickets/" + guestItemId),
+                r -> r.andExpect(status().isOk()));
+        measure("GET /bookings/tickets/{itemId}/qr.png", get("/bookings/tickets/" + guestItemId + "/qr.png"),
+                r -> r.andExpect(status().isOk()));
+        assertThat(holderPage).contains(guestTicket).contains("Ticket for Guest One")
+                .doesNotContain(ownTicket).doesNotContain(b.getId().toString());
         measure("POST /tickets/lookup", post("/tickets/lookup").header("Authorization", bearer(organizerToken()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"confirmationNumber\":\"" + b.getConfirmationNumber() + "\"}"),
@@ -292,6 +302,8 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         assertThat(measured.get("GET /bookings/internal/{id}")).isEqualTo(1);
         assertThat(measured.get("GET /bookings/{id}/tickets (HTML)")).isEqualTo(1);
         assertThat(measured.get("GET /bookings/{id}/tickets/{n}/qr")).isEqualTo(1);
+        assertThat(measured.get("GET /bookings/tickets/{itemId} (HTML)")).isEqualTo(1);
+        assertThat(measured.get("GET /bookings/tickets/{itemId}/qr.png")).isEqualTo(1);
         assertThat(measured.get("POST /tickets/lookup")).isEqualTo(1);
         // select item + booking, claim UPDATE, scan_attempts INSERT — the
         // booking's tickets are no longer loaded behind the scan's back.

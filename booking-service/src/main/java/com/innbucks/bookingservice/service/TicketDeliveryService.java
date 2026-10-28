@@ -36,9 +36,10 @@ import java.util.Map;
  *   <li><b>WhatsApp</b> (to {@code phoneNumber}, if present) — one approved
  *       Twilio Content Template send per ticket via the gateway's
  *       {@code /api/messages/event-qr-code} endpoint, delivering the scannable
- *       QR image. The free-text booking summary (booking ref, ticket numbers,
- *       total) is concatenated into the template's {@code eventName} variable
- *       so it renders inline with the QR — there is NO separate
+ *       QR image. A booking summary (booking ref, "ticket i of n", total, and
+ *       THAT message's ticket number only, since these get forwarded) is
+ *       concatenated into the template's {@code eventName} variable so it
+ *       renders inline with the QR — there is NO separate
  *       {@code /api/messages/send} text message. One endpoint, one channel.</li>
  * </ul>
  *
@@ -75,9 +76,10 @@ public class TicketDeliveryService {
     private final EventServiceClient eventServiceClient;
 
     /**
-     * Public edge base for the hosted ticket page — the same value
-     * {@code TicketController} uses. Only consulted for the attendee email,
-     * which links the guest to their ticket online in case the WhatsApp QR
+     * Public edge base for the hosted ticket pages — the same value
+     * {@code TicketController} uses. The purchaser's email links the whole
+     * booking; an attendee's email links only that attendee's ticket
+     * ({@link TicketRenderingService#holderTicketPath}), in case the WhatsApp QR
      * never lands. Blank (unit tests, unprovisioned cell) = no link, the email
      * still carries the ticket number.
      */
@@ -252,17 +254,18 @@ public class TicketDeliveryService {
      * <em>"Event confirmed! Here is your e-ticket entry for {eventName}. Only
      * present this ticket at the gate."</em>, so we pack the actual event title
      * AND the booking summary into the {@code eventName} variable — the
-     * customer sees the QR image plus the full confirmation text in one render.
-     * Each call is independent best-effort. Returns how many sends succeeded.
+     * customer sees the QR image plus the confirmation text in one render.
+     * Each message's text names ITS OWN ticket only (see
+     * {@link #buildEventNameField}). Each call is independent best-effort.
+     * Returns how many sends succeeded.
      */
     private int sendQrETickets(Booking booking, String phone, List<BookingItem> items, String eventTitle) {
         if (items.isEmpty()) {
             return 0;
         }
-        String eventName = buildEventNameField(booking, eventTitle);
         int sent = 0;
         for (BookingItem item : items) {
-            if (sendQr(booking, item, phone, eventName)) {
+            if (sendQr(booking, item, phone, buildEventNameField(booking, item, eventTitle))) {
                 sent++;
             }
         }
@@ -373,7 +376,22 @@ public class TicketDeliveryService {
      * <em>"Event confirmed! Here is your e-ticket entry for {eventName}. Only
      * present this ticket at the gate."</em> — so this must read as a noun
      * phrase, e.g.
-     * <pre>InnBucks Annual Gala 2025 (booking INN-..., 2 tickets, total 20.00 — TN1, TN2)</pre>
+     * <pre>InnBucks Annual Gala 2025 (booking INN-..., ticket 2 of 3, total 30.00 — TN2 (Rudo Sibanda))</pre>
+     *
+     * <p><b>It names this message's ticket and no other.</b> A ticket number is
+     * the gate credential, and the buyer forwards these messages: a guest's QR
+     * that fell back to them, a name-only or email-only guest's, or simply the
+     * spare tickets of a booking that named nobody. When every message listed
+     * every ticket number, one forward handed the recipient everyone's entry.
+     * The whole list is in the purchaser's receipt email, which is not forwarded
+     * as part of the flow. "ticket 2 of 3" also tells the buyer which message
+     * is whose, within one send: the items load in no fixed order
+     * ({@code findByIdWithItems} has no ORDER BY), so a resend can number the
+     * same ticket differently. Its number and holder are what identify it.
+     *
+     * <p>The event title goes through {@link #singleLine} like the holder's
+     * name: event-service stores a title's line breaks and runs of spaces as
+     * typed, and either one makes Twilio refuse every QR of that event.
      *
      * <p><b>Must be a single line.</b> WhatsApp template variables cannot
      * contain newlines, tabs, or &gt;4 consecutive spaces — any of those makes
@@ -383,12 +401,15 @@ public class TicketDeliveryService {
      * read awkwardly mid-sentence and the template is already branded
      * transactional copy.
      */
-    private String buildEventNameField(Booking booking, String eventTitle) {
+    private String buildEventNameField(Booking booking, BookingItem item, String eventTitle) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
-        StringBuilder sb = new StringBuilder(eventTitle)
+        StringBuilder sb = new StringBuilder(singleLine(eventTitle))
                 .append(" (booking ").append(booking.getConfirmationNumber());
+        int position = positionOf(items, item);
         if (items.size() == 1) {
             sb.append(", 1 ticket");
+        } else if (position > 0) {
+            sb.append(", ticket ").append(position).append(" of ").append(items.size());
         } else if (items.size() > 1) {
             sb.append(", ").append(items.size()).append(" tickets");
         }
@@ -396,21 +417,25 @@ public class TicketDeliveryService {
         if (total != null) {
             sb.append(", total ").append(total.toPlainString());
         }
-        // Ticket numbers as the gate reference, after an en-dash. Single line,
-        // comma-separated — no newlines (WhatsApp template-variable rule).
-        if (!items.isEmpty()) {
-            sb.append(" — ");
-            for (int i = 0; i < items.size(); i++) {
-                if (i > 0) sb.append(", ");
-                sb.append(items.get(i).getTicketNumber());
-                String who = items.get(i).getAttendeeName();
-                if (who != null && !who.isBlank()) {
-                    sb.append(" (").append(singleLine(who)).append(')');
-                }
-            }
+        // This ticket's number as the gate reference, after an em-dash. Single
+        // line, no newlines (WhatsApp template-variable rule).
+        sb.append(" — ").append(item.getTicketNumber());
+        String who = item.getAttendeeName();
+        if (who != null && !who.isBlank()) {
+            sb.append(" (").append(singleLine(who)).append(')');
         }
         sb.append(')');
         return sb.toString();
+    }
+
+    /** 1-based position of {@code item} in the booking's items as loaded for this send, by identity; 0 if absent. */
+    private static int positionOf(List<BookingItem> items, BookingItem item) {
+        for (int i = 0; i < items.size(); i++) {
+            if (items.get(i) == item) {
+                return i + 1;
+            }
+        }
+        return 0;
     }
 
     /**
@@ -419,7 +444,7 @@ public class TicketDeliveryService {
      * <pre>Harare Jazz Festival (ticket for Tendai Ncube, booked by Alice Moyo, booking INN-..., 20260502-3FQ7M-X9K2D)</pre>
      */
     private String buildAttendeeEventNameField(Booking booking, BookingItem item, String eventTitle) {
-        StringBuilder sb = new StringBuilder(eventTitle)
+        StringBuilder sb = new StringBuilder(singleLine(eventTitle))
                 .append(" (ticket for ").append(singleLine(item.getAttendeeName()));
         if (booking.getCustomerName() != null && !booking.getCustomerName().isBlank()) {
             sb.append(", booked by ").append(singleLine(booking.getCustomerName()));
@@ -431,9 +456,9 @@ public class TicketDeliveryService {
     }
 
     /**
-     * Plain-text confirmation email body — the same information as the WhatsApp
-     * summary (event, booking ref, ticket count, total, ticket numbers), one
-     * fact per line. The notification API is plain-text only; the scannable QR
+     * Plain-text confirmation email body: event, booking ref, ticket count,
+     * total and EVERY ticket number, one fact per line. The purchaser's full
+     * receipt; each WhatsApp QR message names only its own ticket. The notification API is plain-text only; the scannable QR
      * e-ticket(s) are delivered over WhatsApp, so this email is the textual
      * record and points the customer at that QR for gate entry.
      */
@@ -544,9 +569,12 @@ public class TicketDeliveryService {
         } else {
             sb.append("\nPresent your ticket number at the gate.");
         }
-        if (publicBaseUrl != null && !publicBaseUrl.isBlank()) {
-            sb.append("\nView the tickets online: ").append(publicBaseUrl)
-              .append("/bookings/").append(booking.getId()).append("/tickets");
+        // Their OWN ticket, never the booking's page: that one shows every
+        // guest's QR, so a guest holding it could enter on someone else's
+        // ticket. The link carries no booking id for the same reason.
+        if (publicBaseUrl != null && !publicBaseUrl.isBlank() && item.getId() != null) {
+            sb.append("\nView your ticket online: ").append(publicBaseUrl)
+              .append(TicketRenderingService.holderTicketPath(item.getId()));
         }
         return sb.toString();
     }
