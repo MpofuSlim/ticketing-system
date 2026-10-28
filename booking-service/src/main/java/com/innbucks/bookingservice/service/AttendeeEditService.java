@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.common.ticket.TicketNumbers;
 import com.innbucks.bookingservice.dto.AttendeeUpdateRequestDTO;
 import com.innbucks.bookingservice.dto.AttendeeUpdateResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
@@ -91,7 +92,7 @@ public class AttendeeEditService {
             item.setAttendeeEmail(email);
             item.setAttendeePhone(phone);
             log.info("Attendee edited bookingId={} ref={} ticket={} by={} changed={} phone {} -> {}",
-                    booking.getId(), booking.getConfirmationNumber(), ticketNumber, caller.getName(),
+                    booking.getId(), booking.getConfirmationNumber(), TicketNumbers.forLog(ticketNumber), caller.getName(),
                     changed, MsisdnMasking.mask(oldPhone), MsisdnMasking.mask(phone));
         }
 

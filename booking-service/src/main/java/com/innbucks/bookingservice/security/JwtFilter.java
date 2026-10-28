@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.security;
 
 import io.jsonwebtoken.Claims;
+import com.innbucks.bookingservice.util.RequestPaths;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
@@ -98,7 +99,7 @@ public class JwtFilter extends OncePerRequestFilter {
             // honour them until the access-token TTL elapses. Fail-open inside
             // the denylist on a Redis blip, so this never blanket-401s traffic.
             if (revokedTokenDenylist.isRevoked(token)) {
-                log.warn("Rejected revoked (logged-out) token path={}", request.getRequestURI());
+                log.warn("Rejected revoked (logged-out) token path={}", RequestPaths.forLog(request.getRequestURI()));
                 writeUnauthorized(response, "TOKEN_REVOKED", "Token has been revoked");
                 return;
             }
@@ -119,7 +120,7 @@ public class JwtFilter extends OncePerRequestFilter {
                     Long tokenVersion = jwtUtil.extractTokenVersion(claims);
                     if (tokenVersion != null && tokenVersion < currentVersion) {
                         log.warn("Rejected superseded token (tokenVersion={} < current={}) path={}",
-                                tokenVersion, currentVersion, request.getRequestURI());
+                                tokenVersion, currentVersion, RequestPaths.forLog(request.getRequestURI()));
                         writeUnauthorized(response, "TOKEN_REVOKED", "Token has been revoked");
                         return;
                     }
@@ -176,9 +177,9 @@ public class JwtFilter extends OncePerRequestFilter {
             // off by default in every environment (prod log level is INFO; even a
             // DEBUG investigation shouldn't spill identity + authz into the logs).
             log.trace("JWT authenticated subject={} roles={} services={} tier={} path={}",
-                    email, roles, services, tier, request.getRequestURI());
+                    email, roles, services, tier, RequestPaths.forLog(request.getRequestURI()));
         } catch (Exception e) {
-            log.warn("JWT validation error path={} message={}", request.getRequestURI(), e.getMessage());
+            log.warn("JWT validation error path={} message={}", RequestPaths.forLog(request.getRequestURI()), e.getMessage());
             writeUnauthorized(response, "INVALID_TOKEN", "Token is invalid or expired");
             return;
         }

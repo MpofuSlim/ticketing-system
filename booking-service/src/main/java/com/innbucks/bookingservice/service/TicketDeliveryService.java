@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.common.ticket.TicketNumbers;
 import com.innbucks.bookingservice.client.EmailNotificationClient;
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
@@ -159,7 +160,7 @@ public class TicketDeliveryService {
                             buildAttendeeEventNameField(booking, item, eventTitle));
                     if (qrToAttendee) {
                         log.info("Attendee QR e-ticket sent bookingId={} ticket={}",
-                                booking.getId(), item.getTicketNumber());
+                                booking.getId(), TicketNumbers.forLog(item.getTicketNumber()));
                     }
                 }
                 boolean emailToAttendee = sendAttendeeEmail(booking, item, eventTitle,
@@ -180,7 +181,7 @@ public class TicketDeliveryService {
                 // reached nobody. The hosted booking page / wallet still hold
                 // it; make the loss loud for the ops log.
                 log.warn("Attendee QR undeliverable and no purchaser phone to fall back to "
-                        + "bookingId={} ticket={}", booking.getId(), item.getTicketNumber());
+                        + "bookingId={} ticket={}", booking.getId(), TicketNumbers.forLog(item.getTicketNumber()));
             }
         }
 
@@ -296,7 +297,7 @@ public class TicketDeliveryService {
         } catch (RuntimeException ex) {
             log.warn("Booking-confirm QR e-ticket failed bookingId={} ticket={} "
                             + "(other channels/tickets unaffected): {}",
-                    booking.getId(), tn, ex.getMessage());
+                    booking.getId(), TicketNumbers.forLog(tn), ex.getMessage());
             return false;
         }
     }
@@ -357,11 +358,11 @@ public class TicketDeliveryService {
                     buildAttendeeConfirmationText(booking, item, eventTitle, qrDelivered, purchaserHasPhone),
                     "ATT-" + booking.getConfirmationNumber() + "-"
                             + java.util.UUID.randomUUID().toString().substring(0, 6));
-            log.info("Attendee email sent bookingId={} ticket={}", booking.getId(), item.getTicketNumber());
+            log.info("Attendee email sent bookingId={} ticket={}", booking.getId(), TicketNumbers.forLog(item.getTicketNumber()));
             return true;
         } catch (RuntimeException ex) {
             log.warn("Attendee email failed bookingId={} ticket={} (other tickets unaffected): {}",
-                    booking.getId(), item.getTicketNumber(), ex.getMessage());
+                    booking.getId(), TicketNumbers.forLog(item.getTicketNumber()), ex.getMessage());
             return false;
         }
     }

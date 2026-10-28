@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.client;
 
+import com.innbucks.common.ticket.TicketNumbers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.common.email.BrandedEmailRenderer;
 import com.innbucks.common.email.EmailSignature;
@@ -179,7 +180,7 @@ public class EmailNotificationClient {
                     throw new UnauthorizedException();
                 }
                 log.warn("Notification API rejected email ref={} status={} body={}",
-                        ref, ex.getStatusCode(), ex.getResponseBodyAsString());
+                        ref, ex.getStatusCode(), TicketNumbers.redactIn(ex.getResponseBodyAsString()));
                 throw new NotificationDeliveryException(
                         "Notification API rejected email: HTTP " + ex.getStatusCode().value(), ex);
             } catch (NotificationDeliveryException ex) {
@@ -238,7 +239,7 @@ public class EmailNotificationClient {
                     throw new UnauthorizedException();
                 }
                 log.warn("Notification API rejected SMS ref={} status={} body={}",
-                        ref, ex.getStatusCode(), ex.getResponseBodyAsString());
+                        ref, ex.getStatusCode(), TicketNumbers.redactIn(ex.getResponseBodyAsString()));
                 throw new NotificationDeliveryException(
                         "Notification API rejected SMS: HTTP " + ex.getStatusCode().value(), ex);
             } catch (NotificationDeliveryException ex) {
