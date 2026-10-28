@@ -382,8 +382,11 @@ public class InnbucksAppSupportActions {
         return MsisdnValidator.normalizeToE164(phone, deploymentCountry).orElse(null);
     }
 
+    /** The number as the search would show it: a staff account is dropped, exactly as the search drops it. */
     private com.innbucks.userservice.support.dto.SupportDTOs.InnbucksAppPhoneView phoneView(String msisdn) {
-        return section.phone(msisdn, users.findByPhoneNumber(msisdn));
+        return section.phone(msisdn, users.findByPhoneNumber(msisdn)
+                .filter(u -> !staffTargets.isStaffAccount(u))
+                .orElse(null));
     }
 
     private AppActionResult replay(SupportAction earlier, Op op, SupportAgent agent, String actedOn, String msisdn,

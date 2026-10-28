@@ -304,7 +304,18 @@ class InnbucksAppSupportActionsTest {
         order.verify(audit).recordRequired(eq(AuditEventType.SUPPORT_INNBUCKS_APP_ACTION),
                 eq("agent.one@innbucks.co.zw"), anyString(), eq("msisdn:****4567"), eq("CUSTOMER"), any(), any());
         assertThat(req.getValue().mode()).isEqualTo("UNTIL_UNLOCKED");
-        verify(section).phone(eq(NUMBER), any());
+        verify(section).phone(NUMBER, customer);
+    }
+
+    @Test
+    @DisplayName("the answer drops a staff account, as the search does: its profile never reaches the section")
+    void theAnswerNeverCarriesAStaffAccount() {
+        when(staffTargets.staffAccounts(any())).thenReturn(Set.of(customer.getUserUuid()));
+        when(staffTargets.isStaffAccount(customer)).thenReturn(true);
+        SupportAgent supervisor = agent(PermissionCatalog.DEVICE_SECURITY_MANAGE,
+                PermissionCatalog.SUPPORT_STAFF_TARGETS_MANAGE);
+        run(Op.BLOCK, supervisor, Target.device(DEVICE), KEY);
+        verify(section).phone(NUMBER, null);
     }
 
     @Test

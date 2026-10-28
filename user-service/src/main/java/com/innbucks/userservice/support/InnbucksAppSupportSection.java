@@ -92,11 +92,14 @@ public class InnbucksAppSupportSection {
     /**
      * One number as the section shows it, now — what a support write on the
      * number answers with, so the console can redraw that phone's panel.
+     *
+     * @param account the number's account, or null for none. The caller passes
+     *                null for a staff account, as the search does: a staff
+     *                account's details never reach this section.
      */
-    public InnbucksAppPhoneView phone(String msisdn, Optional<User> account) {
+    public InnbucksAppPhoneView phone(String msisdn, User account) {
         CustomerOverview overview = deviceSupport.overview(msisdn);
-        CustomerProfileView profile = account
-                .flatMap(u -> customerProfiles.findByUserId(u.getId()))
+        CustomerProfileView profile = account == null ? null : customerProfiles.findByUserId(account.getId())
                 .map(InnbucksAppSupportSection::profile)
                 .orElse(null);
         return new InnbucksAppPhoneView(overview.msisdn(), profile, mask(overview));
