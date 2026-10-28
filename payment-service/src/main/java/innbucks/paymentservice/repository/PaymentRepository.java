@@ -99,4 +99,8 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
      */
     Optional<Payment> findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(
             OrderType orderType, String orderRef, Collection<Payment.PaymentStatus> statuses);
+
+    /** The order's latest attempt on one rail — the EcoCash decline hold reads it. */
+    Optional<Payment> findFirstByOrderTypeAndOrderRefAndPaymentRailOrderByCreatedAtDesc(
+            OrderType orderType, String orderRef, innbucks.paymentservice.entity.PaymentRail paymentRail);
 }

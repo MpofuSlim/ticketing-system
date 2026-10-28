@@ -754,6 +754,34 @@ class PaymentControllerTest {
             recordSent(sent, payFailing(voucherOrder, () -> voucherGateway.fetch("VCH-4F9A1C22B7D3")));
         }
 
+        // ECOCASH: EcoCash just declined this order — the one 400 that carries
+        // data (the declined attempt), so it is recorded without recordSent's
+        // data-is-null check.
+        var ecocash = mock(innbucks.paymentservice.service.EcocashPaymentService.class);
+        Payment declined = Payment.builder()
+                .id(UUID.randomUUID())
+                .paymentRail(innbucks.paymentservice.entity.PaymentRail.ECOCASH)
+                .orderType(OrderType.BOOKING).orderRef(bookingId.toString()).bookingId(bookingId)
+                .status(Payment.PaymentStatus.FAILED)
+                .upstreamErrorCode("subscriber_rejected")
+                .upstreamErrorMessage("You have insufficient funds to complete this transaction.")
+                .amount(new BigDecimal("100.00")).currency("USD")
+                .build();
+        when(ecocash.startCharge(any(), anyString())).thenThrow(
+                new innbucks.paymentservice.service.EcocashPaymentService.EcocashDeclinedException(
+                        declined, "You have insufficient funds to complete this transaction.", 104));
+        PaymentController withEcocash = new PaymentController(
+                mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class),
+                mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class),
+                new innbucks.paymentservice.client.ZimswitchProperties(), ecocash,
+                mock(PaymentRecordService.class), mock(PaymentRepository.class));
+        PaymentRequest ecocashPay = paymentFor(bookingId);
+        ecocashPay.setPaymentRail(innbucks.paymentservice.entity.PaymentRail.ECOCASH);
+        ResponseEntity<ApiResult<PaymentResponse>> declinedResp = withEcocash.processPayment(ecocashPay);
+        assertNotNull(declinedResp.getBody().getData());
+        sent.computeIfAbsent(declinedResp.getStatusCode().value(), s -> new HashSet<>())
+                .add(declinedResp.getBody().getCode() + " | " + declinedResp.getBody().getMessage());
+
         assertEquals(Set.of(400, 409, 503), sent.keySet(), "every failure above is a 400, 409 or 503");
         assertTrue(sent.get(400).containsAll(documented.get(400)),
                 "a 400 example nothing sends: " + diff(documented.get(400), sent.get(400)));

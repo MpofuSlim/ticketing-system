@@ -42,6 +42,9 @@ class PaymentStageTest {
         expected.put(PaymentResponse.Stage.PAYMENT_RECEIVED, Boolean.TRUE);
         expected.put(PaymentResponse.Stage.COMPLETED, Boolean.TRUE);
         expected.put(PaymentResponse.Stage.VERIFYING, null);
+        // Terminal: the provider positively said no money moved.
+        expected.put(PaymentResponse.Stage.DECLINED, Boolean.FALSE);
+        expected.put(PaymentResponse.Stage.LAPSED, Boolean.FALSE);
 
         assertThat(actual).containsExactlyInAnyOrderEntriesOf(expected);
     }

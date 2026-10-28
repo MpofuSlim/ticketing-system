@@ -31,6 +31,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -340,6 +341,26 @@ public class PaymentController {
                                               "message": "Provide exactly one of bookingId or orderType + orderRef — not both",
                                               "data": null
                                             }
+                                            """),
+                                    @ExampleObject(name = "ECOCASH: EcoCash just declined this order — no new charge", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "EcoCash: You have insufficient funds to complete this transaction. Try again in 2 minutes, or pay with an InnBucks code.",
+                                              "data": {
+                                                "transactionId": "c4d5e6f7-8901-2345-6789-abcdef012345",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "FAILED",
+                                                "stage": "DECLINED",
+                                                "fundsCaptured": false,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "paymentRail": "ECOCASH",
+                                                "failureReason": "You have insufficient funds to complete this transaction.",
+                                                "retryAfterSeconds": 104
+                                              }
+                                            }
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
@@ -607,6 +628,15 @@ public class PaymentController {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
             if (status == null) status = HttpStatus.BAD_GATEWAY;
             return error(status, e.getMessage());
+        } catch (innbucks.paymentservice.service.EcocashPaymentService.EcocashDeclinedException e) {
+            // EcoCash just declined this order's charge: answer with that
+            // decline and its reason instead of charging (and texting) again.
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
+                    ApiResult.<PaymentResponse>builder()
+                            .code(HttpStatus.BAD_REQUEST.value() + " " + HttpStatus.BAD_REQUEST.name())
+                            .message(e.getMessage())
+                            .data(terminalResponse(e.declined(), key, e.retryAfterSeconds()))
+                            .build());
         } catch (InvalidPaymentRequestException e) {
             // 409 (already paying — race with another tap) degrades to replay.
             if (e.getStatusCode() == 409) {
@@ -753,8 +783,15 @@ public class PaymentController {
     }
 
     private ResponseEntity<ApiResult<PaymentResponse>> toReplayResponse(Payment p, OrderKey key) {
+        return ResponseEntity.ok(replayResult(p, key));
+    }
+
+    /** The replay receipt and its prose, for {@link #toReplayResponse} and the reads built on it. */
+    private ApiResult<PaymentResponse> replayResult(Payment p, OrderKey key) {
         PaymentResponse.Status status = switch (p.getStatus()) {
             case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
+            // Terminal unpaid attempts — read by GET /payments/{id} only.
+            case FAILED, EXPIRED, REJECTED -> PaymentResponse.Status.FAILED;
             default -> PaymentResponse.Status.PROCESSING;
         };
         String noun = key.type() == OrderType.BOOKING ? "booking" : "order";
@@ -805,6 +842,14 @@ public class PaymentController {
             // either rail without customer action (code approval / card
             // entry), so "not captured" is safe here.
             stage = PaymentResponse.Stage.IN_PROGRESS;
+        } else if (p.getStatus() == Payment.PaymentStatus.FAILED) {
+            // Terminal, provider said no money moved. Only GET /payments/{id}
+            // and the EcoCash decline answer reach here: POST replays active
+            // or successful rows only.
+            stage = PaymentResponse.Stage.DECLINED;
+        } else if (p.getStatus() == Payment.PaymentStatus.EXPIRED
+                || p.getStatus() == Payment.PaymentStatus.REJECTED) {
+            stage = PaymentResponse.Stage.LAPSED;
         } else {
             // IN_DOUBT, plus the reserved states that have no writer. Money
             // may or may not have moved; admitting that is the only honest
@@ -836,6 +881,8 @@ public class PaymentController {
                 .shopperResultUrl(cardArtifacts != null ? cardArtifacts.shopperResultUrl() : null)
                 .checkoutExpiresAt(cardArtifacts != null && p.getCodeExpiresAt() != null
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
+                .failureReason(stage == PaymentResponse.Stage.DECLINED
+                        ? innbucks.paymentservice.service.EcocashPaymentService.declineReason(p) : null)
                 .build();
         // Prose for humans, derived FROM the stage above — never the other way
         // round. Clients must branch on `stage`, never on this text: it is
@@ -861,8 +908,129 @@ public class PaymentController {
             case PAYMENT_RECEIVED -> "Payment received; your " + noun + " is being confirmed";
             case IN_PROGRESS -> "Your payment is already being processed — please retry in a moment";
             case VERIFYING -> "Your payment is being verified — contact support if this persists";
+            case DECLINED -> response.getFailureReason() != null
+                    ? "EcoCash: " + response.getFailureReason()
+                    : "The payment didn't go through. Nothing was charged.";
+            case LAPSED -> "The payment wasn't completed in time. Nothing was charged; you can pay again.";
         };
-        return ResponseEntity.ok(ApiResult.ok(message, response));
+        return ApiResult.ok(message, response);
+    }
+
+    /**
+     * The receipt of an attempt that is over (declined or lapsed), with
+     * EcoCash's reason and, for an EcoCash decline still inside its hold, the
+     * wait before a new EcoCash attempt is accepted.
+     */
+    private PaymentResponse terminalResponse(Payment p, OrderKey key, Long retryAfterSeconds) {
+        PaymentResponse body = replayResult(p, key).getData();
+        if (retryAfterSeconds != null) {
+            body.setRetryAfterSeconds(retryAfterSeconds);
+        }
+        return body;
+    }
+
+    @GetMapping("/{transactionId}")
+    @Operation(
+            summary = "Read one payment attempt by its transactionId (no login required)",
+            description = "Public, like `POST /payments`: the `transactionId` from that response is the key, a "
+                    + "random UUID only the payer has. Read-only — it never starts, retries or checks a payment "
+                    + "upstream, so poll it as often as every 2–3 seconds while a payment is open.\n\n"
+                    + "Use it to learn how an attempt ENDED, which polling the booking cannot tell you: stage "
+                    + "`DECLINED` carries EcoCash's own reason in `failureReason` (e.g. \"You have insufficient "
+                    + "funds to complete this transaction.\") and, while a new EcoCash attempt for the order is "
+                    + "held back, `retryAfterSeconds`. Stage `LAPSED` means the instrument ended unpaid. Every "
+                    + "other stage means what it means on `POST /payments`.\n\n"
+                    + "Poll this, never `POST /payments`: a POST after an attempt has ended starts a NEW payment.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "The attempt",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "EcoCash declined — insufficient funds", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "EcoCash: You have insufficient funds to complete this transaction.",
+                                      "data": {
+                                        "transactionId": "c4d5e6f7-8901-2345-6789-abcdef012345",
+                                        "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "orderType": "BOOKING",
+                                        "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "status": "FAILED",
+                                        "stage": "DECLINED",
+                                        "fundsCaptured": false,
+                                        "amountPaid": 100.00,
+                                        "currency": "USD",
+                                        "paymentRail": "ECOCASH",
+                                        "failureReason": "You have insufficient funds to complete this transaction.",
+                                        "retryAfterSeconds": 104
+                                      }
+                                    }
+                                    """),
+                            @ExampleObject(name = "EcoCash prompt still open", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Approve the payment prompt on your phone to complete your booking",
+                                      "data": {
+                                        "transactionId": "c4d5e6f7-8901-2345-6789-abcdef012345",
+                                        "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "orderType": "BOOKING",
+                                        "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "status": "PROCESSING",
+                                        "stage": "AWAITING_PAYMENT",
+                                        "fundsCaptured": false,
+                                        "amountPaid": 100.00,
+                                        "currency": "USD",
+                                        "paymentRail": "ECOCASH",
+                                        "promptExpiresAt": "2026-10-28T16:12:00+02:00"
+                                      }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Paid", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Payment processed successfully",
+                                      "data": {
+                                        "transactionId": "c4d5e6f7-8901-2345-6789-abcdef012345",
+                                        "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "orderType": "BOOKING",
+                                        "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "status": "SUCCESS",
+                                        "stage": "COMPLETED",
+                                        "fundsCaptured": true,
+                                        "amountPaid": 100.00,
+                                        "currency": "USD",
+                                        "confirmationNumber": "INN-20261028-941C78",
+                                        "paymentRail": "ECOCASH"
+                                      }
+                                    }
+                                    """)
+                    })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No payment has this id (or it is not a UUID)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "404 NOT_FOUND",
+                              "message": "Payment not found",
+                              "data": null
+                            }
+                            """)))
+    })
+    public ResponseEntity<ApiResult<PaymentResponse>> getPayment(
+            @org.springframework.web.bind.annotation.PathVariable String transactionId) {
+        UUID id;
+        try {
+            id = UUID.fromString(transactionId);
+        } catch (IllegalArgumentException e) {
+            return error(HttpStatus.NOT_FOUND, "Payment not found");
+        }
+        Payment p = paymentRepository.findById(id).orElse(null);
+        if (p == null || p.getOrderType() == null || p.getOrderRef() == null) {
+            return error(HttpStatus.NOT_FOUND, "Payment not found");
+        }
+        ApiResult<PaymentResponse> answer = replayResult(p, new OrderKey(p.getOrderType(), p.getOrderRef()));
+        Long hold = ecocashPaymentService.declineHoldRemaining(p);
+        if (hold != null) {
+            answer.getData().setRetryAfterSeconds(hold);
+        }
+        return ResponseEntity.ok(answer);
     }
 
     /**

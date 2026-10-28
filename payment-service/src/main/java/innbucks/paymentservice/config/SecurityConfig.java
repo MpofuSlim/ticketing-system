@@ -85,6 +85,11 @@ public class SecurityConfig {
                         // JWT and MUST stay authenticated — it falls through to
                         // anyRequest() below.
                         .requestMatchers(HttpMethod.POST, "/payments").permitAll()
+                        // The payer polls their own attempt: the random
+                        // transactionId from that POST's response is the key
+                        // (no login, like the POST). One path segment only, so
+                        // it opens no other GET under /payments.
+                        .requestMatchers(HttpMethod.GET, "/payments/{transactionId}").permitAll()
                         // EcoCash EIP notifyUrl callback: the gateway POSTs the
                         // final charge status here from the public internet and
                         // cannot carry our JWTs. Safe to open — the handler

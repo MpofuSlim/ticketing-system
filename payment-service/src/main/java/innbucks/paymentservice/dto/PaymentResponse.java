@@ -95,7 +95,23 @@ public class PaymentResponse {
          * {@code fundsCaptured} is {@code null}. Do NOT claim either outcome
          * to the customer; direct them to support.
          */
-        VERIFYING;
+        VERIFYING,
+        /**
+         * The attempt is over and the payment provider SAID no money moved:
+         * EcoCash declined the charge (e.g. insufficient funds — EcoCash's own
+         * words are in {@code failureReason}) or the attempt was refused
+         * before anything was payable. Terminal. Show the reason; a new
+         * attempt is the customer's choice (and for EcoCash waits
+         * {@code retryAfterSeconds}).
+         */
+        DECLINED,
+        /**
+         * The attempt is over and its instrument lapsed UNPAID — the provider
+         * positively reported it unpaid past its deadline (code expired, card
+         * checkout ended, EcoCash prompt never approved). Terminal; the
+         * customer may start a new payment at once.
+         */
+        LAPSED;
 
         /**
          * The money question, answered from the stage alone — the ONE place
@@ -122,6 +138,8 @@ public class PaymentResponse {
                 // live and untouched (AWAITING_PAYMENT), or we never managed
                 // to present one at all (PAYMENT_UNAVAILABLE).
                 case AWAITING_PAYMENT, IN_PROGRESS, PAYMENT_UNAVAILABLE -> Boolean.FALSE;
+                // The attempt ended and the provider positively said unpaid.
+                case DECLINED, LAPSED -> Boolean.FALSE;
                 // Genuinely unknown. INSTRUMENT_EXPIRED belongs here, not
                 // with the FALSE group: a client only ever sees it while the
                 // reconciler has NOT concluded the instrument went unpaid
@@ -240,6 +258,22 @@ public class PaymentResponse {
      * every other timestamp.
      */
     private LocalDateTime promptExpiresAt;
+
+    /**
+     * Stage {@code DECLINED} on the EcoCash rail: EcoCash's own words for the
+     * decline, e.g. "You have insufficient funds to complete this
+     * transaction." Null when EcoCash gave none. Safe to show as is.
+     */
+    @io.swagger.v3.oas.annotations.media.Schema(nullable = true,
+            example = "You have insufficient funds to complete this transaction.")
+    private String failureReason;
+
+    /**
+     * Stage {@code DECLINED} on the EcoCash rail: seconds until a new EcoCash
+     * attempt for this order is accepted. Other payment methods work at once.
+     */
+    @io.swagger.v3.oas.annotations.media.Schema(nullable = true, example = "104")
+    private Long retryAfterSeconds;
 
     /**
      * ZimSwitch COPYandPAY widget artifacts, present while a card checkout

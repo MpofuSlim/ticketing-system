@@ -97,4 +97,13 @@ public class EcocashProperties {
     private int maxPromptsPerNumber = 5;
 
     private Duration promptsPerNumberWindow = Duration.ofMinutes(15);
+
+    /**
+     * How long after EcoCash declines an order's charge (FAILED — e.g.
+     * insufficient funds) a new EcoCash charge for that order is refused,
+     * with the decline's own reason. Each charge costs the customer an SMS
+     * from EcoCash, so a client that re-POSTs on a timer would otherwise send
+     * one per call. Zero or less switches it off.
+     */
+    private Duration declineHold = Duration.ofMinutes(2);
 }

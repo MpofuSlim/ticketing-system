@@ -278,6 +278,10 @@ ecocash:
   # 0 or less switches it off.
   max-prompts-per-number: ${ECOCASH_MAX_PROMPTS_PER_NUMBER:5}
   prompts-per-number-window: ${ECOCASH_PROMPTS_PER_NUMBER_WINDOW:PT15M}
+  # After EcoCash declines an order's charge (e.g. insufficient funds), a new
+  # EcoCash charge for that order is refused for this long, with EcoCash's
+  # reason, instead of sending the customer another SMS. 0 switches it off.
+  decline-hold: ${ECOCASH_DECLINE_HOLD:PT2M}
 
 payments:
   innbucks:

@@ -253,6 +253,53 @@ class EcocashEipClientContractTest {
         EcocashChargeStatus status = newClient(wireMock.baseUrl()).query(MSISDN, CORRELATOR);
 
         assertThat(status.outcome()).isEqualTo(EcocashChargeStatus.Outcome.FAILED);
+        assertThat(status.responseMessage()).isNull();
+    }
+
+    /**
+     * Observed on production 2026-10-28: a wallet without the funds is FAILED
+     * about 2 seconds after the charge, before any PIN prompt, with the reason
+     * in {@code responseMessage}. Trimmed (customer number replaced, merchant
+     * PIN left out).
+     */
+    private static final String QUERY_FAILED_INSUFFICIENT_FUNDS = """
+            {
+              "id": 1667031495,
+              "clientCorrelator": "1763385010123456",
+              "endUserId": "777000000",
+              "transactionOperationStatus": "FAILED",
+              "paymentAmount": {
+                "charginginformation": { "amount": 100.00, "currency": "USD",
+                                         "description": "Ticketize online payment" },
+                "totalAmountCharged": 100.00
+              },
+              "ecocashReference": "MP261028.1647.T9162268",
+              "ecocashResponseCode": "FAILED",
+              "responseMessage": "You have insufficient funds to complete this transaction.",
+              "source": "RMP_INIT"
+            }
+            """;
+
+    @Test
+    @DisplayName("query: production's insufficient-funds FAILED carries EcoCash's reason, cleaned for a customer")
+    void query_failedInsufficientFunds_carriesTheReason() {
+        wireMock.stubFor(get(urlEqualTo(QUERY_PATH)).willReturn(okJson(QUERY_FAILED_INSUFFICIENT_FUNDS)));
+
+        EcocashChargeStatus status = newClient(wireMock.baseUrl()).query(MSISDN, CORRELATOR);
+
+        assertThat(status.outcome()).isEqualTo(EcocashChargeStatus.Outcome.FAILED);
+        assertThat(status.responseMessage()).isEqualTo("You have insufficient funds to complete this transaction.");
+        assertThat(status.ecocashReference()).isEqualTo("MP261028.1647.T9162268");
+    }
+
+    @Test
+    @DisplayName("customerMessage: control and line-break characters go, spaces collapse, length capped")
+    void customerMessage_isSafeToShow() {
+        assertThat(EcocashEipClient.customerMessage(" You have\ninsufficient‮ funds. "))
+                .isEqualTo("You have insufficient funds.");
+        assertThat(EcocashEipClient.customerMessage(" \u0000 ")).isNull();
+        assertThat(EcocashEipClient.customerMessage(null)).isNull();
+        assertThat(EcocashEipClient.customerMessage("x".repeat(300))).hasSize(201);
     }
 
     @Test

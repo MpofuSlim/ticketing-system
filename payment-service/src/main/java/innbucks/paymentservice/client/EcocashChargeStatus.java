@@ -21,6 +21,10 @@ import java.math.BigDecimal;
  *                       until approved; the echo-guard field on a COMPLETED
  *                       read
  * @param currencyEcho   {@code paymentAmount.charginginformation.currency}
+ * @param responseMessage EcoCash's own words for the outcome, e.g. "You have
+ *                       insufficient funds to complete this transaction." on a
+ *                       FAILED read — cleaned and capped by the client, null
+ *                       when absent. Shown to the customer, so never the body.
  */
 public record EcocashChargeStatus(
         Outcome outcome,
@@ -28,7 +32,14 @@ public record EcocashChargeStatus(
         String ecocashReference,
         BigDecimal amountEcho,
         BigDecimal totalAmountCharged,
-        String currencyEcho) {
+        String currencyEcho,
+        String responseMessage) {
+
+    /** A status with no message from EcoCash. */
+    public EcocashChargeStatus(Outcome outcome, String rawStatus, String ecocashReference,
+                               BigDecimal amountEcho, BigDecimal totalAmountCharged, String currencyEcho) {
+        this(outcome, rawStatus, ecocashReference, amountEcho, totalAmountCharged, currencyEcho, null);
+    }
 
     /**
      * Classified {@code transactionOperationStatus}. The still-pending set is

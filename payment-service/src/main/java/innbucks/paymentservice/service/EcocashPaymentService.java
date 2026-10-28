@@ -95,6 +95,24 @@ public class EcocashPaymentService {
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
+    /** {@code upstream_error_code} of a charge EcoCash itself reported FAILED. */
+    public static final String DECLINED_CODE = "subscriber_rejected";
+
+    /** Stored when EcoCash reports FAILED without saying why; never shown to a customer. */
+    static final String DECLINED_WITHOUT_REASON =
+            "EcoCash reports the charge FAILED (subscriber rejected or prompt lapsed upstream)";
+
+    /**
+     * The customer-facing reason for a charge EcoCash declined: EcoCash's own
+     * words when it gave any (e.g. "You have insufficient funds to complete
+     * this transaction."), else null.
+     */
+    public static String declineReason(Payment p) {
+        if (p == null || !DECLINED_CODE.equals(p.getUpstreamErrorCode())) return null;
+        String m = p.getUpstreamErrorMessage();
+        return m == null || m.isBlank() || DECLINED_WITHOUT_REASON.equals(m) ? null : m;
+    }
+
     private final PaymentRecordService paymentRecordService;
     private final EcocashEipClient ecocashClient;
     private final EcocashProperties ecocashProperties;
@@ -201,6 +219,8 @@ public class EcocashPaymentService {
             throw new InvalidPaymentRequestException(
                     "A payment for this " + noun + " is already in progress or completed", 409);
         }
+
+        requireNoRecentDecline(orderType, orderRef);
 
         OrderSnapshot snapshot = gateway.fetch(orderRef);
         if (!snapshot.payable()) {
@@ -349,6 +369,82 @@ public class EcocashPaymentService {
      * differently on each order does not reset the count. Refused before the
      * hold is extended or a ledger row opened, so nothing is held for it.
      */
+    /**
+     * The decline hold: an order whose latest EcoCash charge EcoCash DECLINED
+     * (FAILED, e.g. insufficient funds) within {@code declineHold} gets that
+     * decline back instead of a new charge. EcoCash sends the customer an SMS
+     * for every charge, and a declined wallet declines again at once, so a
+     * client re-POSTing on a timer used to send one SMS per call (twenty for
+     * one booking, 2026-10-28). A charge that merely EXPIRED is not held: the
+     * customer may simply have missed the prompt.
+     */
+    private void requireNoRecentDecline(OrderType orderType, String orderRef) {
+        Payment last = paymentRecordService.latestOnRail(orderType, orderRef, PaymentRail.ECOCASH).orElse(null);
+        if (last == null) {
+            return;
+        }
+        Long seconds = declineHoldRemaining(last);
+        if (seconds == null) {
+            return;
+        }
+        metrics.incEcocashCharge("decline_held");
+        log.info("[ecocash] charge refused: order {} {} was declined by EcoCash (paymentReference={}); hold {}s more",
+                orderType, orderRef, last.getPaymentReference(), seconds);
+        throw new EcocashDeclinedException(last, declineReason(last), seconds);
+    }
+
+    /**
+     * Seconds until a new EcoCash charge is accepted after {@code p}, when
+     * {@code p} is an EcoCash charge EcoCash declined inside the hold; else
+     * null. Only the order's LATEST EcoCash attempt holds the order — the
+     * caller passes that one.
+     */
+    public Long declineHoldRemaining(Payment p) {
+        Duration hold = ecocashProperties.getDeclineHold();
+        if (p == null || hold == null || hold.isZero() || hold.isNegative()
+                || p.getPaymentRail() != PaymentRail.ECOCASH
+                || p.getStatus() != Payment.PaymentStatus.FAILED
+                || !DECLINED_CODE.equals(p.getUpstreamErrorCode()) || p.getCompletedAt() == null) {
+            return null;
+        }
+        Instant now = Instant.now();
+        Instant until = p.getCompletedAt().plus(hold);
+        if (!now.isBefore(until)) {
+            return null;
+        }
+        return Math.max(1, (Duration.between(now, until).toMillis() + 999) / 1000);
+    }
+
+    /**
+     * A new EcoCash charge refused because EcoCash just declined this order's
+     * last one. Carries that attempt and EcoCash's reason, so the response can
+     * tell the customer why — once.
+     */
+    public static class EcocashDeclinedException extends InvalidPaymentRequestException {
+        private final transient Payment declined;
+        private final String reason;
+        private final long retryAfterSeconds;
+
+        public EcocashDeclinedException(Payment declined, String reason, long retryAfterSeconds) {
+            super(message(reason, retryAfterSeconds), 400);
+            this.declined = declined;
+            this.reason = reason;
+            this.retryAfterSeconds = retryAfterSeconds;
+        }
+
+        static String message(String reason, long retryAfterSeconds) {
+            long minutes = Math.max(1, (retryAfterSeconds + 59) / 60);
+            String said = reason != null ? "EcoCash: " + (reason.endsWith(".") ? reason : reason + ".")
+                    : "EcoCash declined the payment.";
+            return said + " Try again in " + minutes + (minutes == 1 ? " minute" : " minutes")
+                    + ", or pay with an InnBucks code.";
+        }
+
+        public Payment declined() { return declined; }
+        public String reason() { return reason; }
+        public long retryAfterSeconds() { return retryAfterSeconds; }
+    }
+
     private void requirePromptRoomFor(String msisdn) {
         int max = ecocashProperties.getMaxPromptsPerNumber();
         if (max <= 0) {
@@ -431,8 +527,10 @@ public class EcocashPaymentService {
             case FAILED -> {
                 // The subscriber rejected the prompt — the positive "no money
                 // moved" answer. Terminal FAILED frees the slot for a retry.
-                paymentRecordService.markFailed(p.getId(), "subscriber_rejected",
-                        "EcoCash reports the charge FAILED (subscriber rejected or prompt lapsed upstream)");
+                // EcoCash's own reason ("You have insufficient funds …") is
+                // what the customer is shown, so it is kept when sent.
+                paymentRecordService.markFailed(p.getId(), DECLINED_CODE,
+                        status.responseMessage() != null ? status.responseMessage() : DECLINED_WITHOUT_REASON);
                 metrics.incEcocashResolution("failed");
                 log.info("[ecocash] charge failed upstream paymentReference={} — slot freed",
                         p.getPaymentReference());
