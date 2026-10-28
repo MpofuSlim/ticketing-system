@@ -138,6 +138,19 @@ public final class PermissionCatalog {
     public static final String CUSTOMER_MESSAGES_SEND = "customer-messages:send";
 
     /**
+     * Read-only platform access to a product's own screens, as SUPER_ADMIN sees
+     * them, through GET endpoints only (enforced in loyalty-service and
+     * marketplace-service, which read the token's {@code perms}). Nothing in
+     * user-service checks them; they live here because this catalog is the
+     * fleet's one vocabulary and {@code role_permissions} can reference nothing
+     * else. They never reach a write, a voucher or collection code, payout
+     * details, or a single customer's record: that is support's logged surface.
+     * Built for developer accounts (a custom role such as DEV_READONLY).
+     */
+    public static final String LOYALTY_REPORTS_READ = "loyalty-reports:read";
+    public static final String MARKETPLACE_REPORTS_READ = "marketplace-reports:read";
+
+    /**
      * Unified customer support (V46) — the Foundry console section of
      * {@code /admin/support/**}. Tiered like device security: an agent reads and
      * does the routine things (unlock, send a reset code); resetting a second
@@ -260,6 +273,12 @@ public final class PermissionCatalog {
                         + "sign a customer out everywhere", Scope.PLATFORM),
                 entry(LOYALTY_SUPPORT_SUPERVISE, "Adjust or reverse a customer's points, unblock a membership, "
                         + "and review every agent's loyalty support activity", Scope.PLATFORM),
+                entry(LOYALTY_REPORTS_READ, "Read InnRewards across every tenant and merchant, read-only: "
+                        + "reports, merchants, shops, rules and invoices. No voucher codes, no single customer's "
+                        + "record", Scope.PLATFORM),
+                entry(MARKETPLACE_REPORTS_READ, "Read the marketplace across every seller, read-only: listings, "
+                        + "orders, sellers and reports. No payout details or codes, no single buyer's record",
+                        Scope.PLATFORM),
                 entry(CUSTOMER_MESSAGES_SEND, "Type and send an SMS or WhatsApp message to a customer on "
                         + "record from a support screen", Scope.PLATFORM),
                 entry(SUPPORT_CONSOLE_READ, "Look customers up in customer support and see their Foundry console "
