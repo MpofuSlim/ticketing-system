@@ -173,6 +173,23 @@ class GatewayCompressionAndTracingTest {
         assertThat(context.getBeansOfType(SpanExporter.class)).isEmpty();
     }
 
+    // ---------------------------------------------------------------- CORS
+
+    @Test
+    void aBrowserMayReadTheHeadersThePublishedContractsName() throws Exception {
+        // The browser hides every response header not listed here from
+        // cross-origin JS. Each one is part of a published FE contract: the
+        // CSV filename, the unread-count validator, the escalation reference,
+        // and when a 429 may be retried.
+        HttpResponse<byte[]> response = send(HttpRequest.newBuilder(uri("/__compression-test/small.json"))
+                .header("Origin", "http://localhost:3000").GET().build());
+
+        assertThat(response.headers().firstValue("Access-Control-Allow-Origin")).hasValue("http://localhost:3000");
+        String exposed = String.join(",", response.headers().allValues("Access-Control-Expose-Headers"));
+        assertThat(exposed.split("\\s*,\\s*"))
+                .contains("Content-Disposition", "ETag", "X-Correlation-Id", "Retry-After");
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private static String vary(HttpResponse<?> response) {

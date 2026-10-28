@@ -244,11 +244,18 @@ public class ConsoleSupportSection {
         return out;
     }
 
+    /**
+     * One account in the summary line: its roles and, unless active, its
+     * status. Never its name. The agent asks the caller's name before saying
+     * one, and the summary is the line a console shows first, so a name here
+     * would be read out before the caller gave it. The name stays on the
+     * account itself ({@code name}), for the console to show once asked.
+     */
     private static String describe(ConsoleAccountEntry entry) {
         if (!(entry instanceof ConsoleAccountView v)) return "an InnBucks staff account";
-        return (v.name() == null ? "An unnamed account" : v.name()) + " (" + String.join(", ", v.roles())
-                + ("ACTIVE".equals(v.status()) ? "" : ", " + v.status().toLowerCase(java.util.Locale.ROOT).replace('_', ' '))
-                + ")";
+        String roles = v.roles().isEmpty() ? "no role" : String.join(", ", v.roles());
+        return roles + ("ACTIVE".equals(v.status()) ? ""
+                : ", " + v.status().toLowerCase(java.util.Locale.ROOT).replace('_', ' '));
     }
 
     static String name(User u) {

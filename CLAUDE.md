@@ -2077,7 +2077,12 @@ agent token can call directly — it would bypass all of it.
   `SupportRefs.normalise` (which prepends `SEC-` to anything). Card-shaped digits
   (13–19) and 12-character codes are refused `query_not_accepted`; reference
   kinds whose section isn't built are `query_not_supported`. **A refused query is
-  logged by KIND only — never its text** (it may be a card number).
+  logged by KIND only — never its text** (it may be a card number). That refusal
+  comes BEFORE the kind's permission is read, so a misspelt code there stays
+  hidden until the section ships: every reference kind must name a real
+  catalog code (`marketplace-support:read`, `loyalty-support:read`) or, for
+  ticketing, `TICKETING_SUPPORT_READ`, which joins `PermissionCatalog` with
+  the Phase 2 `@PreAuthorize` that enforces it (`referencePermissionsAreRealCodes`).
 - **A reference returns ONLY its owning section** (+ `focus`); the cross-product
   view is always a second, explicit phone/email search. A reference is printed on
   shared tickets and screenshots — it must not open a customer's whole record.
@@ -2120,7 +2125,17 @@ agent token can call directly — it would bypass all of it.
   row; a section whose reads fail renders `UNAVAILABLE`; identity warnings that
   can't be read say so (`identity_check_unavailable`). `support_log_unavailable`
   stays the fail-closed answer for a row that can't be written — only the
-  search's lookup-id draw gets a constraint violation back to retry.
+  search's lookup-id draw gets a constraint violation back to retry. **The
+  search's `message` reads the sections** (`AdminSupportController.searchMessage`):
+  "Customer found" when any is OK, "No customer found" only when every section
+  answered and found nothing, and a "couldn't be read … try again" message when
+  any is UNAVAILABLE — it used to say "No customer found" while a section could
+  not be read, which an agent takes as "this customer does not exist".
+- **Section summaries name roles, never people.** The console summary is
+  "1 Foundry console account: MERCHANT_ADMIN." — the account's name stays in
+  the section's detail, which is what the console renders behind the
+  permission. A summary is the line most likely to be copied into a ticket or
+  a chat.
 - **`support_access_log` is not on the audit chain** (D10 — the head lock would
   serialise every lookup). Customer data leaving the service is logged
   FAIL-CLOSED (`503 support_log_unavailable`); refusals are best-effort. It holds

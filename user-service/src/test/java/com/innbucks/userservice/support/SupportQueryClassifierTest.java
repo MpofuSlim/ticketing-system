@@ -1,5 +1,6 @@
 package com.innbucks.userservice.support;
 
+import com.innbucks.userservice.security.PermissionCatalog;
 import com.innbucks.userservice.support.SupportQueryClassifier.Kind;
 import com.innbucks.userservice.support.SupportQueryClassifier.Query;
 import org.junit.jupiter.api.DisplayName;
@@ -161,6 +162,30 @@ class SupportQueryClassifierTest {
         assertThat(Kind.DTX_REFERENCE.permission()).isEqualTo("device-security:read");
         assertThat(Kind.PHONE.permission()).isNull();
         assertThat(Kind.EMAIL.permission()).isNull();
+    }
+
+    @Test
+    @DisplayName("every reference permission is a catalog code (Ticketize's pending one aside), so none is "
+            + "silently wrong until its section ships")
+    void referencePermissionsAreRealCodes() {
+        // An unbuilt kind is refused query_not_supported BEFORE its permission
+        // is read, so a misspelt code hides until the section is switched on,
+        // and then refuses every agent. They read "support-marketplace:read"
+        // (and so on) until this test existed; the catalog says
+        // "marketplace-support:read".
+        assertThat(Kind.MARKETPLACE_ORDER.permission()).isEqualTo(PermissionCatalog.MARKETPLACE_SUPPORT_READ);
+        assertThat(Kind.PARCEL.permission()).isEqualTo(PermissionCatalog.MARKETPLACE_SUPPORT_READ);
+        assertThat(Kind.VOUCHER_ORDER.permission()).isEqualTo(PermissionCatalog.LOYALTY_SUPPORT_READ);
+        assertThat(Kind.BOOKING_CONFIRMATION.permission()).isEqualTo("ticketing-support:read");
+        assertThat(Kind.TICKET_NUMBER.permission()).isEqualTo("ticketing-support:read");
+        for (Kind k : Kind.values()) {
+            String code = k.permission();
+            if (code == null || code.equals(SupportQueryClassifier.TICKETING_SUPPORT_READ)) continue;
+            assertThat(PermissionCatalog.isKnown(code)).as("%s needs %s", k, code).isTrue();
+        }
+        // The pending code is not in the catalog yet. When the Ticketize section
+        // adds it, this fails: move the constant into PermissionCatalog then.
+        assertThat(PermissionCatalog.isKnown(SupportQueryClassifier.TICKETING_SUPPORT_READ)).isFalse();
     }
 
     @ParameterizedTest

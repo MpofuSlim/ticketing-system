@@ -54,15 +54,22 @@ import java.util.regex.Pattern;
  */
 public final class SupportQueryClassifier {
 
+    /**
+     * Ticketize's support read code, planned for its support section (Phase 2).
+     * Not in {@link PermissionCatalog} yet: a code is added there only with the
+     * {@code @PreAuthorize} that enforces it. Move the constant there then.
+     */
+    static final String TICKETING_SUPPORT_READ = "ticketing-support:read";
+
     /** What the query is. REFUSED kinds carry no value. */
     public enum Kind {
         EMAIL(true, null),
         DTX_REFERENCE(true, PermissionCatalog.DEVICE_SECURITY_READ),
-        MARKETPLACE_ORDER(false, "support-marketplace:read"),
-        PARCEL(false, "support-marketplace:read"),
-        VOUCHER_ORDER(false, "support-loyalty:read"),
-        BOOKING_CONFIRMATION(false, "support-ticketing:read"),
-        TICKET_NUMBER(false, "support-ticketing:read"),
+        MARKETPLACE_ORDER(false, PermissionCatalog.MARKETPLACE_SUPPORT_READ),
+        PARCEL(false, PermissionCatalog.MARKETPLACE_SUPPORT_READ),
+        VOUCHER_ORDER(false, PermissionCatalog.LOYALTY_SUPPORT_READ),
+        BOOKING_CONFIRMATION(false, TICKETING_SUPPORT_READ),
+        TICKET_NUMBER(false, TICKETING_SUPPORT_READ),
         PAYMENT_REFERENCE(false, null),
         PHONE(true, null),
         /** Row 9: a card, voucher or collection code. */
@@ -85,9 +92,14 @@ public final class SupportQueryClassifier {
 
         /**
          * The section read permission a REFERENCE kind needs; null for EMAIL and
-         * PHONE (any section read) and for the refusals. Named as literals for
-         * the unbuilt sections: those codes enter the catalog with the PR that
-         * enforces them (§3.3), and nothing here grants or checks them yet.
+         * PHONE (any section read) and for the refusals. The marketplace and
+         * loyalty codes are the catalog's own (V47), so a misspelling cannot
+         * compile. Ticketize's code enters the catalog with the PR that enforces
+         * it (§3.3); until then it is {@link #TICKETING_SUPPORT_READ}, spelled
+         * like the other two. An unbuilt kind is refused {@code
+         * query_not_supported} before this is read, so a wrong code here stays
+         * silent until the day its section ships, and then refuses every agent.
+         * {@code SupportQueryClassifierTest} pins every code to the catalog.
          */
         public String permission() {
             return permission;

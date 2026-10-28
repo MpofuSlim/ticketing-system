@@ -7,6 +7,7 @@ import com.innbucks.userservice.support.ConsoleSupportActions;
 import com.innbucks.userservice.support.SupportAgent;
 import com.innbucks.userservice.support.SupportAgentResolver;
 import com.innbucks.userservice.support.SupportSearchService;
+import com.innbucks.userservice.support.dto.SupportDTOs;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,7 +17,9 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -296,5 +299,46 @@ class AdminSupportDispatchTest {
                 .andExpect(jsonPath("$.message").value("We couldn't record this change, so it wasn't made. Try again."))
                 .andExpect(jsonPath("$.data.errorCode").value("audit_unavailable"))
                 .andExpect(header().string("Cache-Control", "no-store"));
+    }
+
+    // ---- the search's envelope message agrees with its sections ----------------------------
+
+    private static SupportDTOs.SectionView<Object> section(String status) {
+        return new SupportDTOs.SectionView<>(status, null, status, null, null);
+    }
+
+    private void searchReturns(Map<String, SupportDTOs.SectionView<?>> sections) {
+        when(search.search(any(), anyString(), any())).thenReturn(new SupportDTOs.SearchResult("SLK-6T1VB5",
+                new SupportDTOs.QueryView("PHONE", "+263771234567"),
+                new SupportDTOs.CustomerView("+263771234567", null, null), List.of(), sections, null, List.of(),
+                false));
+    }
+
+    private void searchSays(String message) throws Exception {
+        mvc.perform(post("/admin/support/customers/search").principal(auth())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"q\":\"0771234567\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("200 OK"))
+                .andExpect(jsonPath("$.message").value(message));
+    }
+
+    @Test
+    @DisplayName("a search whose sections couldn't be read never says \"No customer found\"")
+    void searchMessageAgreesWithTheSections() throws Exception {
+        Map<String, SupportDTOs.SectionView<?>> sections = new LinkedHashMap<>();
+        sections.put("console", section("UNAVAILABLE"));
+        sections.put("innbucksApp", section("UNAVAILABLE"));
+        searchReturns(sections);
+        searchSays("The customer records couldn't be read. Try again in a minute.");
+
+        sections.put("console", section("NOT_FOUND"));
+        searchSays("Some customer records couldn't be read, so this customer may still exist. Try again in a minute.");
+
+        sections.put("innbucksApp", section("NOT_FOUND"));
+        searchSays("No customer found");
+
+        sections.put("console", section("OK"));
+        sections.put("innbucksApp", section("UNAVAILABLE"));
+        searchSays("Customer found");
     }
 }
