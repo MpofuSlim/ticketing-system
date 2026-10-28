@@ -974,10 +974,15 @@ spring:
                 #   pays a full 200.
                 # - X-Correlation-Id: the support-lookup ref the services
                 #   return on every response; error dialogs surface it.
+                # - Retry-After: a 429 says when to try again (the support
+                #   lookup limit, the device-security reads). Unexposed, the
+                #   console can only read the body's retryAfterSeconds, which
+                #   not every 429 carries.
                 exposedHeaders:
                   - Content-Disposition
                   - ETag
                   - X-Correlation-Id
+                  - Retry-After
                 allowCredentials: true
                 maxAge: 3600
 

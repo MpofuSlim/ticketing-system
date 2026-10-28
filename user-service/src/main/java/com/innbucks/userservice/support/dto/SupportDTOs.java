@@ -98,7 +98,7 @@ public final class SupportDTOs {
     public record SectionView<T>(
             @Schema(example = "OK", description = "OK, NOT_FOUND or UNAVAILABLE") String status,
             @Schema(example = "phone", nullable = true, description = "phone, email or reference") String matchedBy,
-            @Schema(example = "1 Foundry console account: Tariro Moyo (MERCHANT_ADMIN).") String summary,
+            @Schema(example = "1 Foundry console account: MERCHANT_ADMIN.") String summary,
             @Schema(example = "Locked after too many wrong passwords until 14:30. After verifying the caller you can "
                     + "unlock it now.", nullable = true) String agentGuidance,
             @Schema(nullable = true) T data) {

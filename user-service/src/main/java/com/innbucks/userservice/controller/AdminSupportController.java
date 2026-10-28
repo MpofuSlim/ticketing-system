@@ -12,6 +12,7 @@ import com.innbucks.userservice.support.dto.SupportDTOs.ActionResult;
 import com.innbucks.userservice.support.dto.SupportDTOs.ConsoleAccountView;
 import com.innbucks.userservice.support.dto.SupportDTOs.SearchRequest;
 import com.innbucks.userservice.support.dto.SupportDTOs.SearchResult;
+import com.innbucks.userservice.support.dto.SupportDTOs.SectionView;
 import com.innbucks.userservice.support.dto.SupportDTOs.WriteRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -36,6 +37,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * Unified customer support — one search box, one screen per customer, and the
@@ -180,7 +183,7 @@ public class AdminSupportController {
                                         "customer": { "phone": "+263771234567", "email": "tariro@example.com", "name": "Tariro Moyo" },
                                         "identityWarnings": [],
                                         "sections": {
-                                          "console": { "status": "OK", "matchedBy": "phone", "summary": "1 Foundry console account: Tariro Moyo (MERCHANT_ADMIN).", "agentGuidance": "Locked after too many wrong passwords until 14:30. After verifying the caller you can unlock it now.",
+                                          "console": { "status": "OK", "matchedBy": "phone", "summary": "1 Foundry console account: MERCHANT_ADMIN.", "agentGuidance": "Locked after too many wrong passwords until 14:30. After verifying the caller you can unlock it now.",
                                             "data": { "accounts": [ """ + ACCOUNT_JSON + """
                                             ] } },
                                           "innbucksApp": { "status": "OK", "matchedBy": "phone", "summary": "1 phone signed in.", "agentGuidance": "Nothing is stopping this customer's phones. If the app still refuses them, check the recent events.",
@@ -244,6 +247,25 @@ public class AdminSupportController {
                                         "staffAccount": true
                                       }
                                     }
+                                    """),
+                            @ExampleObject(name = "section_unavailable", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Some customer records couldn't be read, so this customer may still exist. Try again in a minute.",
+                                      "data": {
+                                        "lookupId": "SLK-6T1VB5",
+                                        "query": { "kind": "PHONE", "normalised": "+263771234567" },
+                                        "customer": { "phone": "+263771234567", "email": null, "name": null },
+                                        "identityWarnings": [],
+                                        "sections": {
+                                          "console": { "status": "NOT_FOUND", "matchedBy": null, "summary": "No Foundry console account uses this number.", "agentGuidance": "If the caller says they use the console, ask which email they sign in with and search by that.", "data": { "accounts": [] } },
+                                          "innbucksApp": { "status": "UNAVAILABLE", "matchedBy": null, "summary": "The InnBucks app records couldn't be read. Try again in a minute.", "agentGuidance": null, "data": null }
+                                        },
+                                        "focus": null,
+                                        "notShown": [],
+                                        "staffAccount": false
+                                      }
+                                    }
                                     """)
                     })),
             @ApiResponse(responseCode = "400", description = "A query that can't be searched",
@@ -285,9 +307,28 @@ public class AdminSupportController {
                                                                    Authentication auth, HttpServletRequest request) {
         SupportAgent agent = agents.require(auth);
         SearchResult result = search.search(agent, body.q(), DeviceSecurityRequests.clientIp(request));
-        String message = result.sections().values().stream().anyMatch(s -> "OK".equals(s.status()))
-                ? "Customer found" : "No customer found";
-        return noStore(ApiResult.ok(message, result));
+        return noStore(ApiResult.ok(searchMessage(result), result));
+    }
+
+    static final String MESSAGE_FOUND = "Customer found";
+    static final String MESSAGE_NOT_FOUND = "No customer found";
+    static final String MESSAGE_ALL_UNAVAILABLE = "The customer records couldn't be read. Try again in a minute.";
+    static final String MESSAGE_SOME_UNAVAILABLE =
+            "Some customer records couldn't be read, so this customer may still exist. Try again in a minute.";
+
+    /**
+     * The envelope's message for a search, consistent with the sections. It
+     * says "No customer found" only when every section was READ and found
+     * nothing. A section that could not be read ({@code UNAVAILABLE}) may hold
+     * the customer, so saying "No customer found" there tells the agent the
+     * customer doesn't exist during an outage.
+     */
+    static String searchMessage(SearchResult result) {
+        List<String> statuses = result.sections() == null ? List.of()
+                : result.sections().values().stream().map(SectionView::status).toList();
+        if (statuses.contains("OK")) return MESSAGE_FOUND;
+        if (!statuses.contains("UNAVAILABLE")) return MESSAGE_NOT_FOUND;
+        return statuses.stream().allMatch("UNAVAILABLE"::equals) ? MESSAGE_ALL_UNAVAILABLE : MESSAGE_SOME_UNAVAILABLE;
     }
 
     // ---- console section: detail -------------------------------------------------------------

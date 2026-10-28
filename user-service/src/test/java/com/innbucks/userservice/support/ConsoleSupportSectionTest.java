@@ -92,6 +92,28 @@ class ConsoleSupportSectionTest {
     }
 
     @Test
+    @DisplayName("the summary never names an account: the agent asks the caller's name before saying one")
+    void summaryCarriesRolesNotNames() {
+        SectionView<ConsoleSectionData> one = section.section(List.of(merchant), "phone", supervisor(), NOW);
+        assertThat(one.summary()).isEqualTo("1 Foundry console account: MERCHANT_ADMIN.");
+        // The name is still on the account itself, for the console to show once asked.
+        assertThat(((ConsoleAccountView) one.data().accounts().get(0)).name()).isEqualTo("Tariro Moyo");
+
+        User organizer = User.builder().id(2001L).userUuid(UUID.randomUUID()).firstName("Tendai").lastName("Ncube")
+                .email("tariro@example.com").phoneNumber("+263771234999")
+                .roles(new LinkedHashSet<>(List.of("EVENT_ORGANIZER"))).active(false).approved(true)
+                .failedLoginAttempts(0).mfaEnabled(false).build();
+        User roleless = User.builder().id(2002L).userUuid(UUID.randomUUID()).firstName("Rudo").lastName("Sibanda")
+                .email("tariro@example.com").roles(new LinkedHashSet<>()).active(true).approved(true)
+                .failedLoginAttempts(0).mfaEnabled(false).build();
+        SectionView<ConsoleSectionData> three = section.section(List.of(organizer, roleless, merchant), "email",
+                supervisor(), NOW);
+        assertThat(three.summary()).isEqualTo(
+                "3 Foundry console accounts: MERCHANT_ADMIN; EVENT_ORGANIZER, deactivated; no role.");
+        assertThat(three.summary()).doesNotContain("Tariro").doesNotContain("Tendai").doesNotContain("Rudo");
+    }
+
+    @Test
     @DisplayName("a merchant's full view offers unlock, send-password-reset and mfa/reset to a supervisor")
     void activeAccountOffersEverythingThatApplies() {
         ConsoleAccountView v = section.view(merchant, supervisor(), NOW);
