@@ -3444,6 +3444,18 @@ new sensitive columns MUST follow suit:
   `audit_chain_head`, `payment.audit.chain.broken` → alert `PaymentAuditChainBroken`
   (ticket, vs the `PaymentAuditIntegrityBroken` page). Both services' audit logs
   now detect row deletion/reordering, not just content tampering.
+  **A sealed field must be sealed exactly as the database will hand it back.**
+  `occurred_at` is a `timestamptz` (microseconds) and the JVM's clock reads
+  nanoseconds, so both services sealed `.868363512Z`, stored `.868363Z`, and
+  every row failed its own HMAC: production paged TAMPERED=220 with the chain
+  intact (the chain uses the STORED `row_hmac`, so it was the proof the key was
+  fine). Both write paths now seal `Instant.now().truncatedTo(MICROS)`. Rows
+  sealed before that verify through `sealedBeforeMicrosecondTruncation`, which
+  retries the times within the driver's rounding (−500 to +999 ns), still needs
+  the key, and is counted as `sealedAtNanoseconds` in the verifier's log line.
+  A new sealed column gets the same check, and `AuditSealRoundTripPostgresIT`
+  (both services) is the test that sees it: a mocked repository hands back the
+  object it was given.
   The guard also **fails boot on a blank `spring.data.redis.password` under a
   deployment profile** (all six data services) — Redis holds session-revocation
   + rate-limit state, so an unauthenticated Redis is a tamper surface; compose/k8s

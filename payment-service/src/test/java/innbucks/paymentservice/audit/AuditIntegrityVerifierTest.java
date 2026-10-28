@@ -165,4 +165,86 @@ class AuditIntegrityVerifierTest {
         assertEquals(0, r.chainOk());
         verify(metrics).auditChainBroken(0L);
     }
+
+    // ---- Postgres keeps occurred_at to the microsecond ----------------------
+    // Before the write path truncated the time, a row was sealed over the JVM's
+    // nanoseconds and read back at microseconds, so EVERY row looked tampered
+    // (production: TAMPERED=220, chain intact). These pin that such rows verify,
+    // and that the allowance stays under a microsecond.
+
+    private AuditEvent sealedAt(String sealedTime) {
+        AuditEvent e = AuditEvent.builder()
+                .occurredAt(java.time.Instant.parse(sealedTime))
+                .eventType("SEALED_AT_NANOS").outcome("SUCCESS")
+                .actorId("system").actorType("SYSTEM")
+                .targetId("t-1").targetType("TARGET")
+                .metadata("{\"to\":\"SUCCEEDED\"}")
+                .build();
+        e.setId(1L);
+        e.setRowHmac(auditService.computeHmac(e));
+        return e;
+    }
+
+    private AuditIntegrityVerifier.Result verifyOne(AuditEvent stored) {
+        feed(List.of(stored));
+        return verifier.verifyRecent();
+    }
+
+    @Test
+    void aRowSealedAtNanoseconds_andRoundedByTheColumn_isIntact() {
+        AuditEvent row = sealedAt("2026-07-22T18:43:56.868363512Z");
+        row.setOccurredAt(java.time.Instant.parse("2026-07-22T18:43:56.868364Z"));   // rounded up
+
+        AuditIntegrityVerifier.Result r = verifyOne(row);
+
+        assertEquals(1, r.ok());
+        assertEquals(0, r.tampered());
+        assertEquals(1, r.sealedAtNanoseconds());
+        verify(metrics).auditIntegrityBroken(0L);
+    }
+
+    @Test
+    void aRowSealedAtNanoseconds_andTruncatedByTheColumn_isIntact() {
+        AuditEvent row = sealedAt("2026-07-22T18:43:56.868363987Z");
+        row.setOccurredAt(java.time.Instant.parse("2026-07-22T18:43:56.868363Z"));   // cut down
+
+        AuditIntegrityVerifier.Result r = verifyOne(row);
+
+        assertEquals(0, r.tampered());
+        assertEquals(1, r.sealedAtNanoseconds());
+    }
+
+    @Test
+    void aRowSealedAtNanoseconds_stillShowsAChangedField() {
+        AuditEvent row = sealedAt("2026-07-22T18:43:56.868363512Z");
+        row.setOccurredAt(java.time.Instant.parse("2026-07-22T18:43:56.868364Z"));
+        row.setOutcome("FAILURE");                                                   // altered after sealing
+
+        AuditIntegrityVerifier.Result r = verifyOne(row);
+
+        assertEquals(1, r.tampered());
+        assertEquals(0, r.sealedAtNanoseconds());
+        verify(metrics).auditIntegrityBroken(1L);
+    }
+
+    @Test
+    void aTimeMovedByAMicrosecondOrMore_isTampered() {
+        AuditEvent row = sealedAt("2026-07-22T18:43:56.868363512Z");
+        row.setOccurredAt(java.time.Instant.parse("2026-07-22T18:43:56.868366Z"));   // 2.5 µs later
+
+        AuditIntegrityVerifier.Result r = verifyOne(row);
+
+        assertEquals(1, r.tampered());
+        assertEquals(0, r.sealedAtNanoseconds());
+    }
+
+    @Test
+    void aRowSealedAtMicroseconds_matchesExactly_withoutTheAllowance() {
+        AuditEvent row = sealedAt("2026-07-22T18:43:56.868363Z");
+
+        AuditIntegrityVerifier.Result r = verifyOne(row);
+
+        assertEquals(1, r.ok());
+        assertEquals(0, r.sealedAtNanoseconds());
+    }
 }

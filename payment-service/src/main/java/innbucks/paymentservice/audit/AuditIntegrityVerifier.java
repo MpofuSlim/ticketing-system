@@ -68,7 +68,7 @@ public class AuditIntegrityVerifier {
      * {@code chainBroken > 0} (row deleted/reordered) is a security incident.
      */
     public record Result(int checked, int ok, int tampered, int legacy,
-                         int chainOk, int chainBroken) {}
+                         int chainOk, int chainBroken, int sealedAtNanoseconds) {}
 
     @Scheduled(cron = "${audit.integrity.verify-cron:0 30 3 * * *}")
     // Read-only, so a double run is only wasted work and a doubled log line —
@@ -82,9 +82,9 @@ public class AuditIntegrityVerifier {
                     + "verification; investigate immediately",
                     r.checked(), r.ok(), r.tampered(), r.legacy(), r.chainOk(), r.chainBroken());
         } else {
-            log.info("Audit integrity verified: checked={} ok={} legacy={} chainOk={} "
-                    + "(no tampering, chain intact)",
-                    r.checked(), r.ok(), r.legacy(), r.chainOk());
+            log.info("Audit integrity verified: checked={} ok={} (sealedAtNanoseconds={}) legacy={} "
+                    + "chainOk={} (no tampering, chain intact)",
+                    r.checked(), r.ok(), r.sealedAtNanoseconds(), r.legacy(), r.chainOk());
         }
     }
 
@@ -96,6 +96,7 @@ public class AuditIntegrityVerifier {
      */
     public Result verifyRecent() {
         int checked = 0, ok = 0, tampered = 0, legacy = 0, chainOk = 0, chainBroken = 0;
+        int sealedAtNanoseconds = 0;
         try {
             List<AuditEvent> rows = repository.findAll(
                     PageRequest.of(0, verifyLimit, Sort.by(Sort.Direction.DESC, "id"))).getContent();
@@ -106,6 +107,11 @@ public class AuditIntegrityVerifier {
                     legacy++;                       // pre-HMAC row: unverifiable, not tampered
                 } else if (stored.equals(auditService.computeHmac(row))) {
                     ok++;
+                } else if (auditService.sealedBeforeMicrosecondTruncation(row)) {
+                    // Sealed at nanoseconds before the write path truncated to the
+                    // column's microseconds: intact, not tampered.
+                    ok++;
+                    sealedAtNanoseconds++;
                 } else {
                     tampered++;
                     log.error("AUDIT_ROW_TAMPERED id={} eventType={} occurredAt={} — "
@@ -121,7 +127,7 @@ public class AuditIntegrityVerifier {
         }
         paymentMetrics.auditIntegrityBroken(tampered);
         paymentMetrics.auditChainBroken(chainBroken);
-        return new Result(checked, ok, tampered, legacy, chainOk, chainBroken);
+        return new Result(checked, ok, tampered, legacy, chainOk, chainBroken, sealedAtNanoseconds);
     }
 
     /**
