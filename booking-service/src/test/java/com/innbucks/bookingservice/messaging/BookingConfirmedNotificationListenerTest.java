@@ -148,6 +148,35 @@ class BookingConfirmedNotificationListenerTest {
         }
     }
 
+    // event-service stores a title's line breaks and runs of spaces as typed,
+    // and either one in the template variable makes Twilio refuse the whole
+    // message (63021): every QR of that event, the buyer's and the guests'.
+    @Test
+    void eventName_titleWithLineBreaksOrSpaceRuns_isFlattenedForEveryRecipient() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", null, 2);
+        b.getItems().get(1).setAttendeeName("Tendai Ncube");
+        b.getItems().get(1).setAttendeePhone("+263772000000");
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
+        when(m.events().getEvent(b.getEventId())).thenReturn(ApiResult.ok(
+                EventLookupDTO.builder().title("Harare Jazz\r\nFestival\t     2026 ").build()));
+
+        m.listener().onBookingConfirmed(eventFor(b));
+
+        ArgumentCaptor<String> buyer = ArgumentCaptor.forClass(String.class);
+        verify(m.wa()).sendEventQrCode(eq("+263771234567"), buyer.capture(), anyString());
+        ArgumentCaptor<String> guest = ArgumentCaptor.forClass(String.class);
+        verify(m.wa()).sendEventQrCode(eq("+263772000000"), guest.capture(), anyString());
+        for (String eventName : List.of(buyer.getValue(), guest.getValue())) {
+            assertThat(eventName)
+                    .startsWith("Harare Jazz Festival 2026 (")
+                    .doesNotContain("\n")
+                    .doesNotContain("\r")
+                    .doesNotContain("\t")
+                    .doesNotContain("  ");
+        }
+    }
+
     @Test
     void eventName_singleTicket_saysOneTicket_notPlural() {
         Mocks m = mocks();

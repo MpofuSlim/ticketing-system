@@ -367,11 +367,14 @@ class TicketDeliveryServiceTest {
         Fixture f = fixture();
         Booking booking = bookingWithOneTicket();
         booking.setCustomerName("Alice Moyo");
+        // TENDAI (delivered to their own phone) sits before BAD (fell back to
+        // the buyer), so BAD is 3rd of the buyer's messages but 4th of the
+        // booking: "ticket i of n" must count the booking, as the receipt does.
         booking.setItems(List.of(
                 ticketFor("TN-ALICE", null, null, null),
                 ticketFor("TN-RUDO", "Rudo Sibanda", "rudo@example.com", null),
-                ticketFor("TN-BAD", "Bad Number", null, "+263779999999"),
-                ticketFor("TN-TENDAI", "Tendai Ncube", null, "+263772000000")));
+                ticketFor("TN-TENDAI", "Tendai Ncube", null, "+263772000000"),
+                ticketFor("TN-BAD", "Bad Number", null, "+263779999999")));
         doThrow(new NotificationDeliveryException("gateway said no"))
                 .when(f.whatsApp()).sendEventQrCode(eq("+263779999999"), anyString(), anyString());
 
@@ -394,6 +397,9 @@ class TicketDeliveryServiceTest {
         verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), rudo.capture(), contains("TN-RUDO"));
         assertTrue(rudo.getValue().contains("ticket 2 of 4"), rudo.getValue());
         assertTrue(rudo.getValue().contains("TN-RUDO (Rudo Sibanda)"), rudo.getValue());
+        ArgumentCaptor<String> bad = ArgumentCaptor.forClass(String.class);
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), bad.capture(), contains("TN-BAD"));
+        assertTrue(bad.getValue().contains("ticket 4 of 4"), bad.getValue());
     }
 
     @Test

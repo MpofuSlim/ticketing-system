@@ -1337,24 +1337,32 @@ organizer's bookings view from a list of MSISDNs into a guest list.
   guest.** The WhatsApp QR's media path still names the booking: Twilio fetches
   it, and the guest sees only the image.
 - **Every WhatsApp QR the purchaser receives names only its own ticket**
-  (`booking INN-…, ticket 2 of 3, total …, <its number> (<holder>)`). The buyer
-  forwards these (a guest's QR that fell back to them, an email-only guest's,
-  the spares of a booking that named nobody), and when every caption listed
-  every ticket number, one forward handed the recipient everyone's entry. The
-  full list is the purchaser's receipt email and wallet. Still open, stated
-  rather than hidden:
+  (`<title> (booking INN-…, ticket 2 of 3, total … — <its number> (<holder>))`,
+  the holder only when the ticket names one, `1 ticket` for a one-ticket
+  booking). The buyer forwards these (a guest's QR that fell back to them, an
+  email-only guest's, the spares of a booking that named nobody), and when
+  every caption listed every ticket number, one forward handed the recipient
+  everyone's entry. The full list is the purchaser's receipt email and wallet. "i of n" holds within
+  one send only: `findByIdWithItems` has no ORDER BY, so a resend can number a
+  ticket differently. The title is flattened (`singleLine`) like the holder's
+  name, because a line break or a run of spaces in it made Twilio refuse every
+  QR of that event (63021). Still open, stated rather than hidden:
   - Guest messages (email subject and body, the guest's WhatsApp caption) and
     forwarded QRs still show the confirmation number. At the gate,
-    `POST /tickets/lookup` (staff only) lists every ticket of that booking by
-    holder name, so the operator's name or ID check is the guard. Dropping the
-    number from guest messages is the owner's call.
+    `POST /tickets/lookup` (the event's organizer and gate team only) lists
+    every ticket of that booking by holder name, so the operator's name or ID
+    check is the guard. Dropping the number from guest messages is the owner's
+    call.
   - `GET /bookings/public/phone/{phone}` returns every ticket of the buyer's
     bookings to anyone who knows the buyer's number, until it closes (see
     "Ticket lookups that replace …" below).
   - Guest emails sent before this carry the booking link, valid for the life of
-    the booking (the id cannot rotate). They are the CONFIRMED bookings created
-    before the deploy with an item whose `lower(attendee_email)` differs from
-    `lower(coalesce(user_email, ''))`.
+    the booking (the id cannot rotate). They are among the CONFIRMED bookings
+    created before the deploy with an item whose `attendee_name IS NOT NULL`: a
+    guest was emailed only when named, and no edit removes a name. Comparing
+    `attendee_email` with `user_email` is not enough, because an attendee edit
+    clears or replaces the email in place and keeps no copy: it misses exactly
+    the guests later taken off a ticket.
   - The item link lives as long as its row. Changing a ticket's attendee rotates
     neither the ticket number nor the link, so a future "re-issue on
     reassignment" must rotate the link's key too.

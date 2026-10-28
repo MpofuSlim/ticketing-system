@@ -384,7 +384,13 @@ public class TicketDeliveryService {
      * every ticket number, one forward handed the recipient everyone's entry.
      * The whole list is in the purchaser's receipt email, which is not forwarded
      * as part of the flow. "ticket 2 of 3" also tells the buyer which message
-     * is whose.
+     * is whose, within one send: the items load in no fixed order
+     * ({@code findByIdWithItems} has no ORDER BY), so a resend can number the
+     * same ticket differently. Its number and holder are what identify it.
+     *
+     * <p>The event title goes through {@link #singleLine} like the holder's
+     * name: event-service stores a title's line breaks and runs of spaces as
+     * typed, and either one makes Twilio refuse every QR of that event.
      *
      * <p><b>Must be a single line.</b> WhatsApp template variables cannot
      * contain newlines, tabs, or &gt;4 consecutive spaces — any of those makes
@@ -396,7 +402,7 @@ public class TicketDeliveryService {
      */
     private String buildEventNameField(Booking booking, BookingItem item, String eventTitle) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
-        StringBuilder sb = new StringBuilder(eventTitle)
+        StringBuilder sb = new StringBuilder(singleLine(eventTitle))
                 .append(" (booking ").append(booking.getConfirmationNumber());
         int position = positionOf(items, item);
         if (items.size() == 1) {
@@ -410,7 +416,7 @@ public class TicketDeliveryService {
         if (total != null) {
             sb.append(", total ").append(total.toPlainString());
         }
-        // This ticket's number as the gate reference, after an en-dash. Single
+        // This ticket's number as the gate reference, after an em-dash. Single
         // line, no newlines (WhatsApp template-variable rule).
         sb.append(" — ").append(item.getTicketNumber());
         String who = item.getAttendeeName();
@@ -421,7 +427,7 @@ public class TicketDeliveryService {
         return sb.toString();
     }
 
-    /** 1-based position of {@code item} in the booking's (request-ordered) items, by identity; 0 if absent. */
+    /** 1-based position of {@code item} in the booking's items as loaded for this send, by identity; 0 if absent. */
     private static int positionOf(List<BookingItem> items, BookingItem item) {
         for (int i = 0; i < items.size(); i++) {
             if (items.get(i) == item) {
@@ -437,7 +443,7 @@ public class TicketDeliveryService {
      * <pre>Harare Jazz Festival (ticket for Tendai Ncube, booked by Alice Moyo, booking INN-..., 20260502-3FQ7M-X9K2D)</pre>
      */
     private String buildAttendeeEventNameField(Booking booking, BookingItem item, String eventTitle) {
-        StringBuilder sb = new StringBuilder(eventTitle)
+        StringBuilder sb = new StringBuilder(singleLine(eventTitle))
                 .append(" (ticket for ").append(singleLine(item.getAttendeeName()));
         if (booking.getCustomerName() != null && !booking.getCustomerName().isBlank()) {
             sb.append(", booked by ").append(singleLine(booking.getCustomerName()));
