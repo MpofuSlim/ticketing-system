@@ -22,8 +22,13 @@ in ways called out below.
 | Query | `GET {base}/payment/v1/{endUserId}/transactions/amount/{clientCorrelator}` | The only retried call |
 | Refund | `POST {base}/payment/v1/transactions/refund` | Keyed by `originalEcocashReference`; not yet modelled |
 
-- Preprod base: `https://payonline.ecocash.co.zw/ecocashGateway-preprod`
-  (test basic-auth creds + test merchant 8003/789111401/PIN 1234 are in the
+- Base URLs, as measured (see "The host trap" below):
+  - **Production:** `https://payonline.ecocash.co.zw/ecocashGateway` (live
+    since 2026-10-28).
+  - **Preprod:** `https://payonline.econet.co.zw/ecocashGateway-preprod`. The
+    PDF names `payonline.ecocash.co.zw/ecocashGateway-preprod`, which our
+    client cannot reach.
+- Preprod (test basic-auth creds + test merchant 8003/789111401/PIN 1234 are in the
   PDF; test customer msisdns must be registered with the EcoCash POC by
   email first).
 - Auth: **HTTP Basic** on every call. Same credentials for USD and ZWG.
@@ -170,12 +175,23 @@ Your support ID is: …") served with **HTTP 200** and `text/html`, even for an
 empty `{}` body — which is what proved the request *content* was never the
 problem.
 
-- **Which host serves PRODUCTION is NOT yet confirmed.** EcoCash said
-  `.ecocash` first, then `.econet`. Before go-live, get the production base
-  URL in writing and run one non-mutating GET against it with our real
-  `User-Agent`; if production is on `payonline.ecocash.co.zw`, the same
-  challenge will refuse every charge on launch day unless they whitelist us
-  first.
+- **PRODUCTION is `https://payonline.ecocash.co.zw/ecocashGateway`**, the
+  `.ecocash` host, and there it does NOT challenge us. Measured 2026-10-28
+  from the production box with our real `User-Agent`
+  (`Ticketize-Payments/1.0`): a GET and an empty POST both got EcoCash's own
+  `401` JSON, with no `cf-mitigated` header. The first live charge (USD 0.20,
+  reference `MP261028.1607.T8736889`) completed, and a USD 0.01 booking
+  confirmed end to end.
+  - So the same name means different edges: preprod's `.ecocash` host
+    challenges, production's does not. Keep preprod on `.econet`.
+  - Where it is set: production's `ECOCASH_BASE_URL` lives in the production
+    box's gitignored `cell.zw.local.env` (so in `cell-zw-secrets`), beside
+    the production merchant's credentials (merchant code `073537`). The
+    committed `cell.zw.env` keeps preprod's URL for staging.
+  - If production ever starts answering `403` with `cf-mitigated:
+    challenge`, EcoCash's edge changed: ask them to allow-list
+    `Ticketize-Payments/1.0` from our egress IP. Do not change the
+    User-Agent.
 - Do NOT "fix" this by spoofing a browser or `curl` User-Agent. The rail
   sends an honest identity (`EcocashEipClient.USER_AGENT`); a payment partner
   is entitled to know what is calling it.

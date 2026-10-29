@@ -3938,10 +3938,13 @@ back). Non-negotiables:
   `ecocash.co.zw` answers `curl` 200 but our client 403; `econet.co.zw`
   answers **both** 200. This cost a full day of debugging while the
   credentials, merchant config, body and registered msisdns were all correct
-  — so check the HOST first if EcoCash starts refusing. **The PRODUCTION host
-  is NOT confirmed** (EcoCash said `.ecocash`, then `.econet`): get it in
-  writing and probe it with our real User-Agent before go-live, or launch day
-  reproduces this with real customers.
+  — so check the HOST first if EcoCash starts refusing. **PRODUCTION is
+  `https://payonline.ecocash.co.zw/ecocashGateway`, live since 2026-10-28**,
+  and its edge passes our User-Agent: a GET and an empty POST got EcoCash's
+  own 401 JSON with no challenge, and the first live charge confirmed. So the
+  `.ecocash` name challenges on preprod but not on production. Production's
+  URL and credentials (merchant `073537`) are set in the production box's
+  gitignored `cell.zw.local.env`; the committed `cell.zw.env` keeps preprod's.
 - **The client sends an honest `User-Agent`** (`EcocashEipClient.USER_AGENT`),
   because EcoCash's edge runs a UA **allow-list**: `curl/8.x` passes,
   `Java-http-client/21` (the JDK default) and even `Ticketize-Payments/1.0`
