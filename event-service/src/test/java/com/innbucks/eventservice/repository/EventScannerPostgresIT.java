@@ -7,6 +7,7 @@ import com.innbucks.eventservice.entity.EventScannerAssignment;
 import com.innbucks.eventservice.exception.ApiProblemException;
 import com.innbucks.eventservice.service.ScannerService;
 import com.innbucks.eventservice.testsupport.PostgresIntegrationTestBase;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,7 +44,11 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
     private final UUID organizerA = UUID.randomUUID();
     private final UUID organizerB = UUID.randomUUID();
 
+    // Before AND after: the Postgres container is shared by every IT in the
+    // module, and EventRepositoryPostgresIT counts every active event, so rows
+    // left behind here change its answer.
     @BeforeEach
+    @AfterEach
     void clean() {
         assignmentRepository.deleteAll();
         scannerRepository.deleteAll();
@@ -143,19 +148,21 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
         assign(atA, aEvent);
         Event overlapping = event(organizerB, now.plusDays(1).withHour(20), now.plusDays(1).withHour(22));
 
+        // Each save returns the managed copy at its new @Version; keep it, or
+        // the next save of the old copy is an optimistic-lock failure.
         atA.setDisabledAt(now);
-        scannerRepository.saveAndFlush(atA);
+        atA = scannerRepository.saveAndFlush(atA);
         assertThat(clashes(atB, overlapping)).as("A switched them off").isZero();
 
         atA.setDisabledAt(null);
         atA.setDeclinedAt(now);
-        scannerRepository.saveAndFlush(atA);
+        atA = scannerRepository.saveAndFlush(atA);
         assertThat(clashes(atB, overlapping)).as("they declined A").isZero();
 
         // A's own switched-off row still may not take an overlapping event of A's.
         atA.setDeclinedAt(null);
         atA.setDisabledAt(now);
-        scannerRepository.saveAndFlush(atA);
+        atA = scannerRepository.saveAndFlush(atA);
         Event aOverlapping = event(organizerA, now.plusDays(1).withHour(21), now.plusDays(1).withHour(23));
         assertThat(assignmentRepository.countClashes(PHONE, atA.getScannerId(), aOverlapping.getEventId(),
                 aOverlapping.getStartDateTime(), aOverlapping.getEndDateTime(), now)).isEqualTo(1);
