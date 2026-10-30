@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.common.ticket.TicketNumbers;
 import com.innbucks.bookingservice.dto.GateLookupRequestDTO;
 import com.innbucks.bookingservice.dto.GateLookupResponseDTO;
 import com.innbucks.bookingservice.dto.ScanTicketRequestDTO;
@@ -75,6 +76,10 @@ public class TicketScanController {
                           "show a retry rather than turning the customer away — an outage is not a " +
                           "verdict about the ticket. Operators can disable the day rule entirely with " +
                           "`innbucks.scan.event-day-check.enabled=false`. " +
+                          "**A typed `ticketNumber` is accepted in any case, with or without its dashes " +
+                          "or spaces** (`202606197kq4m9xz2b` finds `20260619-7KQ4M-9XZ2B`): the fallback " +
+                          "when a QR will not scan. The response and the scan record carry the number as " +
+                          "issued. " +
                           "Requires **EVENT_ORGANIZER** or **TEAM_MEMBER** role."
     )
     @ApiResponses({
@@ -196,7 +201,7 @@ public class TicketScanController {
             Authentication authentication
     ) {
         String scannerDisplayName = resolveScannerDisplayName(authentication);
-        ScanTicketResponseDTO result = ticketScanService.scan(request.getTicketNumber(), scannerDisplayName);
+        ScanTicketResponseDTO result = ticketScanService.scan(issuedForm(request.getTicketNumber()), scannerDisplayName);
         return ResponseEntity.ok(ApiResult.ok("Scan result", result));
     }
 
@@ -320,6 +325,20 @@ public class TicketScanController {
     ) {
         GateLookupResponseDTO result = gateLookupService.lookup(request.getConfirmationNumber());
         return ResponseEntity.ok(ApiResult.ok("Lookup result", result));
+    }
+
+    /**
+     * The ticket number as issued, when the value is one a person typed:
+     * dashes optional, any case, spaces dropped ({@link TicketNumbers#canonical}).
+     * Gate staff type it from the buyer's message when the QR will not scan or
+     * never arrived. Only the spelling is forgiven: no symbol is swapped for
+     * another, so it can only ever find the ticket that was typed. A camera
+     * scan already sends the issued form and passes through unchanged, and
+     * anything that is not ticket-shaped (a stray QR) is looked up exactly as
+     * sent, so it is still TICKET_NOT_FOUND.
+     */
+    static String issuedForm(String raw) {
+        return raw == null ? null : TicketNumbers.canonical(raw).orElse(raw);
     }
 
     /**
