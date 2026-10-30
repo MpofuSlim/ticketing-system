@@ -48,7 +48,8 @@ class GatewayRouteTableTest {
             "user-auth-route", "device-security-partner-route",
             "cells-lookup-route", "user-admin-route", "user-notifications-route",
             "user-organizations-route",
-            "booking-event-organizer-reports-route", "user-event-organizer-route",
+            "booking-event-organizer-reports-route", "event-organizer-scanners-route",
+            "user-event-organizer-route",
             "user-internal-deny", "user-self-route",
             "event-internal-deny", "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-internal-deny", "seat-service-category-route",
@@ -79,6 +80,7 @@ class GatewayRouteTableTest {
             Map.entry("user-organizations-route", "/organizations/**"),
             Map.entry("user-event-organizer-route", "/event-organizer/**"),
             Map.entry("booking-event-organizer-reports-route", "/event-organizer/reports/**"),
+            Map.entry("event-organizer-scanners-route", "/event-organizer/scanners/**"),
             Map.entry("user-self-route", "/users/**"),
             Map.entry("event-service-route", "/events/**"),
             Map.entry("seat-service-seat-route", "/seats/**"),
@@ -97,6 +99,7 @@ class GatewayRouteTableTest {
             "auth-device-security-route", "auth-staff-invite-route", "device-security-partner-route",
             "user-admin-route", "user-notifications-route", "user-organizations-route",
             "user-event-organizer-route", "booking-event-organizer-reports-route",
+            "event-organizer-scanners-route",
             "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
             "booking-public-phone-route", "booking-ticket-check-route", "booking-create-route",
@@ -481,6 +484,20 @@ class GatewayRouteTableTest {
                 .isLessThan(catchAll);
         assertThat(route("booking-event-organizer-reports-route").getUri())
                 .hasToString("lb://booking-service");
+    }
+
+    @Test
+    void scannersRoutePrecedesUserEventOrganizerCatchAll() {
+        // The super-app scanners (event-service V14) live under /event-organizer
+        // beside user-service's team members. Matched after the catch-all, every
+        // scanner call would reach user-service and 404.
+        List<String> order = orderedIds();
+        int scanners = order.indexOf("event-organizer-scanners-route");
+        assertThat(scanners).as("event-organizer-scanners-route must be defined").isGreaterThanOrEqualTo(0);
+        assertThat(scanners)
+                .as("event-organizer-scanners-route must precede the /event-organizer/** catch-all")
+                .isLessThan(order.indexOf("user-event-organizer-route"));
+        assertThat(route("event-organizer-scanners-route").getUri()).hasToString("lb://event-service");
     }
 
     /**

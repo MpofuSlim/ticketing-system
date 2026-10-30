@@ -1020,6 +1020,67 @@ here are the shape of the key and the hole it opened one level up:
   `tokenVersion`" is inaccurate — it does, in `UserAdminService.setRoles`. The
   hole it describes is real regardless, because the refresh ROW survives.)
 
+## Super-app gate scanners are phone numbers, not accounts (event-service V14)
+
+**An organizer adds a scanner by phone number and name
+(`POST /event-organizer/scanners`). The person behind the number accepts in the
+super app (`POST /events/gate/invites/{id}/accept`), which binds the row to the
+account that accepted, and only that account then scans.** The scanner-app
+`TEAM_MEMBER` (user-service) could not serve the super app: it creates an
+account on the number, one per number, with one organizer per account. A
+super-app user already has an account on their number, so creating one was
+refused, and an account created first made `/auth/exchange` refuse the number
+(`not_a_customer`).
+
+- **Where it lives.** `event_scanners` and `event_scanner_assignments` in
+  event-service, beside the events. The ownership check and the clash rule are
+  then one local transaction on live event times, with no remote call. The
+  gateway's `event-organizer-scanners-route` sends `/event-organizer/scanners/**`
+  to event-service, ahead of user-service's `/event-organizer/**`
+  (`GatewayRouteTableTest`).
+- **The shared-device login stays (owner decision, 2026-10-30).**
+  `/event-organizer/team-members` (an account plus a temporary password, for
+  the scanner app on venue phones) is unchanged. Venues that hand phones around
+  can't use a personal wallet to scan.
+- **A number is never on two events whose times overlap, under any organizer
+  (owner decision, 2026-10-30).** Organizers may run overlapping events; one
+  scanner may not be at both, even two of the same organizer's.
+  - Checked whenever a row starts counting: assign, enable, reinvite
+    (`countClashes` / `countClashesOnReturn`).
+  - The check runs after `lockAllByPhoneNumber` (`FOR UPDATE` on every row of
+    the number, in id order), in the same transaction, so two organizers
+    assigning one number at once queue (`EventScannerPostgresIT`, 10 rounds).
+  - Windows are half-open. Ended and deleted events never clash. Another
+    organizer's switched-off or declined row doesn't count, but a row's own
+    events always do.
+  - It is NOT re-checked when an organizer moves their own event: one
+    organizer's schedule change is never blocked by another's staffing.
+  - The refusal (`409 scanner_schedule_clash`) names neither the other event
+    nor its organizer.
+- **Nothing says whether a number has an InnBucks account.** Every new scanner
+  is `INVITED`. No message is sent (the organizer tells the person). The
+  organizer only ever sees the name they typed.
+  - Status is derived from `disabled_at` > `declined_at` > `accepted_at`, never
+    stored.
+  - `chk_event_scanners_accept_binds_account` keeps `accepted_at` and
+    `account_user_uuid` together. Leaving (decline on an accepted team) clears
+    both, so a recycled number's new owner inherits nothing.
+  - At most `events.scanners.max-per-organizer` (500) per organizer: each one
+    puts an invite in a stranger's app.
+- **The super-app endpoints take the phone and the account from the session,
+  never from a request.** `JwtFilter` stashes the token's `phoneNumber` claim.
+  - `GET /events/gate` is matched `authenticated()` BEFORE the
+    `GET /events/**` permitAll in `SecurityConfig`, like `/events/inactive`.
+  - Pinned through a real minted JWT by `ScannerEndpointsSecurityTest`.
+- **booking-service asks before every scan:** `GET /events/internal/scanner-access`
+  (X-Internal-Token, covered by the `/events/internal/*` permitAll and
+  event-internal-deny). It returns allowed only for an accepted, switched-on
+  scanner assigned to the event, on that event's organizer's team. It is read
+  live, so a removal bites at the next scan.
+- **Still to come:** booking-service scanning with a super-app token (eventId
+  required, `WRONG_EVENT`, the organizer-typed name as the scanner's name), and
+  moving a legacy `TEAM_MEMBER` onto a scanner.
+
 ## Deactivation ends sessions at once; `token_version` is written atomically (user-service, V42)
 
 **`PUT /admin/users/{id}/active` with `false` (and the organizer's team-member

@@ -342,6 +342,22 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # An organizer's super-app scanners live in event-service (V14), beside
+            # the events they are assigned to; every other /event-organizer path
+            # (team members, the shared-device logins, among them) is
+            # user-service's. Must precede user-event-organizer-route.
+            - id: event-organizer-scanners-route
+              uri: lb://event-service
+              predicates:
+                - Path=/event-organizer/scanners/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: user-event-organizer-route
               uri: lb://user-service
               predicates:
