@@ -14,6 +14,7 @@ import com.innbucks.bookingservice.exception.NotFoundException;
 import com.innbucks.bookingservice.security.AuthenticatedCaller;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.service.ScanReportService;
+import com.innbucks.bookingservice.service.TicketScanService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -120,11 +121,15 @@ public class ScanReportController {
     private String eventInternalToken;
 
     @GetMapping("/me")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','CUSTOMER')")
     @Operation(summary = "List my scan attempts",
             description = "Returns the calling user's own scan attempts in the [from, to] window, " +
                           "newest first. Page size capped at " + MAX_PAGE_SIZE + ". `to` is optional — omit it for "
-                        + "'up to now'; a supplied value is widened to the end of its market-local day.")
+                        + "'up to now'; a supplied value is widened to the end of its market-local day. "
+                        + "`eventId` narrows it to one event; with `eventId`, `from` may be omitted for the "
+                        + "whole event. Open to super-app gate scanners (CUSTOMER): only the caller's own "
+                        + "attempts are ever returned, so it needs no team check. A super-app scanner's rows "
+                        + "carry no `scannerEmail`.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200", description = "Page of scan attempts",
@@ -156,7 +161,8 @@ public class ScanReportController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "'from' after 'to', page<0, or size out of range",
+                    description = "'from' missing (without eventId) or after 'to', 'to' without 'from', "
+                            + "page<0, or size out of range",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "400 BAD_REQUEST", "message": "'from' (2026-06-30T00:00:00Z) must not be after 'to' (2026-06-01T00:00:00Z).", "data": null }
@@ -168,7 +174,7 @@ public class ScanReportController {
                                     { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller is not EVENT_ORGANIZER or TEAM_MEMBER",
+                    description = "Caller is not EVENT_ORGANIZER, TEAM_MEMBER or CUSTOMER",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
@@ -176,13 +182,25 @@ public class ScanReportController {
     })
     public ResponseEntity<ApiResult<PageResponse<ScanAttemptDTO>>> myScans(
             Authentication authentication,
-            @RequestParam Instant from,
+            @RequestParam(required = false) Instant from,
             @RequestParam(required = false) Instant to,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) UUID eventId) {
         UUID scannerUserUuid = requireScannerUserUuid(authentication);
-        to = resolveTo(from, to);
         validatePage(page, size);
+        if (eventId != null) {
+            if (from != null) {
+                to = resolveTo(from, to);
+            } else if (to != null) {
+                throw new BadRequestException("'from' is required when 'to' is given.");
+            }
+            log.debug("GET /scans/me scanner={} eventId={} from={} to={} page={} size={}",
+                    scannerUserUuid, eventId, from, to, page, size);
+            return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Scan attempts retrieved",
+                    scanReportService.listMyScansAtEvent(scannerUserUuid, eventId, from, to, page, size)));
+        }
+        to = resolveTo(from, to);
         log.debug("GET /scans/me scanner={} from={} to={} page={} size={}",
                 scannerUserUuid, from, to, page, size);
         return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Scan attempts retrieved",
@@ -190,17 +208,22 @@ public class ScanReportController {
     }
 
     @GetMapping("/me/stats")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','CUSTOMER')")
     @Operation(summary = "My scan-outcome stats",
             description = "Outcome breakdown (ALLOWED, ALREADY_REDEEMED, etc.) for the calling user " +
                           "over the [from, to] window. Every Outcome enum value is present in the response " +
                           "(zero-filled for outcomes the scanner didn't see). `to` is optional — omit it " +
-                          "for 'up to now'; a supplied value is widened to the end of its market-local day.")
+                          "for 'up to now'; a supplied value is widened to the end of its market-local day. " +
+                          "`eventId` narrows it to one event (echoed back as `eventId`); with `eventId`, " +
+                          "`from` may be omitted for the whole event, and `from`/`to` are then null. " +
+                          "Open to super-app gate scanners (CUSTOMER), whose stats carry no `scannerEmail` " +
+                          "and the name the organizer typed for them.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Stats computed",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
+                            examples = {
+                                    @ExampleObject(name = "Window", value = """
                                     {
                                       "code": "200 OK",
                                       "message": "Scanner stats retrieved",
@@ -221,9 +244,35 @@ public class ScanReportController {
                                         }
                                       }
                                     }
-                                    """))),
+                                    """),
+                                    @ExampleObject(name = "One event (super-app scanner)", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Scanner stats retrieved",
+                                      "data": {
+                                        "scannerUserUuid": "5b2e8f10-3c4d-4e5f-8a9b-0c1d2e3f4a5b",
+                                        "scannerEmail": null,
+                                        "scannerDisplayName": "Rudo Sibanda",
+                                        "from": null,
+                                        "to": null,
+                                        "total": 57,
+                                        "byOutcome": {
+                                          "ALLOWED": 51,
+                                          "ALREADY_REDEEMED": 3,
+                                          "WRONG_ORGANIZER": 0,
+                                          "NOT_ASSIGNED_TO_EVENT": 0,
+                                          "TICKET_NOT_FOUND": 1,
+                                          "BOOKING_NOT_CONFIRMED": 0,
+                                          "WRONG_EVENT_DAY": 0,
+                                          "WRONG_EVENT": 2
+                                        },
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                                      }
+                                    }
+                                    """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "'from' after 'to'",
+                    description = "'from' missing (without eventId) or after 'to', or 'to' without 'from'",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "400 BAD_REQUEST", "message": "'from' (2026-06-30T00:00:00Z) must not be after 'to' (2026-06-01T00:00:00Z).", "data": null }
@@ -235,7 +284,7 @@ public class ScanReportController {
                                     { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller is not EVENT_ORGANIZER or TEAM_MEMBER",
+                    description = "Caller is not EVENT_ORGANIZER, TEAM_MEMBER or CUSTOMER",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
@@ -243,12 +292,27 @@ public class ScanReportController {
     })
     public ResponseEntity<ApiResult<ScannerStatsDTO>> myStats(
             Authentication authentication,
-            @RequestParam Instant from,
-            @RequestParam(required = false) Instant to) {
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to,
+            @RequestParam(required = false) UUID eventId) {
         UUID scannerUserUuid = requireScannerUserUuid(authentication);
+        // A super-app session's subject is a phone or a customer email, and it
+        // carries no name: neither is the scanner's identity at the gate. The
+        // service reads the name the organizer typed off their latest scan.
+        boolean superApp = TicketScanService.isSuperAppScanner(authentication);
+        String email = superApp ? null : authentication.getName();
+        String displayName = superApp ? null : resolveDisplayName(authentication);
+        if (eventId != null) {
+            if (from != null) {
+                to = resolveTo(from, to);
+            } else if (to != null) {
+                throw new BadRequestException("'from' is required when 'to' is given.");
+            }
+            log.debug("GET /scans/me/stats scanner={} eventId={} from={} to={}", scannerUserUuid, eventId, from, to);
+            return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Scanner stats retrieved",
+                    scanReportService.myStatsAtEvent(scannerUserUuid, email, displayName, eventId, from, to)));
+        }
         to = resolveTo(from, to);
-        String email = authentication.getName();
-        String displayName = resolveDisplayName(authentication);
         log.debug("GET /scans/me/stats scanner={} from={} to={}", scannerUserUuid, from, to);
         return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Scanner stats retrieved",
                 scanReportService.myStats(scannerUserUuid, email, displayName, from, to)));

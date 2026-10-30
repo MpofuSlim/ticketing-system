@@ -141,7 +141,7 @@ public class ScanAttempt implements Persistable<UUID> {
     private String country;
 
     /**
-     * Mirrors the CHECK constraint in V15__scan_attempts.sql exactly — adding a
+     * Mirrors the CHECK constraint (V15, rewritten by V23 and V30) exactly — adding a
      * value here without adding it to the migration (and vice versa) will fail
      * the insert at the DB layer.
      */
@@ -152,6 +152,8 @@ public class ScanAttempt implements Persistable<UUID> {
         NOT_ASSIGNED_TO_EVENT,
         TICKET_NOT_FOUND,
         BOOKING_NOT_CONFIRMED,
-        WRONG_EVENT_DAY
+        WRONG_EVENT_DAY,
+        /** A ticket for another event than the one the scanner said they scan for (V30). */
+        WRONG_EVENT
     }
 }

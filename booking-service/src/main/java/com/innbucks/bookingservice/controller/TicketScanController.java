@@ -46,7 +46,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @Slf4j
 @Tag(name = "Ticket Scan",
-     description = "Gate-side ticket redemption for EVENT_ORGANIZER and TEAM_MEMBER scanners.")
+     description = "Gate-side ticket redemption: the scanner app (EVENT_ORGANIZER, TEAM_MEMBER) and "
+             + "gate scanners on the InnBucks super app (a CUSTOMER session whose phone an organizer "
+             + "added to the event's team).")
 @SecurityRequirement(name = "bearerAuth")
 public class TicketScanController {
 
@@ -54,7 +56,7 @@ public class TicketScanController {
     private final GateLookupService gateLookupService;
 
     @PostMapping("/scan")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','CUSTOMER')")
     @Operation(
             summary = "Redeem a ticket at the gate",
             description = "Single-shot per ticket. ALLOWED on the first scan; ALREADY_REDEEMED on every " +
@@ -75,7 +77,13 @@ public class TicketScanController {
                           "show a retry rather than turning the customer away — an outage is not a " +
                           "verdict about the ticket. Operators can disable the day rule entirely with " +
                           "`innbucks.scan.event-day-check.enabled=false`. " +
-                          "Requires **EVENT_ORGANIZER** or **TEAM_MEMBER** role."
+                          "**`eventId`** is the event the gate is scanning for: a ticket for any other " +
+                          "event is WRONG_EVENT and is not redeemed. Optional for the scanner app. " +
+                          "**Super-app scanners** (a CUSTOMER session) must send it: their access to that " +
+                          "event is checked first (NOT_ASSIGNED_TO_EVENT when their number is not on the " +
+                          "event's team, 503 when it cannot be checked), and a ticket of another event or " +
+                          "organizer is WRONG_EVENT. ALLOWED and ALREADY_REDEEMED carry `categoryName`. " +
+                          "Requires **EVENT_ORGANIZER**, **TEAM_MEMBER** or **CUSTOMER** role."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -92,7 +100,8 @@ public class TicketScanController {
                                                 "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
                                                 "redeemedAt": "2026-06-19T19:42:11Z",
                                                 "redeemedByName": "Tariro Chikomo",
-                                                "holderName": "Tendai Ncube"
+                                                "holderName": "Tendai Ncube",
+                                                "categoryName": "VIP"
                                               }
                                             }
                                             """),
@@ -106,7 +115,8 @@ public class TicketScanController {
                                                 "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
                                                 "redeemedAt": "2026-06-19T19:42:11Z",
                                                 "redeemedByName": "Tariro Chikomo",
-                                                "holderName": "Tendai Ncube"
+                                                "holderName": "Tendai Ncube",
+                                                "categoryName": "VIP"
                                               }
                                             }
                                             """),
@@ -153,20 +163,51 @@ public class TicketScanController {
                                                 "eventDate": "2026-06-19"
                                               }
                                             }
+                                            """),
+                                    @ExampleObject(name = "WRONG_EVENT", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Scan result",
+                                              "data": {
+                                                "status": "WRONG_EVENT",
+                                                "ticketNumber": "20260619-7KQ4M-9XZ2B",
+                                                "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "NOT_ASSIGNED_TO_EVENT", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Scan result",
+                                              "data": {
+                                                "status": "NOT_ASSIGNED_TO_EVENT",
+                                                "ticketNumber": "20260619-7KQ4M-9XZ2B"
+                                              }
+                                            }
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "ticketNumber missing or blank",
+                    responseCode = "400", description = "ticketNumber missing or blank; or a super-app "
+                            + "scanner sent no eventId",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
+                            examples = {
+                                    @ExampleObject(name = "ticketNumber missing", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Validation failed",
                                       "data": { "ticketNumber": "ticketNumber is required" }
                                     }
-                                    """))),
+                                    """),
+                                    @ExampleObject(name = "eventId missing (super app)", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "eventId is required",
+                                      "data": null
+                                    }
+                                    """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Caller is not an EVENT_ORGANIZER or TEAM_MEMBER",
+                    responseCode = "403", description = "Caller is not an EVENT_ORGANIZER, TEAM_MEMBER or CUSTOMER",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
@@ -183,25 +224,35 @@ public class TicketScanController {
                                   + "the deliberate exception to the always-200 rule, because an "
                                   + "outage is not a verdict about the ticket.",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
+                            examples = {
+                                    @ExampleObject(name = "Event date unknown", value = """
                                     {
                                       "code": "503 SERVICE_UNAVAILABLE",
                                       "message": "Could not confirm the event's date. Please try again.",
                                       "data": null
                                     }
-                                    """)))
+                                    """),
+                                    @ExampleObject(name = "Scanner access unknown (super app)", value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "Could not confirm you can scan for this event. Please try again.",
+                                      "data": null
+                                    }
+                                    """)
+                            }))
     })
     public ResponseEntity<ApiResult<ScanTicketResponseDTO>> scan(
             @Valid @RequestBody ScanTicketRequestDTO request,
             Authentication authentication
     ) {
         String scannerDisplayName = resolveScannerDisplayName(authentication);
-        ScanTicketResponseDTO result = ticketScanService.scan(request.getTicketNumber(), scannerDisplayName);
+        ScanTicketResponseDTO result = ticketScanService.scan(
+                request.getTicketNumber(), request.getEventId(), scannerDisplayName);
         return ResponseEntity.ok(ApiResult.ok("Scan result", result));
     }
 
     @PostMapping("/lookup")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','CUSTOMER')")
     @Operation(
             summary = "Find a booking by confirmation number (no-QR fallback)",
             description = "For a customer who cannot open the WhatsApp QR but has the confirmation number "
@@ -216,7 +267,12 @@ public class TicketScanController {
                           + "Same authorization as the scan: WRONG_ORGANIZER / NOT_ASSIGNED_TO_EVENT when this "
                           + "scanner could not redeem the booking's tickets. Every outcome is 200 with a "
                           + "`status`; anything but FOUND carries only the echoed confirmation number. "
-                          + "Requires **EVENT_ORGANIZER** or **TEAM_MEMBER** role."
+                          + "**`eventId`** is the event the gate is scanning for: another event's booking is "
+                          + "WRONG_EVENT and none of its tickets are listed. Optional for the scanner app; "
+                          + "**super-app scanners** must send it, and their access to the event is checked "
+                          + "before the booking is read (NOT_ASSIGNED_TO_EVENT, or 503 when it cannot be "
+                          + "checked). "
+                          + "Requires **EVENT_ORGANIZER**, **TEAM_MEMBER** or **CUSTOMER** role."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -292,6 +348,16 @@ public class TicketScanController {
                                                 "confirmationNumber": "INN-20260901-3C8849"
                                               }
                                             }
+                                            """),
+                                    @ExampleObject(name = "WRONG_EVENT", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Lookup result",
+                                              "data": {
+                                                "status": "WRONG_EVENT",
+                                                "confirmationNumber": "INN-20260901-3C8849"
+                                              }
+                                            }
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -305,7 +371,7 @@ public class TicketScanController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Caller is not an EVENT_ORGANIZER or TEAM_MEMBER",
+                    responseCode = "403", description = "Caller is not an EVENT_ORGANIZER, TEAM_MEMBER or CUSTOMER",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
@@ -313,12 +379,24 @@ public class TicketScanController {
                                       "message": "Forbidden - insufficient role",
                                       "data": null
                                     }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503", description = "A super-app scanner's access to the event could "
+                            + "not be checked. Retryable; nothing was read.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "Could not confirm you can scan for this event. Please try again.",
+                                      "data": null
+                                    }
                                     """)))
     })
     public ResponseEntity<ApiResult<GateLookupResponseDTO>> lookup(
             @Valid @RequestBody GateLookupRequestDTO request
     ) {
-        GateLookupResponseDTO result = gateLookupService.lookup(request.getConfirmationNumber());
+        GateLookupResponseDTO result = gateLookupService.lookup(
+                request.getConfirmationNumber(), request.getEventId());
         return ResponseEntity.ok(ApiResult.ok("Lookup result", result));
     }
 
