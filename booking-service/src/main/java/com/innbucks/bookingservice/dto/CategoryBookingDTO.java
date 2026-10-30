@@ -19,6 +19,11 @@ import java.util.UUID;
 public class CategoryBookingDTO {
 
     private UUID bookingId;
+    /**
+     * This ticket's own id: the key for {@code PUT /bookings/{bookingId}/items/{bookingItemId}/attendee},
+     * which replaces editing by ticket number (a masked number cannot address a ticket).
+     */
+    private UUID bookingItemId;
     private String userEmail;
     /**
      * The PURCHASER's full name (V22) — who paid for the booking this ticket
@@ -46,6 +51,11 @@ public class CategoryBookingDTO {
     private String categoryName;
     private String rowLabel;
     private Integer seatNumber;
+    /**
+     * The gate credential. Masked ({@code 20261030-*****-**7CB}) when the cell
+     * masks ticket numbers ({@code app.booking.mask-ticket-numbers}): this list
+     * is read by organizers and staff, never by the ticket's holder.
+     */
     private String ticketNumber;
     private BigDecimal priceAtBooking;
     /** The price tier the ticket was sold at; absent at the full price. */

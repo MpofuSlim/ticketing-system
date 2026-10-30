@@ -1495,6 +1495,44 @@ ticket shapes are defined once, in common's `TicketNumbers`.
   At 24 bits a day, b bookings expect about b²/33.5M clashes (27 at 30,000):
   expected, retried, invisible to the buyer, and not alerted.
 
+## Ticket numbers are whole only for the buyer, the holder and the gate (booking-service)
+
+**A ticket number is the gate credential (the QR holds nothing else, and the
+first scan wins), so every surface an organizer or staff member reads shows it
+masked, `20261030-*****-**7CB` (`TicketNumbers.forDisplay`, the log mask), and
+carries no QR** (owner's go, 2026-10-30). Shown whole, it reached everyone who
+could see the console or the export the console builds from it (the bookings
+CSV, Excel and PDF are the guest-list JSON), and any of them could walk in on it
+before the real holder.
+
+- **Masked** (`TicketNumberDisplay.forStaff`): the guest list (`/bookings/by-event`,
+  `/by-category`, and through it seat-service's analytics, which passes the field
+  through), a booking read by anyone but its buyer (`/bookings/{id}` by staff,
+  `/confirmation/{n}` by an organizer or staff, `/phone/{p}` for someone else's
+  number: number masked, `qrCode` null), the scan reports (`/scans/**`, where a
+  refused scan's number can still get in), and the attendee edit's answer.
+- **Whole**: the buyer's own reads and wallet, the magic-link and holder pages,
+  every message we send, the gate's scan and lookup, and
+  `GET /bookings/internal/{id}` (`getBookingForService`: a service is not a
+  person, and what siblings receive must not change with the switch).
+- **What replaced the full number in the console:** `bookingItemId` on every
+  guest-list row and on each item of an authenticated booking read (never on a
+  public view), the attendee edit by item
+  (`PUT /bookings/{bookingId}/items/{bookingItemId}/attendee`; the by-number
+  path is deprecated, and put the credential in every access log), and
+  `GET /bookings/by-event/{id}?ticketNumber=` (any case, dashes optional; that
+  ticket's row or `[]`, ownership checked first).
+- **The switch is a rollout device** (`app.booking.mask-ticket-numbers`,
+  `BOOKINGS_MASK_TICKET_NUMBERS`, default false): masked before the console
+  moves, its edit-by-number and in-browser search stop finding tickets. Turn it
+  on per cell once the console has moved; then delete it and mask always.
+- **Not closed by this, stated rather than hidden:** the booking id and the item
+  id on those same surfaces still open the PUBLIC ticket pages
+  (`GET /bookings/{bookingId}/tickets`, `/bookings/tickets/{itemId}`), which show
+  the QR. Those pages need a key of their own (a random link token) before the
+  ids stop being credentials; until then masking stops the casual copy, the
+  export and the screenshot, not someone reading the raw JSON.
+
 ## A MERCHANT_ADMIN's token carries NO `merchantId` claim — the organization is the scope
 
 **Step 2 of the organizations plan removed `AuthService.resolveMerchantIdClaim`

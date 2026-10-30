@@ -208,4 +208,12 @@ class TicketNumbersTest {
         assertThat(TicketNumbers.redactIn(null)).isNull();
         assertThat(TicketNumbers.redactIn("")).isEmpty();
     }
+
+    @Test
+    void forDisplay_masksLikeTheLogs_andNeverShowsAValueThatIsNotATicket() {
+        assertThat(TicketNumbers.forDisplay("20261030-CH2F0-5V7CB")).isEqualTo("20261030-*****-**7CB");
+        assertThat(TicketNumbers.forDisplay("20261028-90100N")).isEqualTo("20261028-****0N");
+        assertThat(TicketNumbers.forDisplay("TKT-SECRET")).isEqualTo("****");
+        assertThat(TicketNumbers.forDisplay(null)).isNull();
+    }
 }
