@@ -303,6 +303,56 @@ groups:
           description: "Some writer stored a key without a TTL. Under noeviction it stays until deleted by hand."
           runbook: "prometheus/slo.md#rediskeyswithoutttl"
 
+  # The node's clock (node-exporter's timex collector, job "node-clock"). Every
+  # 2FA code, token expiry, scheduled job and stored timestamp in the cell reads
+  # it. On 2026-10-30 production's chronyd had been stopped since Jul 22: the
+  # clock had drifted 63 s slow, past the one 30 s step either side a TOTP code
+  # is allowed, and every staff sign-in failed with nothing alerting.
+  - name: clock
+    interval: 60s
+    rules:
+
+      # The kernel's own verdict, the one `timedatectl` prints as "System clock
+      # synchronized". With the time daemon stopped, the kernel calls the clock
+      # unsynchronised once its error bound passes 16 s, about 9 hours later, so
+      # this fires within about 10 hours. Drift at a few ppm (0.4 s a day on
+      # production) takes months to reach the 30 s that breaks 2FA.
+      - alert: NodeClockNotSynchronised
+        expr: min by (instance) (node_timex_sync_status) == 0
+        for: 1h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The node clock at {{ $labels.instance }} is not synchronised"
+          description: "Nothing is correcting this node's clock (chronyd stopped, or no time source reachable). It drifts a few ppm a day; past 30 s every 2FA code is refused."
+          runbook: "prometheus/slo.md#nodeclocknotsynchronised"
+
+      # Synchronised but still more than a second off: a bad time source, or a
+      # large error chronyd is still slewing away. (While unsynchronised the
+      # kernel keeps the last offset, so this stays quiet then; the rule above
+      # covers that case.)
+      - alert: NodeClockOffsetHigh
+        expr: max by (instance) (abs(node_timex_offset_seconds)) > 1
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The node clock at {{ $labels.instance }} is {{ $value | humanizeDuration }} off"
+          description: "The kernel reports an offset of more than 1 s from its time source for 15m. 2FA codes fail past 30 s."
+          runbook: "prometheus/slo.md#nodeclocknotsynchronised"
+
+      # Without the exporter both rules above are silently green: absent() is
+      # true when the target is down AND when the collector reports nothing.
+      - alert: NodeClockUnmonitored
+        expr: absent(node_timex_sync_status)
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "No node is reporting its clock state"
+          description: "Prometheus has no node_timex_sync_status series: the node-clock exporter is down or not scraped, so the clock alerts are blind."
+          runbook: "prometheus/slo.md#nodeclockunmonitored"
+
   # OWASP A09 — security-abuse detection. Fed by user-service SecurityMetrics
   # (security.* counters, exported as security_*_total). Baselines for these are
   # ~0 in normal operation, so the thresholds are deliberately low: they're

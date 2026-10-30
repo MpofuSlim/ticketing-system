@@ -306,6 +306,48 @@ permanent lockout.
    to set the TTL in the same command or script, then `DEL` or `PEXPIRE` the
    strays.
 
+### `NodeClockNotSynchronised`
+
+Also used by `NodeClockOffsetHigh`. Nothing is correcting the node's clock, or
+it is more than a second off its time source. Every pod reads the node's
+clock: 2FA codes (TOTP allows one 30 s step either side), token expiry,
+scheduled jobs and every stored timestamp. On 2026-10-30 production's chronyd
+had been stopped since Jul 22. The clock was 63 s slow and every staff 2FA
+sign-in failed with `Failed MFA attempt` in user-service's log.
+
+On the node (EC2, Amazon Linux):
+
+1. Confirm: `timedatectl | grep synchronized` (want `yes`) and
+   `systemctl status chronyd --no-pager | head -4` (want `active (running)`).
+2. Measure the drift without changing anything:
+   `sudo chronyd -Q 'server 169.254.169.123 iburst'` prints
+   `System clock wrong by N seconds`.
+3. Find out why it stopped before starting it:
+   `sudo journalctl -u chronyd --no-pager -n 20`, then the whole journal around
+   the last `Stopped chronyd.service`. A stop that is not followed by a boot was
+   someone's `systemctl stop` or a script, which can happen again.
+4. Fix: `sudo systemctl enable --now chronyd`, wait about 10 s for a source,
+   then `sudo chronyc makestep`. Check `chronyc tracking`: `Reference ID`
+   should name `169.254.169.123` (Amazon Time Sync), and `Leap status` should
+   be `Normal`. If `chronyc sources` lists nothing reachable, add
+   `server 169.254.169.123 prefer iburst minpoll 4 maxpoll 4` to
+   `/etc/chrony.conf` and restart chronyd.
+5. Pods read the new time at once; nothing needs a restart. After a large
+   step, sessions minted on the old clock may expire early or late, and people
+   may have to sign in again. An account that hit the 2FA lockout (7 wrong codes,
+   30 min) while the clock was off can wait it out, or be cleared in
+   `user_service`:
+   `UPDATE users SET mfa_failed_attempts = 0, mfa_locked_until = NULL WHERE email = '<email>';`
+
+### `NodeClockUnmonitored`
+
+Prometheus has no `node_timex_sync_status` series, so the clock alerts are
+blind. Check the exporter: `kubectl -n ticketing get pods -l app=node-clock`,
+its logs, and the `node-clock` job on the `/targets` page. The DaemonSet and
+its headless Service come from `deploy/k8s/monitoring/`
+(`scripts/apply-monitoring.sh`). Prometheus finds the pods by DNS, so a pod
+that is not Ready is not scraped.
+
 ### `AuditIntegrityBroken`
 
 A row in `audit_events` failed its `row_hmac` recompute — its **content**
