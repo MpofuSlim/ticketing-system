@@ -423,11 +423,11 @@ public class TicketDeliveryService {
      * <em>"Event confirmed! Here is your e-ticket entry for {eventName}. Only
      * present this ticket at the gate."</em> — so this must read as a noun
      * phrase, e.g.
-     * <pre>InnBucks Annual Gala 2025 (booking INN-..., ticket 2 of 3, total 30.00 — TN2)</pre>
+     * <pre>InnBucks Annual Gala 2025 (booking INN-..., ticket 2 of 3, total 30.00 — ticket number TN2)</pre>
      *
      * <p><b>A guest's ticket carries no booking reference</b>
      * ({@link #isGuestTicket}):
-     * <pre>InnBucks Annual Gala 2025 (ticket 2 of 3, total 30.00 — TN2 (Rudo Sibanda))</pre>
+     * <pre>InnBucks Annual Gala 2025 (ticket 2 of 3, total 30.00 — ticket number TN2 (Rudo Sibanda))</pre>
      * The buyer forwards it to that guest, and the confirmation number opens
      * every ticket of the booking at the gate lookup. The buyer's own tickets
      * and unnamed spares keep it.
@@ -475,9 +475,11 @@ public class TicketDeliveryService {
         }
         StringBuilder sb = new StringBuilder(singleLine(eventTitle))
                 .append(" (").append(String.join(", ", facts));
-        // This ticket's number as the gate reference, after an em-dash. Single
+        // This ticket's number as the gate reference, after an em-dash and
+        // LABELLED: it is what the gate types in when the QR will not scan or
+        // never arrived, and a bare code after a dash told nobody that. Single
         // line, no newlines (WhatsApp template-variable rule).
-        sb.append(facts.isEmpty() ? "" : " ").append("— ").append(item.getTicketNumber());
+        sb.append(facts.isEmpty() ? "" : " ").append("— ticket number ").append(item.getTicketNumber());
         String who = item.getAttendeeName();
         if (who != null && !who.isBlank()) {
             sb.append(" (").append(singleLine(who)).append(')');
@@ -500,7 +502,7 @@ public class TicketDeliveryService {
      * The attendee's variant of {@link #buildEventNameField}: ONE ticket, in
      * their name, with who booked it — same single-line rule. No booking
      * reference: it opens every ticket of the booking at the gate lookup.
-     * <pre>Harare Jazz Festival (ticket for Tendai Ncube, booked by Alice Moyo, 20260502-3FQ7M-X9K2D)</pre>
+     * <pre>Harare Jazz Festival (ticket for Tendai Ncube, booked by Alice Moyo, ticket number 20260502-3FQ7M-X9K2D)</pre>
      */
     private String buildAttendeeEventNameField(Booking booking, BookingItem item, String eventTitle) {
         StringBuilder sb = new StringBuilder(singleLine(eventTitle))
@@ -508,7 +510,7 @@ public class TicketDeliveryService {
         if (booking.getCustomerName() != null && !booking.getCustomerName().isBlank()) {
             sb.append(", booked by ").append(singleLine(booking.getCustomerName()));
         }
-        sb.append(", ").append(item.getTicketNumber())
+        sb.append(", ticket number ").append(item.getTicketNumber())
           .append(')');
         return sb.toString();
     }

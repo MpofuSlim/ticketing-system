@@ -16,7 +16,9 @@ public class ScanTicketRequestDTO {
     @Schema(example = "20260619-7KQ4M-9XZ2B",
             description = "Per-seat ticket identifier, encoded in the QR. Unique across all bookings. "
                     + "Issued as yyyyMMdd-XXXXX-XXXXX (upper-case Crockford base32); tickets issued "
-                    + "before that are yyyyMMdd-DDDDDL (e.g. 20260619-48291X) and stay valid. Send the "
-                    + "value exactly as scanned: it is matched as issued.")
+                    + "before that are yyyyMMdd-DDDDDL (e.g. 20260619-48291X) and stay valid. A scanned "
+                    + "value is sent as read. A TYPED value may drop the dashes, add spaces or use lower "
+                    + "case (202606197kq4m9xz2b): it is read as the issued number, with no letter swapped "
+                    + "for another.")
     private String ticketNumber;
 }

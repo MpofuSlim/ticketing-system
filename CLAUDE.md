@@ -1415,11 +1415,14 @@ organizer's bookings view from a list of MSISDNs into a guest list.
     reaches a guest, `POST /tickets/lookup` (the event's organizer and gate team
     only) lists every ticket of that booking by holder name, so the operator's
     name or ID check remains the guard.
-  - **The gate fallback a guest is left with** is their exact ticket number at
-    `POST /tickets/scan` (matched as issued) or their own ticket link. Whether
-    the scanner app accepts a typed number is the scanner team's to answer; the
-    forgiving ticket-number lookup (task file Part 2) is parked until the owner
-    decides.
+  - **The gate fallback a guest is left with** is their ticket number, typed
+    at `POST /tickets/scan`, or their own ticket link. The scan reads a typed
+    number in any case, with or without dashes or spaces
+    (`TicketScanController.issuedForm` → `TicketNumbers.canonical`; owner's go,
+    2026-10-30), and swaps no letter for another, so it can only find the
+    ticket typed. Every WhatsApp caption labels it `ticket number …` so the
+    holder knows what to read out. A scanner-app or super-app screen to type it
+    on is the clients' to build.
   - `GET /bookings/public/phone/{phone}` returns every ticket of the buyer's
     bookings to anyone who knows the buyer's number, until it closes (see
     "Ticket lookups that replace …" below).

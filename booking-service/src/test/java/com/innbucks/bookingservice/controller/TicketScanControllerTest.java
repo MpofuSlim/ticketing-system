@@ -80,6 +80,19 @@ class TicketScanControllerTest {
     }
 
     @Test
+    void scan_aTypedNumber_reachesTheServiceAsIssued() {
+        TicketScanService service = mock(TicketScanService.class);
+        when(service.scan(eq("20261030-CH2F0-5V7CB"), any())).thenReturn(okResponse("20261030-CH2F0-5V7CB"));
+
+        ScanTicketRequestDTO req = new ScanTicketRequestDTO();
+        req.setTicketNumber("20261030 ch2f0 5v7cb");
+
+        controller(service).scan(req, authWith("tariro@harare-arena.co.zw", "Tariro", "Chikomo"));
+
+        verify(service).scan(eq("20261030-CH2F0-5V7CB"), any());
+    }
+
+    @Test
     void scan_fallsBackToEmail_whenJwtCarriesNoNameClaims() {
         // Legacy tokens minted before this PR (and any future staff role that
         // intentionally omits display-name claims) must still produce a non-
