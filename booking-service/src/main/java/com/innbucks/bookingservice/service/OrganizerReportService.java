@@ -3,6 +3,7 @@ package com.innbucks.bookingservice.service;
 import com.innbucks.bookingservice.dto.report.BucketSize;
 import com.innbucks.bookingservice.dto.report.ReportMetaDTO;
 import com.innbucks.bookingservice.dto.report.CategoryRevenueDTO;
+import com.innbucks.bookingservice.dto.report.PaymentMethodRevenueDTO;
 import com.innbucks.bookingservice.dto.report.PriceTierRevenueDTO;
 import com.innbucks.bookingservice.dto.report.EventRevenueDTO;
 import com.innbucks.bookingservice.dto.report.RevenueSummaryDTO;
@@ -94,7 +95,43 @@ public class OrganizerReportService {
                 confirmedBookings, ticketsSold,
                 scale2(gross), scale2(cash), scale2(points),
                 reversed.size(), scale2(refundedTotal),
-                scale2(net), aov, currency);
+                scale2(net), aov, currency,
+                byPaymentMethod(confirmed));
+    }
+
+    /**
+     * Confirmed bookings grouped by the method that paid them, largest amount
+     * first (then by code, so the order is stable). Summed from the same rows
+     * as netRevenue, so the split always adds up to it.
+     */
+    private static List<PaymentMethodRevenueDTO> byPaymentMethod(List<Booking> confirmed) {
+        Map<String, MethodTotals> byMethod = new LinkedHashMap<>();
+        for (Booking b : confirmed) {
+            String rail = b.getPaymentRail();
+            String code = rail == null ? PaymentMethodRevenueDTO.NOT_RECORDED : PaymentMethods.code(rail);
+            String label = rail == null ? PaymentMethodRevenueDTO.NOT_RECORDED_LABEL : PaymentMethods.label(rail);
+            MethodTotals t = byMethod.computeIfAbsent(code, c -> new MethodTotals(label));
+            t.bookings++;
+            t.tickets += ticketCount(b);
+            t.amount = t.amount.add(nz(b.getTotalAmount()));
+        }
+        return byMethod.entrySet().stream()
+                .map(e -> new PaymentMethodRevenueDTO(e.getKey(), e.getValue().label,
+                        e.getValue().bookings, e.getValue().tickets, scale2(e.getValue().amount)))
+                .sorted(Comparator.comparing(PaymentMethodRevenueDTO::amount).reversed()
+                        .thenComparing(PaymentMethodRevenueDTO::method))
+                .toList();
+    }
+
+    private static final class MethodTotals {
+        private final String label;
+        private long bookings;
+        private long tickets;
+        private BigDecimal amount = BigDecimal.ZERO;
+
+        private MethodTotals(String label) {
+            this.label = label;
+        }
     }
 
     @Transactional(readOnly = true)

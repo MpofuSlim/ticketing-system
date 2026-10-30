@@ -64,8 +64,11 @@ public class OrganizerReportController {
     @GetMapping("/revenue")
     @Operation(summary = "Revenue summary",
             description = "Period revenue for the calling organizer — gross (pre-refund), cash vs points, " +
-                          "refunds, and net (= CONFIRMED total). Optional `eventId` narrows to one event; " +
-                          "`from`/`to` default to the last 30 days.")
+                          "refunds, and net (= CONFIRMED total). `byPaymentMethod` splits net by how each booking was " +
+                          "paid (InnBucks, EcoCash, bank card; NOT_RECORDED when none is on record); its rows add " +
+                          "up to `netRevenue`, `confirmedBookings` and `ticketsSold`. Optional `eventId` narrows to " +
+                          "one event; `from`/`to` default to the last 30 days, so for a whole event pass a `from` " +
+                          "on or before its first sale.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Summary computed",
@@ -87,7 +90,12 @@ public class OrganizerReportController {
                                         "refundedAmount": 300.00,
                                         "netRevenue": 33900.00,
                                         "averageOrderValue": 264.84,
-                                        "currency": "USD"
+                                        "currency": "USD",
+                                        "byPaymentMethod": [
+                                          { "method": "INNBUCKS", "label": "InnBucks", "bookings": 101, "ticketsSold": 270, "amount": 26700.00 },
+                                          { "method": "ECOCASH", "label": "EcoCash", "bookings": 21, "ticketsSold": 56, "amount": 5600.00 },
+                                          { "method": "CARD", "label": "Bank card (ZimSwitch)", "bookings": 6, "ticketsSold": 16, "amount": 1600.00 }
+                                        ]
                                       }
                                     }
                                     """))),

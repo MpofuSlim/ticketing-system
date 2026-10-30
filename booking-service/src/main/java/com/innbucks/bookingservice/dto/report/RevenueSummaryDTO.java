@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -17,7 +18,8 @@ import java.util.UUID;
  * paid and are excluded entirely.
  *
  * <p>All figures are keyed on the booking's {@code createdAt} (when the sale
- * originated), in UTC.
+ * originated), in UTC. {@code byPaymentMethod} splits {@code netRevenue} by
+ * the rail that paid each booking (V29).
  */
 @Schema(name = "OrganizerRevenueSummary",
         description = "Period revenue summary for the calling organizer's events.")
@@ -40,5 +42,17 @@ public record RevenueSummaryDTO(
                 example = "33900.00") BigDecimal netRevenue,
         @Schema(description = "netRevenue / confirmedBookings (0 when none).", example = "264.84")
         BigDecimal averageOrderValue,
-        @Schema(example = "USD") String currency
-) { }
+        @Schema(example = "USD") String currency,
+        @Schema(description = "netRevenue split by how the bookings were paid, largest amount first. The rows add "
+                + "up to netRevenue, confirmedBookings and ticketsSold. Empty when there are no confirmed bookings.")
+        List<PaymentMethodRevenueDTO> byPaymentMethod
+) {
+    /** A summary with no payment-method split (kept for callers built before it existed). */
+    public RevenueSummaryDTO(LocalDate from, LocalDate to, UUID eventId, long confirmedBookings, long ticketsSold,
+                             BigDecimal grossRevenue, BigDecimal cashCollected, BigDecimal pointsRedeemed,
+                             long refundedBookings, BigDecimal refundedAmount, BigDecimal netRevenue,
+                             BigDecimal averageOrderValue, String currency) {
+        this(from, to, eventId, confirmedBookings, ticketsSold, grossRevenue, cashCollected, pointsRedeemed,
+                refundedBookings, refundedAmount, netRevenue, averageOrderValue, currency, List.of());
+    }
+}
