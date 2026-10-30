@@ -442,7 +442,7 @@ class InnbucksPaymentServiceTest {
         when(innbucksApi.inquireCodeStatus("701285660"))
                 .thenReturn(new innbucks.paymentservice.client.CodeStatusResult(
                         innbucks.paymentservice.client.CodeStatusResult.Status.PAID, "Paid", null));
-        when(bookings.confirmBooking(bookingId)).thenReturn(Map.of("confirmationNumber", "INN-X"));
+        when(bookings.confirmBooking(eq(bookingId), any())).thenReturn(Map.of("confirmationNumber", "INN-X"));
 
         var outcome = service.tryResolveOpenCode(row);
 

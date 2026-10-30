@@ -263,15 +263,16 @@ public class OrganizerReportController {
                           "V22 appends two columns: `customerName` (the purchaser) and `attendees` (named guests " +
                           "on the booking's tickets, `; `-joined, names only — for contacts use GET /bookings/by-event/{id}). " +
                           "V27 appends `promoCode` and `discountAmount` (empty when no code was used); `totalAmount` " +
-                          "is already after the discount.")
+                          "is already after the discount. V29 appends `paymentMethod`: \"InnBucks\", \"EcoCash\" or " +
+                          "\"Bank card (ZimSwitch)\", empty when not recorded.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "CSV body (no ApiResult envelope)",
                     content = @Content(mediaType = "text/csv",
                             examples = @ExampleObject(name = "CSV", value = """
-                                    confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees,promoCode,discountAmount
-                                    INN-20260502-AB12CD,3fa85f64-5717-4562-b3fc-2c963f66afa6,2026-05-02T15:45:00,2,180.00,180.00,0.00,+2637****6789,Alice Moyo,Tendai Ncube,EARLY10,20.00
-                                    INN-20260503-CD34EF,3fa85f64-5717-4562-b3fc-2c963f66afa6,2026-05-03T09:12:00,1,100.00,80.00,20.00,+2637****0000,Carol Dube,,,
+                                    confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees,promoCode,discountAmount,paymentMethod
+                                    INN-20260502-AB12CD,3fa85f64-5717-4562-b3fc-2c963f66afa6,2026-05-02T15:45:00,2,180.00,180.00,0.00,+2637****6789,Alice Moyo,Tendai Ncube,EARLY10,20.00,EcoCash
+                                    INN-20260503-CD34EF,3fa85f64-5717-4562-b3fc-2c963f66afa6,2026-05-03T09:12:00,1,100.00,80.00,20.00,+2637****0000,Carol Dube,,,,InnBucks
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid range"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Not an EVENT_ORGANIZER")

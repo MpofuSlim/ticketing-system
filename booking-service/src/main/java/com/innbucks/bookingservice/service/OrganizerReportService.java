@@ -11,6 +11,7 @@ import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.util.MsisdnMasking;
+import com.innbucks.bookingservice.util.PaymentMethods;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -212,8 +213,9 @@ public class OrganizerReportService {
         // list with contacts is GET /bookings/by-event/{id}. V27 appends
         // promoCode + discountAmount at the END, so a positional parser of the
         // old export keeps working; totalAmount is already after the discount.
+        // V29 appends paymentMethod (in words, empty when not recorded) after them.
         StringBuilder sb = new StringBuilder();
-        sb.append("confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees,promoCode,discountAmount\n");
+        sb.append("confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees,promoCode,discountAmount,paymentMethod\n");
         for (Booking b : confirmed) {
             sb.append(csv(b.getConfirmationNumber())).append(',')
               .append(csv(b.getEventId())).append(',')
@@ -226,7 +228,8 @@ public class OrganizerReportService {
               .append(csv(b.getCustomerName())).append(',')
               .append(csv(attendeeNames(b))).append(',')
               .append(csv(b.getPromoCode())).append(',')
-              .append(b.getDiscountAmount() == null ? "" : scale2(b.getDiscountAmount())).append('\n');
+              .append(b.getDiscountAmount() == null ? "" : scale2(b.getDiscountAmount())).append(',')
+              .append(csv(PaymentMethods.label(b.getPaymentRail()))).append('\n');
         }
         return sb.toString();
     }

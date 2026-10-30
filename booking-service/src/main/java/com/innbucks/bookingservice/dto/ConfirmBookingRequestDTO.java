@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -48,4 +49,12 @@ public class ConfirmBookingRequestDTO {
             description = "Cash portion of the payment. For a pure-cash confirm, omit this field entirely.")
     @DecimalMin(value = "0.0", message = "cashAmount must be >= 0")
     private BigDecimal cashAmount;
+
+    @Schema(example = "ECOCASH", nullable = true,
+            description = "The payment rail that paid for the booking, as payment-service names it: "
+                    + "INNBUCKS_CODE, ECOCASH or ZIMSWITCH_CARD. Recorded once and shown to the organizer "
+                    + "as the payment method. Optional: a confirm without it records nothing, and a value "
+                    + "that is not a plain upper-case name is ignored.")
+    @Size(max = 32, message = "paymentRail must be at most 32 characters")
+    private String paymentRail;
 }

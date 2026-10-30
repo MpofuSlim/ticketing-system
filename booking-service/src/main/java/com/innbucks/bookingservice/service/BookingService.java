@@ -13,6 +13,7 @@ import com.innbucks.bookingservice.exception.BookingConflictException;
 import com.innbucks.bookingservice.exception.DependencyUnavailableException;
 import com.innbucks.bookingservice.exception.NotFoundException;
 import com.innbucks.bookingservice.util.MsisdnMasking;
+import com.innbucks.bookingservice.util.PaymentMethods;
 import com.innbucks.bookingservice.repository.*;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.Hibernate;
@@ -938,6 +939,8 @@ public class BookingService {
                 .priceAtBooking(item.getPriceAtBooking())
                 .priceTierName(item.getPriceTierName())
                 .discountAmount(item.getDiscountAmount())
+                .paymentMethod(PaymentMethods.code(b.getPaymentRail()))
+                .paymentMethodLabel(PaymentMethods.label(b.getPaymentRail()))
                 .bookedAt(b.getCreatedAt())
                 .updatedAt(b.getUpdatedAt())
                 .expiresAt(b.getExpiresAt())
@@ -1713,6 +1716,7 @@ public class BookingService {
         // Returning the existing DTO is the correct retry semantics.
         if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
             log.info("Confirm idempotent replay (already CONFIRMED) bookingId={}", bookingId);
+            recordPaymentRail(booking, confirmRequest);
             return ConfirmStep.answered(toDTO(booking));
         }
         // CANCELLED: the payment landed after the booking was cancelled — by
@@ -1818,6 +1822,7 @@ public class BookingService {
         Booking booking = lockWithItems(bookingId, "Confirm");
         if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
             log.info("Confirm idempotent replay (resurrected by a concurrent confirm) bookingId={}", bookingId);
+            recordPaymentRail(booking, confirmRequest);
             return new Resurrected(toDTO(booking), true);
         }
         if (booking.getStatus() != Booking.BookingStatus.CANCELLED
@@ -1874,6 +1879,7 @@ public class BookingService {
 
         booking.setPointsUsed(pointsToUse.signum() > 0 ? pointsToUse : null);
         booking.setCashAmount(cashAmount);
+        recordPaymentRail(booking, confirmRequest);
         booking.setStatus(Booking.BookingStatus.CONFIRMED);
         booking.setExpiresAt(null); // paid — hold no longer applicable
         bookingRepository.save(booking);
@@ -1891,6 +1897,22 @@ public class BookingService {
         log.info("Booking confirmed bookingId={} userEmail={} pointsUsed={} cashAmount={}",
                 booking.getId(), booking.getUserEmail(), booking.getPointsUsed(), booking.getCashAmount());
         return toDTO(booking);
+    }
+
+    /**
+     * Records the rail that paid (V29), once: a confirm never overwrites one
+     * already recorded, so a replay can fill a gap (a booking confirmed before
+     * payment-service sent it) but never change what paid. A malformed value
+     * is ignored rather than refused, because the money has already moved.
+     * On a replay the CONFIRMED row is written by the caller's transaction at
+     * commit, like every other change made under the row lock.
+     */
+    private static void recordPaymentRail(Booking booking, ConfirmBookingRequestDTO confirmRequest) {
+        if (booking.getPaymentRail() != null || confirmRequest == null) return;
+        String rail = PaymentMethods.cleanRail(confirmRequest.getPaymentRail());
+        if (rail != null) {
+            booking.setPaymentRail(rail);
+        }
     }
 
     // Loyalty is DECOUPLED from booking (product decision): a ticket purchase
@@ -2047,6 +2069,8 @@ public class BookingService {
                 .cashAmount(booking.getCashAmount())
                 .promoCode(booking.getPromoCode())
                 .discountAmount(booking.getDiscountAmount())
+                .paymentMethod(PaymentMethods.code(booking.getPaymentRail()))
+                .paymentMethodLabel(PaymentMethods.label(booking.getPaymentRail()))
                 .items(itemDTOs)
                 .createdAt(booking.getCreatedAt())
                 .updatedAt(booking.getUpdatedAt())

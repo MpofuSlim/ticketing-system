@@ -2,6 +2,7 @@ package innbucks.paymentservice.order;
 
 import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.EventServiceClient;
+import innbucks.paymentservice.entity.PaymentRail;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
 import innbucks.paymentservice.service.SettlementReference;
 import lombok.extern.slf4j.Slf4j;
@@ -130,9 +131,19 @@ public class BookingOrderGateway implements OrderGateway {
 
     @Override
     public ConfirmOutcome confirm(String orderRef, String confirmationRef, long amountCents) {
+        return confirm(orderRef, confirmationRef, amountCents, null);
+    }
+
+    /**
+     * Confirms the booking and tells booking-service which rail paid, so the
+     * organizer's guest list and CSV show the payment method (booking V29).
+     */
+    @Override
+    public ConfirmOutcome confirm(String orderRef, String confirmationRef, long amountCents, PaymentRail rail) {
         UUID bookingId = parseBookingId(orderRef);
         try {
-            Map<String, Object> confirmed = bookingServiceClient.confirmBooking(bookingId);
+            Map<String, Object> confirmed = bookingServiceClient.confirmBooking(
+                    bookingId, rail == null ? null : rail.name());
             Object confirmation = confirmed == null ? null : confirmed.get("confirmationNumber");
             return ConfirmOutcome.confirmed(confirmation == null ? null : confirmation.toString());
         } catch (BookingServiceClient.BookingConfirmationException e) {

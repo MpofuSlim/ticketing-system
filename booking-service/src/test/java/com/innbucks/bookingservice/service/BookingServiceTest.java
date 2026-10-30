@@ -1034,6 +1034,67 @@ class BookingServiceTest {
     }
 
     @Test
+    void confirmBooking_recordsTheRailThatPaid_andShowsItAsThePaymentMethod() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        UUID id = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
+                .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
+
+        BookingResponseDTO resp = service.confirmBooking(id,
+                ConfirmBookingRequestDTO.builder().paymentRail("ECOCASH").build());
+
+        assertEquals("ECOCASH", booking.getPaymentRail());
+        assertEquals("ECOCASH", resp.getPaymentMethod());
+        assertEquals("EcoCash", resp.getPaymentMethodLabel());
+    }
+
+    @Test
+    void confirmBooking_ignoresAMalformedRail_neverRefusesAPaidConfirm() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        UUID id = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
+                .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
+        when(bookingRepo.lockById(id)).thenReturn(Optional.of(booking));
+
+        BookingResponseDTO resp = service.confirmBooking(id,
+                ConfirmBookingRequestDTO.builder().paymentRail("eco cash; DROP").build());
+
+        assertEquals(Booking.BookingStatus.CONFIRMED, booking.getStatus());
+        assertNull(booking.getPaymentRail());
+        assertNull(resp.getPaymentMethod());
+    }
+
+    @Test
+    void confirmBooking_replay_fillsAMissingRail_butNeverChangesARecordedOne() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        UUID missing = UUID.randomUUID();
+        Booking unrecorded = Booking.builder().id(missing).status(Booking.BookingStatus.CONFIRMED)
+                .userEmail("u@example.com").totalAmount(BigDecimal.TEN).items(new ArrayList<>()).build();
+        UUID recorded = UUID.randomUUID();
+        Booking paid = Booking.builder().id(recorded).status(Booking.BookingStatus.CONFIRMED)
+                .userEmail("u@example.com").totalAmount(BigDecimal.TEN).paymentRail("INNBUCKS_CODE")
+                .items(new ArrayList<>()).build();
+        when(bookingRepo.lockById(missing)).thenReturn(Optional.of(unrecorded));
+        when(bookingRepo.lockById(recorded)).thenReturn(Optional.of(paid));
+
+        service.confirmBooking(missing, ConfirmBookingRequestDTO.builder().paymentRail("ZIMSWITCH_CARD").build());
+        BookingResponseDTO resp = service.confirmBooking(recorded,
+                ConfirmBookingRequestDTO.builder().paymentRail("ECOCASH").build());
+
+        assertEquals("ZIMSWITCH_CARD", unrecorded.getPaymentRail());
+        assertEquals("INNBUCKS_CODE", paid.getPaymentRail());
+        assertEquals("INNBUCKS", resp.getPaymentMethod());
+        assertEquals("InnBucks", resp.getPaymentMethodLabel());
+    }
+
+    @Test
     void confirmBooking_alreadyConfirmed_isIdempotentReplay() {
         // Was: this test asserted that re-confirming a CONFIRMED booking throws.
         // Audit hardening: confirm is now idempotent for CONFIRMED — payment-service

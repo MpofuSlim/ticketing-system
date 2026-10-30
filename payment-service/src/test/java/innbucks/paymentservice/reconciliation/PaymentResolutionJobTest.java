@@ -168,7 +168,7 @@ class PaymentResolutionJobTest {
                 Instant.now().minus(Duration.ofMinutes(3)));
         when(payments.findByStatus(eq(Payment.PaymentStatus.COMPLETED_UNCONFIRMED), any(Pageable.class)))
                 .thenReturn(List.of(unconfirmed));
-        when(bookings.confirmBooking(unconfirmed.getBookingId()))
+        when(bookings.confirmBooking(eq(unconfirmed.getBookingId()), any()))
                 .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-7"));
 
         newPaymentJob(payments, records, bookings, metrics).scanPayments();
@@ -191,9 +191,9 @@ class PaymentResolutionJobTest {
                 Instant.now().minus(Duration.ofMinutes(4)));
         when(payments.findByStatus(eq(Payment.PaymentStatus.COMPLETED_UNCONFIRMED), any(Pageable.class)))
                 .thenReturn(List.of(broken, healable));
-        when(bookings.confirmBooking(broken.getBookingId()))
+        when(bookings.confirmBooking(eq(broken.getBookingId()), any()))
                 .thenThrow(new BookingServiceClient.BookingConfirmationException("hold gone for good", 409));
-        when(bookings.confirmBooking(healable.getBookingId()))
+        when(bookings.confirmBooking(eq(healable.getBookingId()), any()))
                 .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-8"));
 
         newPaymentJob(payments, records, bookings, metrics).scanPayments();
@@ -222,7 +222,7 @@ class PaymentResolutionJobTest {
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
         when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.PAID));
-        when(bookings.confirmBooking(open.getBookingId()))
+        when(bookings.confirmBooking(eq(open.getBookingId()), any()))
                 .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-9"));
 
         newPollJob(payments, records, bookings, innbucksApi, metrics).pollCodePayments();
@@ -242,7 +242,7 @@ class PaymentResolutionJobTest {
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
         when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.CLAIMED));
-        when(bookings.confirmBooking(open.getBookingId()))
+        when(bookings.confirmBooking(eq(open.getBookingId()), any()))
                 .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-10"));
 
         newPollJob(payments, records, bookings, innbucksApi, new PaymentMetrics(new SimpleMeterRegistry()))
@@ -266,7 +266,7 @@ class PaymentResolutionJobTest {
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
         when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.PAID));
-        when(bookings.confirmBooking(open.getBookingId()))
+        when(bookings.confirmBooking(eq(open.getBookingId()), any()))
                 .thenThrow(new BookingServiceClient.BookingConfirmationException("hold expired", 409));
 
         newPollJob(payments, records, bookings, innbucksApi, metrics).pollCodePayments();

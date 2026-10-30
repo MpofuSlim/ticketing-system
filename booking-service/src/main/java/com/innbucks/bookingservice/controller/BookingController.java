@@ -1044,7 +1044,8 @@ public class BookingController {
                     "to exclude them. Restricted to EVENT_ORGANIZER because it exposes customer emails.\n\n" +
                     "**Who is coming (V22):** every row carries the purchaser's `customerName`, and — when the purchaser " +
                     "named a guest for that ticket — `attendeeName`/`attendeeEmail`/`attendeePhone`. `holderName` is " +
-                    "the attendee if named, else the purchaser: print that for a guest list."
+                    "the attendee if named, else the purchaser: print that for a guest list. `paymentMethod` / " +
+                    "`paymentMethodLabel` (V29): how the booking was paid, absent when not recorded."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -1073,6 +1074,8 @@ public class BookingController {
                                           "seatNumber": 1,
                                           "ticketNumber": "20260502-3FQ7M-X9K2D",
                                           "priceAtBooking": 100.00,
+                                          "paymentMethod": "ECOCASH",
+                                          "paymentMethodLabel": "EcoCash",
                                           "attendeeName": null,
                                           "attendeeEmail": null,
                                           "attendeePhone": null,
@@ -1096,6 +1099,8 @@ public class BookingController {
                                           "seatNumber": 2,
                                           "ticketNumber": "20260502-8TN4W-2HC6R",
                                           "priceAtBooking": 100.00,
+                                          "paymentMethod": "ECOCASH",
+                                          "paymentMethodLabel": "EcoCash",
                                           "attendeeName": "Tendai Ncube",
                                           "attendeeEmail": "tendai@example.com",
                                           "attendeePhone": "+263772000000",
@@ -1134,7 +1139,10 @@ public class BookingController {
                     "Restricted to EVENT_ORGANIZER because it exposes customer emails.\n\n" +
                     "**This is the organizer's guest list (V22):** one row per ticket, each with the purchaser's " +
                     "`customerName` and, when named, the ticket's `attendeeName`/`attendeeEmail`/`attendeePhone`. " +
-                    "`holderName` = attendee if named, else purchaser. Filter `status == CONFIRMED` for who has actually paid."
+                    "`holderName` = attendee if named, else purchaser. Filter `status == CONFIRMED` for who has actually paid. " +
+                    "`paymentMethod` (V29) is how the booking was paid: INNBUCKS, ECOCASH or CARD (a ZimSwitch-enabled " +
+                    "bank card), with `paymentMethodLabel` in words; both are absent when not recorded (unpaid, or " +
+                    "confirmed before V29 and not backfilled)."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -1163,6 +1171,8 @@ public class BookingController {
                                           "seatNumber": 1,
                                           "ticketNumber": "20260502-3FQ7M-X9K2D",
                                           "priceAtBooking": 100.00,
+                                          "paymentMethod": "ECOCASH",
+                                          "paymentMethodLabel": "EcoCash",
                                           "attendeeName": null,
                                           "attendeeEmail": null,
                                           "attendeePhone": null,
@@ -1186,6 +1196,8 @@ public class BookingController {
                                           "seatNumber": 2,
                                           "ticketNumber": "20260502-8TN4W-2HC6R",
                                           "priceAtBooking": 100.00,
+                                          "paymentMethod": "ECOCASH",
+                                          "paymentMethodLabel": "EcoCash",
                                           "attendeeName": "Tendai Ncube",
                                           "attendeeEmail": "tendai@example.com",
                                           "attendeePhone": "+263772000000",

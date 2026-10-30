@@ -134,6 +134,15 @@ public class Booking {
     @Column(name = "cancel_reason", length = 20)
     private CancelReason cancelReason;
 
+    // The payment rail that paid for this booking (V29), as payment-service
+    // names it: INNBUCKS_CODE, ECOCASH or ZIMSWITCH_CARD. Sent with the
+    // confirm and set once; see PaymentMethods for what the organizer sees.
+    // A String, not an enum: a rail payment-service adds later must never make
+    // a row unreadable here. NULL = not recorded (pre-V29 rows until the
+    // backfill, and any confirm that did not say).
+    @Column(name = "payment_rail", length = 32)
+    private String paymentRail;
+
     // When the DAY-OF pre-event reminder was sent (or consumed) for this
     // CONFIRMED booking. Set on the reminder attempt — success or failure —
     // so the hourly EventReminderScheduler never retries into spam; also set

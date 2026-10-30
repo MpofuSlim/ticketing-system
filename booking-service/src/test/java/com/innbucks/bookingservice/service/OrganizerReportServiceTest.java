@@ -279,12 +279,12 @@ class OrganizerReportServiceTest {
         String[] lines = csv.strip().split("\n");
 
         assertThat(lines[0]).isEqualTo(
-                "confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees,promoCode,discountAmount");
+                "confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees,promoCode,discountAmount,paymentMethod");
         assertThat(lines).hasSize(2);
         assertThat(lines[1]).contains(",2,200.00,200.00,0.00,");
         assertThat(lines[1]).doesNotContain("+263772000000"); // raw phone must be masked
-        // Pre-V22 booking: the two new columns are simply empty.
-        assertThat(lines[1]).endsWith(",,");
+        // Pre-V22 booking: the later columns are simply empty.
+        assertThat(lines[1]).endsWith(",,,");
     }
 
     @Test
@@ -305,7 +305,7 @@ class OrganizerReportServiceTest {
         String csv = service(repo).confirmedBookingsCsv(ORG, EVENT_A, null, null);
         String[] lines = csv.strip().split("\n");
 
-        assertThat(lines[1]).endsWith(",Alice Moyo,\"Tendai Ncube; Rudo, Sibanda\",,");
+        assertThat(lines[1]).endsWith(",Alice Moyo,\"Tendai Ncube; Rudo, Sibanda\",,,");
         // The ledger is names-only: attendee contact belongs to /bookings/by-event.
         assertThat(lines[1]).doesNotContain("tendai@example.com").doesNotContain("+263772000000");
     }
@@ -322,7 +322,26 @@ class OrganizerReportServiceTest {
 
         String[] lines = service(repo).confirmedBookingsCsv(ORG, EVENT_A, null, null).strip().split("\n");
 
-        assertThat(lines[1]).contains(",2,180.00,180.00,0.00,").endsWith(",EARLY10,20.00");
+        assertThat(lines[1]).contains(",2,180.00,180.00,0.00,").endsWith(",EARLY10,20.00,");
+    }
+
+    @Test
+    void csv_carriesThePaymentMethod_inWords_atTheEnd() {
+        OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
+        LocalDateTime t = LocalDate.of(2026, 5, 2).atTime(15, 45);
+        Booking ecocash = confirmed(EVENT_A, "100.00", "100.00", null, t, item(CAT_VIP, "VIP", "100.00"));
+        ecocash.setPaymentRail("ECOCASH");
+        Booking card = confirmed(EVENT_A, "100.00", "100.00", null, t, item(CAT_VIP, "VIP", "100.00"));
+        card.setPaymentRail("ZIMSWITCH_CARD");
+        Booking code = confirmed(EVENT_A, "100.00", "100.00", null, t, item(CAT_VIP, "VIP", "100.00"));
+        code.setPaymentRail("INNBUCKS_CODE");
+        when(repo.findConfirmedWithItems(eq(ORG), any(), any(), any())).thenReturn(List.of(ecocash, card, code));
+
+        String[] lines = service(repo).confirmedBookingsCsv(ORG, EVENT_A, null, null).strip().split("\n");
+
+        assertThat(lines[1]).endsWith(",,,EcoCash");
+        assertThat(lines[2]).endsWith(",,,Bank card (ZimSwitch)");
+        assertThat(lines[3]).endsWith(",,,InnBucks");
     }
 
     @Test
