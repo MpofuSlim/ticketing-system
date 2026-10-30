@@ -58,6 +58,9 @@ kubectl -n "$NS" rollout status  deployment/alertmanager
 # redis-exporter (job "redis") reads REDIS_PASSWORD from cell-zw-secrets; it
 # needs no restart for a Prometheus config change, only to exist.
 kubectl -n "$NS" rollout status  deployment/redis-exporter
+# node-clock (job "node-clock") reads the node's clock state; same: it only
+# has to exist.
+kubectl -n "$NS" rollout status  daemonset/node-clock
 
 echo
 echo "Done. Verify targets are UP (expect every job green, incl. the 5"

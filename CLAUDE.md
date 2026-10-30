@@ -645,6 +645,31 @@ design; neither works alone.
   limit); neither survives a restart unless the manifest says the same
   (`CONFIG REWRITE` does not work: Redis runs with no config file).
 
+## The node clock: chronyd must run, and it is watched
+
+**Every pod reads the node's clock, and nothing in the fleet corrects for it
+being wrong.** On 2026-10-30 production's chronyd had been stopped since Jul 22
+(a clean `systemctl stop`, no reboot since). The clock had drifted 63 s slow,
+and 2FA allows one 30 s step either side, so every staff sign-in was refused.
+user-service logged `Failed MFA attempt` for every account, and nothing alerted.
+
+- **2FA failing for everyone at once is a clock question first.** Run
+  `timedatectl | grep synchronized` on the host before reading any code.
+- **chronyd runs on every host**, synced to Amazon Time Sync
+  (`169.254.169.123`). Never stop it.
+- **Watched by** the `node-clock` DaemonSet (`deploy/k8s/monitoring/`:
+  node-exporter with only its timex collector, no host network, PID or mounts,
+  every capability dropped) and the `clock` alert group:
+  - `NodeClockNotSynchronised`: the kernel's own sync flag. With the daemon
+    stopped the kernel only declares the clock unsynchronised once its error
+    bound passes 16 s, so this fires about 10 hours later. At 0.4 s of drift a
+    day that is months before 2FA breaks.
+  - `NodeClockOffsetHigh`: more than 1 s off while synchronised.
+  - `NodeClockUnmonitored`: no clock series at all.
+- Prometheus finds the pods by DNS through the headless `node-clock` Service
+  (`dns_sd_configs`), one target per node, with no Kubernetes API access. The
+  runbook is `prometheus/slo.md#nodeclocknotsynchronised`.
+
 ## Swagger response examples
 
 **Every endpoint you add or modify MUST have meaningful `@ApiResponses` with

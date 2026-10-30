@@ -130,3 +130,14 @@ scrape_configs:
   - job_name: redis
     static_configs:
       - targets: [ "redis-exporter:9121" ]
+
+  # The node's clock, through node-exporter's timex collector (the node-clock
+  # DaemonSet, deploy/k8s/monitoring/). Feeds the `clock` alert group. The
+  # Service is headless, so DNS returns one address per node's pod and each
+  # becomes its own target. No token: in-cluster only, and it serves the
+  # kernel's clock state and nothing else.
+  - job_name: node-clock
+    dns_sd_configs:
+      - names: [ "node-clock" ]
+        type: A
+        port: 9100

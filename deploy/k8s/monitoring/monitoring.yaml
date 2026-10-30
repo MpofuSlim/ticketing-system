@@ -186,3 +186,58 @@ spec:
           resources: { requests: { memory: 16Mi }, limits: { memory: 64Mi } }
           readinessProbe: { httpGet: { path: /health, port: 9121 }, initialDelaySeconds: 5,  periodSeconds: 10 }
           livenessProbe:  { httpGet: { path: /health, port: 9121 }, initialDelaySeconds: 15, periodSeconds: 20 }
+---
+# The node's clock, for the `clock` alert group (prometheus/alerts.yaml). On
+# 2026-10-30 production's chronyd had been stopped since Jul 22: the clock had
+# drifted 63 s slow, past the one 30 s step either side a 2FA code is allowed,
+# so every staff sign-in failed, and nothing alerted.
+#
+# node-exporter with ONLY its timex collector: it reads the kernel's NTP state
+# with a read-only adjtimex (is the clock synchronised, by how much is it off).
+# The realtime clock is not namespaced, so the pod sees the node's clock with no
+# host network, no host PID and no host mounts. It runs as nobody with every
+# capability dropped: reading adjtimex needs none, and setting the clock would
+# need CAP_SYS_TIME, which it does not have.
+#
+# A DaemonSet, so every node is measured. The Service is HEADLESS: Prometheus
+# finds each pod by DNS (dns_sd_configs in prometheus.yml), one target per node,
+# with no Kubernetes API access.
+apiVersion: v1
+kind: Service
+metadata: { name: node-clock, namespace: ticketing }
+spec:
+  clusterIP: None
+  selector: { app: node-clock }
+  ports: [ { name: metrics, port: 9100, targetPort: 9100 } ]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: { name: node-clock, namespace: ticketing }
+spec:
+  selector: { matchLabels: { app: node-clock } }
+  template:
+    metadata: { labels: { app: node-clock } }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # The image's own non-root user (nobody).
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: node-exporter
+          image: prom/node-exporter:v1.12.1
+          args:
+            - --collector.disable-defaults
+            - --collector.timex
+            - --web.disable-exporter-metrics
+            - --web.listen-address=:9100
+          ports: [ { containerPort: 9100 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources: { requests: { memory: 16Mi }, limits: { memory: 64Mi } }
+          readinessProbe: { httpGet: { path: /metrics, port: 9100 }, initialDelaySeconds: 5,  periodSeconds: 10 }
+          livenessProbe:  { httpGet: { path: /metrics, port: 9100 }, initialDelaySeconds: 15, periodSeconds: 20 }
