@@ -132,7 +132,7 @@ class ScanReportControllerTest {
 
         ResponseEntity<ApiResult<PageResponse<ScanAttemptDTO>>> resp =
                 controller(svc, null).myScans(organizerAuth(UUID.randomUUID(), userUuid),
-                        from, to, 0, 20);
+                        from, to, 0, 20, null);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(resp.getBody()).isNotNull();
@@ -153,7 +153,7 @@ class ScanReportControllerTest {
 
         ResponseEntity<ApiResult<PageResponse<ScanAttemptDTO>>> resp =
                 controller(svc, null).myScans(teamMemberAuth(UUID.randomUUID(), userUuid),
-                        from, to, 0, 20);
+                        from, to, 0, 20, null);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
         verify(svc).listMyScans(eq(userUuid), eq(from), eq(widened(to)), eq(0), eq(20));
@@ -171,7 +171,7 @@ class ScanReportControllerTest {
 
         assertThatThrownBy(() -> controller(svc, null).myScans(auth,
                 Instant.parse("2026-06-01T00:00:00Z"),
-                Instant.parse("2026-06-30T23:59:59Z"), 0, 20))
+                Instant.parse("2026-06-30T23:59:59Z"), 0, 20, null))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("missing user identity");
         verify(svc, never()).listMyScans(any(), any(), any(), anyInt(), anyInt());
@@ -183,7 +183,7 @@ class ScanReportControllerTest {
         assertThatThrownBy(() -> controller(svc, null).myScans(
                 organizerAuth(UUID.randomUUID(), UUID.randomUUID()),
                 Instant.parse("2026-06-30T00:00:00Z"),
-                Instant.parse("2026-06-01T00:00:00Z"), 0, 20))
+                Instant.parse("2026-06-01T00:00:00Z"), 0, 20, null))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("must not be after");
     }
@@ -194,7 +194,7 @@ class ScanReportControllerTest {
         assertThatThrownBy(() -> controller(svc, null).myScans(
                 organizerAuth(UUID.randomUUID(), UUID.randomUUID()),
                 Instant.parse("2026-06-01T00:00:00Z"),
-                Instant.parse("2026-06-30T23:59:59Z"), 0, 101))
+                Instant.parse("2026-06-30T23:59:59Z"), 0, 101, null))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("'size' must be between 1 and 100");
     }
@@ -215,7 +215,7 @@ class ScanReportControllerTest {
                 eq("Tariro Chikomo"), eq(from), eq(widened(to)))).thenReturn(dto);
 
         ResponseEntity<ApiResult<ScannerStatsDTO>> resp = controller(svc, null)
-                .myStats(teamMemberAuth(UUID.randomUUID(), userUuid), from, to);
+                .myStats(teamMemberAuth(UUID.randomUUID(), userUuid), from, to, null);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(resp.getBody()).isNotNull();

@@ -59,7 +59,7 @@ class ScanReportWindowTest {
                 .thenReturn(new PageResponse<>(List.of(), 0, 20, 0L, 0));
 
         UUID userUuid = UUID.randomUUID();
-        controller(svc).myScans(teamMemberAuth(userUuid), from, frozenTo, 0, 20);
+        controller(svc).myScans(teamMemberAuth(userUuid), from, frozenTo, 0, 20, null);
 
         ArgumentCaptor<Instant> toArg = ArgumentCaptor.forClass(Instant.class);
         verify(svc).listMyScans(eq(userUuid), eq(from), toArg.capture(), eq(0), eq(20));
@@ -80,7 +80,7 @@ class ScanReportWindowTest {
         UUID userUuid = UUID.randomUUID();
         controller(svc).myScans(teamMemberAuth(userUuid),
                 Instant.parse("2026-09-09T07:44:00Z"),
-                Instant.parse("2026-09-09T07:44:00Z"), 0, 20);
+                Instant.parse("2026-09-09T07:44:00Z"), 0, 20, null);
 
         ArgumentCaptor<Instant> toArg = ArgumentCaptor.forClass(Instant.class);
         verify(svc).listMyScans(any(), any(), toArg.capture(), anyInt(), anyInt());
@@ -99,7 +99,7 @@ class ScanReportWindowTest {
 
         controller(svc).myScans(teamMemberAuth(UUID.randomUUID()),
                 Instant.parse("2026-09-01T00:00:00Z"),
-                Instant.parse("2026-09-03T10:00:00Z"), 0, 20);
+                Instant.parse("2026-09-03T10:00:00Z"), 0, 20, null);
 
         ArgumentCaptor<Instant> toArg = ArgumentCaptor.forClass(Instant.class);
         verify(svc).listMyScans(any(), any(), toArg.capture(), anyInt(), anyInt());
@@ -119,7 +119,7 @@ class ScanReportWindowTest {
 
         Instant before = Instant.now();
         controller(svc).myScans(teamMemberAuth(UUID.randomUUID()),
-                Instant.parse("2026-09-02T07:44:00Z"), null, 0, 20);
+                Instant.parse("2026-09-02T07:44:00Z"), null, 0, 20, null);
         Instant after = Instant.now();
 
         ArgumentCaptor<Instant> toArg = ArgumentCaptor.forClass(Instant.class);
@@ -134,7 +134,7 @@ class ScanReportWindowTest {
 
         assertThatThrownBy(() -> controller(svc).myScans(teamMemberAuth(UUID.randomUUID()),
                 Instant.parse("2026-09-30T00:00:00Z"),
-                Instant.parse("2026-09-01T00:00:00Z"), 0, 20))
+                Instant.parse("2026-09-01T00:00:00Z"), 0, 20, null))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("must not be after");
     }
@@ -144,7 +144,7 @@ class ScanReportWindowTest {
         ScanReportService svc = mock(ScanReportService.class);
 
         assertThatThrownBy(() -> controller(svc).myScans(teamMemberAuth(UUID.randomUUID()),
-                null, Instant.parse("2026-09-01T00:00:00Z"), 0, 20))
+                null, Instant.parse("2026-09-01T00:00:00Z"), 0, 20, null))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("'from' is required");
     }
@@ -154,7 +154,7 @@ class ScanReportWindowTest {
         ScanReportService svc = mock(ScanReportService.class);
 
         assertThatThrownBy(() -> controller(svc).myScans(teamMemberAuth(UUID.randomUUID()),
-                Instant.now().plusSeconds(3600), null, 0, 20))
+                Instant.now().plusSeconds(3600), null, 0, 20, null))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("must not be in the future");
     }
@@ -170,7 +170,7 @@ class ScanReportWindowTest {
 
         ResponseEntity<ApiResult<PageResponse<ScanAttemptDTO>>> resp =
                 controller(svc).myScans(teamMemberAuth(UUID.randomUUID()),
-                        Instant.parse("2026-09-02T07:44:00Z"), null, 0, 20);
+                        Instant.parse("2026-09-02T07:44:00Z"), null, 0, 20, null);
 
         assertThat(resp.getHeaders().getCacheControl()).contains("no-store");
     }

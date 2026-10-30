@@ -88,6 +88,8 @@ public class GateLookupResponseDTO {
         /** The booking exists but is PENDING or CANCELLED — not paid for. */
         BOOKING_NOT_CONFIRMED,
         WRONG_ORGANIZER,
-        NOT_ASSIGNED_TO_EVENT
+        NOT_ASSIGNED_TO_EVENT,
+        /** The booking is for another event than the one the scanner is scanning for. */
+        WRONG_EVENT
     }
 }

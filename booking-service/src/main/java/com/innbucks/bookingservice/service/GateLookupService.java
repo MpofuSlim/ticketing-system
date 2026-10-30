@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.dto.GateLookupResponseDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
+import com.innbucks.bookingservice.dto.ScannerAccessDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.repository.BookingRepository;
@@ -10,6 +11,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
+import com.innbucks.bookingservice.security.AuthenticatedCaller;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,6 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 /**
  * Finds a booking by its confirmation number at the gate — the fallback for a
@@ -84,12 +88,25 @@ public class GateLookupService {
 
     /** Deliberately NOT {@code @Transactional} — see the class javadoc. */
     public GateLookupResponseDTO lookup(String rawConfirmationNumber) {
+        return lookup(rawConfirmationNumber, null);
+    }
+
+    /**
+     * @param eventId the event the gate is scanning for. Required from a
+     *                super-app scanner, optional for the scanner app; when
+     *                given, another event's booking is {@code WRONG_EVENT} and
+     *                none of its tickets are listed.
+     */
+    public GateLookupResponseDTO lookup(String rawConfirmationNumber, UUID eventId) {
         String confirmationNumber = normalise(rawConfirmationNumber);
         if (confirmationNumber.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "confirmationNumber is required");
         }
-        String scanner = SecurityContextHolder.getContext().getAuthentication() == null
-                ? null : SecurityContextHolder.getContext().getAuthentication().getName();
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (TicketScanService.isSuperAppScanner(auth)) {
+            return lookupForSuperApp(confirmationNumber, eventId, auth);
+        }
+        String scanner = auth == null ? null : auth.getName();
 
         // Items fetched with the booking: the FOUND answer lists every ticket.
         Booking booking = TransactionPhases.inTransaction(readTx,
@@ -110,7 +127,58 @@ public class GateLookupService {
         if (refused != null) {
             return refusal(GateLookupResponseDTO.Status.valueOf(refused.name()), confirmationNumber);
         }
+        if (eventId != null && !eventId.equals(booking.getEventId())) {
+            log.info("Gate lookup rejected, booking is for another event confirmationNumber={} scanningFor={} scanner={}",
+                    confirmationNumber, eventId, scanner);
+            return refusal(GateLookupResponseDTO.Status.WRONG_EVENT, confirmationNumber);
+        }
+        return found(booking, confirmationNumber, scanner);
+    }
 
+    /**
+     * The super-app gate: the caller's access to {@code eventId} is asked of
+     * event-service BEFORE the booking is read (503 when it cannot be asked),
+     * so a phone that is not on the event's team learns nothing about any
+     * booking, not even whether a confirmation number exists. Then another
+     * event's or another organizer's booking is {@code WRONG_EVENT}, the same
+     * answer for both.
+     */
+    private GateLookupResponseDTO lookupForSuperApp(String confirmationNumber, UUID eventId, Authentication auth) {
+        if (eventId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "eventId is required");
+        }
+        UUID userUuid = AuthenticatedCaller.userUuid(auth);
+        if (userUuid == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+        String scanner = "user:" + userUuid;
+        ScannerAccessDTO access = ticketScanService.superAppAccess(userUuid, eventId);
+        if (!access.isAllowed()) {
+            log.info("Gate lookup rejected, not on the event's team eventId={} scanner={}", eventId, scanner);
+            return refusal(GateLookupResponseDTO.Status.NOT_ASSIGNED_TO_EVENT, confirmationNumber);
+        }
+        Booking booking = TransactionPhases.inTransaction(readTx,
+                () -> bookingRepository.findByConfirmationNumberWithItems(confirmationNumber))
+                .orElse(null);
+        if (booking == null) {
+            log.info("Gate lookup miss confirmationNumber={} scanner={}", confirmationNumber, scanner);
+            return refusal(GateLookupResponseDTO.Status.BOOKING_NOT_FOUND, confirmationNumber);
+        }
+        if (!eventId.equals(booking.getEventId()) || booking.getTenantUserUuid() == null
+                || !booking.getTenantUserUuid().equals(access.getOrganizerUuid())) {
+            log.info("Gate lookup rejected, booking is for another event confirmationNumber={} eventId={} scanner={}",
+                    confirmationNumber, eventId, scanner);
+            return refusal(GateLookupResponseDTO.Status.WRONG_EVENT, confirmationNumber);
+        }
+        if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
+            log.info("Gate lookup rejected, booking not confirmed confirmationNumber={} status={} scanner={}",
+                    confirmationNumber, booking.getStatus(), scanner);
+            return refusal(GateLookupResponseDTO.Status.BOOKING_NOT_CONFIRMED, confirmationNumber);
+        }
+        return found(booking, confirmationNumber, scanner);
+    }
+
+    private GateLookupResponseDTO found(Booking booking, String confirmationNumber, String scanner) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
         List<GateLookupResponseDTO.Ticket> tickets = items.stream()
                 .sorted(Comparator.comparing(BookingItem::getTicketNumber))

@@ -64,6 +64,10 @@ public class ScanTicketResponseDTO {
                           + "can greet the holder / check an ID; null for bookings that pre-date names.")
     private String holderName;
 
+    @Schema(example = "VIP", nullable = true,
+            description = "The ticket's seat category. Present on ALLOWED and ALREADY_REDEEMED.")
+    private String categoryName;
+
     /**
      * The event's first market-local day. Populated ONLY on
      * {@link Status#WRONG_EVENT_DAY}, so gate staff can tell someone "come back
@@ -92,6 +96,12 @@ public class ScanTicketResponseDTO {
          * is not one of the event's market-local days. The ticket is NOT
          * redeemed — it stays valid for its own day.
          */
-        WRONG_EVENT_DAY
+        WRONG_EVENT_DAY,
+        /**
+         * The ticket is for another event than the one the scanner is scanning
+         * for ({@code eventId}). NOT redeemed. Sent whenever the request names
+         * an event; a super-app scanner always does.
+         */
+        WRONG_EVENT
     }
 }
