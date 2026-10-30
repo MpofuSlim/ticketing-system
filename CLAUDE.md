@@ -1828,6 +1828,14 @@ no further change and cannot tell how the customer proved themselves.
   — was the workaround for the hole, not a policy; it is gone.
   Pinned by `PhoneProofScopeTest` and the dual-role case in
   `FederatedLoginServiceTest`.
+- **"The account itself is untouched" holds at tier-2 too.** Tier-2
+  (`/auth/customer/register/tier2`) writes the account row's email and names,
+  and asks only for a phone proof in the last 30 minutes. On an account that
+  also signs in to the portal — any role besides CUSTOMER, or an organization
+  membership — those are the portal sign-in identity and its reset address, so
+  tier-2 refuses it with `409 business_account_not_eligible` and writes nothing
+  (`CustomerService.signsInToThePortal`, pinned in `CustomerServiceTest`). A new
+  self-service writer of `User.email` or names applies the same rule.
 - **The scope rides the REFRESH ROW (`refresh_tokens.phone_proof`, V38), not the
   access token.** `/auth/refresh` re-reads the LIVE user and re-derives claims
   from their current roles, so a login-time narrowing kept anywhere else would

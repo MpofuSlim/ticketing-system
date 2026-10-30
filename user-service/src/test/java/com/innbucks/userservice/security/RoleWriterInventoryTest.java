@@ -87,7 +87,9 @@ class RoleWriterInventoryTest {
                 "new_user", 1);
         writer("service/CustomerService.java",
                 "GUARDED — tier-2: requireEmailNotReserved first, then requireNotStaffAccount on the "
-                        + "phone's account, then the email must not be held by another account in any letter case.",
+                        + "phone's account, then no business account (a role besides CUSTOMER, or an organization "
+                        + "membership: 409 business_account_not_eligible), then the email must not be held by "
+                        + "another account in any letter case.",
                 "set_email", 1);
         writer("service/FederatedLoginService.java",
                 "UNREACHABLE — creates a CUSTOMER matched by PHONE; a profiled account has no sign-in phone, "

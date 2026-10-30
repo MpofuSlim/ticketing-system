@@ -99,6 +99,33 @@ public class CustomerService {
         this.cellAffinityChecker = cellAffinityChecker;
     }
 
+    /**
+     * Who belongs to an organization ({@link #signsInToThePortal}). A required
+     * setter so the plain-{@code new} unit tests keep their construction; Spring
+     * always sets it, and only those tests run without it.
+     */
+    private com.innbucks.userservice.repository.OrganizationMemberRepository organizationMembers;
+
+    @Autowired
+    void setOrganizationMembers(com.innbucks.userservice.repository.OrganizationMemberRepository organizationMembers) {
+        this.organizationMembers = organizationMembers;
+    }
+
+    /**
+     * True when this account's email and names are a portal sign-in identity:
+     * it holds any role besides CUSTOMER (custom roles included), or belongs to
+     * an organization, which since V39 signs a plain CUSTOMER in to the portal
+     * as a colleague.
+     */
+    private boolean signsInToThePortal(User user) {
+        if (user.getRoles() != null
+                && user.getRoles().stream().anyMatch(r -> !User.Role.CUSTOMER.name().equals(r))) {
+            return true;
+        }
+        return organizationMembers != null && user.getId() != null
+                && organizationMembers.existsByUserId(user.getId());
+    }
+
     private String homeCountryFor(String phone) {
         return cellAffinityChecker != null ? cellAffinityChecker.homeCountryFor(phone)
                 : MsisdnCountryResolver.resolve(phone).orElse(deploymentCountry);
@@ -186,6 +213,15 @@ public class CustomerService {
         // subject and the address its invite was bound to).
         staffEligibility.requireNotStaffAccount(profile.getUser(), null, "customer_tier2",
                 com.innbucks.userservice.exception.StaffPolicyException.STAFF_ACCOUNT_NOT_A_CUSTOMER_MESSAGE);
+        // ...nor a business account's. A CUSTOMER who also runs or works for a
+        // business signs in to the portal with this row's email, behind a
+        // password and a second factor; tier-2 needs only a recent phone proof,
+        // so writing the email or names here would let phone possession replace
+        // that sign-in identity (and its reset address).
+        if (signsInToThePortal(profile.getUser())) {
+            log.warn("Refused tier-2 registration for a business account userId={}", profile.getUser().getId());
+            throw com.innbucks.userservice.exception.StaffPolicyException.businessAccountNotEligible();
+        }
         // Another account already holding this address, in any letter case, is
         // refused like registration refuses it (V49: one account per address).
         // The customer's own row is excluded, so re-submitting their own

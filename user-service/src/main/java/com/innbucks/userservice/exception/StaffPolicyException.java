@@ -353,6 +353,22 @@ public class StaffPolicyException extends RuntimeException {
                 message == null ? STAFF_ACCOUNT_NOT_ELIGIBLE_MESSAGE : message, Map.of());
     }
 
+    /**
+     * {@code errorCode} for tier-2 on a number whose account also signs in to
+     * the portal: it holds a role besides CUSTOMER, or belongs to an
+     * organization. Its email and names are that sign-in's identity, and
+     * tier-2 needs only a recent phone proof, never the portal's password and
+     * second factor.
+     */
+    public static final String BUSINESS_ACCOUNT_NOT_ELIGIBLE = "business_account_not_eligible";
+    public static final String BUSINESS_ACCOUNT_NOT_A_CUSTOMER_MESSAGE =
+            "This number belongs to a business account, which can't be registered as a customer here.";
+
+    public static StaffPolicyException businessAccountNotEligible() {
+        return new StaffPolicyException(HttpStatus.CONFLICT, BUSINESS_ACCOUNT_NOT_ELIGIBLE,
+                BUSINESS_ACCOUNT_NOT_A_CUSTOMER_MESSAGE, Map.of());
+    }
+
     public static StaffPolicyException useStaffInvite() {
         return new StaffPolicyException(HttpStatus.CONFLICT, USE_STAFF_INVITE, USE_STAFF_INVITE_MESSAGE, Map.of());
     }

@@ -212,6 +212,117 @@ class CustomerServiceTest {
         assertEquals(1, profile.getRegistrationTier(), "tier must not advance");
     }
 
+    /**
+     * A business account's email and names are its portal sign-in identity,
+     * behind a password and a second factor. Tier-2 needs only a recent phone
+     * proof, so on such an account it must change nothing: otherwise whoever
+     * holds the number replaces the address the portal signs in with and sends
+     * reset codes to.
+     */
+    private void assertTier2RefusedAsBusinessAccount(User user,
+                                                     com.innbucks.userservice.repository.OrganizationMemberRepository members) {
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
+        CustomerService service = newService(userRepo, profileRepo);
+        service.setOrganizationMembers(members);
+
+        CustomerProfile profile = CustomerProfile.builder()
+                .user(user)
+                .registrationTier(1)
+                .phoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC))
+                .build();
+        when(userRepo.findByPhoneNumber(user.getPhoneNumber())).thenReturn(Optional.of(user));
+        when(profileRepo.findByUserId(user.getId())).thenReturn(Optional.of(profile));
+
+        com.innbucks.userservice.exception.StaffPolicyException ex = assertThrows(
+                com.innbucks.userservice.exception.StaffPolicyException.class,
+                () -> service.registerTier2(tier2Request(user.getPhoneNumber())));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals("business_account_not_eligible", ex.getErrorCode());
+
+        assertEquals("owner@business.co.zw", user.getEmail(), "the portal sign-in email must not change");
+        assertEquals("Tendai", user.getFirstName());
+        assertEquals("Ncube", user.getLastName());
+        assertEquals(1, profile.getRegistrationTier(), "tier must not advance");
+        assertNull(profile.getNationalId(), "no KYC field may be written");
+        verify(userRepo, never()).save(any());
+        verify(profileRepo, never()).save(any());
+    }
+
+    private User businessAccount(java.util.Set<String> roles) {
+        return User.builder()
+                .id(77L)
+                .firstName("Tendai")
+                .lastName("Ncube")
+                .email("owner@business.co.zw")
+                .phoneNumber("+263770000077")
+                .password("hashed")
+                .roles(roles)
+                .active(true)
+                .build();
+    }
+
+    @Test
+    void registerTier2_refusesAMerchantAdminWhoAlsoShops() {
+        assertTier2RefusedAsBusinessAccount(
+                businessAccount(User.roleNames(User.Role.CUSTOMER, User.Role.MERCHANT_ADMIN)),
+                mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class));
+    }
+
+    @Test
+    void registerTier2_refusesAnOrganizerWhoAlsoShops() {
+        assertTier2RefusedAsBusinessAccount(
+                businessAccount(User.roleNames(User.Role.CUSTOMER, User.Role.EVENT_ORGANIZER)),
+                mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class));
+    }
+
+    @Test
+    void registerTier2_refusesACustomerHoldingACustomRole() {
+        // A role created at runtime is still not CUSTOMER: whatever it grants is
+        // signed in for through the portal.
+        java.util.Set<String> roles = new java.util.LinkedHashSet<>(User.roleNames(User.Role.CUSTOMER));
+        roles.add("BOX_OFFICE");
+        assertTier2RefusedAsBusinessAccount(businessAccount(roles),
+                mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class));
+    }
+
+    @Test
+    void registerTier2_refusesAPlainCustomerWhoBelongsToAnOrganization() {
+        // V39: a CUSTOMER added to a business as a colleague signs in to the
+        // portal with this row's email, though their roles say only CUSTOMER.
+        com.innbucks.userservice.repository.OrganizationMemberRepository members =
+                mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class);
+        when(members.existsByUserId(77L)).thenReturn(true);
+        assertTier2RefusedAsBusinessAccount(businessAccount(User.roleNames(User.Role.CUSTOMER)), members);
+    }
+
+    @Test
+    void registerTier2_stillWritesAPlainCustomersEmailAndNames() {
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
+        CustomerService service = newService(userRepo, profileRepo);
+        com.innbucks.userservice.repository.OrganizationMemberRepository members =
+                mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class);
+        service.setOrganizationMembers(members);
+
+        User user = customerUser(42L, "+263770000001");
+        CustomerProfile profile = CustomerProfile.builder()
+                .user(user)
+                .registrationTier(1)
+                .phoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC))
+                .build();
+        when(userRepo.findByPhoneNumber("+263770000001")).thenReturn(Optional.of(user));
+        when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
+
+        CustomerRegistrationResponseDTO resp = service.registerTier2(tier2Request("+263770000001"));
+
+        assertEquals(2, resp.getTier());
+        assertEquals("alice@example.com", user.getEmail());
+        assertEquals("Alice", user.getFirstName());
+        verify(members).existsByUserId(42L);
+        verify(userRepo).save(user);
+    }
+
     @Test
     void getCustomerTierByPhoneNumber_returnsTierProgression_withoutLeakingEmail() throws Exception {
         // OWASP A01 information-exposure guard. GET /auth/customer/tier is PUBLIC

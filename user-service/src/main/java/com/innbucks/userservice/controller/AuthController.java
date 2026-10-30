@@ -1165,15 +1165,27 @@ public class AuthController {
                                     """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
-                    description = "The number belongs to an InnBucks staff account, whose email is never changed here.",
+                    description = "The number belongs to an account whose email and names are a sign-in "
+                            + "identity, so they are never changed here: an InnBucks staff account, or a "
+                            + "business account (any role besides CUSTOMER, or a member of an organization). "
+                            + "Nothing is written.",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Staff account", value = """
+                            examples = {
+                                    @ExampleObject(name = "Staff account", value = """
                                     {
                                       "code": "409 CONFLICT",
                                       "message": "This number belongs to an InnBucks staff account, which can't be registered as a customer.",
                                       "data": { "errorCode": "staff_account_not_eligible" }
                                     }
-                                    """)))
+                                    """),
+                                    @ExampleObject(name = "Business account", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "This number belongs to a business account, which can't be registered as a customer here.",
+                                      "data": { "errorCode": "business_account_not_eligible" }
+                                    }
+                                    """)
+                            }))
     })
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier2(
             @Valid @RequestBody CustomerTier2RegisterDTO request) {
