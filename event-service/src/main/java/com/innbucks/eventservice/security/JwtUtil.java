@@ -284,6 +284,21 @@ public class JwtUtil {
         return uuidClaim(claims, "organizerUuid");
     }
 
+    /**
+     * The {@code phoneNumber} claim user-service mints on a customer's token
+     * (E.164; a super-app session always carries it). Null when absent or not
+     * a string. Read only by the super-app scanner endpoints, which take the
+     * number from the session and never from a request.
+     */
+    public String extractPhoneNumber(Claims claims) {
+        try {
+            String raw = claims.get("phoneNumber", String.class);
+            return raw == null || raw.isBlank() ? null : raw;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private UUID extractUuidClaim(String token, String name) {
         try {
             return uuidClaim(getClaims(token), name);

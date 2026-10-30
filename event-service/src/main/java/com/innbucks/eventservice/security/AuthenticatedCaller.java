@@ -43,6 +43,16 @@ public final class AuthenticatedCaller {
         return readUuid(auth, AuthDetailsKeys.ORGANIZER_UUID);
     }
 
+    /** The session's {@code phoneNumber} claim, or null. */
+    @SuppressWarnings("unchecked")
+    public static String phoneNumber(Authentication auth) {
+        if (auth == null) return null;
+        Object details = auth.getDetails();
+        if (!(details instanceof Map<?, ?> map)) return null;
+        Object value = ((Map<String, Object>) map).get(AuthDetailsKeys.PHONE_NUMBER);
+        return value instanceof String phone && !phone.isBlank() ? phone : null;
+    }
+
     @SuppressWarnings("unchecked")
     private static UUID readUuid(Authentication auth, String key) {
         if (auth == null) return null;
