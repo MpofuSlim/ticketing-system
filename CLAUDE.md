@@ -2899,6 +2899,14 @@ the same hook loyalty's voucher report uses) and booking-service records it once
 - **Deploy booking-service before payment-service.** A booking-service without
   V29 may refuse the new body field, and a refused confirm parks a paid
   payment `COMPLETED_UNCONFIRMED` (retried every minute) until it ships.
+- **The revenue summary splits net by method** (`GET /event-organizer/reports/revenue`,
+  `byPaymentMethod`: `method`, `label`, `bookings`, `ticketsSold`, `amount`,
+  largest amount first). It is summed from the same CONFIRMED rows as
+  `netRevenue`, so the rows always add up to it, to `confirmedBookings` and to
+  `ticketsSold`; a booking with no rail is `NOT_RECORDED` / "Not recorded",
+  never dropped. Refunds are in no row. The CSV export stays one row per
+  booking with the method as its last column: a totals block under it would
+  break every parser that reads the file as a table.
 - **History is filled once by `scripts/backfill-booking-payment-rail.sh`**
   (dry run by default, `APPLY=1` to write; reads payment-service's paid
   booking payments, writes only NULL rails on CONFIRMED bookings). A booking

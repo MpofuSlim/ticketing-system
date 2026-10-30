@@ -115,6 +115,45 @@ class OrganizerReportServiceTest {
         assertThat(s.eventId()).isEqualTo(EVENT_A);
     }
 
+    private Booking paidBy(String rail, String total, LocalDateTime createdAt, BookingItem... items) {
+        Booking b = confirmed(EVENT_A, total, total, null, createdAt, items);
+        b.setPaymentRail(rail);
+        return b;
+    }
+
+    @Test
+    void revenueSummary_splitsNetByPaymentMethod_andTheRowsAddUpToTheTotals() {
+        OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
+        LocalDateTime t = LocalDate.of(2026, 10, 20).atTime(12, 0);
+        when(repo.findConfirmedWithItems(eq(ORG), any(), any(), any())).thenReturn(List.of(
+                paidBy("INNBUCKS_CODE", "200.00", t, item(CAT_GA, "GA", "100.00"), item(CAT_GA, "GA", "100.00")),
+                paidBy("INNBUCKS_CODE", "100.00", t, item(CAT_GA, "GA", "100.00")),
+                paidBy("ECOCASH", "300.00", t,
+                        item(CAT_GA, "GA", "100.00"), item(CAT_GA, "GA", "100.00"), item(CAT_GA, "GA", "100.00")),
+                paidBy("ZIMSWITCH_CARD", "100.00", t, item(CAT_GA, "GA", "100.00")),
+                paidBy(null, "50.00", t, item(CAT_GA, "GA", "50.00"))));
+        // A refund is not money kept, so it is in no payment-method row.
+        when(repo.findReversed(eq(ORG), any(), any(), any())).thenReturn(List.of(reversed(EVENT_A, "100.00", t)));
+
+        RevenueSummaryDTO s = service(repo).revenueSummary(ORG, EVENT_A,
+                LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
+
+        assertThat(s.byPaymentMethod())
+                .extracting(m -> m.method() + "|" + m.label() + "|" + m.bookings() + "|" + m.ticketsSold() + "|"
+                        + m.amount().toPlainString())
+                .containsExactly(
+                        "ECOCASH|EcoCash|1|3|300.00",
+                        "INNBUCKS|InnBucks|2|3|300.00",
+                        "CARD|Bank card (ZimSwitch)|1|1|100.00",
+                        "NOT_RECORDED|Not recorded|1|1|50.00");
+        assertThat(s.byPaymentMethod().stream().map(m -> m.amount()).reduce(BigDecimal.ZERO, BigDecimal::add))
+                .isEqualByComparingTo(s.netRevenue());
+        assertThat(s.byPaymentMethod().stream().mapToLong(m -> m.bookings()).sum())
+                .isEqualTo(s.confirmedBookings());
+        assertThat(s.byPaymentMethod().stream().mapToLong(m -> m.ticketsSold()).sum())
+                .isEqualTo(s.ticketsSold());
+    }
+
     @Test
     void revenueSummary_emptyPeriod_isAllZeroNotNullAndNoDivideByZero() {
         OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
@@ -126,6 +165,7 @@ class OrganizerReportServiceTest {
         assertThat(s.confirmedBookings()).isZero();
         assertThat(s.netRevenue()).isEqualByComparingTo("0.00");
         assertThat(s.averageOrderValue()).isEqualByComparingTo("0.00"); // no ArithmeticException
+        assertThat(s.byPaymentMethod()).isEmpty();
     }
 
     @Test
