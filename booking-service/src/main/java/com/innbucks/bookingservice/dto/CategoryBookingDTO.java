@@ -55,6 +55,21 @@ public class CategoryBookingDTO {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private BigDecimal discountAmount;
     /**
+     * How the booking this ticket belongs to was paid (V29): INNBUCKS,
+     * ECOCASH or CARD (a ZimSwitch-enabled bank card), from the rail
+     * payment-service recorded at confirm. Absent when not recorded: an
+     * unpaid booking, or one confirmed before V29 that the backfill did not
+     * reach. A rail added later appears under its own name.
+     */
+    @io.swagger.v3.oas.annotations.media.Schema(example = "ECOCASH", nullable = true,
+            allowableValues = {"INNBUCKS", "ECOCASH", "CARD"})
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String paymentMethod;
+    /** {@link #paymentMethod} in words, ready to print: "InnBucks", "EcoCash" or "Bank card (ZimSwitch)". */
+    @io.swagger.v3.oas.annotations.media.Schema(example = "EcoCash", nullable = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String paymentMethodLabel;
+    /**
      * Named attendee for THIS ticket (V22), when the purchaser gave one; null
      * = the purchaser's own ticket. This is the "who is actually coming"
      * answer: one row per ticket, so a 3-ticket booking with two named guests

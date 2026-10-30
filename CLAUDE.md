@@ -2879,6 +2879,31 @@ runs when a tier closes: every read works out the price in force at that moment.
   `GET /seat-categories/{id}/price-history` (owner or SUPER_ADMIN, newest first,
   at most 200; a deleted category's history stays readable).
 
+## Bookings record how they were paid (booking-service V29)
+
+**`bookings.payment_rail` is the rail that paid: `INNBUCKS_CODE`, `ECOCASH` or
+`ZIMSWITCH_CARD`, as payment-service names them.** payment-service sends it in
+the confirm body (`{"paymentRail": ...}`, through `OrderGateway.confirm(…, rail)`,
+the same hook loyalty's voucher report uses) and booking-service records it once.
+
+- **Shown as a payment method**: `paymentMethod` (`INNBUCKS` / `ECOCASH` /
+  `CARD`) and `paymentMethodLabel` on the guest list (`GET /bookings/by-event`,
+  `/by-category`) and on `BookingResponseDTO`; the organizer CSV appends
+  `paymentMethod` in words at the END. `PaymentMethods` is the one mapping.
+  **The card label is "Bank card (ZimSwitch)", never "Visa/Mastercard"**:
+  ZimSwitch takes ZimSwitch-enabled cards only on our channel
+  (`docs/api/zimswitch-copyandpay.md`).
+- **It can never fail a paid confirm.** No CHECK on the column, a malformed
+  value is ignored (`PaymentMethods.cleanRail`), and an unknown rail is shown by
+  its own name. A replay fills a missing rail but never changes a recorded one.
+- **Deploy booking-service before payment-service.** A booking-service without
+  V29 may refuse the new body field, and a refused confirm parks a paid
+  payment `COMPLETED_UNCONFIRMED` (retried every minute) until it ships.
+- **History is filled once by `scripts/backfill-booking-payment-rail.sh`**
+  (dry run by default, `APPLY=1` to write; reads payment-service's paid
+  booking payments, writes only NULL rails on CONFIRMED bookings). A booking
+  with no paid payment on record (made by hand) stays blank.
+
 ## Promo codes (booking-service V27)
 
 **An organizer creates a code for one of their events; a buyer types it at

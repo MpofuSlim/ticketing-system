@@ -189,7 +189,7 @@ class BookingOrderGatewayTest {
 
     @Test
     void confirm_2xx_isConfirmed_withTheConfirmationNumber() {
-        when(bookings.confirmBooking(bookingId)).thenReturn(Map.of("confirmationNumber", "INN-CONF-1"));
+        when(bookings.confirmBooking(eq(bookingId), any())).thenReturn(Map.of("confirmationNumber", "INN-CONF-1"));
 
         ConfirmOutcome outcome = gateway.confirm(bookingId.toString(), "TKZ-X-1", 5000L);
 
@@ -199,7 +199,7 @@ class BookingOrderGatewayTest {
 
     @Test
     void confirm_4xxRefusal_isRejected_neverThrown() {
-        when(bookings.confirmBooking(bookingId))
+        when(bookings.confirmBooking(eq(bookingId), any()))
                 .thenThrow(new BookingServiceClient.BookingConfirmationException("hold expired", 409));
 
         ConfirmOutcome outcome = gateway.confirm(bookingId.toString(), "TKZ-X-1", 5000L);
@@ -210,7 +210,7 @@ class BookingOrderGatewayTest {
 
     @Test
     void confirm_unreachable_isUnreachable_soTheCallerParksNotFails() {
-        when(bookings.confirmBooking(bookingId))
+        when(bookings.confirmBooking(eq(bookingId), any()))
                 .thenThrow(new BookingServiceClient.BookingConfirmationException(
                         "Unable to reach booking-service to confirm the booking", 503));
 

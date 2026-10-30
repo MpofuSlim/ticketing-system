@@ -8,6 +8,7 @@ import innbucks.paymentservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
@@ -129,15 +130,26 @@ public class BookingServiceClient {
      * Returns the parsed envelope on a 2xx, or throws BookingConfirmationException
      * on a non-2xx so the caller can surface booking-service's reason
      * (e.g. "Seat hold expired", "Booking not found").
+     *
+     * <p>{@code paymentRail} (the {@code PaymentRail} name that paid) rides in
+     * the body as {@code {"paymentRail": "..."}} so booking-service can show
+     * the organizer how each booking was paid (its V29). Null sends no body,
+     * the historical contract. booking-service records it once and ignores a
+     * value it cannot read, so it can never make a paid confirm fail.
      */
-    public Map<String, Object> confirmBooking(UUID bookingId) {
+    public Map<String, Object> confirmBooking(UUID bookingId, String paymentRail) {
         try {
-            String body = restClient.patch()
+            var request = restClient.patch()
                     // /bookings/internal/** is gateway-edge-denied + permitted in
                     // booking-service SecurityConfig + X-Internal-Token gated in
                     // the controller — the "three files agree" S2S contract.
                     .uri("/bookings/internal/{id}/confirm", bookingId)
-                    .header("X-Internal-Token", internalToken)
+                    .header("X-Internal-Token", internalToken);
+            if (paymentRail != null) {
+                request = request.contentType(MediaType.APPLICATION_JSON)
+                        .body(Map.of("paymentRail", paymentRail));
+            }
+            String body = request
                     .retrieve()
                     .body(String.class);
             ApiResult<Map<String, Object>> envelope = objectMapper.readValue(

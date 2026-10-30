@@ -45,6 +45,21 @@ public class BookingResponseDTO {
                     + "absent when no code was used.")
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     private BigDecimal discountAmount;
+    // How the booking was paid (V29), from the rail payment-service recorded
+    // at confirm. Absent when not recorded (an unpaid booking, or one
+    // confirmed before V29 that the backfill did not reach).
+    @io.swagger.v3.oas.annotations.media.Schema(example = "ECOCASH", nullable = true,
+            allowableValues = {"INNBUCKS", "ECOCASH", "CARD"},
+            description = "How the booking was paid: INNBUCKS (an InnBucks code), ECOCASH, or CARD "
+                    + "(a ZimSwitch-enabled bank card). Absent when not recorded. A rail added later "
+                    + "appears under its own name, so treat an unknown value as a label, not an error.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String paymentMethod;
+    @io.swagger.v3.oas.annotations.media.Schema(example = "EcoCash", nullable = true,
+            description = "paymentMethod in words, ready to print: \"InnBucks\", \"EcoCash\" or "
+                    + "\"Bank card (ZimSwitch)\". Absent when not recorded.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String paymentMethodLabel;
     private List<BookingItemDTO> items; // each item has its own ticketNumber
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
