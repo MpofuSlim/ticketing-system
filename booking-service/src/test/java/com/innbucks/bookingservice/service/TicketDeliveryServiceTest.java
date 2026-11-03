@@ -209,7 +209,7 @@ class TicketDeliveryServiceTest {
         // The confirmation number opens every ticket of the booking at the
         // gate lookup: a guest gets their own ticket number and nothing more.
         assertFalse(eventName.getValue().contains(booking.getConfirmationNumber()), eventName.getValue());
-        assertEquals("your event (ticket for Tendai Ncube, booked by Alice Moyo, TN-TENDAI)",
+        assertEquals("your event (ticket for Tendai Ncube, booked by Alice Moyo, ticket number TN-TENDAI)",
                 eventName.getValue());
 
         assertEquals(1, outcome.qrTicketsSent(), "purchaser-routed QRs only");
@@ -426,18 +426,18 @@ class TicketDeliveryServiceTest {
         String reference = booking.getConfirmationNumber();
         ArgumentCaptor<String> rudo = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), rudo.capture(), contains("TN-RUDO"));
-        assertEquals("your event (ticket 2 of 5 — TN-RUDO (Rudo Sibanda))", rudo.getValue());
+        assertEquals("your event (ticket 2 of 5 — ticket number TN-RUDO (Rudo Sibanda))", rudo.getValue());
         ArgumentCaptor<String> bad = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), bad.capture(), contains("TN-BAD"));
-        assertEquals("your event (ticket 4 of 5 — TN-BAD (Bad Number))", bad.getValue());
+        assertEquals("your event (ticket 4 of 5 — ticket number TN-BAD (Bad Number))", bad.getValue());
         assertFalse(bad.getValue().contains(reference), bad.getValue());
         // The buyer's own ticket and the one they named themselves on keep it.
         ArgumentCaptor<String> alice = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), alice.capture(), contains("TN-ALICE"));
-        assertEquals("your event (booking " + reference + ", ticket 1 of 5 — TN-ALICE)", alice.getValue());
+        assertEquals("your event (booking " + reference + ", ticket 1 of 5 — ticket number TN-ALICE)", alice.getValue());
         ArgumentCaptor<String> self = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), self.capture(), contains("TN-SELF"));
-        assertEquals("your event (booking " + reference + ", ticket 5 of 5 — TN-SELF (Alice Moyo))",
+        assertEquals("your event (booking " + reference + ", ticket 5 of 5 — ticket number TN-SELF (Alice Moyo))",
                 self.getValue());
     }
 
@@ -456,7 +456,7 @@ class TicketDeliveryServiceTest {
         ArgumentCaptor<String> caption = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), caption.capture(), contains("TN-SELF"));
         assertEquals("your event (booking " + booking.getConfirmationNumber()
-                + ", 1 ticket, total 60.00 — TN-SELF (Alice Moyo))", caption.getValue());
+                + ", 1 ticket, total 60.00 — ticket number TN-SELF (Alice Moyo))", caption.getValue());
     }
 
     @Test
