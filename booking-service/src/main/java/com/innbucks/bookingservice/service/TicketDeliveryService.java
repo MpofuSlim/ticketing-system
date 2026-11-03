@@ -308,7 +308,10 @@ public class TicketDeliveryService {
         // TicketController serves as an explicit alias for exactly this
         // reason. Adding the prefix here produces /foundry/brand/foundry/...
         // and Twilio fails the media fetch with 63019.
-        String qrCodePath = "/bookings/" + booking.getId() + "/tickets/" + tn + "/qr.png";
+        //
+        // Keyed by the ticket's link token (V31): the URL Twilio fetches names
+        // neither the booking nor the ticket number.
+        String qrCodePath = TicketRenderingService.ticketQrPath(item);
         try {
             whatsApp.sendEventQrCode(phone, eventName, qrCodePath);
             return true;
@@ -577,7 +580,7 @@ public class TicketDeliveryService {
         }
         if (publicBaseUrl != null && !publicBaseUrl.isBlank()) {
             sb.append("\nView the whole booking online: ").append(publicBaseUrl)
-              .append("/bookings/").append(booking.getId()).append("/tickets");
+              .append(TicketRenderingService.bookingPagePath(booking));
         }
         return sb.toString();
     }
@@ -630,10 +633,11 @@ public class TicketDeliveryService {
         }
         // Their OWN ticket, never the booking's page: that one shows every
         // guest's QR, so a guest holding it could enter on someone else's
-        // ticket. The link carries no booking id for the same reason.
-        if (publicBaseUrl != null && !publicBaseUrl.isBlank() && item.getId() != null) {
+        // ticket. The link carries the ticket's own token, nothing of the
+        // booking, for the same reason.
+        if (publicBaseUrl != null && !publicBaseUrl.isBlank() && item.getLinkToken() != null) {
             sb.append("\nView your ticket online: ").append(publicBaseUrl)
-              .append(TicketRenderingService.holderTicketPath(item.getId()));
+              .append(TicketRenderingService.holderTicketPath(item));
         }
         return sb.toString();
     }

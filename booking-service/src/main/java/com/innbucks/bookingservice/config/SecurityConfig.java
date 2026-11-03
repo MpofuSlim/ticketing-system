@@ -87,6 +87,13 @@ public class SecurityConfig {
                         // bearer model; the exact three paths, nothing wider.
                         .requestMatchers(HttpMethod.GET, "/bookings/tickets/*",
                                 "/bookings/tickets/*/qr", "/bookings/tickets/*/qr.png").permitAll()
+                        // The same pages by link token (V31), the links every message
+                        // carries now: the buyer's view and page, a holder's page and
+                        // a ticket's QR. The token is the access control; the exact
+                        // paths, nothing wider. (The QR's /brand alias rides /brand/**.)
+                        .requestMatchers(HttpMethod.GET, "/bookings/view/*", "/bookings/view/*/tickets",
+                                "/bookings/ticket/*", "/bookings/ticket/*/qr",
+                                "/bookings/ticket/*/qr.png").permitAll()
                         // Brand assets — public PNGs served from classpath:/static/brand/
                         // (e.g. /brand/innbucks-logo.png) for the FE's WhatsApp templates,
                         // HTML emails, etc. Same anonymous-public model as the ticket QR.

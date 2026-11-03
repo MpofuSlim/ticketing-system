@@ -546,7 +546,12 @@ public class BookingController {
                     + "control is the unguessable UUID, same model as the existing public lookup by "
                     + "confirmation number. Returns a TRIMMED, PII-free view (PublicBookingResponseDTO): "
                     + "no userEmail / phoneNumber / tenantId / payment-split. Use the authenticated "
-                    + "GET /bookings/{id} for the full owner view. 404 if the id is unknown.")
+                    + "GET /bookings/{id} for the full owner view. 404 if the id is unknown.\n\n"
+                    + "**Being replaced by `GET /bookings/view/{viewToken}`** (same body), keyed by the "
+                    + "`viewToken` on the `POST /bookings` response instead of the booking id. The id is on staff "
+                    + "screens, scan reports and logs, so anyone who reads it can open this view and its QR codes. "
+                    + "This route closes behind `app.booking.id-links` (404, like an unknown id) once every client "
+                    + "polls by token.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200", description = "Booking returned (trimmed view)",
@@ -606,6 +611,102 @@ public class BookingController {
                 .cacheControl(CacheControl.noStore())
                 .body(ApiResult.ok("Booking retrieved successfully",
                         bookingService.getBookingByIdPublic(id)));
+    }
+
+    /**
+     * The buyer's public view of their booking, by its link token (V31): the
+     * checkout's status poll and the magic-link view. Replaces
+     * {@code GET /bookings/public/{id}}, whose key is on staff screens and in
+     * logs. The token is pinned to its shape, so no other path matches here.
+     */
+    @GetMapping("/view/{viewToken:[0-9a-f]{32}}")
+    @SecurityRequirements({})
+    @Operation(summary = "Get booking by view token (public, PII-free)",
+            description = "Public. The buyer's view of their booking, keyed by `viewToken`: the value on the "
+                    + "`POST /bookings` response (and on each booking of `GET /bookings/my`). Poll it after "
+                    + "checkout until `status` is CONFIRMED; the tickets' `ticketNumber` and `qrCode` appear only "
+                    + "then. Same body as `GET /bookings/public/{id}`, which it replaces. The buyer's page with "
+                    + "every QR is `GET /bookings/view/{viewToken}/tickets`. Never cached (`no-store`). 404 if the "
+                    + "token is unknown.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Booking returned (trimmed view)",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = PublicBookingResponseDTO.class),
+                            examples = {
+                                    @ExampleObject(name = "Awaiting payment", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Booking retrieved successfully",
+                                      "data": {
+                                        "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "confirmationNumber": "INN-20260502-AB12CD",
+                                        "status": "PENDING",
+                                        "totalAmount": 100.00,
+                                        "items": [
+                                          {
+                                            "seatId": "11111111-2222-3333-4444-555555555555",
+                                            "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                            "categoryName": "VIP",
+                                            "rowLabel": "A",
+                                            "seatNumber": 12,
+                                            "priceAtBooking": 100.00,
+                                            "ticketNumber": null,
+                                            "qrCode": null
+                                          }
+                                        ],
+                                        "createdAt": "2026-05-02T15:45:00",
+                                        "expiresAt": "2026-05-02T16:00:00"
+                                      }
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Paid", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Booking retrieved successfully",
+                                      "data": {
+                                        "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "confirmationNumber": "INN-20260502-AB12CD",
+                                        "status": "CONFIRMED",
+                                        "totalAmount": 100.00,
+                                        "items": [
+                                          {
+                                            "seatId": "11111111-2222-3333-4444-555555555555",
+                                            "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                            "categoryName": "VIP",
+                                            "rowLabel": "A",
+                                            "seatNumber": 12,
+                                            "priceAtBooking": 100.00,
+                                            "ticketNumber": "20260502-3FQ7M-X9K2D",
+                                            "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
+                                          }
+                                        ],
+                                        "createdAt": "2026-05-02T15:45:00",
+                                        "expiresAt": null
+                                      }
+                                    }
+                                    """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Unknown token",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Booking not found",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<PublicBookingResponseDTO>> getBookingByViewToken(@PathVariable String viewToken) {
+        // Never log the token: it opens the booking's tickets.
+        log.debug("GET /bookings/view/{token} (public lookup)");
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(ApiResult.ok("Booking retrieved successfully",
+                        bookingService.getBookingByTokenPublic(viewToken)));
     }
 
     /**
@@ -1526,7 +1627,7 @@ public class BookingController {
                     "PRODUCT_MANAGER) get every booking for the number. PENDING (awaiting-payment) and CANCELLED " +
                     "bookings are excluded, so a booking only appears here once payment is confirmed. Returns " +
                     "an empty list if no confirmed bookings exist for that phone. To track an in-flight booking " +
-                    "through payment, poll GET /bookings/public/{id} instead — that endpoint surfaces the " +
+                    "through payment, poll GET /bookings/view/{viewToken} instead (the viewToken is on the create response): it surfaces the " +
                     "PENDING booking and flips to CONFIRMED when the InnBucks code is approved."
     )
     @ApiResponses({

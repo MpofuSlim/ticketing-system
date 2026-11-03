@@ -651,7 +651,7 @@ public class BookingService {
         log.info("Booking created bookingId={} confirmation={} userEmail={} eventId={} total={} items={}",
                 booking.getId(), booking.getConfirmationNumber(), userEmail, booking.getEventId(),
                 booking.getTotalAmount(), items.size());
-        return toDTO(booking);
+        return toBuyerDTO(booking);
     }
 
     /**
@@ -978,7 +978,7 @@ public class BookingService {
         log.debug("Fetching bookings userEmail={}", userEmail);
         return loadWithItems(() -> bookingRepository.findByUserEmail(userEmail))
                 .stream()
-                .map(this::toDTO)
+                .map(this::toBuyerDTO)
                 .collect(Collectors.toList());
     }
 
@@ -1300,11 +1300,30 @@ public class BookingService {
      */
     public PublicBookingResponseDTO getBookingByIdPublic(UUID bookingId) {
         log.debug("Public fetch by id bookingId={}", bookingId);
-        return toPublicDTO(bookingRepository.findByIdWithItems(bookingId)
+        Booking booking = bookingRepository.findByIdWithItems(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Public booking lookup by id failed, not found bookingId={}", bookingId);
                     return new com.innbucks.bookingservice.exception.NotFoundException("Booking not found");
-                }));
+                });
+        // Closed behind app.booking.id-links once clients poll by token: the
+        // id is on staff screens and in logs. Refused exactly like an unknown id.
+        if (!idLinks.allows(booking)) {
+            log.info("Public booking lookup by id refused, id links closed for it bookingId={}", bookingId);
+            throw new com.innbucks.bookingservice.exception.NotFoundException("Booking not found");
+        }
+        return toPublicDTO(booking);
+    }
+
+    /**
+     * The same PII-free view, by the booking's link token (V31): the buyer's
+     * checkout poll and magic-link view. The token is never logged.
+     */
+    public PublicBookingResponseDTO getBookingByTokenPublic(String viewToken) {
+        if (!com.innbucks.bookingservice.service.LinkTokens.isWellFormed(viewToken)) {
+            throw new com.innbucks.bookingservice.exception.NotFoundException("Booking not found");
+        }
+        return toPublicDTO(bookingRepository.findByLinkTokenWithItems(viewToken)
+                .orElseThrow(() -> new com.innbucks.bookingservice.exception.NotFoundException("Booking not found")));
     }
 
     /**
@@ -2036,6 +2055,13 @@ public class BookingService {
     /** How ticket numbers reach organizers and staff. Setter for the same reason; without it, in full. */
     private volatile TicketNumberDisplay ticketNumbers = TicketNumberDisplay.FULL;
 
+    private volatile IdLinkPolicy idLinks = IdLinkPolicy.OPEN;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setIdLinkPolicy(IdLinkPolicy idLinks) {
+        this.idLinks = Objects.requireNonNull(idLinks, "idLinks");
+    }
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setTicketNumberDisplay(TicketNumberDisplay ticketNumbers) {
         this.ticketNumbers = Objects.requireNonNull(ticketNumbers, "ticketNumbers");
@@ -2117,6 +2143,19 @@ public class BookingService {
 
     private BookingResponseDTO toDTO(Booking booking) {
         return toDTO(booking, false);
+    }
+
+    /**
+     * A booking as its BUYER reads it, with {@code viewToken}: the create
+     * response (what checkout polls with) and the buyer's own list. Only
+     * those. {@link #toDTO(Booking)} also builds the confirm, cancel and
+     * reverse answers, which go to payment-service and to staff, so the token
+     * is never set there.
+     */
+    private BookingResponseDTO toBuyerDTO(Booking booking) {
+        BookingResponseDTO dto = toDTO(booking, false);
+        dto.setViewToken(booking.getLinkToken());
+        return dto;
     }
 
     /**

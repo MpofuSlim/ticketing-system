@@ -69,6 +69,9 @@ class BookingConfirmedNotificationListenerTest {
         for (int i = 0; i < n; i++) {
             BookingItem item = new BookingItem();
             item.setTicketNumber("20260610-T" + (i + 1));
+            // Stand-in link token that names its ticket, so a test can tell
+            // which ticket a QR path is for. Real tokens are random hex.
+            item.setLinkToken("tok-20260610-T" + (i + 1));
             arr[i] = item;
         }
         return List.of(arr);
@@ -104,8 +107,8 @@ class BookingConfirmedNotificationListenerTest {
         ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
         verify(m.wa(), times(2)).sendEventQrCode(eq("+263771234567"), anyString(), path.capture());
         assertThat(path.getAllValues()).containsExactlyInAnyOrder(
-                "/bookings/" + b.getId() + "/tickets/20260610-T1/qr.png",
-                "/bookings/" + b.getId() + "/tickets/20260610-T2/qr.png");
+                "/bookings/ticket/tok-20260610-T1/qr.png",
+                "/bookings/ticket/tok-20260610-T2/qr.png");
         verify(m.wa(), never()).sendCustomNotification(anyString(), anyString());
     }
 

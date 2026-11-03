@@ -67,4 +67,19 @@ public class BookingResponseDTO {
     // expiration scheduler will flip the booking to CANCELLED. Null after
     // the booking is paid (CONFIRMED) or once it's been cancelled.
     private LocalDateTime expiresAt;
+
+    /**
+     * The key of this booking's public pages (V31): poll
+     * {@code GET /bookings/view/{viewToken}} after checkout, and link the
+     * buyer's ticket page at {@code /bookings/view/{viewToken}/tickets}. Only
+     * on the create response and on the buyer's own list
+     * ({@code GET /bookings/my}); absent everywhere else, staff reads and
+     * service-to-service answers included. Treat it like the tickets it opens:
+     * never log it, never put it where anyone but the buyer can read it.
+     */
+    @io.swagger.v3.oas.annotations.media.Schema(example = "3f9c2a7e1b4d4e8fa0c6d2b9e5f71a34", nullable = true,
+            description = "The buyer's link token: poll GET /bookings/view/{viewToken}. Only on the create "
+                    + "response and GET /bookings/my.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String viewToken;
 }

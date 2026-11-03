@@ -172,4 +172,66 @@ class TicketControllerTest {
         }
         verifyNoInteractions(rendering);
     }
+
+    // -- V31: by link token --------------------------------------------------
+
+    private static final String TOKEN = "0123456789abcdef0123456789abcdef";
+
+    @Test
+    void tokenRoutes_serveThePages_andTheQrAtEveryPath_includingTheBrandAlias() throws Exception {
+        byte[] png = {(byte) 0x89, 'P', 'N', 'G'};
+        when(rendering.ticketPageHtmlByToken(TOKEN, "https://api.test")).thenReturn(Optional.of("<html>all</html>"));
+        when(rendering.holderTicketPageHtmlByToken(TOKEN, "https://api.test")).thenReturn(Optional.of("<html>one</html>"));
+        when(rendering.ticketQrPngByToken(TOKEN)).thenReturn(Optional.of(png));
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mvc.perform(get("/bookings/view/" + TOKEN + "/tickets"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.TEXT_HTML))
+                .andExpect(content().string("<html>all</html>"));
+        mvc.perform(get("/bookings/ticket/" + TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.TEXT_HTML))
+                .andExpect(content().string("<html>one</html>"));
+        // The WhatsApp gateway's base URL ends in /brand: it fetches the media
+        // path we hand it, /bookings/ticket/{token}/qr.png, under /brand.
+        for (String path : new String[]{
+                "/bookings/ticket/" + TOKEN + "/qr",
+                "/bookings/ticket/" + TOKEN + "/qr.png",
+                "/brand/bookings/ticket/" + TOKEN + "/qr",
+                "/brand/bookings/ticket/" + TOKEN + "/qr.png"}) {
+            mvc.perform(get(path))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(MediaType.IMAGE_PNG))
+                    .andExpect(content().bytes(png));
+        }
+    }
+
+    @Test
+    void tokenRoutes_empty_return404() throws Exception {
+        when(rendering.ticketPageHtmlByToken(TOKEN, "https://api.test")).thenReturn(Optional.empty());
+        when(rendering.holderTicketPageHtmlByToken(TOKEN, "https://api.test")).thenReturn(Optional.empty());
+        when(rendering.ticketQrPngByToken(TOKEN)).thenReturn(Optional.empty());
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        mvc.perform(get("/bookings/view/" + TOKEN + "/tickets")).andExpect(status().isNotFound());
+        mvc.perform(get("/bookings/ticket/" + TOKEN)).andExpect(status().isNotFound());
+        mvc.perform(get("/bookings/ticket/" + TOKEN + "/qr.png")).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void tokenRoutes_takeOnlyATokensShape_andNeverReachAnotherHandler() throws Exception {
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        for (String path : new String[]{
+                "/bookings/ticket/" + TOKEN.toUpperCase(),
+                "/bookings/ticket/" + TOKEN.substring(1),
+                "/bookings/ticket/" + TOKEN + "0/qr.png",
+                "/bookings/view/not-a-token/tickets"}) {
+            mvc.perform(get(path)).andExpect(status().isNotFound());
+        }
+        verifyNoInteractions(rendering);
+    }
 }

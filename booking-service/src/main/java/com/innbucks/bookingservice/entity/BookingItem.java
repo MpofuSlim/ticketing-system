@@ -73,6 +73,19 @@ public class BookingItem {
     private String ticketNumber;
 
     /**
+     * The key of this ticket's own public page and QR image (V31): what its
+     * holder's message links to, and the QR image URL in every message and
+     * on the buyer's page. Random
+     * ({@link com.innbucks.bookingservice.service.LinkTokens}), set at insert,
+     * never changed. Never on a staff view, a public view keyed by id, a log
+     * line or an S2S payload; {@code bookingItemId} is what those carry.
+     */
+    @Column(name = "link_token", nullable = false, unique = true, length = 32, updatable = false)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
+    private String linkToken;
+
+    /**
      * OPTIONAL named attendee for THIS ticket — who will actually present it
      * at the gate when the buyer is bringing others. All three null = the
      * ticket is the purchaser's own (the common case; a one-ticket booking
@@ -169,4 +182,11 @@ public class BookingItem {
      */
     @Column(name = "redeemed_by_name")
     private String redeemedByName;
+
+    @PrePersist
+    void assignLinkToken() {
+        if (this.linkToken == null) {
+            this.linkToken = com.innbucks.bookingservice.service.LinkTokens.newToken();
+        }
+    }
 }

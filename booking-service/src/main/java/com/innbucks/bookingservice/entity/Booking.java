@@ -53,6 +53,19 @@ public class Booking {
     @Column(nullable = false, unique = true)
     private String confirmationNumber;
 
+    /**
+     * The key of this booking's public pages (V31): the buyer's page with
+     * every ticket's QR, and the checkout's status poll. Random
+     * ({@link com.innbucks.bookingservice.service.LinkTokens}), set at insert,
+     * never changed. It goes to the buyer only: the create response, the
+     * buyer's own list, and the links in what we send them. Never on a staff
+     * view, a public view keyed by id, a log line or an S2S payload.
+     */
+    @Column(name = "link_token", nullable = false, unique = true, length = 32, updatable = false)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
+    private String linkToken;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private BookingStatus status;
@@ -169,6 +182,9 @@ public class Booking {
     @PrePersist
     public void onCreate() {
         this.createdAt = LocalDateTime.now(ZoneOffset.UTC);
+        if (this.linkToken == null) {
+            this.linkToken = com.innbucks.bookingservice.service.LinkTokens.newToken();
+        }
         if (this.status == null) {
             this.status = BookingStatus.PENDING;
         }

@@ -21,7 +21,11 @@ import java.util.UUID;
 
 /**
  * Public, customer-facing ticket artifacts that the confirmation email and
- * WhatsApp message link to:
+ * WhatsApp message link to. Since V31 every link we send is keyed by a random
+ * link token ({@code /bookings/view/{token}/tickets},
+ * {@code /bookings/ticket/{token}} and its QR); the id-keyed routes below
+ * serve links sent before that, and close behind {@code IdLinkPolicy}
+ * ({@code app.booking.id-links}). The id-keyed routes:
  * <ul>
  *   <li>{@code GET /bookings/{id}/tickets/{ticketNumber}/qr} — the scannable
  *       QR as a PNG (so an email's {@code <img src>} renders reliably, unlike
@@ -85,7 +89,9 @@ public class TicketController {
                     + "`/qr` and `/qr.png`, and at the same paths under the `/brand` prefix "
                     + "(`/brand/bookings/{bookingId}/tickets/{ticketNumber}/qr.png`) for clients whose "
                     + "configured base URL ends in `/brand`. All forms serve the identical PNG. 404 if the "
-                    + "booking isn't CONFIRMED or the ticket number doesn't belong to it.")
+                    + "booking isn't CONFIRMED or the ticket number doesn't belong to it. **Links sent before V31 only**: "
+                    + "new messages use `/bookings/ticket/{token}/qr.png`, and this route closes behind "
+                    + "`app.booking.id-links` (404 when closed).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "PNG image", content = @Content(mediaType = MediaType.IMAGE_PNG_VALUE)),
@@ -107,8 +113,9 @@ public class TicketController {
     @Operation(summary = "Ticket view page (HTML)",
             description = "Public. A self-contained page rendering every seat's QR + ticket number for a "
                     + "CONFIRMED booking — the link in the purchaser's receipt email. It shows every ticket, so it "
-                    + "is never sent to a named guest (a guest gets `/bookings/tickets/{itemId}`). 404 if not "
-                    + "CONFIRMED.")
+                    + "is never sent to a named guest. 404 if not CONFIRMED. **Links sent before V31 only**: new "
+                    + "messages link `/bookings/view/{token}/tickets`, and this route closes behind "
+                    + "`app.booking.id-links` (404 when closed).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "HTML page", content = @Content(mediaType = MediaType.TEXT_HTML_VALUE)),
@@ -145,7 +152,9 @@ public class TicketController {
                     + "total, no other tickets). The link sent to a named guest. `itemId` is the ticket's own "
                     + "row id, carried in that link (no customer-facing response returns it); it is neither the "
                     + "booking's id nor the ticket number. 404 if the id is not a UUID, the ticket is unknown, "
-                    + "or its booking isn't CONFIRMED.")
+                    + "or its booking isn't CONFIRMED. **Links sent before V31 only**: new messages link "
+                    + "`/bookings/ticket/{token}`, and this route closes behind `app.booking.id-links` (404 when "
+                    + "closed).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "HTML page", content = @Content(mediaType = MediaType.TEXT_HTML_VALUE)),
@@ -168,7 +177,8 @@ public class TicketController {
     @Operation(summary = "One ticket's QR, by the ticket's id (PNG)",
             description = "Public. The QR image on the holder's page (`/bookings/tickets/{itemId}`), addressed by "
                     + "the ticket's id so the page never names the booking. Served at `/qr` and `/qr.png`. 404 "
-                    + "if the id is not a UUID, the ticket is unknown, or its booking isn't CONFIRMED.")
+                    + "if the id is not a UUID, the ticket is unknown, or its booking isn't CONFIRMED. Closes "
+                    + "behind `app.booking.id-links` like the page.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "PNG image", content = @Content(mediaType = MediaType.IMAGE_PNG_VALUE)),
@@ -178,6 +188,89 @@ public class TicketController {
     public ResponseEntity<byte[]> holderTicketQr(@PathVariable UUID itemId) {
         return ticketRenderingService.holderTicketQrPng(itemId)
                 .map(png -> ResponseEntity.ok()
+                        .contentType(MediaType.IMAGE_PNG)
+                        .cacheControl(CacheControl.maxAge(Duration.ofHours(12)).cachePrivate())
+                        .body(png))
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+    }
+
+    // ------------------------------------------------------------ link tokens
+    // Keyed by a random 128-bit link token (V31), never by a record id: ids are
+    // on staff screens, scan reports and logs, tokens only in what the buyer
+    // and the holder receive. Pinned to the token's shape (32 lower-case hex),
+    // so no path here can match another handler's literal segment.
+    private static final String TOKEN = "{token:[0-9a-f]{32}}";
+
+    @GetMapping(value = "/bookings/view/" + TOKEN + "/tickets", produces = MediaType.TEXT_HTML_VALUE)
+    @SecurityRequirements({})
+    @Operation(summary = "The buyer's ticket page, by link token (HTML)",
+            description = "Public. Every ticket of a CONFIRMED booking with its QR, holder, type, seat and number: "
+                    + "the link in the buyer's receipt email and WhatsApp. `token` is the booking's link token "
+                    + "(`viewToken` on the `POST /bookings` response), never its id. The page's images are keyed "
+                    + "by each ticket's own token. 404 if the token is unknown or the booking isn't CONFIRMED.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "HTML page", content = @Content(mediaType = MediaType.TEXT_HTML_VALUE)),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Unknown token, or the booking isn't CONFIRMED", content = @Content)
+    })
+    public ResponseEntity<String> ticketPageByToken(@PathVariable String token) {
+        return html(ticketRenderingService.ticketPageHtmlByToken(token, publicBaseUrl));
+    }
+
+    @GetMapping(value = "/bookings/ticket/" + TOKEN, produces = MediaType.TEXT_HTML_VALUE)
+    @SecurityRequirements({})
+    @Operation(summary = "One ticket's page, for its holder, by link token (HTML)",
+            description = "Public. ONE ticket of a CONFIRMED booking: its QR, who it is for, its type and seat, and "
+                    + "its number. Nothing else of the booking (no reference, no total, no other tickets). The link "
+                    + "sent to a named guest. `token` is the ticket's own link token; it names neither the booking "
+                    + "nor the ticket number. 404 if the token is unknown or the booking isn't CONFIRMED.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "HTML page", content = @Content(mediaType = MediaType.TEXT_HTML_VALUE)),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Unknown token, or the booking isn't CONFIRMED", content = @Content)
+    })
+    public ResponseEntity<String> holderTicketPageByToken(@PathVariable String token) {
+        return html(ticketRenderingService.holderTicketPageHtmlByToken(token, publicBaseUrl));
+    }
+
+    // The `/brand/...` aliases exist for the WhatsApp gateway, whose base URL
+    // ends in `/brand` (see the id-keyed QR above): the media path we hand it
+    // is /bookings/ticket/{token}/qr.png, which it fetches as /brand/bookings/...
+    @GetMapping(
+            value = {
+                    "/bookings/ticket/" + TOKEN + "/qr",
+                    "/bookings/ticket/" + TOKEN + "/qr.png",
+                    "/brand/bookings/ticket/" + TOKEN + "/qr",
+                    "/brand/bookings/ticket/" + TOKEN + "/qr.png"},
+            produces = MediaType.IMAGE_PNG_VALUE)
+    @SecurityRequirements({})
+    @Operation(summary = "One ticket's QR, by link token (PNG)",
+            description = "Public. The scannable QR of one ticket of a CONFIRMED booking: the image in every ticket "
+                    + "email and page, and the media of the WhatsApp e-ticket. Served at `/qr` and `/qr.png`, and "
+                    + "under the `/brand` prefix for the WhatsApp gateway. The URL names neither the booking nor "
+                    + "the ticket number. 404 if the token is unknown or the booking isn't CONFIRMED.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "PNG image", content = @Content(mediaType = MediaType.IMAGE_PNG_VALUE)),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Unknown token, or the booking isn't CONFIRMED", content = @Content)
+    })
+    public ResponseEntity<byte[]> ticketQrByToken(@PathVariable String token) {
+        return png(ticketRenderingService.ticketQrPngByToken(token));
+    }
+
+    private static ResponseEntity<String> html(java.util.Optional<String> page) {
+        return page.map(html -> ResponseEntity.ok()
+                        .contentType(MediaType.TEXT_HTML)
+                        .cacheControl(CacheControl.noCache())
+                        .body(html))
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+    }
+
+    private static ResponseEntity<byte[]> png(java.util.Optional<byte[]> image) {
+        return image.map(png -> ResponseEntity.ok()
                         .contentType(MediaType.IMAGE_PNG)
                         .cacheControl(CacheControl.maxAge(Duration.ofHours(12)).cachePrivate())
                         .body(png))

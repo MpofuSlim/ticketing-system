@@ -8,12 +8,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -25,6 +30,9 @@ import static org.mockito.Mockito.when;
 class TicketRenderingServiceTest {
 
     private static final String BASE = "https://api.test";
+    private static final String BOOKING_TOKEN = "0123456789abcdef0123456789abcdef";
+    private static final String ITEM_TOKEN = "fedcba9876543210fedcba9876543210";
+    private static final String GUEST_TOKEN = "aaaabbbbccccddddeeeeffff00001111";
 
     private BookingRepository repo;
     private BookingItemRepository itemRepo;
@@ -43,7 +51,11 @@ class TicketRenderingServiceTest {
         b.setStatus(status);
         b.setConfirmationNumber("INN-20260610-A1B2C3");
         b.setTotalAmount(new BigDecimal("50.00"));
+        b.setLinkToken(BOOKING_TOKEN);
+        b.setCreatedAt(LocalDateTime.of(2026, 6, 1, 10, 0));
         BookingItem item = new BookingItem();
+        item.setId(UUID.randomUUID());
+        item.setLinkToken(ITEM_TOKEN);
         item.setTicketNumber("20260610-T1");
         item.setCategoryName("VIP");
         item.setRowLabel("A");
@@ -122,13 +134,15 @@ class TicketRenderingServiceTest {
         String html = service.confirmationEmailHtml(b, BASE);
 
         // Inline styles (Gmail strips <style> blocks) + absolute hosted image
-        // (data-URIs are stripped) + the view link.
+        // (data-URIs are stripped) + the view link. Both keyed by link token:
+        // the booking's id appears nowhere in what we send.
         assertThat(html).contains("style=")
                 .doesNotContain("<style>")
-                .contains("src=\"" + BASE + "/bookings/" + b.getId() + "/tickets/20260610-T1/qr\"")
-                .contains(BASE + "/bookings/" + b.getId() + "/tickets")
+                .contains("src=\"" + BASE + "/bookings/ticket/" + ITEM_TOKEN + "/qr.png\"")
+                .contains("href=\"" + BASE + "/bookings/view/" + BOOKING_TOKEN + "/tickets\"")
                 .contains("INN-20260610-A1B2C3")
-                .contains("20260610-T1");
+                .contains("20260610-T1")
+                .doesNotContain(b.getId().toString());
     }
 
     // -- price tiers (V26): the ticket says what it was sold as ---------------
@@ -245,6 +259,7 @@ class TicketRenderingServiceTest {
         own.setBooking(b);
         BookingItem guest = new BookingItem();
         guest.setId(UUID.randomUUID());
+        guest.setLinkToken(GUEST_TOKEN);
         guest.setTicketNumber("20260610-GUEST");
         guest.setCategoryName("VIP");
         guest.setRowLabel("A");
@@ -306,10 +321,147 @@ class TicketRenderingServiceTest {
         assertThat(service.holderTicketQrPng(guest.getId())).isEmpty();
     }
 
-    @Test
-    void holderTicketPath_carriesTheTicketsIdAndNoBookingId() {
-        UUID itemId = UUID.randomUUID();
+    // -- V31: link tokens --------------------------------------------------
 
-        assertThat(TicketRenderingService.holderTicketPath(itemId)).isEqualTo("/bookings/tickets/" + itemId);
+    @Test
+    void thePaths_weSend_areKeyedByLinkToken_andNameNeitherTheBookingNorTheTicketNumber() {
+        Booking b = booking(Booking.BookingStatus.CONFIRMED);
+        BookingItem item = b.getItems().get(0);
+
+        assertThat(TicketRenderingService.bookingPagePath(b)).isEqualTo("/bookings/view/" + BOOKING_TOKEN + "/tickets");
+        assertThat(TicketRenderingService.holderTicketPath(item)).isEqualTo("/bookings/ticket/" + ITEM_TOKEN);
+        assertThat(TicketRenderingService.ticketQrPath(item)).isEqualTo("/bookings/ticket/" + ITEM_TOKEN + "/qr.png");
+        assertThat(TicketRenderingService.ticketQrPath(item))
+                .doesNotContain(b.getId().toString())
+                .doesNotContain(item.getId().toString())
+                .doesNotContain("20260610-T1");
+    }
+
+    @Test
+    void tokenPage_imagesAreKeyedByEachTicketsToken_andNoIdAppears() {
+        Booking b = twoTicketBooking(Booking.BookingStatus.CONFIRMED);
+        when(repo.findByLinkTokenWithItems(BOOKING_TOKEN)).thenReturn(Optional.of(b));
+
+        String html = service.ticketPageHtmlByToken(BOOKING_TOKEN, BASE).orElseThrow();
+
+        assertThat(html)
+                .contains("src=\"" + BASE + "/bookings/ticket/" + ITEM_TOKEN + "/qr.png\"")
+                .contains("src=\"" + BASE + "/bookings/ticket/" + GUEST_TOKEN + "/qr.png\"")
+                .contains("20260610-T1")
+                .contains("20260610-GUEST")
+                .doesNotContain(b.getId().toString())
+                .doesNotContain(b.getItems().get(0).getId().toString())
+                .doesNotContain(b.getItems().get(1).getId().toString());
+    }
+
+    @Test
+    void idPage_rendersAsBefore_andNeverEmbedsAToken() {
+        // Anyone holding an id (staff, a scan report, a log) could otherwise
+        // collect the tokens and keep the tickets after the id routes close.
+        Booking b = twoTicketBooking(Booking.BookingStatus.CONFIRMED);
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
+        BookingItem guest = b.getItems().get(1);
+        when(itemRepo.findByIdWithBooking(guest.getId())).thenReturn(Optional.of(guest));
+
+        String page = service.ticketPageHtml(b.getId(), BASE).orElseThrow();
+        String holder = service.holderTicketPageHtml(guest.getId(), BASE).orElseThrow();
+
+        assertThat(page)
+                .contains(BASE + "/bookings/" + b.getId() + "/tickets/20260610-T1/qr")
+                .doesNotContain(BOOKING_TOKEN).doesNotContain(ITEM_TOKEN).doesNotContain(GUEST_TOKEN);
+        assertThat(holder).doesNotContain(GUEST_TOKEN).doesNotContain(BOOKING_TOKEN);
+    }
+
+    @Test
+    void tokenPage_pendingOrUnknown_isEmpty() {
+        Booking pending = booking(Booking.BookingStatus.PENDING);
+        when(repo.findByLinkTokenWithItems(BOOKING_TOKEN)).thenReturn(Optional.of(pending));
+        String unknown = "ffffffffffffffffffffffffffffffff";
+        when(repo.findByLinkTokenWithItems(unknown)).thenReturn(Optional.empty());
+
+        assertThat(service.ticketPageHtmlByToken(BOOKING_TOKEN, BASE)).isEmpty();
+        assertThat(service.ticketPageHtmlByToken(unknown, BASE)).isEmpty();
+    }
+
+    @Test
+    void holderTokenPage_showsOnlyThatTicket_andItsQrByToken() {
+        Booking b = twoTicketBooking(Booking.BookingStatus.CONFIRMED);
+        BookingItem guest = b.getItems().get(1);
+        when(itemRepo.findByLinkTokenWithBooking(GUEST_TOKEN)).thenReturn(Optional.of(guest));
+
+        String html = service.holderTicketPageHtmlByToken(GUEST_TOKEN, BASE).orElseThrow();
+
+        assertThat(html)
+                .contains("Ticket for Tendai Ncube")
+                .contains("20260610-GUEST")
+                .contains("src=\"" + BASE + "/bookings/ticket/" + GUEST_TOKEN + "/qr.png\"")
+                .doesNotContain(b.getId().toString())
+                .doesNotContain(BOOKING_TOKEN)
+                .doesNotContain(ITEM_TOKEN)
+                .doesNotContain("20260610-T1")
+                .doesNotContain("INN-20260610-A1B2C3");
+        assertThat(service.ticketQrPngByToken(GUEST_TOKEN))
+                .hasValueSatisfying(png -> assertThat(png).isEqualTo(new QrCodeGenerator().toPngBytes("20260610-GUEST")));
+
+        b.setStatus(Booking.BookingStatus.CANCELLED);
+        assertThat(service.holderTicketPageHtmlByToken(GUEST_TOKEN, BASE)).isEmpty();
+        assertThat(service.ticketQrPngByToken(GUEST_TOKEN)).isEmpty();
+    }
+
+    @Test
+    void aMalformedToken_isEmpty_withoutAQuery() {
+        for (String bad : new String[] {null, "", "0123456789ABCDEF0123456789ABCDEF", "0123", "../etc/passwd"}) {
+            assertThat(service.ticketPageHtmlByToken(bad, BASE)).isEmpty();
+            assertThat(service.holderTicketPageHtmlByToken(bad, BASE)).isEmpty();
+            assertThat(service.ticketQrPngByToken(bad)).isEmpty();
+        }
+        verify(repo, never()).findByLinkTokenWithItems(anyString());
+        verify(itemRepo, never()).findByLinkTokenWithBooking(anyString());
+    }
+
+    // -- IdLinkPolicy: the id routes close; the token routes never do --------
+
+    @Test
+    void closed_everyIdRouteIs404_andTheTokenRoutesStillServe() {
+        service.setIdLinkPolicy(new IdLinkPolicy(IdLinkPolicy.Mode.CLOSED, null, null));
+        Booking b = twoTicketBooking(Booking.BookingStatus.CONFIRMED);
+        BookingItem guest = b.getItems().get(1);
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
+        when(itemRepo.findByIdWithBooking(guest.getId())).thenReturn(Optional.of(guest));
+        when(repo.findByLinkTokenWithItems(BOOKING_TOKEN)).thenReturn(Optional.of(b));
+        when(itemRepo.findByLinkTokenWithBooking(GUEST_TOKEN)).thenReturn(Optional.of(guest));
+
+        assertThat(service.ticketPageHtml(b.getId(), BASE)).isEmpty();
+        assertThat(service.ticketQrPng(b.getId(), "20260610-T1")).isEmpty();
+        assertThat(service.holderTicketPageHtml(guest.getId(), BASE)).isEmpty();
+        assertThat(service.holderTicketQrPng(guest.getId())).isEmpty();
+
+        assertThat(service.ticketPageHtmlByToken(BOOKING_TOKEN, BASE)).isPresent();
+        assertThat(service.holderTicketPageHtmlByToken(GUEST_TOKEN, BASE)).isPresent();
+        assertThat(service.ticketQrPngByToken(GUEST_TOKEN)).isPresent();
+    }
+
+    @Test
+    void legacy_servesTheIdRoutes_onlyForBookingsCreatedBeforeTheCutOver() {
+        service.setIdLinkPolicy(new IdLinkPolicy(IdLinkPolicy.Mode.LEGACY,
+                LocalDateTime.of(2026, 11, 10, 8, 0), null));
+        Booking old = twoTicketBooking(Booking.BookingStatus.CONFIRMED);
+        old.setCreatedAt(LocalDateTime.of(2026, 11, 10, 7, 59));
+        Booking fresh = twoTicketBooking(Booking.BookingStatus.CONFIRMED);
+        fresh.setId(UUID.randomUUID());
+        fresh.setCreatedAt(LocalDateTime.of(2026, 11, 10, 8, 0));
+        when(repo.findByIdWithItems(old.getId())).thenReturn(Optional.of(old));
+        when(repo.findByIdWithItems(fresh.getId())).thenReturn(Optional.of(fresh));
+        when(itemRepo.findByIdWithBooking(any())).thenAnswer(inv -> {
+            UUID id = inv.getArgument(0);
+            return java.util.stream.Stream.of(old, fresh).flatMap(x -> x.getItems().stream())
+                    .filter(i -> id.equals(i.getId())).findFirst();
+        });
+
+        assertThat(service.ticketPageHtml(old.getId(), BASE)).isPresent();
+        assertThat(service.holderTicketQrPng(old.getItems().get(1).getId())).isPresent();
+        assertThat(service.ticketPageHtml(fresh.getId(), BASE)).isEmpty();
+        assertThat(service.ticketQrPng(fresh.getId(), "20260610-T1")).isEmpty();
+        assertThat(service.holderTicketPageHtml(fresh.getItems().get(1).getId(), BASE)).isEmpty();
     }
 }

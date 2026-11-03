@@ -29,6 +29,21 @@ class RequestPathsTest {
     }
 
     @Test
+    void theLinkTokenPaths_hideTheTokenWhole_brandAliasIncluded() {
+        String token = "0123456789abcdef0123456789abcdef";
+        assertThat(RequestPaths.forLog("/bookings/view/" + token)).isEqualTo("/bookings/view/****");
+        assertThat(RequestPaths.forLog("/bookings/view/" + token + "/tickets")).isEqualTo("/bookings/view/****/tickets");
+        assertThat(RequestPaths.forLog("/bookings/ticket/" + token)).isEqualTo("/bookings/ticket/****");
+        assertThat(RequestPaths.forLog("/brand/bookings/ticket/" + token + "/qr.png"))
+                .isEqualTo("/brand/bookings/ticket/****/qr.png");
+        // A near-miss a caller sent is hidden too: it may be a real token with
+        // one character wrong.
+        assertThat(RequestPaths.forLog("/bookings/ticket/0123456789ABCDEF?x=1")).isEqualTo("/bookings/ticket/****?x=1");
+        // The holder page by item id is a different literal and stays as it was.
+        assertThat(RequestPaths.forLog("/bookings/tickets/" + BOOKING)).isEqualTo("/bookings/tickets/" + BOOKING);
+    }
+
+    @Test
     void otherPaths_areUnchanged() {
         String path = "/bookings/" + BOOKING + "/resend-ticket";
         assertThat(RequestPaths.forLog(path)).isEqualTo(path);

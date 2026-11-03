@@ -198,13 +198,32 @@ public class ScanReportController {
             log.debug("GET /scans/me scanner={} eventId={} from={} to={} page={} size={}",
                     scannerUserUuid, eventId, from, to, page, size);
             return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Scan attempts retrieved",
-                    scanReportService.listMyScansAtEvent(scannerUserUuid, eventId, from, to, page, size)));
+                    forCaller(authentication,
+                            scanReportService.listMyScansAtEvent(scannerUserUuid, eventId, from, to, page, size))));
         }
         to = resolveTo(from, to);
         log.debug("GET /scans/me scanner={} from={} to={} page={} size={}",
                 scannerUserUuid, from, to, page, size);
         return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Scan attempts retrieved",
-                scanReportService.listMyScans(scannerUserUuid, from, to, page, size)));
+                forCaller(authentication, scanReportService.listMyScans(scannerUserUuid, from, to, page, size))));
+    }
+
+    /**
+     * A super-app scanner's rows carry no {@code bookingId}. Such a scanner is
+     * anyone whose number an organizer added, and a booking id names every
+     * ticket of a booking, including other events' tickets they scanned and
+     * were refused. The organizer's own team keeps it.
+     */
+    private static PageResponse<ScanAttemptDTO> forCaller(Authentication authentication,
+                                                         PageResponse<ScanAttemptDTO> rows) {
+        if (rows == null || rows.content() == null || !TicketScanService.isSuperAppScanner(authentication)) {
+            return rows;
+        }
+        return new PageResponse<>(rows.content().stream()
+                .map(r -> new ScanAttemptDTO(r.id(), r.attemptedAt(), r.outcome(), r.ticketNumber(),
+                        r.bookingItemId(), null, r.eventId(), r.scannerEmail(), r.scannerDisplayName(),
+                        r.scannerUserUuid()))
+                .toList(), rows.page(), rows.size(), rows.totalElements(), rows.totalPages());
     }
 
     @GetMapping("/me/stats")

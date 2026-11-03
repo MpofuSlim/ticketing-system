@@ -6,12 +6,15 @@ import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 
 /**
  * Renders the customer-facing ticket artifacts the notification channels link
@@ -21,13 +24,18 @@ import java.util.UUID;
  * nothing extra is stored.
  *
  * <p>Only <b>CONFIRMED</b> bookings render — a pending/cancelled booking must
- * never hand out a scannable ticket. Access control is the unguessable UUID in
- * the URL (tickets are bearer instruments — the link IS the ticket, same trust
- * model as forwarding the confirmation email); gate validation of the scanned
- * code is a separate concern. The booking's id opens every ticket on it, so it
- * goes only to the purchaser; a guest gets their ticket's own id
- * ({@link #holderTicketPath}), and nothing on the guest's page names the
- * booking.
+ * never hand out a scannable ticket. Access control is the random link token
+ * in the URL (V31, {@link LinkTokens}): tickets are bearer instruments, the
+ * link IS the ticket, same trust model as forwarding the confirmation email.
+ * The booking's token opens every ticket on it, so it goes only to the
+ * purchaser; a guest gets their ticket's own token ({@link #holderTicketPath}),
+ * and nothing on the guest's page names the booking.
+ *
+ * <p>The same pages are still served by record id until
+ * {@link IdLinkPolicy} closes those routes. A page opened by id renders
+ * exactly as before V31 and never embeds a token: anyone holding an id (staff,
+ * a scan report, a log) could otherwise collect the token and keep the page
+ * after the id routes close.
  */
 @Slf4j
 @Service
@@ -38,7 +46,85 @@ public class TicketRenderingService {
     private final QrCodeGenerator qrCodeGenerator;
     private final BookingItemRepository bookingItemRepository;
 
-    /** PNG bytes of the QR for one ticket of a CONFIRMED booking, or empty. */
+    private volatile IdLinkPolicy idLinks = IdLinkPolicy.OPEN;
+
+    @Autowired(required = false)
+    public void setIdLinkPolicy(IdLinkPolicy idLinks) {
+        this.idLinks = Objects.requireNonNull(idLinks, "idLinks");
+    }
+
+    // ------------------------------------------------------------------ paths
+    // Every link we send is built here, from the link tokens. Never from a
+    // record id: an id is on staff screens and in logs, a token only in what
+    // the buyer and the holder receive.
+
+    /** The buyer's page, every ticket's QR on it: {@code /bookings/view/{token}/tickets}. */
+    public static String bookingPagePath(Booking booking) {
+        return "/bookings/view/" + booking.getLinkToken() + "/tickets";
+    }
+
+    /**
+     * The path of ONE ticket's page, for its holder:
+     * {@code /bookings/ticket/{token}}. Nothing in it names the booking. A
+     * guest's message links here, never to the booking's page, which shows
+     * every ticket's QR: a guest who could reach that page could enter on
+     * another guest's ticket.
+     */
+    public static String holderTicketPath(BookingItem item) {
+        return "/bookings/ticket/" + item.getLinkToken();
+    }
+
+    /**
+     * One ticket's QR image: {@code /bookings/ticket/{token}/qr.png}. The
+     * image in every email and page, and the WhatsApp QR's media path. It
+     * carries neither the booking id nor the ticket number.
+     */
+    public static String ticketQrPath(BookingItem item) {
+        return holderTicketPath(item) + "/qr.png";
+    }
+
+    // ------------------------------------------------------ by link token (V31)
+
+    /** The buyer's page for a CONFIRMED booking, by its link token; else empty. */
+    @Transactional(readOnly = true)
+    public Optional<String> ticketPageHtmlByToken(String token, String publicBaseUrl) {
+        if (!LinkTokens.isWellFormed(token)) {
+            return Optional.empty();
+        }
+        return bookingRepository.findByLinkTokenWithItems(token)
+                .filter(b -> b.getStatus() == Booking.BookingStatus.CONFIRMED)
+                .map(b -> renderHtml(b,
+                        item -> esc(publicBaseUrl) + esc(ticketQrPath(item))));
+    }
+
+    /** One ticket's page for its holder, by the ticket's link token; else empty. */
+    @Transactional(readOnly = true)
+    public Optional<String> holderTicketPageHtmlByToken(String token, String publicBaseUrl) {
+        return confirmedItemByToken(token).map(item -> renderHolderHtml(item,
+                esc(publicBaseUrl) + esc(ticketQrPath(item))));
+    }
+
+    /** One ticket's QR PNG, by the ticket's link token; else empty. */
+    @Transactional(readOnly = true)
+    public Optional<byte[]> ticketQrPngByToken(String token) {
+        return confirmedItemByToken(token)
+                .map(item -> qrCodeGenerator.toPngBytes(item.getTicketNumber()));
+    }
+
+    private Optional<BookingItem> confirmedItemByToken(String token) {
+        if (!LinkTokens.isWellFormed(token)) {
+            return Optional.empty();
+        }
+        return bookingItemRepository.findByLinkTokenWithBooking(token).filter(TicketRenderingService::renderable);
+    }
+
+    // ------------------------------------------- by record id (IdLinkPolicy)
+
+    /**
+     * PNG bytes of the QR for one ticket of a CONFIRMED booking, by the
+     * booking's id and the ticket number, or empty. Only links sent before
+     * V31 use it; it follows {@link IdLinkPolicy} like the other id routes.
+     */
     @Transactional(readOnly = true)
     public Optional<byte[]> ticketQrPng(UUID bookingId, String ticketNumber) {
         Booking booking = bookingRepository.findByIdWithItems(bookingId).orElse(null);
@@ -47,64 +133,68 @@ public class TicketRenderingService {
         }
         boolean belongs = items(booking).stream()
                 .anyMatch(i -> ticketNumber != null && ticketNumber.equals(i.getTicketNumber()));
-        if (!belongs) {
+        if (!belongs || !idLinks.allows(booking)) {
             return Optional.empty();
         }
         return Optional.ofNullable(qrCodeGenerator.toPngBytes(ticketNumber));
     }
 
-    /** Self-contained HTML ticket page for a CONFIRMED booking, or empty. */
+    /**
+     * The buyer's page by the booking's id, for a CONFIRMED booking the id
+     * links still serve; else empty. Renders as before V31: its images are
+     * keyed by the booking id and ticket number, never by a token.
+     */
     @Transactional(readOnly = true)
     public Optional<String> ticketPageHtml(UUID bookingId, String publicBaseUrl) {
         Booking booking = bookingRepository.findByIdWithItems(bookingId).orElse(null);
-        if (booking == null || booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
+        if (booking == null || booking.getStatus() != Booking.BookingStatus.CONFIRMED
+                || !idLinks.allows(booking)) {
             return Optional.empty();
         }
-        return Optional.of(renderHtml(booking, publicBaseUrl));
+        return Optional.of(renderHtml(booking,
+                item -> esc(publicBaseUrl) + "/bookings/" + booking.getId()
+                        + "/tickets/" + esc(item.getTicketNumber()) + "/qr"));
     }
 
     /**
-     * The path of ONE ticket's page, for its holder: keyed by the ticket's own
-     * row id, with no booking id in it. A guest's message links here, never to
-     * the booking's page, which shows every ticket's QR: a guest who could reach
-     * that page could enter on another guest's ticket.
-     */
-    public static String holderTicketPath(UUID itemId) {
-        return "/bookings/tickets/" + itemId;
-    }
-
-    /**
-     * PNG bytes of one ticket's QR, addressed by the ticket's row id, for a
-     * CONFIRMED booking; else empty. The holder's page uses this rather than the
-     * booking-keyed QR, so nothing on that page names the booking.
+     * One ticket's QR by the ticket's row id, for a CONFIRMED booking the id
+     * links still serve; else empty.
      */
     @Transactional(readOnly = true)
     public Optional<byte[]> holderTicketQrPng(UUID itemId) {
-        return confirmedItem(itemId)
+        return confirmedItemById(itemId)
                 .map(item -> qrCodeGenerator.toPngBytes(item.getTicketNumber()));
     }
 
     /**
-     * A page with ONE ticket on it, for its holder (a named guest): the QR, who
-     * it is for, its type and seat, and its number. Not the booking's reference,
-     * total or other tickets. CONFIRMED bookings only, else empty.
+     * One ticket's page by the ticket's row id, for a CONFIRMED booking the id
+     * links still serve; else empty. Renders as before V31: its image is keyed
+     * by the item id, never by a token.
      */
     @Transactional(readOnly = true)
     public Optional<String> holderTicketPageHtml(UUID itemId, String publicBaseUrl) {
-        return confirmedItem(itemId).map(item -> renderHolderHtml(item, publicBaseUrl));
+        return confirmedItemById(itemId).map(item -> renderHolderHtml(item,
+                esc(publicBaseUrl) + "/bookings/tickets/" + item.getId() + "/qr.png"));
     }
 
-    private Optional<BookingItem> confirmedItem(UUID itemId) {
+    private Optional<BookingItem> confirmedItemById(UUID itemId) {
         BookingItem item = itemId == null ? null : bookingItemRepository.findByIdWithBooking(itemId).orElse(null);
-        if (item == null || item.getBooking() == null
-                || item.getBooking().getStatus() != Booking.BookingStatus.CONFIRMED
-                || item.getTicketNumber() == null || item.getTicketNumber().isBlank()) {
+        if (item == null || !renderable(item) || !idLinks.allows(item.getBooking())) {
             return Optional.empty();
         }
         return Optional.of(item);
     }
 
-    private String renderHtml(Booking booking, String baseUrl) {
+    private static boolean renderable(BookingItem item) {
+        return item.getBooking() != null
+                && item.getBooking().getStatus() == Booking.BookingStatus.CONFIRMED
+                && item.getTicketNumber() != null && !item.getTicketNumber().isBlank();
+    }
+
+    // -------------------------------------------------------------- rendering
+
+    /** {@code qrSrc} gives each ticket's image URL, already escaped. */
+    private String renderHtml(Booking booking, Function<BookingItem, String> qrSrc) {
         StringBuilder sb = new StringBuilder(2048);
         appendHead(sb, "InnBucks Tickets — " + esc(booking.getConfirmationNumber()));
         sb.append("<h1>Your tickets are confirmed</h1>")
@@ -112,8 +202,7 @@ public class TicketRenderingService {
                 .append(" — show each QR at the gate.</p>");
 
         for (BookingItem item : items(booking)) {
-            appendTicket(sb, item, esc(baseUrl) + "/bookings/" + booking.getId()
-                    + "/tickets/" + esc(item.getTicketNumber()) + "/qr");
+            appendTicket(sb, item, qrSrc.apply(item));
         }
         if (booking.getTotalAmount() != null) {
             sb.append("<p class=\"tot\">Total paid: ").append(esc(booking.getTotalAmount().toPlainString()))
@@ -123,12 +212,13 @@ public class TicketRenderingService {
         return sb.toString();
     }
 
-    private String renderHolderHtml(BookingItem item, String baseUrl) {
+    /** {@code qrSrc} is the ticket's image URL, already escaped. */
+    private String renderHolderHtml(BookingItem item, String qrSrc) {
         StringBuilder sb = new StringBuilder(1536);
         appendHead(sb, "InnBucks Ticket");
         sb.append("<h1>Your ticket</h1>")
                 .append("<p class=\"sub\">Show this QR at the gate.</p>");
-        appendTicket(sb, item, esc(baseUrl) + holderTicketPath(item.getId()) + "/qr.png");
+        appendTicket(sb, item, qrSrc);
         sb.append("</div></body></html>");
         return sb.toString();
     }
@@ -194,8 +284,8 @@ public class TicketRenderingService {
             sb.append("<div style=\"border:1px solid #e2e8f0;border-radius:10px;padding:16px;")
                     .append("margin:0 0 12px;text-align:center\">")
                     .append("<img width=\"200\" height=\"200\" style=\"display:block;margin:0 auto\" alt=\"QR ")
-                    .append(esc(tn)).append("\" src=\"").append(esc(base)).append("/bookings/")
-                    .append(booking.getId()).append("/tickets/").append(esc(tn)).append("/qr\">");
+                    .append(esc(tn)).append("\" src=\"").append(esc(base))
+                    .append(esc(ticketQrPath(item))).append("\">");
             String holder = item.holderName();
             if (holder != null && !holder.isBlank()) {
                 sb.append("<div style=\"color:#0b1f33;margin-top:8px\">Ticket for ")
@@ -215,8 +305,8 @@ public class TicketRenderingService {
             sb.append("<p style=\"color:#475569\">Total paid: ")
                     .append(esc(booking.getTotalAmount().toPlainString())).append("</p>");
         }
-        sb.append("<p><a href=\"").append(esc(base)).append("/bookings/").append(booking.getId())
-                .append("/tickets\">View your tickets online</a></p></div>");
+        sb.append("<p><a href=\"").append(esc(base)).append(esc(bookingPagePath(booking)))
+                .append("\">View your tickets online</a></p></div>");
         return sb.toString();
     }
 
