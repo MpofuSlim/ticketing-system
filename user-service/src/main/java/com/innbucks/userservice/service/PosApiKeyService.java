@@ -97,6 +97,38 @@ public class PosApiKeyService {
         }
     }
 
+    /**
+     * Loyalty suspensions (V53): a key whose merchant is listed there is refused
+     * at the exchange. Absent only in hand-built tests.
+     */
+    private com.innbucks.userservice.repository.SuspendedLoyaltyMerchantRepository suspendedMerchants;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setSuspendedMerchants(
+            com.innbucks.userservice.repository.SuspendedLoyaltyMerchantRepository suspendedMerchants) {
+        this.suspendedMerchants = suspendedMerchants;
+    }
+
+    /**
+     * A loyalty suspension (V53): every live key of these merchants moves to a
+     * new session epoch, published after commit, so the cashier tokens they
+     * minted stop in loyalty at once. The keys are not revoked: they work again
+     * when the service is reinstated. Runs inside the suspension's transaction.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public int stopKeysOfMerchants(java.util.Collection<UUID> merchantIds) {
+        if (merchantIds == null || merchantIds.isEmpty()) {
+            return 0;
+        }
+        Map<UUID, Long> versions = new LinkedHashMap<>();
+        for (Object[] row : keys.bumpLiveKeysOfMerchants(merchantIds)) {
+            UUID id = row[0] instanceof UUID u ? u : UUID.fromString(String.valueOf(row[0]));
+            versions.put(id, ((Number) row[1]).longValue());
+        }
+        tokenVersionPublisher.publishAllAfterCommit(versions);
+        return versions.size();
+    }
+
     // ------------------------------------------------------------------
     // Issue, list, revoke (SUPER_ADMIN)
     // ------------------------------------------------------------------
@@ -212,6 +244,10 @@ public class PosApiKeyService {
         PosApiKey key = keys.findByKeyHash(sha256(rawKey.trim())).orElse(null);
         if (key == null) throw rejected("unknown", null);
         if (key.isRevoked()) throw rejected("revoked", key);
+        if (suspendedMerchants != null && suspendedMerchants.existsById(key.getMerchantId())) {
+            // The merchant's business has its loyalty service suspended (V53).
+            throw rejected("merchant_suspended", key);
+        }
         if (!PosIpAllowList.fromColumn(key.getAllowedIps()).allows(clientIp)) {
             throw rejected("ip_not_allowed", key);
         }

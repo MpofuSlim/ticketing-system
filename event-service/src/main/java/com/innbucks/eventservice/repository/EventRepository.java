@@ -542,4 +542,20 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Modifying(flushAutomatically = true)
     @Query(value = "UPDATE events SET banner_image = NULL WHERE event_id = :eventId", nativeQuery = true)
     int clearBannerImage(@Param("eventId") UUID eventId);
+
+    /**
+     * Published events of these organizers that have not ended (deleted and
+     * rejected ones excluded): what user-service asks before it suspends a
+     * business's ticketing, which is refused while any is on sale.
+     */
+    @Query("""
+        SELECT COUNT(e) FROM Event e
+        WHERE e.tenantUserUuid IN :organizers
+        AND e.deleted = false
+        AND e.active = true
+        AND e.rejected = false
+        AND e.endDateTime > :now
+    """)
+    long countLiveByOrganizers(@Param("organizers") java.util.Collection<java.util.UUID> organizers,
+                               @Param("now") LocalDateTime now);
 }

@@ -2,6 +2,7 @@ package com.innbucks.userservice.config;
 
 import com.innbucks.userservice.devicesecurity.DeviceSecurityProperties;
 import com.innbucks.userservice.devicesecurity.StagingClientServiceClient;
+import com.innbucks.userservice.integration.EventServiceClient;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.junit.jupiter.api.AfterAll;
@@ -85,6 +86,16 @@ class OutboundClientsArePooledTest {
         LoyaltyServiceClient client = new LoyaltyServiceClient(
                 new LoadBalancedRestClientConfig().loadBalancedRestClientBuilder(POOL),
                 "http://loyalty-service", 1500, 3500, "token", POOL);
+
+        assertPooled((RestClient) ReflectionTestUtils.getField(client, "http"), 1500, 3500);
+    }
+
+    @Test
+    @DisplayName("event-service (load-balanced): pooled with its own timeouts")
+    void eventService() {
+        EventServiceClient client = new EventServiceClient(
+                new LoadBalancedRestClientConfig().loadBalancedRestClientBuilder(POOL),
+                "http://event-service", 1500, 3500, "token", POOL);
 
         assertPooled((RestClient) ReflectionTestUtils.getField(client, "http"), 1500, 3500);
     }

@@ -73,6 +73,7 @@ public class AdminOrganizationController {
                                     "name": "Chikwanha Traders",
                                     "status": "ACTIVE",
                                     "products": ["loyalty", "marketplace"],
+                                    "suspendedProducts": [],
                                     "ownerEmails": ["rudo@chikwanha-traders.co.zw"],
                                     "contactEmail": "rudo@chikwanha-traders.co.zw",
                                     "createdAt": "2026-09-23T12:15:00+02:00"

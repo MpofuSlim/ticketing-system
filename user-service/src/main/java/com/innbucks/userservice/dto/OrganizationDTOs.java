@@ -130,6 +130,10 @@ public final class OrganizationDTOs {
             @Schema(example = "[\"loyalty\", \"marketplace\"]",
                     description = "The organization's ACTIVE products.")
             List<String> products,
+            @Schema(example = "[\"ticketing\"]",
+                    description = "Products suspended by SUPER_ADMIN (V53), which can be reinstated. "
+                            + "[] when none.")
+            List<String> suspendedProducts,
             @Schema(example = "[\"rudo@chikwanha-traders.co.zw\"]",
                     description = "Email of every OWNER, so two businesses with one name can be told "
                             + "apart. Empty when no owner has an email on file.")
@@ -169,4 +173,40 @@ public final class OrganizationDTOs {
             @Schema(example = "SUSPENDED") String status,
             @Schema(example = "1", description = "Members whose sessions were ended so the organization's "
                     + "claims drop at once.") int membersSignedOut) {}
+
+    @Schema(name = "ServiceSuspendRequest")
+    public record ServiceSuspendRequest(
+            @NotBlank(message = "reason is required")
+            @Size(max = 500, message = "reason must not exceed 500 characters")
+            @Schema(example = "Loyalty was approved for this business by mistake (OPS-1204).",
+                    requiredMode = Schema.RequiredMode.REQUIRED,
+                    description = "Why the service is suspended. Sent to the business's owners and admins, "
+                            + "and recorded on the audit trail. Plain text: markup is stripped.")
+            String reason) {}
+
+    @Schema(name = "ServiceReinstateRequest")
+    public record ServiceReinstateRequest(
+            @Size(max = 500, message = "note must not exceed 500 characters")
+            @Schema(example = "Approved after the merchant agreement was signed (OPS-1219).", nullable = true,
+                    description = "Optional. Recorded on the audit trail only.")
+            String note) {}
+
+    @Schema(name = "ServiceSuspensionResult")
+    public record ServiceSuspensionResult(
+            @Schema(example = "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f") UUID organizationId,
+            @Schema(example = "Moyo Fresh Foods") String name,
+            @Schema(example = "loyalty", description = "ticketing, loyalty or marketplace") String product,
+            @Schema(example = "SUSPENDED", description = "The service's status now: SUSPENDED or ACTIVE.")
+            String status,
+            @Schema(example = "Loyalty was approved for this business by mistake (OPS-1204).", nullable = true,
+                    description = "The reason given on suspend; null once reinstated.")
+            String reason,
+            @Schema(example = "2", description = "The business's members whose sessions were ended. 0 on reinstate.")
+            int membersSignedOut,
+            @Schema(example = "6", description = "Loyalty only: cashiers (shop staff) of the business's merchants "
+                    + "signed out. 0 otherwise.")
+            int cashiersSignedOut,
+            @Schema(example = "1", description = "Loyalty only: live till API keys whose tokens were stopped. "
+                    + "The keys are not revoked: they work again after a reinstate. 0 otherwise.")
+            int tillKeysStopped) {}
 }

@@ -56,6 +56,15 @@ public final class Services {
 
     private Services() {}
 
+    /** "Ticketing", "Loyalty", "Marketplace": a product's name in a message to a person. */
+    public static String displayName(String bundle) {
+        if (bundle == null || bundle.isBlank()) {
+            return "";
+        }
+        String b = bundle.trim().toLowerCase(Locale.ROOT);
+        return Character.toUpperCase(b.charAt(0)) + b.substring(1);
+    }
+
     public static boolean isKnownBundle(String bundle) {
         return bundle != null && BUNDLES.containsKey(bundle.trim().toLowerCase(Locale.ROOT));
     }

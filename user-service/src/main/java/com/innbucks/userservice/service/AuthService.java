@@ -120,6 +120,14 @@ public class AuthService implements ApplicationEventPublisherAware {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private StaffMintFilter staffMintFilter;
 
+    /**
+     * Withholds the roles of a suspended service (V53) — see
+     * {@link com.innbucks.userservice.security.ServiceSuspensionFilter}. Null
+     * only in a plain unit test, where nothing is suspended.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.security.ServiceSuspensionFilter serviceSuspensionFilter;
+
     /** Null-safe security-metric emit — no-op when SecurityMetrics isn't wired
      *  (plain unit tests). Keeps the call sites free of repeated null checks. */
     private void sec(java.util.function.Consumer<com.innbucks.userservice.config.SecurityMetrics> op) {
@@ -1460,6 +1468,11 @@ public class AuthService implements ApplicationEventPublisherAware {
         List<String> roleNames = phoneProof
                 ? List.of(User.Role.CUSTOMER.name())
                 : roleNames(user.getRoles());
+        // A suspended service's role is not minted (V53). Before every claim
+        // below that keys on a role, so the organizer and shop claims go with it.
+        if (!phoneProof && serviceSuspensionFilter != null) {
+            roleNames = serviceSuspensionFilter.withholdSuspended(user, roleNames);
+        }
         List<String> bundles = user.getDefaultServices() == null
                 ? List.of() : new ArrayList<>(user.getDefaultServices());
 
@@ -1486,7 +1499,9 @@ public class AuthService implements ApplicationEventPublisherAware {
         java.util.UUID loyaltyMerchantId = null;
         java.util.UUID loyaltyShopId = null;
         if (!phoneProof) {
-            if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
+            // The MINTED roles, not the account's: a suspended merchant's cashier
+            // (V53) gets neither the role nor the scope.
+            if (roleNames.contains(User.Role.SHOP_ADMIN.name()) || roleNames.contains(User.Role.SHOP_USER.name())) {
                 loyaltyShopId = user.getLoyaltyShopId();
                 loyaltyMerchantId = user.getLoyaltyMerchantId();
             }
@@ -1510,7 +1525,8 @@ public class AuthService implements ApplicationEventPublisherAware {
         UUID organizerUuid;
         if (phoneProof) {
             organizerUuid = null;
-        } else if (user.hasRole(User.Role.EVENT_ORGANIZER)) {
+        } else if (roleNames.contains(User.Role.EVENT_ORGANIZER.name())) {
+            // The minted role (V53): withheld while the owner's ticketing is suspended.
             organizerUuid = user.getUserUuid();
         } else if (user.hasRole(User.Role.TEAM_MEMBER)) {
             organizerUuid = user.getCreatedByOrganizerUuid();

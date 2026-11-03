@@ -288,11 +288,12 @@ public class GlobalExceptionHandler {
      * branches on; the message is a typed constant written for a person.
      */
     @ExceptionHandler(OrganizationException.class)
-    public ResponseEntity<ApiResult<Map<String, String>>> handleOrganization(OrganizationException ex) {
+    public ResponseEntity<ApiResult<Map<String, Object>>> handleOrganization(OrganizationException ex) {
         log.info("Organization request refused status={} errorCode={}",
                 ex.getStatus().value(), ex.getErrorCode());
-        Map<String, String> data = new LinkedHashMap<>();
+        Map<String, Object> data = new LinkedHashMap<>();
         data.put("errorCode", ex.getErrorCode());
+        data.putAll(ex.getExtra());
         return ResponseEntity.status(ex.getStatus())
                 .body(ApiResult.of(ex.getStatus(), ex.getMessage(), data));
     }

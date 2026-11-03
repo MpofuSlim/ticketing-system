@@ -43,4 +43,14 @@ public class OrganizationProduct {
 
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    /** V53: who suspended this service, when and why. Null while ACTIVE. */
+    @Column(name = "suspended_at")
+    private LocalDateTime suspendedAt;
+
+    @Column(name = "suspended_by", length = 254)
+    private String suspendedBy;
+
+    @Column(name = "suspension_reason", length = 500)
+    private String suspensionReason;
 }
