@@ -13,4 +13,9 @@ failureConditions:
     fresh: 70
     total: 50
 
-linter: jetbrains/qodana-jvm-community:2025.3
+# The linter's IDE imports the project with the Maven wrapper's version
+# (.mvn/wrapper/maven-wrapper.properties). It must be able to run that version:
+# 2025.3 cannot start a Maven 3.10 server ("Unable to create injector"), and
+# then scans with no classpath. Keep it in step with the qodana-action CLI,
+# which warns in the scan log when the two are not compatible.
+linter: jetbrains/qodana-jvm-community:2026.2

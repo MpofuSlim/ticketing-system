@@ -23,6 +23,22 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      # Qodana analyses with the jars in its cache dir's .m2 (mounted in the
+      # container as /data/cache/.m2). The runner resolves them here, from
+      # setup-java's Maven cache (shared with ci.yml), so a scan never depends
+      # on its own in-container import downloading the tree from Central.
+      # test-compile, because dependency:resolve cannot see the reactor's own
+      # `common` jar.
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: 'Resolve dependencies for Qodana'
+        run: |
+          ./mvnw -B -ntp -q -DskipTests test-compile
+          mkdir -p "$RUNNER_TEMP/qodana/caches/.m2"
+          cp -a "$HOME/.m2/repository/." "$RUNNER_TEMP/qodana/caches/.m2/"
       - name: 'Qodana Scan'
         uses: JetBrains/qodana-action@3e8d76ff0e0241618abd808682f426afe84bab3f # v2026.2.2
         env:
@@ -45,7 +61,19 @@ jobs:
           # this is a scope fix rather than a baseline — a baseline would bury
           # the existing finding instead of leaving master to report it.
           pr-mode: ${{ github.event_name == 'pull_request' }}
-          use-caches: true
+          # The dir the step above fills. Stated here so the two cannot drift.
+          cache-dir: ${{ runner.temp }}/qodana/caches
+          # No GitHub cache: every run imports the project from scratch. A
+          # cached project model skips the import, which is how a broken one
+          # stayed hidden for four weeks. From 2026-10-05 (Maven wrapper 3.10.0)
+          # the 2025.3 linter could not import the project at all, and master
+          # stayed green only by restoring a model cached before that date.
+          # When that cache was evicted (2026-11-03), master's scan ran with no
+          # classpath, reported 38 phantom problems, and saved that blind state
+          # as the next run's cache. Uncached, a broken import shows up on the
+          # next push. Each cached push also stored another ~300 MB in the
+          # repository's 10 GB cache budget.
+          use-caches: false
           post-pr-comment: true
           use-annotations: true
           # Publish qodana.sarif.json + logs as a job artifact. Without this the
