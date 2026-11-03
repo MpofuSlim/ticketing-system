@@ -25,8 +25,11 @@ public final class NotificationType {
     public static final String SERVICE_REQUEST_APPROVED = "SERVICE_REQUEST_APPROVED";
     public static final String SERVICE_REQUEST_REJECTED = "SERVICE_REQUEST_REJECTED";
 
-    // --- Events (ticketing) — not yet wired ---------------------------
+    // --- Events (ticketing) — WIRED by event-service (V17) --------------
+    // EVENT_SUBMITTED and EVENT_PUBLISHED also reach the event-review staff
+    // through POST /users/internal/staff-notifications (StaffNotificationService).
     public static final String EVENT_SUBMITTED = "EVENT_SUBMITTED";
+    public static final String EVENT_PUBLISHED = "EVENT_PUBLISHED";
     public static final String EVENT_APPROVED = "EVENT_APPROVED";
     public static final String EVENT_REJECTED = "EVENT_REJECTED";
     public static final String EVENT_DEACTIVATED = "EVENT_DEACTIVATED";

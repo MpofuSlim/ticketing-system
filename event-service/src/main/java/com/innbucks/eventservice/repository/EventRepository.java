@@ -544,6 +544,20 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     int clearBannerImage(@Param("eventId") UUID eventId);
 
     /**
+     * The staff review queue (V17): events awaiting a decision, oldest
+     * submission first. Same predicate as {@code idx_events_awaiting_review}.
+     */
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.rejected = false
+        AND e.approvedAt IS NULL
+        AND e.submittedAt IS NOT NULL
+        ORDER BY e.submittedAt ASC, e.eventId ASC
+    """)
+    Page<Event> findAwaitingReview(Pageable pageable);
+
+    /**
      * Published events of these organizers that have not ended (deleted and
      * rejected ones excluded): what user-service asks before it suspends a
      * business's ticketing, which is refused while any is on sale.

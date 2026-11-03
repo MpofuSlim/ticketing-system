@@ -110,6 +110,13 @@ user-service:
 # 0 switches that one cache off; enabled=false (EVENTS_CACHE_ENABLED) all of
 # them. Hit ratio: cache_gets_total{cache_manager="read"} in Prometheus.
 events:
+  # The event review step (V17). Off: organizers publish directly and the
+  # review staff (SUPER_ADMIN, PRODUCT_MANAGER, PRODUCT_OFFICER) are emailed
+  # about each new event. On: an organizer's publish submits the event and it
+  # goes live when staff approve it. Turn on per cell once the Foundry portal
+  # shows "Awaiting approval" and the review queue (GET /events/review-queue).
+  review:
+    required: ${EVENTS_REVIEW_REQUIRED:false}
   cache:
     enabled: true
     public-event-pages:   # anonymous-branch list pages; max-size counts events

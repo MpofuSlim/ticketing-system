@@ -3565,6 +3565,60 @@ UTC via `MarketTimeZone` before anything reads them; responses stay UTC with the
   need a one-off shift per cell, which is a deliberate data decision — see the
   PR for the query.
 
+## Events go through review behind a switch (event-service V17)
+
+**`EVENTS_REVIEW_REQUIRED` (default `false`) decides whether an organizer's
+publish (`PUT /events/{id}/activate`) puts the event live or submits it for
+staff review.** Owner decisions (2026-11-03): build the review step behind a
+per-cell switch, flip it once the Foundry portal shows "Awaiting approval";
+staff are told about every new event either way; an event approved once is
+never reviewed again.
+
+- **The status is derived, never stored** (`ReviewStatus.of`): `rejected` →
+  REJECTED, `approved_at` → APPROVED, `submitted_at` → SUBMITTED, else DRAFT.
+  Visibility is still `active` / `rejected`, so `SalesStatus` and
+  booking-service's sales window needed no change: an event awaiting review is
+  unpublished, and booking already refuses that.
+- **Switch off:** publishing is as before. The first time an ORGANIZER puts an
+  event live (`approved_at` was null) it is stamped approved with
+  `approved_by` null and the review staff get `EVENT_PUBLISHED`. Republishing
+  after an unpublish tells nobody. Reject takes an optional reason; approve
+  still only clears a rejection (and stamps `approved_by`, so the organizer's
+  republish is not reported back to the staff who just approved it).
+- **Switch on:** the owner's publish of an event never approved sets
+  `submitted_at` and stays inactive (200, message "Event submitted for review",
+  `reviewStatus: SUBMITTED`); a repeat is a no-op; a REJECTED event the owner
+  publishes again is resubmitted. Staff (SUPER_ADMIN, PRODUCT_MANAGER) approve
+  through `/approve` or `/activate`, which publishes it; a DRAFT is 409
+  `NOT_SUBMITTED_YET`; approving an APPROVED event its organizer unpublished is a
+  no-op. Reject REQUIRES a reason (400). Every rejection clears `approved_at`.
+- **No re-review after approval:** an approved event's organizer edits,
+  unpublishes and republishes freely. Staff can reject at any time.
+- **V17's backfill** stamps every event live at migration time APPROVED, so
+  flipping the switch never takes one down. An inactive, never-approved event
+  (including one published and unpublished before V17) is DRAFT and goes
+  through review when next published with the switch on.
+- **Staff notices go through `POST /users/internal/staff-notifications`**
+  (user-service, internal trio covered by `/users/internal/**`). **The audience
+  is fixed per TYPE in `StaffNotificationService.AUDIENCES`, never sent by the
+  caller** (the internal token is shared by every service): `EVENT_SUBMITTED` /
+  `EVENT_PUBLISHED` → active SUPER_ADMIN, PRODUCT_MANAGER, PRODUCT_OFFICER.
+  Never `CALL_CENTER_*`. An unknown type is 400. Each holder gets a bell and an
+  email; the email carries `STAFF_CONSOLE_BASE_URL` + the deep link, and a link
+  that is not a plain console path is dropped.
+- **Notices go after the commit.** `activateEvent`, `approveEvent` and
+  `rejectEvent` write in a `TransactionTemplate` phase and only then call
+  user-service and booking-service (`finish`), so a refused or rolled-back
+  change tells nobody. `deactivateEvent` is unchanged.
+- **Review fields** (`reviewStatus`, `submittedAt`, `approvedAt`,
+  `rejectionReason`) are on the owner's and staff's views and stripped from
+  every public one (`stripInternalIds`); `approved_by` is never in a response.
+  Staff queue: `GET /events/review-queue` (platform staff, oldest submission
+  first, `authenticated()` before the GET permitAll).
+- **Deploy:** user-service before event-service, or the first staff notices
+  are 404s (logged and dropped). V17 is four nullable columns, a small backfill
+  and a partial index on `events`.
+
 ## Ticket sales open at a scheduled time, and every booking asks first (event-service V15)
 
 **An organizer can set `salesStartDateTime` on an event: the event is listed

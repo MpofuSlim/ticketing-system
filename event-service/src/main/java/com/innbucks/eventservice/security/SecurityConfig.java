@@ -40,6 +40,9 @@ public class SecurityConfig {
                         // so a dropped annotation can't silently expose it). MUST precede
                         // the broad /events/** permitAll below — first match wins.
                         .requestMatchers(HttpMethod.GET, "/events/inactive").authenticated()
+                        // The staff review queue (V17): unpublished events awaiting a
+                        // decision. Same reason, same place: before the permitAll.
+                        .requestMatchers(HttpMethod.GET, "/events/review-queue").authenticated()
                         // The super-app scanner's own events and invites: read from
                         // the caller's session, so it is meaningless and must not be
                         // reachable anonymously. Same reason as the line above for
