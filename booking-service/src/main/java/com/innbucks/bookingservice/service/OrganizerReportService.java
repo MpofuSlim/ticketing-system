@@ -318,6 +318,48 @@ public class OrganizerReportService {
         return b.getItems() == null ? 0 : b.getItems().size();
     }
 
+    /**
+     * Add-on sales on CONFIRMED bookings in the window (V33), one row per
+     * add-on and event, highest revenue first. Reversed bookings are CANCELLED,
+     * so they are not counted. Ticket prices are the per-category report's;
+     * together they make up the revenue summary's net.
+     */
+    @Transactional(readOnly = true)
+    public List<com.innbucks.bookingservice.dto.report.AddOnSalesDTO> addOnSales(
+            UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {
+        Range r = resolveRange(from, to);
+        // Oldest first, so the last name seen for an add-on is the latest.
+        List<Booking> confirmed = repository.findConfirmedWithItems(organizerUuid, eventId, r.start(), r.end());
+        record Key(UUID addOnId, UUID eventId) { }
+        final class Acc {
+            String name;
+            String categoryName;
+            long sold;
+            BigDecimal revenue = BigDecimal.ZERO;
+        }
+        Map<Key, Acc> byAddOn = new LinkedHashMap<>();
+        for (Booking b : confirmed) {
+            if (b.getItems() == null) continue;
+            for (BookingItem item : b.getItems()) {
+                if (item.getAddOns() == null) continue;
+                for (com.innbucks.bookingservice.dto.BookingAddOnDTO a : item.getAddOns()) {
+                    Acc acc = byAddOn.computeIfAbsent(new Key(a.getAddOnId(), b.getEventId()), k -> new Acc());
+                    acc.name = a.getName();
+                    acc.categoryName = item.getCategoryName();
+                    acc.sold++;
+                    acc.revenue = acc.revenue.add(nz(a.getPrice()));
+                }
+            }
+        }
+        List<com.innbucks.bookingservice.dto.report.AddOnSalesDTO> out = new ArrayList<>();
+        byAddOn.forEach((k, acc) -> out.add(new com.innbucks.bookingservice.dto.report.AddOnSalesDTO(
+                k.addOnId(), acc.name, k.eventId(), acc.categoryName, acc.sold, scale2(acc.revenue))));
+        out.sort(Comparator.comparing(com.innbucks.bookingservice.dto.report.AddOnSalesDTO::revenue).reversed()
+                .thenComparing(com.innbucks.bookingservice.dto.report.AddOnSalesDTO::name,
+                        Comparator.nullsLast(Comparator.naturalOrder())));
+        return out;
+    }
+
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
     }

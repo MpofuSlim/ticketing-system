@@ -36,6 +36,9 @@ public class CreateCategoryResponseDTO {
     /** The category's price tiers in the order they apply; empty when it has none. */
     private List<PriceTierDTO> priceTiers;
 
+    /** Extras a buyer can add to each ticket (V12), in display order; empty when none. */
+    private List<AddOnDTO> addOns;
+
     /**
      * Live tickets still sellable in this category: {@code totalSeats} minus the
      * count of active (PENDING + CONFIRMED) bookings reported by booking-service.

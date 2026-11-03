@@ -90,6 +90,12 @@ public class CreateBookingRequestDTO {
                         + "question that was skipped. Checked at booking (ANSWERS_INVALID).")
         @Size(max = 20, message = "At most 20 answers per ticket")
         private List<@Valid AnswerRequest> answers;
+
+        @Schema(nullable = true, example = "[\"a1b2c3d4-0e1f-4a2b-8c3d-4e5f6a7b8c01\"]",
+                description = "Add-ons for THIS ticket: ids from its category's addOns, each at most once. "
+                        + "Checked at booking (ADD_ONS_INVALID); a limit reached is ADD_ON_SOLD_OUT.")
+        @Size(max = 10, message = "At most 10 add-ons per ticket")
+        private List<UUID> addOnIds;
     }
 
     @Data

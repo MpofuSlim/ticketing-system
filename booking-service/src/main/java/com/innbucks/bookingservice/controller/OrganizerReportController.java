@@ -70,6 +70,50 @@ public class OrganizerReportController {
         this.bookingQuestionReportService = bookingQuestionReportService;
     }
 
+    @GetMapping("/add-ons")
+    @Operation(summary = "Add-on sales",
+            description = "Add-ons sold on CONFIRMED bookings in the window (V33), one row per add-on, highest "
+                    + "revenue first; `name` is the latest it sold under. Optional `eventId`; `from`/`to` default "
+                    + "to the last 30 days. Refunded bookings are not counted. The revenue summary includes add-on "
+                    + "revenue (it sums booking totals); `/by-category` counts ticket prices only, so the two "
+                    + "together make up the summary's net.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Add-on sales",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Add-on sales retrieved",
+                              "data": [
+                                { "addOnId": "a1b2c3d4-0e1f-4a2b-8c3d-4e5f6a7b8c02", "name": "Meal voucher",
+                                  "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "categoryName": "VIP", "sold": 30, "revenue": 300.00 },
+                                { "addOnId": "a1b2c3d4-0e1f-4a2b-8c3d-4e5f6a7b8c01", "name": "Parking pass",
+                                  "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "categoryName": "VIP", "sold": 12, "revenue": 60.00 }
+                              ],
+                              "meta": { "from": "2026-10-05", "to": "2026-11-03", "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "organizerUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e", "platformWide": false }
+                            }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid range",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "400 BAD_REQUEST", "message": "'from' (2026-06-01) must not be after 'to' (2026-05-31).", "data": null }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Not an organizer or platform staff",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                            """)))
+    })
+    public ResponseEntity<ApiResult<List<com.innbucks.bookingservice.dto.report.AddOnSalesDTO>>> addOns(
+            Authentication authentication,
+            @RequestParam(required = false) UUID eventId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        UUID organizerUuid = resolveScope(authentication);
+        return ResponseEntity.ok(ApiResult.ok("Add-on sales retrieved",
+                reportService.addOnSales(organizerUuid, eventId, from, to),
+                reportService.resolvedMeta(organizerUuid, eventId, from, to)));
+    }
+
     @GetMapping("/booking-questions")
     @Operation(summary = "How an event's tickets answered its booking questions",
             description = "Counts over the event's CONFIRMED tickets (V32): per question, how many answered it; "

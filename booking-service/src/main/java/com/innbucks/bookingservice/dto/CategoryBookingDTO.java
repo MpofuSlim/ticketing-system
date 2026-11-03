@@ -99,6 +99,9 @@ public class CategoryBookingDTO {
     // This ticket's answers to the booking questions (V32), label and type as
     // answered. [] when none, and once deleted (90 days after the event ends).
     private java.util.List<BookingAnswerDTO> answers;
+
+    // Add-ons bought with this ticket (V33), as bought; [] when none.
+    private java.util.List<BookingAddOnDTO> addOns;
     /**
      * Convenience: {@code attendeeName} when set, else {@code customerName} —
      * the name to print on a guest list without the consumer re-deriving it.

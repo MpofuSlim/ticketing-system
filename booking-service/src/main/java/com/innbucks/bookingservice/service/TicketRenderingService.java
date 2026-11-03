@@ -255,6 +255,10 @@ public class TicketRenderingService {
             sb.append("<div class=\"who\">Ticket for ").append(esc(holder)).append("</div>");
         }
         sb.append("<div class=\"cat\">").append(esc(nullSafe(item.ticketTypeLabel(), "Ticket"))).append("</div>");
+        // Add-ons bought with this ticket (V33): what the holder shows at the car park or bar.
+        if (item.addOnsLabel() != null) {
+            sb.append("<div class=\"seat\">With ").append(esc(item.addOnsLabel())).append("</div>");
+        }
         if (item.getRowLabel() != null || item.getSeatNumber() != null) {
             sb.append("<div class=\"seat\">Row ").append(esc(nullSafe(item.getRowLabel(), "-")))
                     .append(", Seat ").append(item.getSeatNumber() == null ? "-" : item.getSeatNumber())
@@ -293,6 +297,10 @@ public class TicketRenderingService {
             }
             sb.append("<div style=\"font-weight:bold;margin-top:8px\">")
                     .append(esc(nullSafe(item.ticketTypeLabel(), "Ticket"))).append("</div>");
+            if (item.addOnsLabel() != null) {
+                sb.append("<div style=\"color:#475569;font-size:14px\">With ")
+                        .append(esc(item.addOnsLabel())).append("</div>");
+            }
             if (item.getRowLabel() != null || item.getSeatNumber() != null) {
                 sb.append("<div style=\"color:#475569;font-size:14px\">Row ")
                         .append(esc(nullSafe(item.getRowLabel(), "-"))).append(", Seat ")

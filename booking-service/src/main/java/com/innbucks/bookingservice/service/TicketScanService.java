@@ -590,6 +590,7 @@ public class TicketScanService {
                     .redeemedByName(reloaded.getRedeemedByName())
                     .holderName(reloaded.holderName())
                     .categoryName(reloaded.getCategoryName())
+                    .addOns(reloaded.addOnNames())
                     .build();
             recordAttempt(ticketNumber, reloaded, ScanAttempt.Outcome.ALREADY_REDEEMED,
                     scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, scanEventId);
@@ -608,6 +609,7 @@ public class TicketScanService {
                 // ID-check the holder. Attendee if named, else the purchaser.
                 .holderName(item.holderName())
                 .categoryName(item.getCategoryName())
+                .addOns(item.addOnNames())
                 .build();
         recordAttempt(ticketNumber, item, ScanAttempt.Outcome.ALLOWED,
                 scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, scanEventId);

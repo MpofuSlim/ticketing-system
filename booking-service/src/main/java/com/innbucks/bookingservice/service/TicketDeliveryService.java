@@ -547,6 +547,10 @@ public class TicketDeliveryService {
         if (prices != null) {
             sb.append("Prices: ").append(prices).append('\n');
         }
+        String addOns = addOnsBreakdown(items);
+        if (addOns != null) {
+            sb.append("Add-ons: ").append(addOns).append('\n');
+        }
         if (!items.isEmpty()) {
             sb.append("Ticket numbers: ");
             for (int i = 0; i < items.size(); i++) {
@@ -659,6 +663,29 @@ public class TicketDeliveryService {
             String type = item.ticketTypeLabel() == null ? "Ticket" : item.ticketTypeLabel();
             String price = item.getPriceAtBooking() == null ? "" : " at " + item.getPriceAtBooking().toPlainString();
             counts.merge(type + price, 1, Integer::sum);
+        }
+        StringBuilder sb = new StringBuilder();
+        counts.forEach((line, n) -> sb.append(sb.isEmpty() ? "" : ", ").append(n).append(" x ").append(line));
+        return sb.toString();
+    }
+
+    /**
+     * "2 x Parking pass at 5.00, 1 x Meal voucher at 10.00" (V33), or null when
+     * no ticket has an add-on. Plain ASCII, like the price line.
+     */
+    static String addOnsBreakdown(List<BookingItem> items) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (BookingItem item : items) {
+            if (item.getAddOns() == null) {
+                continue;
+            }
+            for (com.innbucks.bookingservice.dto.BookingAddOnDTO a : item.getAddOns()) {
+                String price = a.getPrice() == null ? "" : " at " + a.getPrice().toPlainString();
+                counts.merge(a.getName() + price, 1, Integer::sum);
+            }
+        }
+        if (counts.isEmpty()) {
+            return null;
         }
         StringBuilder sb = new StringBuilder();
         counts.forEach((line, n) -> sb.append(sb.isEmpty() ? "" : ", ").append(n).append(" x ").append(line));

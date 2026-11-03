@@ -35,6 +35,20 @@ public class CategoryLookupDTO {
     private List<PriceTier> priceTiers;
     private Integer totalSeats;
     private Integer availableSeats;
+    /** The category's add-ons (seat-service V12), in display order; null or empty when none. */
+    private List<AddOn> addOns;
+
+    /** One add-on's terms. {@code maxQuantity} null = no limit beyond one per ticket. */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class AddOn {
+        private UUID id;
+        private String name;
+        private BigDecimal price;
+        private Integer maxQuantity;
+    }
 
     /**
      * One tier's terms. {@code endsAt} is a string because seat-service

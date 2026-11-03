@@ -68,6 +68,14 @@ public class ScanTicketResponseDTO {
             description = "The ticket's seat category. Present on ALLOWED and ALREADY_REDEEMED.")
     private String categoryName;
 
+    // The ticket's add-ons by name (V33), e.g. "Parking pass", on ALLOWED and
+    // ALREADY_REDEEMED; [] when none. Display only: not redeemed on their own.
+    // Absent on every refusal.
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    @Schema(description = "The ticket's add-ons by name, on ALLOWED and ALREADY_REDEEMED; [] when none.",
+            example = "[\"Parking pass\"]")
+    private java.util.List<String> addOns;
+
     /**
      * The event's first market-local day. Populated ONLY on
      * {@link Status#WRONG_EVENT_DAY}, so gate staff can tell someone "come back

@@ -147,6 +147,13 @@ public class BookingController {
     static final String EXAMPLE_ANSWERS_INVALID = """
             { "code": "400 BAD_REQUEST", "message": "Please check your answers.", "data": { "errorCode": "ANSWERS_INVALID", "answers": { "seats[0].7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e03": "Must be a date like 1990-05-21.", "seats[1].7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e02": "This question is required." } } }
             """;
+    // POST /bookings when an add-on is refused (V33).
+    static final String EXAMPLE_ADD_ONS_INVALID = """
+            { "code": "400 BAD_REQUEST", "message": "Please check the add-ons you chose.", "data": { "errorCode": "ADD_ONS_INVALID", "addOns": { "seats[1].a1b2c3d4-0e1f-4a2b-8c3d-4e5f6a7b8c01": "This add-on isn't sold with this ticket." } } }
+            """;
+    static final String EXAMPLE_ADD_ON_SOLD_OUT = """
+            { "code": "409 CONFLICT", "message": "Only 1 \\"Parking pass\\" left. Please choose fewer.", "data": { "errorCode": "ADD_ON_SOLD_OUT", "addOnId": "a1b2c3d4-0e1f-4a2b-8c3d-4e5f6a7b8c01", "remaining": 1 } }
+            """;
     static final String EXAMPLE_EVENT_UNCHECKED = """
             { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't check this event just now. Please try again.", "data": { "errorCode": "TRY_AGAIN" } }
             """;
@@ -222,10 +229,11 @@ public class BookingController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation or domain error (includes exceeding the per-booking seat ceiling, a missing purchaser name, or a malformed purchaser/attendee phone). TERMS_NOT_ACCEPTED: the event has terms and acceptedTermsVersion is missing (data.termsVersion is the current one). ANSWERS_INVALID: data.answers maps seats[i].<questionId> to what is wrong with that ticket's answer. Nothing was held.",
+                    description = "Validation or domain error (includes exceeding the per-booking seat ceiling, a missing purchaser name, or a malformed purchaser/attendee phone). TERMS_NOT_ACCEPTED: the event has terms and acceptedTermsVersion is missing (data.termsVersion is the current one). ANSWERS_INVALID: data.answers maps seats[i].<questionId> to what is wrong with that ticket's answer. ADD_ONS_INVALID: data.addOns maps seats[i].<addOnId> to what is wrong with that choice. Nothing was held.",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Terms not accepted (TERMS_NOT_ACCEPTED)", value = EXAMPLE_TERMS_NOT_ACCEPTED),
                             @ExampleObject(name = "Answers missing or wrong (ANSWERS_INVALID)", value = EXAMPLE_ANSWERS_INVALID),
+                            @ExampleObject(name = "An add-on not sold with that ticket, or chosen twice (ADD_ONS_INVALID)", value = EXAMPLE_ADD_ONS_INVALID),
                             @ExampleObject(name = "Missing purchaser name (guest)", value = """
                                     { "code": "400 BAD_REQUEST", "message": "Please provide your full name.", "data": null }
                                     """),
@@ -261,13 +269,16 @@ public class BookingController {
                             + "promo code is used up (overall, or by this buyer); or the event is not on sale right "
                             + "now: SALES_NOT_STARTED (data.salesStartDateTime, at the market offset, is when sales "
                             + "open; the message says it in words) or EVENT_ENDED; or the event's terms changed after checkout opened: "
-                            + "TERMS_CHANGED (data.termsVersion is the new version; show the terms again).",
+                            + "TERMS_CHANGED (data.termsVersion is the new version; show the terms again); or an add-on "
+                            + "has reached its limit: ADD_ON_SOLD_OUT (data.addOnId, data.remaining).",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Sales have not opened yet (SALES_NOT_STARTED)",
                                     value = EXAMPLE_SALES_NOT_STARTED),
                             @ExampleObject(name = "The event has ended (EVENT_ENDED)", value = EXAMPLE_EVENT_ENDED),
                             @ExampleObject(name = "The terms changed after checkout opened (TERMS_CHANGED)",
                                     value = EXAMPLE_TERMS_CHANGED),
+                            @ExampleObject(name = "An add-on has reached its limit (ADD_ON_SOLD_OUT)",
+                                    value = EXAMPLE_ADD_ON_SOLD_OUT),
                             @ExampleObject(name = "Sold out", value = """
                             { "code": "409 CONFLICT", "message": "Not enough tickets left in \\"VIP\\". Please choose fewer tickets or a different category.", "data": null }
                             """),
@@ -1581,6 +1592,48 @@ public class BookingController {
         log.debug("GET /bookings/internal/categories/tier-counts categoryIds={} (S2S)", categoryIds);
         return ResponseEntity.ok(ApiResult.ok("Price tier counts retrieved successfully",
                 bookingService.getActiveTierCountsByCategories(categoryIds)));
+    }
+
+    @GetMapping("/internal/categories/add-on-counts")
+    @SecurityRequirements()
+    @Operation(
+            summary = "Add-ons held or sold per category (internal, S2S)",
+            description = "Internal endpoint seat-service uses to show each add-on's `sold` and `remaining` "
+                    + "(V33): add-ons on tickets of bookings that are not CANCELLED, per category and add-on. An "
+                    + "add-on with none is absent. Display only: the limit is enforced at booking from this same "
+                    + "count, taken under the category's stock lock. Requires X-Internal-Token; denied at the edge.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Counts returned",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Add-on counts retrieved successfully",
+                              "data": [
+                                { "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11", "addOnId": "a1b2c3d4-0e1f-4a2b-8c3d-4e5f6a7b8c01", "count": 12 },
+                                { "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11", "addOnId": "a1b2c3d4-0e1f-4a2b-8c3d-4e5f6a7b8c02", "count": 30 }
+                              ]
+                            }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid X-Internal-Token",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "401 UNAUTHORIZED", "message": "Missing or invalid X-Internal-Token", "data": null }
+                            """)))
+    })
+    public ResponseEntity<ApiResult<List<java.util.Map<String, Object>>>> getCategoryAddOnCounts(
+            @RequestParam("categoryIds") List<UUID> categoryIds,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized GET /bookings/internal/categories/add-on-counts — missing or wrong X-Internal-Token");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.<List<java.util.Map<String, Object>>>builder()
+                            .code("401 UNAUTHORIZED")
+                            .message("Missing or invalid X-Internal-Token")
+                            .data(null)
+                            .build());
+        }
+        return ResponseEntity.ok(ApiResult.ok("Add-on counts retrieved successfully",
+                bookingService.getActiveAddOnCountsByCategories(categoryIds)));
     }
 
     @GetMapping("/confirmation/{number}")

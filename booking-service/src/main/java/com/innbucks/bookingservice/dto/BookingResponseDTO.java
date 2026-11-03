@@ -35,6 +35,11 @@ public class BookingResponseDTO {
     private Integer termsVersion;
     @io.swagger.v3.oas.annotations.media.Schema(nullable = true, description = "When the terms were accepted.")
     private LocalDateTime termsAcceptedAt;
+    // The add-ons' total (V33), already inside totalAmount; absent when none.
+    @io.swagger.v3.oas.annotations.media.Schema(example = "15.00", nullable = true,
+            description = "The add-ons' part of totalAmount; absent when the booking has none.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private BigDecimal addOnsAmount;
     // Set after a confirm that included points. Null on PENDING/cancelled
     // bookings and pure-cash confirmations.
     private BigDecimal pointsUsed;
