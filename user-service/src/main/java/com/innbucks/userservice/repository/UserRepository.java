@@ -179,6 +179,17 @@ public interface UserRepository extends JpaRepository<User, Long> {
             + "RETURNING user_uuid, token_version", nativeQuery = true)
     List<Object[]> incrementTokenVersionForRoleHolders(@Param("role") String role);
 
+    /**
+     * Ends the sessions of every account working at these loyalty merchants
+     * (shop staff, by {@code loyalty_merchant_id}) in ONE statement: a loyalty
+     * suspension (V53). One {@code [user_uuid, token_version]} row per account.
+     * Called only by {@link com.innbucks.userservice.service.TokenVersionBumper}.
+     */
+    @Query(value = "UPDATE users SET token_version = token_version + 1 "
+            + "WHERE loyalty_merchant_id IN (:merchants) "
+            + "RETURNING user_uuid, token_version", nativeQuery = true)
+    List<Object[]> incrementTokenVersionForMerchantStaff(@Param("merchants") java.util.Collection<UUID> merchants);
+
     /** Deactivate and bump in one statement — AccountSessionRevoker's first step. */
     @Query(value = "UPDATE users SET active = FALSE, token_version = token_version + 1 WHERE id = :id "
             + "RETURNING token_version", nativeQuery = true)

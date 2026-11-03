@@ -176,6 +176,29 @@ public class TokenVersionBumper {
         return rows.size();
     }
 
+    /**
+     * Signs out every account working at these loyalty merchants (V53, a
+     * loyalty suspension): one atomic UPDATE ... RETURNING, published after
+     * commit through one synchronization. Returns how many accounts.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public int bumpAllAtMerchants(java.util.Collection<java.util.UUID> merchantIds) {
+        if (merchantIds == null || merchantIds.isEmpty()) {
+            return 0;
+        }
+        java.util.List<Object[]> rows = userRepository.incrementTokenVersionForMerchantStaff(merchantIds);
+        java.util.Map<java.util.UUID, Long> versions = new java.util.LinkedHashMap<>();
+        for (Object[] row : rows) {
+            java.util.UUID userUuid = row[0] instanceof java.util.UUID u ? u
+                    : java.util.UUID.fromString(String.valueOf(row[0]));
+            versions.put(userUuid, ((Number) row[1]).longValue());
+        }
+        tokenVersionPublisher.publishAllAfterCommit(versions);
+        log.info("token_version bumped for the staff of {} loyalty merchant(s) count={}", merchantIds.size(),
+                rows.size());
+        return rows.size();
+    }
+
     private long apply(User user, long next) {
         user.setTokenVersion(next);
         tokenVersionPublisher.publishAfterCommit(user.getUserUuid(), next);

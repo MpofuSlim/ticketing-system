@@ -34,6 +34,12 @@ public final class NotificationType {
     public static final String EVENT_REJECTED = "EVENT_REJECTED";
     public static final String EVENT_DEACTIVATED = "EVENT_DEACTIVATED";
 
+    // --- A business's services (V53) — WIRED --------------------------
+    // To the business's OWNERs and ADMINs when SUPER_ADMIN suspends or
+    // reinstates one of its services.
+    public static final String SERVICE_SUSPENDED = "SERVICE_SUSPENDED";
+    public static final String SERVICE_REINSTATED = "SERVICE_REINSTATED";
+
     // --- Marketplace — not yet wired ----------------------------------
     public static final String LISTING_REPORTED = "LISTING_REPORTED";
     public static final String LISTING_REPORT_ACTIONED = "LISTING_REPORT_ACTIONED";

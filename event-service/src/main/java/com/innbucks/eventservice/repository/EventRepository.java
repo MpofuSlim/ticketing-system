@@ -556,4 +556,20 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         ORDER BY e.submittedAt ASC, e.eventId ASC
     """)
     Page<Event> findAwaitingReview(Pageable pageable);
+
+    /**
+     * Published events of these organizers that have not ended (deleted and
+     * rejected ones excluded): what user-service asks before it suspends a
+     * business's ticketing, which is refused while any is on sale.
+     */
+    @Query("""
+        SELECT COUNT(e) FROM Event e
+        WHERE e.tenantUserUuid IN :organizers
+        AND e.deleted = false
+        AND e.active = true
+        AND e.rejected = false
+        AND e.endDateTime > :now
+    """)
+    long countLiveByOrganizers(@Param("organizers") java.util.Collection<java.util.UUID> organizers,
+                               @Param("now") LocalDateTime now);
 }

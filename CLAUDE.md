@@ -1860,6 +1860,67 @@ sent to the applicant verbatim) — `RegistrationRejectionService`, behind
   loading on every branch (the list is unpaged); `AdminUserOrderTest` and
   `AdminUserListOrderTest`.
 
+## Suspending one service of a business (user-service V53)
+
+**`POST /admin/organizations/{id}/products/{product}/suspend` (reason
+required) and `.../reinstate` (`organizations:manage`, SUPER_ADMIN only) switch
+ONE of a business's services off and on.** Not a delete: the
+`organization_products` row stays, with who suspended it, when and why
+(`suspended_by` / `_at`, `suspension_reason`), cleared on reinstate. Owner
+decisions (2026-11-03): ticketing suspension withholds the organizer role at
+the mint; loyalty suspension also stops cashiers and till keys; a ticketing
+suspension is refused while the business has events on sale.
+
+- **Why the product list alone was not enough.** Only ACTIVE products reach
+  the token's `products`, and loyalty and marketplace scope a business's admins
+  on it, so those admins stopped at the next token already. But ticketing
+  (event, booking, seat) authorises on the person's own `EVENT_ORGANIZER` role,
+  and loyalty treats shop staff and till keys as cashiers from their own
+  merchant and shop claims. Neither looks at the business's products.
+- **The mint withholds the roles** (`ServiceSuspensionFilter`, called from
+  `AuthService.buildResponse` before any claim that keys on a role):
+  `EVENT_ORGANIZER` (and so `organizerUuid`) from an account that OWNS a
+  business whose ticketing is SUSPENDED (fail closed: events belong to the
+  person, so a second business of theirs loses ticketing too); `SHOP_ADMIN` /
+  `SHOP_USER` (and so `merchantId` / `shopId`) from an account whose
+  `loyalty_merchant_id` is in `suspended_loyalty_merchants`. The account itself
+  is untouched; the roles return at the first token after a reinstate.
+- **Loyalty merchants are read from InnRewards AT SUSPEND TIME**
+  (`merchantIdsForOrganizationIfKnown`, strict: unknown is 503
+  `loyalty_check_unavailable`) and kept in `suspended_loyalty_merchants`, so no
+  sign-in or till exchange ever asks InnRewards (the login-time loyalty lookup
+  was removed on purpose). The suspension signs those cashiers out
+  (`TokenVersionBumper.bumpAllAtMerchants`, one UPDATE ... RETURNING), moves
+  every live till key of those merchants to a new epoch
+  (`PosApiKeyService.stopKeysOfMerchants`, not revoked), and the exchange
+  refuses a listed merchant's key (`401 pos_key_rejected`, reason
+  `merchant_suspended`). `ShopStaffService` drops listed merchants from a
+  merchant admin's scope.
+- **Ticketing asks event-service first** (`GET /events/internal/live-event-count`,
+  internal trio: controller token, `/events/internal/*` permitAll,
+  `event-internal-deny`): published, not deleted, not rejected, not ended, for
+  the business's OWNERs who hold `EVENT_ORGANIZER`. Above zero is 409
+  `events_on_sale` (`data.liveEvents`); no answer is 503
+  `ticketing_check_unavailable`. `EventServiceClient` is user-service's first
+  call to event-service (pooled, in `OutboundClientsArePooledTest`).
+- **Order:** read-only checks, then the remote questions with NO transaction
+  open, then one write transaction that locks the product row
+  (`lockByOrganizationIdAndProduct`), re-checks, writes, signs every member out,
+  and seals a REQUIRED audit (`ORGANIZATION_PRODUCT_SUSPENDED` /
+  `_REINSTATED`) last. The owners and admins get an in-app notice and an email
+  after commit (`ServiceSuspensionListener`, types `SERVICE_SUSPENDED` /
+  `SERVICE_REINSTATED`). Reinstate signs nobody out (an ADD never does).
+- **Approval never brings a suspended service back:** `grantProduct` refuses
+  it (409 `product_suspended`), rolling the whole approval back. Reinstate is
+  the one way.
+- `GET /admin/organizations` lists `suspendedProducts` beside `products`.
+- **Residuals, stated:** an organizer can publish an event between the
+  live-event check and the commit (it stays live, unmanaged, until
+  reinstated); a loyalty merchant created for the business after the
+  suspension is not listed, so its cashiers are not stopped; a cashier's or
+  till key's token dies at once only through Redis (the 15-minute TTL is the
+  backstop, as for every revocation).
+
 ## Organizations — the business is the tenant (user-service V39)
 
 `organizations` + `organization_members` (`OWNER` / `ADMIN` / `STAFF`) +

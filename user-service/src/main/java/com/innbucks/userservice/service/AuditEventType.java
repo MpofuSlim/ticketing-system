@@ -254,6 +254,14 @@ public enum AuditEventType {
      * next request. Written fail-closed ({@code recordRequired}).
      */
     ORGANIZATION_SUSPENDED,
+    /**
+     * {@code POST /admin/organizations/{id}/products/{product}/suspend} (V53):
+     * one service of a business stops, its people are signed out, and (loyalty)
+     * its cashiers and till keys with them. REQUIRED, last statement.
+     */
+    ORGANIZATION_PRODUCT_SUSPENDED,
+    /** {@code .../reinstate} (V53): the service is ACTIVE again. REQUIRED, last statement. */
+    ORGANIZATION_PRODUCT_REINSTATED,
 
     /**
      * POS API keys (V51). A key acts as a cashier for a merchant with no person

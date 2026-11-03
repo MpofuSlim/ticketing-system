@@ -1137,6 +1137,35 @@ class EventControllerTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    // ---- GET /events/internal/live-event-count (V53) ---------------------------
+    // user-service refuses to suspend a business's ticketing while its
+    // organizers have an event on sale.
+
+    @Test
+    void liveEventCount_needsTheInternalToken_andCountsOnlyWhatIsOnSale() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        eventRepository.save(eventBuilder().tenantUserUuid(organizer).title("On sale").active(true)
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2)).build());
+        eventRepository.save(eventBuilder().tenantUserUuid(organizer).title("Draft").active(false)
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2)).build());
+
+        mockMvc.perform(get("/events/internal/live-event-count").param("organizerUuids", organizer.toString()))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/events/internal/live-event-count").param("organizerUuids", organizer.toString())
+                        .header("X-Internal-Token", "wrong-token"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/events/internal/live-event-count")
+                        .param("organizerUuids", organizer + "," + UUID.randomUUID())
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.liveEvents").value(1));
+        mockMvc.perform(get("/events/internal/live-event-count").header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.liveEvents").value(0));
+    }
+
     // ---- GET /events/internal/ended — which events to bill commission on ---
     // booking-service invoices an organizer AFTER their event has run, so it
     // asks this which events ENDED in a billing period. Read live, never

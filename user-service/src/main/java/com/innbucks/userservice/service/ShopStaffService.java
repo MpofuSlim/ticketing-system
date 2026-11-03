@@ -687,7 +687,21 @@ public class ShopStaffService {
         if (organizationId != null && runsOrganization(caller, organizationId)) {
             ids.addAll(loyaltyServiceClient.merchantIdsForOrganization(organizationId));
         }
+        // A business whose loyalty service is suspended (V53) administers none
+        // of its merchants' staff here, as loyalty refuses it there.
+        if (!ids.isEmpty() && suspendedMerchants != null) {
+            suspendedMerchants.findSuspendedAmong(ids).forEach(ids::remove);
+        }
         return ids;
+    }
+
+    /** Loyalty suspensions (V53); absent only in hand-built tests. */
+    private com.innbucks.userservice.repository.SuspendedLoyaltyMerchantRepository suspendedMerchants;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setSuspendedMerchants(
+            com.innbucks.userservice.repository.SuspendedLoyaltyMerchantRepository suspendedMerchants) {
+        this.suspendedMerchants = suspendedMerchants;
     }
 
     private boolean runsOrganization(User caller, UUID organizationId) {

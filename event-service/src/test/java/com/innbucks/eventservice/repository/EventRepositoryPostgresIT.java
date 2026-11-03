@@ -255,4 +255,35 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
                 .contains(ok.getEventId())
                 .doesNotContain(rejected.getEventId());
     }
+
+    @Test
+    void countLiveByOrganizers_countsOnlyPublishedEventsThatHaveNotEnded() {
+        // V53: user-service refuses to suspend a business's ticketing while this
+        // is above zero, so each excluded shape is pinned.
+        UUID organizer = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
+        java.util.function.Function<Event.EventBuilder, Event> save = b -> eventRepository.save(b
+                .title("Live count " + UUID.randomUUID()).venue("HICC").country("Zimbabwe")
+                .category(EventCategory.CONCERT).totalCapacity(100).availableTickets(100).build());
+
+        save.apply(Event.builder().tenantUserUuid(organizer).startDateTime(now.plusDays(3))
+                .endDateTime(now.plusDays(3).plusHours(2)).active(true).deleted(false));           // on sale
+        save.apply(Event.builder().tenantUserUuid(organizer).startDateTime(now.minusHours(1))
+                .endDateTime(now.plusHours(2)).active(true).deleted(false));                      // under way
+        save.apply(Event.builder().tenantUserUuid(organizer).startDateTime(now.minusDays(2))
+                .endDateTime(now.minusDays(2).plusHours(2)).active(true).deleted(false));         // ended
+        save.apply(Event.builder().tenantUserUuid(organizer).startDateTime(now.plusDays(3))
+                .endDateTime(now.plusDays(3).plusHours(2)).active(false).deleted(false));         // draft
+        save.apply(Event.builder().tenantUserUuid(organizer).startDateTime(now.plusDays(3))
+                .endDateTime(now.plusDays(3).plusHours(2)).active(true).rejected(true).deleted(false)); // rejected
+        save.apply(Event.builder().tenantUserUuid(organizer).startDateTime(now.plusDays(3))
+                .endDateTime(now.plusDays(3).plusHours(2)).active(true).deleted(true));           // deleted
+        save.apply(Event.builder().tenantUserUuid(other).startDateTime(now.plusDays(3))
+                .endDateTime(now.plusDays(3).plusHours(2)).active(true).deleted(false));          // someone else's
+
+        assertThat(eventRepository.countLiveByOrganizers(java.util.List.of(organizer), now)).isEqualTo(2);
+        assertThat(eventRepository.countLiveByOrganizers(java.util.List.of(organizer, other), now)).isEqualTo(3);
+        assertThat(eventRepository.countLiveByOrganizers(java.util.List.of(UUID.randomUUID()), now)).isZero();
+    }
 }

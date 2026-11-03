@@ -13,15 +13,24 @@ public class OrganizationException extends RuntimeException {
 
     private final HttpStatus status;
     private final String errorCode;
+    private final java.util.Map<String, Object> extra;
 
     public OrganizationException(HttpStatus status, String errorCode, String message) {
+        this(status, errorCode, message, java.util.Map.of());
+    }
+
+    /** With further {@code data} fields beside {@code errorCode} (e.g. {@code liveEvents}). */
+    public OrganizationException(HttpStatus status, String errorCode, String message,
+                                 java.util.Map<String, Object> extra) {
         super(message);
         this.status = status;
         this.errorCode = errorCode;
+        this.extra = extra == null ? java.util.Map.of() : java.util.Map.copyOf(extra);
     }
 
     public HttpStatus getStatus() { return status; }
     public String getErrorCode() { return errorCode; }
+    public java.util.Map<String, Object> getExtra() { return extra; }
 
     /**
      * Not a member, or no such organization — deliberately the same answer, so

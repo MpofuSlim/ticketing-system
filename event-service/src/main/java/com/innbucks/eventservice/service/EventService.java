@@ -482,6 +482,19 @@ public class EventService {
     }
 
     /**
+     * How many published, not-yet-ended events these organizers have (deleted
+     * and rejected excluded). user-service refuses to suspend a business's
+     * ticketing while this is above zero (owner decision, 2026-11-03).
+     */
+    @Transactional(readOnly = true)
+    public long liveEventCount(Collection<UUID> organizers) {
+        if (organizers == null || organizers.isEmpty()) {
+            return 0;
+        }
+        return eventRepository.countLiveByOrganizers(organizers, LocalDateTime.now(ZoneOffset.UTC));
+    }
+
+    /**
      * Internal (service-to-service) lookup: the event WITH {@code tenantUserUuid}
      * intact. The public by-id endpoint strips that field for anonymous callers
      * (organizer enumeration, A01) — which is exactly what a sibling service's

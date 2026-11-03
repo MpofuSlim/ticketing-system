@@ -34,6 +34,19 @@ public interface PosApiKeyRepository extends JpaRepository<PosApiKey, UUID> {
     int revoke(@Param("id") UUID id, @Param("now") LocalDateTime now, @Param("by") String by);
 
     /**
+     * Moves every live key of these merchants to a new session epoch (V53, a
+     * loyalty suspension), so their cashier tokens stop at once in loyalty. One
+     * {@code [id, token_version]} row per key. Not {@code @Modifying}: an
+     * UPDATE ... RETURNING yields a result set.
+     */
+    @Query(value = """
+            UPDATE pos_api_keys SET token_version = token_version + 1
+             WHERE merchant_id IN (:merchants) AND revoked_at IS NULL
+            RETURNING id, token_version
+            """, nativeQuery = true)
+    java.util.List<Object[]> bumpLiveKeysOfMerchants(@Param("merchants") java.util.Collection<UUID> merchants);
+
+    /**
      * Stamp the last exchange, at most once per {@code since} window per key, so
      * a busy integration costs one write every few minutes rather than per token.
      */

@@ -2026,6 +2026,56 @@ public class EventController {
         return ResponseEntity.ok(ApiResult.ok("Sales window resolved", eventService.salesWindow(eventId)));
     }
 
+    static final int MAX_LIVE_COUNT_ORGANIZERS = 50;
+
+    @GetMapping("/internal/live-event-count")
+    @SecurityRequirements()
+    @Operation(
+            summary = "How many events these organizers have on sale (internal)",
+            description = """
+                    Internal endpoint: user-service asks this before it suspends a business's ticketing
+                    service, and refuses while the answer is above zero. Counts published events (active,
+                    not rejected, not deleted) that have not ended, read live. `organizerUuids` is a
+                    comma-separated list of up to 50 organizer user uuids; an empty answer is `0`.
+                    Requires the `X-Internal-Token` shared secret; the gateway's `event-internal-deny`
+                    route makes `/events/internal/**` unreachable from the public internet.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The count",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Two events on sale", value = """
+                                    {"code":"200 OK","message":"Live events counted","data":{"liveEvents":2}}
+                                    """))),
+            @ApiResponse(responseCode = "400", description = "More than 50 organizers",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Too many", value = """
+                                    {"code":"400 BAD_REQUEST","message":"Ask about at most 50 organizers at a time.","data":null}
+                                    """))),
+            @ApiResponse(responseCode = "401", description = "Missing or wrong X-Internal-Token",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Unauthorized", value = """
+                                    {"code":"401 UNAUTHORIZED","message":"Missing or invalid X-Internal-Token","data":null}
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<java.util.Map<String, Long>>> liveEventCount(
+            @RequestParam(name = "organizerUuids", required = false) List<UUID> organizerUuids,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken
+    ) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized GET /events/internal/live-event-count — missing or wrong X-Internal-Token");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing or invalid X-Internal-Token"));
+        }
+        List<UUID> organizers = organizerUuids == null ? List.of() : organizerUuids;
+        if (organizers.size() > MAX_LIVE_COUNT_ORGANIZERS) {
+            return ResponseEntity.badRequest().body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                    "Ask about at most " + MAX_LIVE_COUNT_ORGANIZERS + " organizers at a time."));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Live events counted",
+                java.util.Map.of("liveEvents", eventService.liveEventCount(organizers))));
+    }
+
     @GetMapping("/internal/ended")
     @SecurityRequirements()
     @Operation(

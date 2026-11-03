@@ -260,6 +260,14 @@ public class OrganizationService {
             log.warn("Product not granted — organization no longer exists organizationId={}", target);
             return;
         }
+        // A suspended service is brought back only by its reinstate (V53),
+        // never as a side effect of approving another request for it.
+        if (products.findByOrganizationIdAndProduct(target, normalised)
+                .map(p -> p.getStatus() == OrganizationProduct.Status.SUSPENDED).orElse(false)) {
+            throw new OrganizationException(HttpStatus.CONFLICT, "product_suspended",
+                    "This business's " + Services.displayName(normalised)
+                            + " service is suspended. Reinstate it before approving this request.");
+        }
         upsertActive(target, normalised, LocalDateTime.now(ZoneOffset.UTC));
         auditService.recordSuccess(AuditEventType.ORGANIZATION_PRODUCT_GRANTED,
                 actorId(reviewer), AuditService.ACTOR_TYPE_USER,
@@ -593,12 +601,12 @@ public class OrganizationService {
 
         List<UUID> ids = found.getContent().stream().map(Organization::getId).toList();
         Map<UUID, List<String>> productsOf = new HashMap<>();
+        Map<UUID, List<String>> suspendedOf = new HashMap<>();
         Map<UUID, List<String>> ownersOf = new HashMap<>();
         if (!ids.isEmpty()) {
             for (OrganizationProduct p : products.findByOrganizationIdIn(ids)) {
-                if (p.getStatus() == OrganizationProduct.Status.ACTIVE) {
-                    productsOf.computeIfAbsent(p.getOrganizationId(), k -> new ArrayList<>()).add(p.getProduct());
-                }
+                (p.getStatus() == OrganizationProduct.Status.ACTIVE ? productsOf : suspendedOf)
+                        .computeIfAbsent(p.getOrganizationId(), k -> new ArrayList<>()).add(p.getProduct());
             }
             List<OrganizationMember> owners = members.findByOrganizationIdInAndRole(ids, OrganizationMember.Role.OWNER);
             Map<Long, String> emailOf = users.findAllById(owners.stream().map(OrganizationMember::getUserId).toList())
@@ -617,6 +625,7 @@ public class OrganizationService {
                 .map(o -> new OrganizationDTOs.DirectoryEntry(
                         o.getId(), o.getName(), o.getStatus().name(),
                         productsOf.getOrDefault(o.getId(), List.of()).stream().sorted().toList(),
+                        suspendedOf.getOrDefault(o.getId(), List.of()).stream().sorted().toList(),
                         ownersOf.getOrDefault(o.getId(), List.of()).stream().sorted().toList(),
                         o.getContactEmail(), o.getCreatedAt()))
                 .toList();
