@@ -108,6 +108,34 @@ public class EventService {
         this.termsAndQuestions = termsAndQuestions;
     }
 
+    /** The review step (V17); absent in hand-built tests, which then publish as with the step off. */
+    private EventReviewPolicy reviewPolicy;
+    /** Tells the event-review staff (V17); absent in hand-built tests. */
+    private com.innbucks.eventservice.client.StaffNotificationGateway staffNotificationGateway;
+    /**
+     * The write phase of publish / approve / reject, so their notices and the
+     * booking-service count run after it commits, with no connection held.
+     * Absent in hand-built tests, which run the phase inline.
+     */
+    private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setReviewPolicy(EventReviewPolicy reviewPolicy) {
+        this.reviewPolicy = reviewPolicy;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setStaffNotificationGateway(
+            com.innbucks.eventservice.client.StaffNotificationGateway staffNotificationGateway) {
+        this.staffNotificationGateway = staffNotificationGateway;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setTransactionTemplate(
+            org.springframework.transaction.support.TransactionTemplate transactionTemplate) {
+        this.transactionTemplate = transactionTemplate;
+    }
+
     /** No list cache: every public listing reads Postgres. */
     public EventService(EventRepository eventRepository,
                         com.innbucks.eventservice.config.MarketTimeZone marketTimeZone,
@@ -146,12 +174,17 @@ public class EventService {
      *  must not be broadcast to the public, where it enables organizer
      *  enumeration/correlation. Authenticated owner/admin listings keep it. */
     private Page<EventResponseDTO> stripInternalIds(Page<EventResponseDTO> page) {
-        page.getContent().forEach(dto -> dto.setTenantUserUuid(null));
+        page.getContent().forEach(EventService::stripInternalIds);
         return page;
     }
 
+    /** Also the review fields (V17): staff's notes and dates are the organizer's business, not the public's. */
     private static EventResponseDTO stripInternalIds(EventResponseDTO dto) {
         dto.setTenantUserUuid(null);
+        dto.setReviewStatus(null);
+        dto.setSubmittedAt(null);
+        dto.setApprovedAt(null);
+        dto.setRejectionReason(null);
         return dto;
     }
 
@@ -330,6 +363,15 @@ public class EventService {
                 ? eventRepository.findAllInactiveOnly(from, to, venue, country, pageable)
                 : eventRepository.findAllInactiveOnlyByCategory(from, to, venue, country, category, pageable);
         return enrichWithAvailability(events);
+    }
+
+    /**
+     * The staff review queue (V17): every event awaiting a decision, oldest
+     * submission first, with the organizer's details. Empty while the review
+     * step is off (nothing is submitted then).
+     */
+    public Page<EventResponseDTO> getReviewQueue(int page, int size) {
+        return enrichWithAvailability(eventRepository.findAwaitingReview(PageRequest.of(page, size)));
     }
 
     /**
@@ -1268,51 +1310,118 @@ public class EventService {
                 .build();
     }
 
-    @Transactional
+    /**
+     * Publish. With the review step off (V17), as before: the owner, a
+     * SUPER_ADMIN or a PRODUCT_MANAGER puts the event live, and the first time
+     * an organizer does, the review staff are told so they can look.
+     *
+     * <p>With the step on, the OWNER's publish of an event never approved
+     * submits it for review instead: it stays unpublished, staff are told, and
+     * a rejected event the owner publishes again is resubmitted. Staff
+     * publishing an event awaiting review approves it and puts it live. An
+     * event approved once is published by its owner freely (no re-review,
+     * owner decision 2026-11-03).
+     *
+     * <p>The change commits before anything is sent or booking-service is
+     * asked for counts, so no notice goes out for a publish that rolled back.
+     */
     public EventResponseDTO activateEvent(UUID tenantUserUuid, String role, UUID eventId) {
         log.info("Activating event eventId={} tenantUserUuid={} role={}", eventId, tenantUserUuid, role);
-        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                .orElseThrow(() -> {
-                    log.warn("Activate failed, event not found eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
-                    return new NotFoundException("Event not found");
-                });
+        String actor = currentActorName();
+        LifecycleChange change = inWritePhase(() -> {
+            Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                    .orElseThrow(() -> {
+                        log.warn("Activate failed, event not found eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
+                        return new NotFoundException("Event not found");
+                    });
 
-        // Publishing someone else's event is the PRODUCT_MANAGER's actual
-        // remit: "approve an event" means make it live, and a manager owns
-        // nothing, so the ownership check must let them through. Read from the
-        // security context rather than the `role` string — getCurrentRole()
-        // is findFirst() over the authorities, so for a caller holding several
-        // roles it returns an arbitrary one. NOT PRODUCT_OFFICER: read-only,
-        // and already refused at the door by @PreAuthorize.
-        boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role) || callerMayPublishAnyEvent();
-        if (!isAdmin && !java.util.Objects.equals(event.getTenantUserUuid(), tenantUserUuid)) {
-            log.warn("Unauthorized activate attempt eventId={} tenantUserUuid={} ownerTenantUserUuid={}",
-                    eventId, tenantUserUuid, event.getTenantUserUuid());
-            throw new ForbiddenException("You are not authorized to activate this event");
-        }
+            // Publishing someone else's event is the PRODUCT_MANAGER's actual
+            // remit: "approve an event" means make it live, and a manager owns
+            // nothing, so the ownership check must let them through. Read from the
+            // security context rather than the `role` string — getCurrentRole()
+            // is findFirst() over the authorities, so for a caller holding several
+            // roles it returns an arbitrary one. NOT PRODUCT_OFFICER: read-only,
+            // and already refused at the door by @PreAuthorize.
+            boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role) || callerMayPublishAnyEvent();
+            if (!isAdmin && !java.util.Objects.equals(event.getTenantUserUuid(), tenantUserUuid)) {
+                log.warn("Unauthorized activate attempt eventId={} tenantUserUuid={} ownerTenantUserUuid={}",
+                        eventId, tenantUserUuid, event.getTenantUserUuid());
+                throw new ForbiddenException("You are not authorized to activate this event");
+            }
+            boolean review = reviewRequired();
+            LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
-        // An admin-rejected event cannot be (re)published — not even by its
-        // owner — until a SUPER_ADMIN approves it (PUT /events/{id}/approve).
-        // This keeps the invariant active=true => rejected=false, which is what
-        // lets the inactive listing reliably surface every rejected event.
-        if (event.isRejected()) {
-            log.warn("Activate refused, event is admin-rejected eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
-            throw new ConflictException("This event has been rejected by an administrator and cannot be activated");
-        }
+            // An admin-rejected event is never published by this call. With the
+            // review step on, its OWNER resubmits it (after editing); staff use
+            // PUT /events/{id}/approve. With the step off, as before, it waits for
+            // an approve. Either way active=true => rejected=false holds.
+            if (event.isRejected()) {
+                if (review && !isAdmin) {
+                    event.setRejected(false);
+                    event.setRejectionReason(null);
+                    event.setSubmittedAt(now);
+                    Event saved = eventRepository.save(event);
+                    publicEventCatalog.invalidateAll();
+                    log.info("Event resubmitted for review eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
+                    return new LifecycleChange(saved, () -> announceSubmitted(saved));
+                }
+                log.warn("Activate refused, event is admin-rejected eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
+                throw new ConflictException("This event has been rejected by an administrator and cannot be activated");
+            }
 
-        boolean wasActive = event.isActive();
-        event.setActive(true);
-        Event saved = eventRepository.save(event);
-        publicEventCatalog.invalidateAll();
-        log.info("Event activated eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
-        // Tell the owning organizer their event is live (email-first, WhatsApp
-        // fallback via user-service). Only on a real state change — a repeated
-        // activate on an already-live event must not re-send. Best-effort.
-        if (!wasActive) {
-            organizerNotificationGateway.notifyEventActivated(
-                    saved.getTenantUserUuid(), saved.getEventId(), saved.getTitle());
-        }
-        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+            ReviewStatus status = ReviewStatus.of(event);
+            if (review && !isAdmin && status != ReviewStatus.APPROVED) {
+                if (status == ReviewStatus.SUBMITTED) {
+                    // Already waiting: nothing changes and nobody is told twice.
+                    return new LifecycleChange(event, null);
+                }
+                event.setSubmittedAt(now);
+                Event saved = eventRepository.save(event);
+                publicEventCatalog.invalidateAll();
+                log.info("Event submitted for review eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
+                return new LifecycleChange(saved, () -> announceSubmitted(saved));
+            }
+            if (review && isAdmin && status == ReviewStatus.DRAFT) {
+                // Staff never publish a draft its organizer has not finished.
+                throw new ConflictException(NOT_SUBMITTED_YET);
+            }
+
+            boolean wasActive = event.isActive();
+            boolean firstApproval = event.getApprovedAt() == null;
+            if (firstApproval) {
+                event.setApprovedAt(now);
+                // Who approved: staff publishing under review, or nobody (went
+                // live without a review: the step is off, or staff published it
+                // themselves while it was off).
+                event.setApprovedBy(review && isAdmin ? actor : null);
+            }
+            event.setActive(true);
+            Event saved = eventRepository.save(event);
+            publicEventCatalog.invalidateAll();
+            log.info("Event activated eventId={} tenantUserUuid={} firstApproval={}", eventId, tenantUserUuid,
+                    firstApproval);
+            // The organizer hears only on a real state change: a repeated
+            // activate on a live event must not re-send. The staff hear the
+            // first time an organizer puts an event live without a review.
+            boolean approvedNow = review && isAdmin && firstApproval;
+            boolean tellStaff = !review && !isAdmin && firstApproval;
+            Runnable notices = () -> {
+                if (!wasActive) {
+                    if (approvedNow) {
+                        organizerNotificationGateway.notifyEventApprovedAndLive(
+                                saved.getTenantUserUuid(), saved.getEventId(), saved.getTitle(), salesOpenNote(saved));
+                    } else {
+                        organizerNotificationGateway.notifyEventActivated(
+                                saved.getTenantUserUuid(), saved.getEventId(), saved.getTitle(), salesOpenNote(saved));
+                    }
+                }
+                if (tellStaff) {
+                    announcePublished(saved);
+                }
+            };
+            return new LifecycleChange(saved, notices);
+        });
+        return finish(change);
     }
 
     @Transactional
@@ -1345,63 +1454,250 @@ public class EventService {
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
+    /** As {@link #rejectEvent(UUID, String)} with no reason (review step off only). */
+    public EventResponseDTO rejectEvent(UUID eventId) {
+        return rejectEvent(eventId, null);
+    }
+
     /**
      * Admin moderation: flag an event as rejected so it is removed from every
      * public bookable listing. Also flips {@code active=false} so the event
      * drops into the inactive listing (where an admin can still find it) and so
-     * the invariant {@code active=true => rejected=false} holds. SUPER_ADMIN-gated
-     * at the controller; acts on any tenant's event by design.
+     * the invariant {@code active=true => rejected=false} holds. SUPER_ADMIN /
+     * PRODUCT_MANAGER-gated at the controller; acts on any tenant's event.
+     *
+     * <p>V17: the reason, staff's own words with markup stripped, is kept on
+     * the event and sent to the organizer. With the review step on it is
+     * required. A rejection clears the approval, so the event is reviewed again
+     * before it goes live (step on) or the staff are told when it does (off).
      */
-    @Transactional
-    public EventResponseDTO rejectEvent(UUID eventId) {
-        log.info("Rejecting event eventId={}", eventId);
-        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                .orElseThrow(() -> {
-                    log.warn("Reject failed, event not found eventId={}", eventId);
-                    return new NotFoundException("Event not found");
-                });
-        boolean wasRejected = event.isRejected();
-        event.setRejected(true);
-        event.setActive(false);
-        Event saved = eventRepository.save(event);
-        publicEventCatalog.invalidateAll();
-        log.info("Event rejected eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
-        // Tell the owning organizer their event was declined (email-first,
-        // WhatsApp fallback via user-service). Only on a real state change —
-        // re-rejecting an already-rejected event must not re-send. Best-effort.
-        if (!wasRejected) {
-            organizerNotificationGateway.notifyEventRejected(saved.getTenantUserUuid(), saved.getTitle());
+    public EventResponseDTO rejectEvent(UUID eventId, String reason) {
+        String cleaned = cleanReason(reason);
+        if (cleaned == null && reviewRequired()) {
+            throw new BadRequestException(REJECTION_REASON_REQUIRED);
         }
-        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+        log.info("Rejecting event eventId={}", eventId);
+        LifecycleChange change = inWritePhase(() -> {
+            Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                    .orElseThrow(() -> {
+                        log.warn("Reject failed, event not found eventId={}", eventId);
+                        return new NotFoundException("Event not found");
+                    });
+            boolean wasRejected = event.isRejected();
+            event.setRejected(true);
+            event.setActive(false);
+            event.setApprovedAt(null);
+            event.setApprovedBy(null);
+            event.setSubmittedAt(null);
+            if (cleaned != null || !wasRejected) {
+                event.setRejectionReason(cleaned);
+            }
+            Event saved = eventRepository.save(event);
+            publicEventCatalog.invalidateAll();
+            log.info("Event rejected eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
+            // Tell the owning organizer their event was declined (email-first,
+            // WhatsApp fallback via user-service). Only on a real state change —
+            // re-rejecting an already-rejected event must not re-send. Best-effort.
+            return new LifecycleChange(saved, wasRejected ? null
+                    : () -> organizerNotificationGateway.notifyEventRejected(
+                            saved.getTenantUserUuid(), saved.getEventId(), saved.getTitle(), saved.getRejectionReason()));
+        });
+        return finish(change);
     }
 
     /**
-     * Admin moderation: clear a previous rejection. Leaves {@code active=false}
-     * — the owning organizer re-publishes via PUT /events/{id}/activate when
-     * ready (now permitted again since rejected is false). SUPER_ADMIN-gated at
-     * the controller.
+     * Admin moderation: approve. With the review step off, as before: clear a
+     * previous rejection and leave {@code active=false}, so the organizer
+     * re-publishes when ready; approving an event never rejected is a no-op.
+     *
+     * <p>With the step on (V17), an event awaiting review or rejected is
+     * approved AND published, and the organizer told it is live. A draft never
+     * submitted is refused (409); an event already approved is a no-op, so an
+     * event its organizer unpublished is not put back live behind their back.
      */
-    @Transactional
     public EventResponseDTO approveEvent(UUID eventId) {
-        log.info("Approving (un-rejecting) event eventId={}", eventId);
-        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                .orElseThrow(() -> {
-                    log.warn("Approve failed, event not found eventId={}", eventId);
-                    return new NotFoundException("Event not found");
-                });
-        boolean wasRejected = event.isRejected();
-        event.setRejected(false);
-        Event saved = eventRepository.save(event);
-        publicEventCatalog.invalidateAll();
-        log.info("Event approved eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
-        // Tell the owning organizer their event has been approved (email-first,
-        // WhatsApp fallback via user-service). Only on a real state change —
-        // approving a never-rejected event is a documented no-op and must not
-        // send. Best-effort — never fails approval.
-        if (wasRejected) {
-            organizerNotificationGateway.notifyEventApproved(saved.getTenantUserUuid(), saved.getTitle());
+        log.info("Approving event eventId={}", eventId);
+        String actor = currentActorName();
+        boolean review = reviewRequired();
+        LifecycleChange change = inWritePhase(() -> {
+            Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                    .orElseThrow(() -> {
+                        log.warn("Approve failed, event not found eventId={}", eventId);
+                        return new NotFoundException("Event not found");
+                    });
+            ReviewStatus status = ReviewStatus.of(event);
+            LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+            if (review) {
+                if (status == ReviewStatus.APPROVED) {
+                    return new LifecycleChange(event, null);
+                }
+                if (status == ReviewStatus.DRAFT) {
+                    throw new ConflictException(NOT_SUBMITTED_YET);
+                }
+                event.setRejected(false);
+                event.setRejectionReason(null);
+                event.setApprovedAt(now);
+                event.setApprovedBy(actor);
+                event.setActive(true);
+                Event saved = eventRepository.save(event);
+                publicEventCatalog.invalidateAll();
+                log.info("Event approved and published eventId={} tenantUserUuid={}", eventId,
+                        saved.getTenantUserUuid());
+                return new LifecycleChange(saved, () -> organizerNotificationGateway.notifyEventApprovedAndLive(
+                        saved.getTenantUserUuid(), saved.getEventId(), saved.getTitle(), salesOpenNote(saved)));
+            }
+            boolean wasRejected = event.isRejected();
+            event.setRejected(false);
+            if (wasRejected) {
+                // Staff cleared it: when its organizer publishes it again the
+                // staff are not told about an event they have just approved.
+                event.setRejectionReason(null);
+                event.setApprovedAt(now);
+                event.setApprovedBy(actor);
+            }
+            Event saved = eventRepository.save(event);
+            publicEventCatalog.invalidateAll();
+            log.info("Event approved eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
+            // Tell the owning organizer their event has been approved (email-first,
+            // WhatsApp fallback via user-service). Only on a real state change —
+            // approving a never-rejected event is a documented no-op and must not
+            // send. Best-effort — never fails approval.
+            return new LifecycleChange(saved, wasRejected
+                    ? () -> organizerNotificationGateway.notifyEventApproved(saved.getTenantUserUuid(), saved.getTitle())
+                    : null);
+        });
+        return finish(change);
+    }
+
+    // ---- The review step's helpers (V17) ----
+
+    static final String NOT_SUBMITTED_YET =
+            "The organizer hasn't submitted this event for review yet.";
+    static final String REJECTION_REASON_REQUIRED =
+            "Please say why the event is not approved. The organizer sees your note.";
+    static final int MAX_REJECTION_REASON = 1000;
+
+    /** A write and what to send once it has committed (null: nothing). */
+    private record LifecycleChange(Event event, Runnable notices) {}
+
+    private boolean reviewRequired() {
+        return reviewPolicy != null && reviewPolicy.required();
+    }
+
+    private LifecycleChange inWritePhase(java.util.function.Supplier<LifecycleChange> write) {
+        return transactionTemplate == null ? write.get() : transactionTemplate.execute(status -> write.get());
+    }
+
+    /** After the commit: the notices (best-effort, each gateway swallows its own failure), then the live counts. */
+    private EventResponseDTO finish(LifecycleChange change) {
+        if (change.notices() != null) {
+            try {
+                change.notices().run();
+            } catch (RuntimeException ex) {
+                log.warn("Event notices failed eventId={} cause={}", change.event().getEventId(), ex.toString());
+            }
         }
-        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+        Event event = change.event();
+        return toDtoWithAvailability(event, fetchActiveCounts(event.getEventId()));
+    }
+
+    private static String cleanReason(String reason) {
+        if (reason == null) {
+            return null;
+        }
+        // stripAll returns null only for null, handled above.
+        String cleaned = HtmlSanitizer.stripAll(reason).replaceAll("[\\p{Cntrl}&&[^\\n]]", " ").trim();
+        if (cleaned.isEmpty()) {
+            return null;
+        }
+        return cleaned.length() <= MAX_REJECTION_REASON ? cleaned : cleaned.substring(0, MAX_REJECTION_REASON);
+    }
+
+    /** Who is acting, for {@code approved_by}: the token's name (an email for staff). */
+    private static String currentActorName() {
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth.getName() == null || auth.getName().isBlank()) {
+            return null;
+        }
+        String name = auth.getName().trim();
+        return name.length() <= 254 ? name : name.substring(0, 254);
+    }
+
+    private static final java.time.format.DateTimeFormatter NOTICE_TIME =
+            java.time.format.DateTimeFormatter.ofPattern("EEE d MMM yyyy 'at' HH:mm", java.util.Locale.ENGLISH);
+
+    /** "Ticket sales open on Sat 14 Nov 2026 at 10:00." for sales that start later, else null. */
+    private String salesOpenNote(Event event) {
+        LocalDateTime opens = event.getSalesStartAt();
+        if (opens == null || !opens.isAfter(LocalDateTime.now(ZoneOffset.UTC))) {
+            return null;
+        }
+        return "Ticket sales open on " + NOTICE_TIME.format(marketTimeZone.toMarketLocal(opens)) + ".";
+    }
+
+    private void announceSubmitted(Event event) {
+        organizerNotificationGateway.notifyEventSubmitted(event.getTenantUserUuid(), event.getEventId(), event.getTitle());
+        if (staffNotificationGateway == null) {
+            return;
+        }
+        String organizer = organizerName(event.getTenantUserUuid());
+        staffNotificationGateway.notifyReviewStaff(
+                com.innbucks.eventservice.client.StaffNotificationGateway.EVENT_SUBMITTED, event.getEventId(),
+                clip("Event awaiting approval: " + safeNoticeTitle(event), 200),
+                organizer + " submitted \"" + safeNoticeTitle(event) + "\" for review. "
+                        + startsLine(event)
+                        + "Approve it to put it live, or reject it with a reason the organizer will see.",
+                event.getTenantUserUuid(), organizer);
+    }
+
+    private void announcePublished(Event event) {
+        if (staffNotificationGateway == null) {
+            return;
+        }
+        String organizer = organizerName(event.getTenantUserUuid());
+        staffNotificationGateway.notifyReviewStaff(
+                com.innbucks.eventservice.client.StaffNotificationGateway.EVENT_PUBLISHED, event.getEventId(),
+                clip("New event published: " + safeNoticeTitle(event), 200),
+                organizer + " published \"" + safeNoticeTitle(event) + "\". It is live on Ticketize now. "
+                        + startsLine(event)
+                        + "If it should not be on sale, reject it with a reason the organizer will see.",
+                event.getTenantUserUuid(), organizer);
+    }
+
+    private String startsLine(Event event) {
+        if (event.getStartDateTime() == null) {
+            return "";
+        }
+        return "It starts " + NOTICE_TIME.format(marketTimeZone.toMarketLocal(event.getStartDateTime()))
+                + (event.getVenue() == null || event.getVenue().isBlank() ? "" : " at " + event.getVenue().trim())
+                + ". ";
+    }
+
+    /** The organizer's business name for a staff notice; best-effort, never fails one. */
+    private String organizerName(UUID organizerUuid) {
+        if (organizerUuid != null) {
+            try {
+                Map<UUID, OrganizerDTO> found = organizerGateway.organizersByUserUuids(List.of(organizerUuid));
+                OrganizerDTO organizer = found == null ? null : found.get(organizerUuid);
+                if (organizer != null && organizer.getBusinessName() != null
+                        && !organizer.getBusinessName().isBlank()) {
+                    return organizer.getBusinessName().trim();
+                }
+            } catch (RuntimeException ex) {
+                log.debug("Organizer name unavailable for a staff notice organizerUuid={} cause={}",
+                        organizerUuid, ex.toString());
+            }
+        }
+        return "An organizer";
+    }
+
+    private static String safeNoticeTitle(Event event) {
+        return event.getTitle() == null || event.getTitle().isBlank() ? "an event" : event.getTitle().trim();
+    }
+
+    private static String clip(String value, int max) {
+        return value.length() <= max ? value : value.substring(0, max - 3) + "...";
     }
 
     @Transactional

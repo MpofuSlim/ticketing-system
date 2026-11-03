@@ -1482,6 +1482,17 @@ public class EventController {
                     **EVENT_ORGANIZER** calls this endpoint once the event
                     is ready to be surfaced via `GET /events/active` and
                     `GET /events/by-country`.
+
+                    **Review step (V17, per cell, `EVENTS_REVIEW_REQUIRED`).** While it
+                    is OFF this publishes as described. While it is ON, the owner's
+                    call on an event not yet approved SUBMITS it for review instead:
+                    the answer is 200 with message "Event submitted for review",
+                    `active: false` and `reviewStatus: SUBMITTED`, and the review staff
+                    are emailed. Calling it again while it waits changes nothing. A
+                    rejected event the owner publishes again is resubmitted. Staff
+                    (SUPER_ADMIN, PRODUCT_MANAGER) publishing an event awaiting review
+                    approve it; staff publishing a DRAFT get 409. An event approved
+                    once is published by its owner with no further review.
                     """
     )
     @ApiResponses({
@@ -1532,7 +1543,10 @@ public class EventController {
         String role = getCurrentRole(authentication);
         log.info("Activating event eventId={} tenantUserUuid={}", id, tenantUserUuid);
         EventResponseDTO activated = eventService.activateEvent(tenantUserUuid, role, id);
-        return ResponseEntity.ok(ApiResult.ok("Event activated successfully", activated));
+        // Review step on (V17): the organizer's publish submitted it instead.
+        boolean submitted = !activated.isActive() && activated.getReviewStatus() == ReviewStatus.SUBMITTED;
+        return ResponseEntity.ok(ApiResult.ok(
+                submitted ? SUBMITTED_FOR_REVIEW_MESSAGE : "Event activated successfully", activated));
     }
 
     @PutMapping("/{id}/deactivate")
@@ -1623,6 +1637,12 @@ public class EventController {
                     A rejected event **cannot be re-activated** by its organizer —
                     `PUT /events/{id}/activate` returns 409 until an admin clears
                     the flag via `PUT /events/{id}/approve`.
+
+                    **V17:** optional body `{"reason": "..."}` (up to 1000 characters,
+                    markup stripped), sent to the organizer and shown to them as
+                    `rejectionReason`. **Required while the review step is on** (400
+                    otherwise). With the step on, the organizer edits the event and
+                    publishes it again to resubmit it.
                     """
     )
     @ApiResponses({
@@ -1660,6 +1680,9 @@ public class EventController {
                                     """)
                     )
             ),
+            @ApiResponse(responseCode = "400", description = "Review step on and no reason given",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Reason required", value = EXAMPLE_REJECTION_REASON_REQUIRED))),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @ApiResponse(responseCode = "403", description = "Authenticated but not SUPER_ADMIN"),
             @ApiResponse(responseCode = "404", description = "Event not found",
@@ -1667,11 +1690,96 @@ public class EventController {
     })
     public ResponseEntity<ApiResult<EventResponseDTO>> rejectEvent(
             @Parameter(description = "Event UUID") @PathVariable UUID id,
+            @RequestBody(required = false) @Valid RejectEventRequestDTO body,
             Authentication authentication
     ) {
         log.info("Rejecting event eventId={} admin={}", id, authentication.getName());
-        EventResponseDTO rejected = eventService.rejectEvent(id);
+        EventResponseDTO rejected = eventService.rejectEvent(id, body == null ? null : body.reason());
         return ResponseEntity.ok(ApiResult.ok("Event rejected successfully", rejected));
+    }
+
+    static final String SUBMITTED_FOR_REVIEW_MESSAGE = "Event submitted for review";
+
+    static final String EXAMPLE_REJECTION_REASON_REQUIRED = """
+            {"code":"400 BAD_REQUEST","message":"Please say why the event is not approved. The organizer sees your note.","data":null}""";
+
+    static final String EXAMPLE_NOT_SUBMITTED_YET = """
+            {"code":"409 CONFLICT","message":"The organizer hasn't submitted this event for review yet.","data":null}""";
+
+    @GetMapping("/review-queue")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','PRODUCT_MANAGER','PRODUCT_OFFICER')")
+    @Operation(
+            summary = "Events awaiting approval (staff review queue)",
+            description = """
+                    **SUPER_ADMIN, PRODUCT_MANAGER or PRODUCT_OFFICER** (read-only).
+                    Every event submitted for review and not yet decided
+                    (`reviewStatus: SUBMITTED`), oldest submission first, with the
+                    organizer's details. Approve with `PUT /events/{id}/approve`, reject
+                    with `PUT /events/{id}/reject` and a reason. Empty while the review
+                    step is off on this cell (V17, `EVENTS_REVIEW_REQUIRED`): nothing is
+                    submitted then, events go live directly and staff are told.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The queue",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "One event awaiting approval", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Review queue retrieved",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "eventId": "4b6d1f0e-2c8a-4e7b-9a31-7f5e2d9c0a11",
+                                            "eventNo": null,
+                                            "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
+                                            "organizer": { "businessName": "Harare Runners Club", "businessAddress": "12 Samora Machel Ave, Harare", "businessEmail": "events@harare-runners.example" },
+                                            "title": "Harare Pink Fun Run",
+                                            "settlementCode": "HARAREPINK",
+                                            "description": "5 km and 10 km routes through the city centre.",
+                                            "venue": "Harare Gardens",
+                                            "country": "Zimbabwe", "category": "FUN_RUN",
+                                            "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                            "bannerUrl": "https://dtx.innbucks.co.zw/foundry/events/4b6d1f0e-2c8a-4e7b-9a31-7f5e2d9c0a11/banner?v=1762182300",
+                                            "startDateTime": "2026-11-28T07:00:00+02:00", "endDateTime": "2026-11-28T11:00:00+02:00",
+                                            "salesStartDateTime": "2026-11-10T09:00:00+02:00",
+                                            "salesStatus": "NOT_PUBLISHED",
+                                            "termsVersion": null,
+                                            "termsText": null,
+                                            "bookingQuestions": null,
+                                            "totalCapacity": 500,
+                                            "availableTickets": 500,
+                                            "active": false,
+                                            "rejected": false,
+                                            "reviewStatus": "SUBMITTED",
+                                            "submittedAt": "2026-11-03T17:05:00+02:00",
+                                            "createdAt": "2026-11-03T16:40:00+02:00",
+                                            "updatedAt": "2026-11-03T17:05:00+02:00",
+                                            "seatCategories": null,
+                                            "priceFrom": { "currentPrice": 15.00, "fullPrice": 15.00, "tierName": null, "categoryName": "10 km", "soldOut": false }
+                                          }
+                                        ],
+                                        "totalElements": 1,
+                                        "totalPages": 1,
+                                        "size": 20,
+                                        "number": 0,
+                                        "first": true,
+                                        "last": true,
+                                        "numberOfElements": 1,
+                                        "empty": false
+                                      }
+                                    }
+                                    """))),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @ApiResponse(responseCode = "403", description = "Not platform staff")
+    })
+    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getReviewQueue(
+            @Parameter(description = "Zero-based page index")
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "20") @Min(1) @Max(MAX_PAGE_SIZE) int size
+    ) {
+        return ResponseEntity.ok(ApiResult.ok("Review queue retrieved", eventService.getReviewQueue(page, size)));
     }
 
     @PutMapping("/{id}/approve")
@@ -1679,13 +1787,20 @@ public class EventController {
     @Operation(
             summary = "Approve (un-reject) event (admin moderation)",
             description = """
-                    **SUPER_ADMIN only.** Clears a previous rejection
+                    **SUPER_ADMIN or PRODUCT_MANAGER.**
+
+                    **Review step OFF (V17, the default):** clears a previous rejection
                     (`rejected=false`). The event stays `active=false` — the owning
                     organizer re-publishes it with `PUT /events/{id}/activate` when
                     ready (now permitted again because the rejection is cleared).
-
                     Calling approve on an event that was never rejected is a no-op
                     that returns the event unchanged (still `rejected=false`).
+
+                    **Review step ON:** approves an event awaiting review (or a rejected
+                    one) AND publishes it: `active: true`, `reviewStatus: APPROVED`, and
+                    the organizer is told it is live. A DRAFT never submitted is 409;
+                    an event already approved is returned unchanged (an event its
+                    organizer unpublished is not put back live).
                     """
     )
     @ApiResponses({
@@ -1724,6 +1839,9 @@ public class EventController {
                     )
             ),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @ApiResponse(responseCode = "409", description = "Review step on and the organizer has not submitted it",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Not submitted yet", value = EXAMPLE_NOT_SUBMITTED_YET))),
             @ApiResponse(responseCode = "403", description = "Authenticated but not SUPER_ADMIN"),
             @ApiResponse(responseCode = "404", description = "Event not found",
                     content = @Content(schema = @Schema(example = "{\"code\":\"404 NOT_FOUND\",\"message\":\"Event not found\",\"data\":null}")))

@@ -713,7 +713,8 @@ class EventServiceTest {
 
         service.activateEvent(TENANT_1, "ROLE_EVENT_ORGANIZER", eventId);
 
-        verify(orgNotify).notifyEventActivated(TENANT_1, eventId, "T");
+        // No sales start in the future, so no "sales open on" note.
+        verify(orgNotify).notifyEventActivated(TENANT_1, eventId, "T", null);
     }
 
     @Test
@@ -795,7 +796,8 @@ class EventServiceTest {
 
         service.rejectEvent(eventId);
 
-        verify(orgNotify).notifyEventRejected(TENANT_7, "T");
+        // V17: the event id rides along for the in-app link; no reason was given.
+        verify(orgNotify).notifyEventRejected(eq(TENANT_7), any(UUID.class), eq("T"), isNull());
     }
 
     @Test

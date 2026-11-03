@@ -125,6 +125,23 @@ public class Event {
     @Column(name = "sales_start_at")
     private LocalDateTime salesStartAt;
 
+    // The review step (V17). The status is derived from these and `rejected`,
+    // never stored (ReviewStatus.of). approvedAt set = allowed to go live;
+    // approvedBy null = went live without a review (step off, or live before
+    // V17). rejectionReason = what staff told the organizer, kept until the
+    // event is resubmitted or approved.
+    @Column(name = "submitted_at")
+    private LocalDateTime submittedAt;
+
+    @Column(name = "approved_at")
+    private LocalDateTime approvedAt;
+
+    @Column(name = "approved_by", length = 254)
+    private String approvedBy;
+
+    @Column(name = "rejection_reason", length = 1000)
+    private String rejectionReason;
+
     // The terms-and-conditions version a buyer must accept now (V16); null =
     // no terms. The text of every version is in event_terms_versions.
     @Column(name = "terms_version")

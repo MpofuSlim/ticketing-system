@@ -127,12 +127,86 @@ class OrganizerNotificationGatewayContractTest {
     }
 
     @Test
+    @DisplayName("V17 submitted: subject, type and the console link to the event")
+    void submitted_verifiesOutboundContract() {
+        UUID organizer = UUID.randomUUID();
+        UUID eventId = UUID.fromString("4b6d1f0e-2c8a-4e7b-9a31-7f5e2d9c0a11");
+        wireMock.stubFor(post(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .willReturn(aResponse().withStatus(202)));
+
+        gateway.notifyEventSubmitted(organizer, eventId, "Pink Fun Run");
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .withHeader("X-Internal-Token", equalTo("test-token"))
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your event is waiting for approval")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Pink Fun Run")))
+                .withRequestBody(matchingJsonPath("$.type", equalTo("EVENT_SUBMITTED")))
+                .withRequestBody(matchingJsonPath("$.subjectKind", equalTo("EVENT")))
+                .withRequestBody(matchingJsonPath("$.subjectId", equalTo(eventId.toString())))
+                .withRequestBody(matchingJsonPath("$.deepLink", equalTo("/ticketing/events/" + eventId))));
+    }
+
+    @Test
+    @DisplayName("V17 rejected with a reason: staff's note is in the message")
+    void rejectedWithReason_carriesTheNote() {
+        UUID organizer = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        wireMock.stubFor(post(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .willReturn(aResponse().withStatus(202)));
+
+        gateway.notifyEventRejected(organizer, eventId, "Pink Fun Run", "Please upload your own banner.");
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your event was not approved")))
+                .withRequestBody(matchingJsonPath("$.message",
+                        containing("Our team's note: Please upload your own banner.")))
+                .withRequestBody(matchingJsonPath("$.type", equalTo("EVENT_REJECTED"))));
+    }
+
+    @Test
+    @DisplayName("V17 approved and live: when sales open, and the event link")
+    void approvedAndLive_saysWhenSalesOpen() {
+        UUID organizer = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        wireMock.stubFor(post(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .willReturn(aResponse().withStatus(202)));
+
+        gateway.notifyEventApprovedAndLive(organizer, eventId, "Pink Fun Run",
+                "Ticket sales open on Thu 14 Nov 2030 at 10:00.");
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your event has been approved and is live")))
+                .withRequestBody(matchingJsonPath("$.message",
+                        containing("is now live on Ticketize. Ticket sales open on Thu 14 Nov 2030 at 10:00.")))
+                .withRequestBody(matchingJsonPath("$.message",
+                        containing("https://ticketize.example.test/events/" + eventId)))
+                .withRequestBody(matchingJsonPath("$.type", equalTo("EVENT_APPROVED"))));
+    }
+
+    @Test
+    @DisplayName("the original four keep their two-field body: no type, no link")
+    void legacyCalls_sendSubjectAndMessageOnly() {
+        UUID organizer = UUID.randomUUID();
+        wireMock.stubFor(post(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .willReturn(aResponse().withStatus(202)));
+
+        gateway.notifyEventDeactivated(organizer, "Pink Fun Run");
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .withRequestBody(matchingJsonPath("$.subject"))
+                .withRequestBody(notContaining("\"type\""))
+                .withRequestBody(notContaining("deepLink")));
+    }
+
+    @Test
     @DisplayName("guard rail: null organizer uuid makes NO HTTP call (all four methods)")
     void nullUuid_noNetworkCall() {
         gateway.notifyEventApproved(null, "Summer Concert");
         gateway.notifyEventActivated(null, UUID.randomUUID(), "Summer Concert");
         gateway.notifyEventDeactivated(null, "Summer Concert");
         gateway.notifyEventRejected(null, "Summer Concert");
+        gateway.notifyEventSubmitted(null, UUID.randomUUID(), "Summer Concert");
+        gateway.notifyEventApprovedAndLive(null, UUID.randomUUID(), "Summer Concert", null);
 
         wireMock.verify(0, postRequestedFor(urlPathMatching("/users/internal/.*/notify")));
     }
