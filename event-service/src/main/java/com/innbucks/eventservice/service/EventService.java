@@ -1605,11 +1605,8 @@ public class EventService {
         if (reason == null) {
             return null;
         }
-        String cleaned = HtmlSanitizer.stripAll(reason);
-        if (cleaned == null) {
-            return null;
-        }
-        cleaned = cleaned.replaceAll("[\\p{Cntrl}&&[^\\n]]", " ").trim();
+        // stripAll returns null only for null, handled above.
+        String cleaned = HtmlSanitizer.stripAll(reason).replaceAll("[\\p{Cntrl}&&[^\\n]]", " ").trim();
         if (cleaned.isEmpty()) {
             return null;
         }
