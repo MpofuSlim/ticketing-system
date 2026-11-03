@@ -38,6 +38,12 @@ public class EventMapper {
                 .availableTickets(event.getAvailableTickets())
                 .active(event.isActive())
                 .rejected(event.isRejected())
+                // Review (V17): stripped again on every public view
+                // (EventService.stripInternalIds).
+                .reviewStatus(com.innbucks.eventservice.dto.ReviewStatus.of(event))
+                .submittedAt(event.getSubmittedAt())
+                .approvedAt(event.getApprovedAt())
+                .rejectionReason(event.getRejectionReason())
                 .createdAt(event.getCreatedAt())
                 .updatedAt(event.getUpdatedAt())
                 .build();

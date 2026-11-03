@@ -113,6 +113,27 @@ public class EventResponseDTO {
             "admin approves them.")
     private boolean rejected;
 
+    @Schema(nullable = true, description = "Where the event stands in review (V17). On the organizer's and "
+            + "staff's views only; absent on every public view.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private ReviewStatus reviewStatus;
+
+    @Schema(example = "2026-11-03T17:05:00+02:00", nullable = true,
+            description = "When the organizer last submitted it for review. Organizer and staff views only.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private LocalDateTime submittedAt;
+
+    @Schema(example = "2026-11-03T17:40:00+02:00", nullable = true,
+            description = "When it was approved to go live. Organizer and staff views only.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private LocalDateTime approvedAt;
+
+    @Schema(example = "The banner shows another organizer's logo. Please upload your own artwork.", nullable = true,
+            description = "What staff said when they rejected it; present while rejectionReason applies "
+                    + "(until it is resubmitted or approved). Organizer and staff views only.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String rejectionReason;
+
     @Schema(description = "Creation timestamp (server time).")
     private LocalDateTime createdAt;
 

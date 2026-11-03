@@ -542,4 +542,18 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Modifying(flushAutomatically = true)
     @Query(value = "UPDATE events SET banner_image = NULL WHERE event_id = :eventId", nativeQuery = true)
     int clearBannerImage(@Param("eventId") UUID eventId);
+
+    /**
+     * The staff review queue (V17): events awaiting a decision, oldest
+     * submission first. Same predicate as {@code idx_events_awaiting_review}.
+     */
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.rejected = false
+        AND e.approvedAt IS NULL
+        AND e.submittedAt IS NOT NULL
+        ORDER BY e.submittedAt ASC, e.eventId ASC
+    """)
+    Page<Event> findAwaitingReview(Pageable pageable);
 }
