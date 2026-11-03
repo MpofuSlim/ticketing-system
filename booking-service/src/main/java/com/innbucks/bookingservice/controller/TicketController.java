@@ -215,7 +215,9 @@ public class TicketController {
                     description = "Unknown token, or the booking isn't CONFIRMED", content = @Content)
     })
     public ResponseEntity<String> ticketPageByToken(@PathVariable String token) {
-        return html(ticketRenderingService.ticketPageHtmlByToken(token, publicBaseUrl));
+        return ticketRenderingService.ticketPageHtmlByToken(token, publicBaseUrl)
+                .map(TicketController::htmlPage)
+                .orElseGet(TicketController::notFound);
     }
 
     @GetMapping(value = "/bookings/ticket/" + TOKEN, produces = MediaType.TEXT_HTML_VALUE)
@@ -232,7 +234,9 @@ public class TicketController {
                     description = "Unknown token, or the booking isn't CONFIRMED", content = @Content)
     })
     public ResponseEntity<String> holderTicketPageByToken(@PathVariable String token) {
-        return html(ticketRenderingService.holderTicketPageHtmlByToken(token, publicBaseUrl));
+        return ticketRenderingService.holderTicketPageHtmlByToken(token, publicBaseUrl)
+                .map(TicketController::htmlPage)
+                .orElseGet(TicketController::notFound);
     }
 
     // The `/brand/...` aliases exist for the WhatsApp gateway, whose base URL
@@ -258,23 +262,27 @@ public class TicketController {
                     description = "Unknown token, or the booking isn't CONFIRMED", content = @Content)
     })
     public ResponseEntity<byte[]> ticketQrByToken(@PathVariable String token) {
-        return png(ticketRenderingService.ticketQrPngByToken(token));
+        return ticketRenderingService.ticketQrPngByToken(token)
+                .map(TicketController::pngImage)
+                .orElseGet(TicketController::notFound);
     }
 
-    private static ResponseEntity<String> html(java.util.Optional<String> page) {
-        return page.map(html -> ResponseEntity.ok()
-                        .contentType(MediaType.TEXT_HTML)
-                        .cacheControl(CacheControl.noCache())
-                        .body(html))
-                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+    private static ResponseEntity<String> htmlPage(String html) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_HTML)
+                .cacheControl(CacheControl.noCache())
+                .body(html);
     }
 
-    private static ResponseEntity<byte[]> png(java.util.Optional<byte[]> image) {
-        return image.map(png -> ResponseEntity.ok()
-                        .contentType(MediaType.IMAGE_PNG)
-                        .cacheControl(CacheControl.maxAge(Duration.ofHours(12)).cachePrivate())
-                        .body(png))
-                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+    private static ResponseEntity<byte[]> pngImage(byte[] png) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.IMAGE_PNG)
+                .cacheControl(CacheControl.maxAge(Duration.ofHours(12)).cachePrivate())
+                .body(png);
+    }
+
+    private static <T> ResponseEntity<T> notFound() {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
     }
 
     // The page renders its own image URLs absolute so it works when saved/shared;
