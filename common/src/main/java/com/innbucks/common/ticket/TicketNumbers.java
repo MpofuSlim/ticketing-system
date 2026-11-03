@@ -119,6 +119,21 @@ public final class TicketNumbers {
     }
 
     /**
+     * A ticket number as a screen, report or export shows it to anyone who is
+     * not its buyer, its holder or the gate: the same mask as {@link #forLog}
+     * ({@code 20261013-*****-**Z2B}, legacy {@code 20260419-****1X}). Staff can
+     * still tell tickets apart and match one a customer reads out by its last
+     * symbols; nobody can get in with it. A stored value that is not
+     * ticket-shaped shows as {@code ****}, never as itself. Null stays null.
+     */
+    public static String forDisplay(String issued) {
+        if (issued == null) {
+            return null;
+        }
+        return isTicketNumber(issued) ? masked(issued) : "****";
+    }
+
+    /**
      * {@code text} with every ticket-number-shaped run masked as
      * {@link #forLog} would mask it: for request paths
      * ({@code /bookings/{id}/tickets/{ticketNumber}/qr.png}) and for an

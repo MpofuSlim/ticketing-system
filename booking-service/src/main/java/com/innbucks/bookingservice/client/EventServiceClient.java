@@ -3,6 +3,7 @@ package com.innbucks.bookingservice.client;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
+import com.innbucks.bookingservice.dto.ScannerAccessDTO;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -31,6 +32,17 @@ public interface EventServiceClient {
     @GetMapping("/events/internal/{id}")
     ApiResult<EventLookupDTO> getEventInternal(
             @PathVariable("id") UUID id,
+            @RequestHeader("X-Internal-Token") String internalToken
+    );
+
+    // May this super-app account scan this event (event-service V14 scanners)?
+    // Asked before a super-app scan reads the ticket. The fallback returns null
+    // data, which the scan answers with a retryable 503: an outage is not a
+    // verdict, and an unverified scanner never redeems.
+    @GetMapping("/events/internal/scanner-access")
+    ApiResult<ScannerAccessDTO> scannerAccess(
+            @RequestParam("userUuid") UUID userUuid,
+            @RequestParam("eventId") UUID eventId,
             @RequestHeader("X-Internal-Token") String internalToken
     );
 

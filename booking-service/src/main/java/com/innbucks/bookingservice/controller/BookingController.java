@@ -917,7 +917,7 @@ public class BookingController {
         }
         log.info("GET /bookings/internal/{} (S2S)", id);
         return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
-                bookingService.getBookingById(id, null, true)));
+                bookingService.getBookingForService(id)));
     }
 
     /**
@@ -1061,6 +1061,7 @@ public class BookingController {
                                       "data": [
                                         {
                                           "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
                                           "userEmail": "alice@example.com",
                                           "customerName": "Alice Moyo",
                                           "phoneNumber": "+263771234567",
@@ -1086,6 +1087,7 @@ public class BookingController {
                                         },
                                         {
                                           "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "bookingItemId": "0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
                                           "userEmail": "alice@example.com",
                                           "customerName": "Alice Moyo",
                                           "phoneNumber": "+263771234567",
@@ -1142,7 +1144,12 @@ public class BookingController {
                     "`holderName` = attendee if named, else purchaser. Filter `status == CONFIRMED` for who has actually paid. " +
                     "`paymentMethod` (V29) is how the booking was paid: INNBUCKS, ECOCASH or CARD (a ZimSwitch-enabled " +
                     "bank card), with `paymentMethodLabel` in words; both are absent when not recorded (unpaid, or " +
-                    "confirmed before V29 and not backfilled)."
+                    "confirmed before V29 and not backfilled).\n\n" +
+                    "**Ticket numbers are the gate credential.** Where the cell masks them " +
+                    "(`app.booking.mask-ticket-numbers`), `ticketNumber` reads `20260502-*****-**K2D`. To find one " +
+                    "ticket a customer reads out, send `?ticketNumber=` (any case, dashes optional): the answer is " +
+                    "that ticket's row alone, or an empty list. `bookingItemId` addresses a ticket for the attendee " +
+                    "edit (`PUT /bookings/{bookingId}/items/{bookingItemId}/attendee`)."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -1158,6 +1165,7 @@ public class BookingController {
                                       "data": [
                                         {
                                           "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "bookingItemId": "5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f",
                                           "userEmail": "alice@example.com",
                                           "customerName": "Alice Moyo",
                                           "phoneNumber": "+263771234567",
@@ -1183,6 +1191,7 @@ public class BookingController {
                                         },
                                         {
                                           "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "bookingItemId": "6d7e8f9a-0b1c-4d2e-9f3a-4b5c6d7e8f9a",
                                           "userEmail": "alice@example.com",
                                           "customerName": "Alice Moyo",
                                           "phoneNumber": "+263771234567",
@@ -1208,6 +1217,7 @@ public class BookingController {
                                         },
                                         {
                                           "bookingId": "c5d1e3f4-3456-7890-abcd-ef0123456789",
+                                          "bookingItemId": "7e8f9a0b-1c2d-4e3f-8a4b-5c6d7e8f9a0b",
                                           "userEmail": "carol@example.com",
                                           "customerName": "Carol Dube",
                                           "phoneNumber": "+263773000000",
@@ -1239,12 +1249,21 @@ public class BookingController {
     })
     public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByEvent(
             @PathVariable UUID eventId,
+            @io.swagger.v3.oas.annotations.Parameter(description = "One ticket number a customer reads out "
+                    + "(any case, dashes optional). Returns that ticket's row only, or an empty list.",
+                    example = "20260502-3fq7m-x9k2d")
+            @RequestParam(required = false) String ticketNumber,
             Authentication authentication) {
         UUID requesterOrganizerUuid = com.innbucks.bookingservice.security.AuthenticatedCaller
                 .organizerUuid(authentication);
         boolean isAdmin = AuthenticatedCaller.isPlatformStaff(authentication);
-        log.debug("GET /bookings/by-event/{} requesterOrganizerUuid={} isAdmin={}",
-                eventId, requesterOrganizerUuid, isAdmin);
+        boolean search = ticketNumber != null;
+        log.debug("GET /bookings/by-event/{} requesterOrganizerUuid={} isAdmin={} search={}",
+                eventId, requesterOrganizerUuid, isAdmin, search);
+        if (search) {
+            return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
+                    bookingService.findInEventByTicketNumber(eventId, ticketNumber, requesterOrganizerUuid, isAdmin)));
+        }
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
                 bookingService.getBookingsByEvent(eventId, requesterOrganizerUuid, isAdmin)));
     }
@@ -1594,8 +1613,9 @@ public class BookingController {
         String lookupPhone = normalizedRequested != null ? normalizedRequested : phoneNumber;
         log.debug("GET /bookings/phone/{} isAdmin={} ownPhone={}", MsisdnMasking.mask(lookupPhone), isAdmin, ownPhone);
         if (isAdmin || ownPhone) {
+            // Staff reading someone else's number get it as staff: masked, no QR.
             return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
-                    bookingService.getActiveByPhoneNumber(lookupPhone)));
+                    bookingService.getActiveByPhoneNumber(lookupPhone, ownPhone)));
         }
         UUID organizerUuid = AuthenticatedCaller.organizerUuid(authentication);
         if (organizerUuid == null) {

@@ -21,4 +21,10 @@ public class ScanTicketRequestDTO {
                     + "case (202606197kq4m9xz2b): it is read as the issued number, with no letter swapped "
                     + "for another.")
     private String ticketNumber;
+
+    @Schema(example = "5772554b-9c1d-4e2f-a3b4-c5d6e7f8a9b0", nullable = true,
+            description = "The event the scanner is scanning for. REQUIRED from a super-app scanner (a "
+                    + "CUSTOMER session); optional for the scanner app. When sent, a ticket for any other "
+                    + "event is WRONG_EVENT and is not redeemed.")
+    private java.util.UUID eventId;
 }

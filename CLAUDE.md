@@ -44,6 +44,15 @@ never with a placeholder like `[Your name]`.
 - **Flag it when the owner's own request is the weak link.** Disagreeing with
   evidence is part of the job; silent compliance is not.
 
+## Every change says what it does to production (owner rule, 2026-10-30)
+
+**Before a change ships, tell the owner in plain words what it does to what
+already works in production, and put the same note in the PR body.** Say what
+existing users or clients will notice (a new key in a response, a new row on a
+screen, a changed error), what the deploy needs (order, a quiet time for a
+migration), and whether a rollback is still clean. "Nothing changes for
+existing callers" is a claim to prove from the code, not a default.
+
 ## Files for the owner: Markdown only for the frontend (owner rule, 2026-10-29)
 
 **Send a Markdown file (`SendUserFile`) only when it is a frontend integration
@@ -1020,6 +1029,67 @@ here are the shape of the key and the hole it opened one level up:
   `tokenVersion`" is inaccurate — it does, in `UserAdminService.setRoles`. The
   hole it describes is real regardless, because the refresh ROW survives.)
 
+## Super-app gate scanners are phone numbers, not accounts (event-service V14)
+
+**An organizer adds a scanner by phone number and name
+(`POST /event-organizer/scanners`). The person behind the number accepts in the
+super app (`POST /events/gate/invites/{id}/accept`), which binds the row to the
+account that accepted, and only that account then scans.** The scanner-app
+`TEAM_MEMBER` (user-service) could not serve the super app: it creates an
+account on the number, one per number, with one organizer per account. A
+super-app user already has an account on their number, so creating one was
+refused, and an account created first made `/auth/exchange` refuse the number
+(`not_a_customer`).
+
+- **Where it lives.** `event_scanners` and `event_scanner_assignments` in
+  event-service, beside the events. The ownership check and the clash rule are
+  then one local transaction on live event times, with no remote call. The
+  gateway's `event-organizer-scanners-route` sends `/event-organizer/scanners/**`
+  to event-service, ahead of user-service's `/event-organizer/**`
+  (`GatewayRouteTableTest`).
+- **The shared-device login stays (owner decision, 2026-10-30).**
+  `/event-organizer/team-members` (an account plus a temporary password, for
+  the scanner app on venue phones) is unchanged. Venues that hand phones around
+  can't use a personal wallet to scan.
+- **A number is never on two events whose times overlap, under any organizer
+  (owner decision, 2026-10-30).** Organizers may run overlapping events; one
+  scanner may not be at both, even two of the same organizer's.
+  - Checked whenever a row starts counting: assign, enable, reinvite
+    (`countClashes` / `countClashesOnReturn`).
+  - The check runs after `lockAllByPhoneNumber` (`FOR UPDATE` on every row of
+    the number, in id order), in the same transaction, so two organizers
+    assigning one number at once queue (`EventScannerPostgresIT`, 10 rounds).
+  - Windows are half-open. Ended and deleted events never clash. Another
+    organizer's switched-off or declined row doesn't count, but a row's own
+    events always do.
+  - It is NOT re-checked when an organizer moves their own event: one
+    organizer's schedule change is never blocked by another's staffing.
+  - The refusal (`409 scanner_schedule_clash`) names neither the other event
+    nor its organizer.
+- **Nothing says whether a number has an InnBucks account.** Every new scanner
+  is `INVITED`. No message is sent (the organizer tells the person). The
+  organizer only ever sees the name they typed.
+  - Status is derived from `disabled_at` > `declined_at` > `accepted_at`, never
+    stored.
+  - `chk_event_scanners_accept_binds_account` keeps `accepted_at` and
+    `account_user_uuid` together. Leaving (decline on an accepted team) clears
+    both, so a recycled number's new owner inherits nothing.
+  - At most `events.scanners.max-per-organizer` (500) per organizer: each one
+    puts an invite in a stranger's app.
+- **The super-app endpoints take the phone and the account from the session,
+  never from a request.** `JwtFilter` stashes the token's `phoneNumber` claim.
+  - `GET /events/gate` is matched `authenticated()` BEFORE the
+    `GET /events/**` permitAll in `SecurityConfig`, like `/events/inactive`.
+  - Pinned through a real minted JWT by `ScannerEndpointsSecurityTest`.
+- **booking-service asks before every scan:** `GET /events/internal/scanner-access`
+  (X-Internal-Token, covered by the `/events/internal/*` permitAll and
+  event-internal-deny). It returns allowed only for an accepted, switched-on
+  scanner assigned to the event, on that event's organizer's team. It is read
+  live, so a removal bites at the next scan.
+- **Still to come:** booking-service scanning with a super-app token (eventId
+  required, `WRONG_EVENT`, the organizer-typed name as the scanner's name), and
+  moving a legacy `TEAM_MEMBER` onto a scanner.
+
 ## Deactivation ends sessions at once; `token_version` is written atomically (user-service, V42)
 
 **`PUT /admin/users/{id}/active` with `false` (and the organizer's team-member
@@ -1497,6 +1567,44 @@ ticket shapes are defined once, in common's `TicketNumbers`.
   them out and type them at the gate (`GateLookupService`), so they stay short.
   At 24 bits a day, b bookings expect about b²/33.5M clashes (27 at 30,000):
   expected, retried, invisible to the buyer, and not alerted.
+
+## Ticket numbers are whole only for the buyer, the holder and the gate (booking-service)
+
+**A ticket number is the gate credential (the QR holds nothing else, and the
+first scan wins), so every surface an organizer or staff member reads shows it
+masked, `20261030-*****-**7CB` (`TicketNumbers.forDisplay`, the log mask), and
+carries no QR** (owner's go, 2026-10-30). Shown whole, it reached everyone who
+could see the console or the export the console builds from it (the bookings
+CSV, Excel and PDF are the guest-list JSON), and any of them could walk in on it
+before the real holder.
+
+- **Masked** (`TicketNumberDisplay.forStaff`): the guest list (`/bookings/by-event`,
+  `/by-category`, and through it seat-service's analytics, which passes the field
+  through), a booking read by anyone but its buyer (`/bookings/{id}` by staff,
+  `/confirmation/{n}` by an organizer or staff, `/phone/{p}` for someone else's
+  number: number masked, `qrCode` null), the scan reports (`/scans/**`, where a
+  refused scan's number can still get in), and the attendee edit's answer.
+- **Whole**: the buyer's own reads and wallet, the magic-link and holder pages,
+  every message we send, the gate's scan and lookup, and
+  `GET /bookings/internal/{id}` (`getBookingForService`: a service is not a
+  person, and what siblings receive must not change with the switch).
+- **What replaced the full number in the console:** `bookingItemId` on every
+  guest-list row and on each item of an authenticated booking read (never on a
+  public view), the attendee edit by item
+  (`PUT /bookings/{bookingId}/items/{bookingItemId}/attendee`; the by-number
+  path is deprecated, and put the credential in every access log), and
+  `GET /bookings/by-event/{id}?ticketNumber=` (any case, dashes optional; that
+  ticket's row or `[]`, ownership checked first).
+- **The switch is a rollout device** (`app.booking.mask-ticket-numbers`,
+  `BOOKINGS_MASK_TICKET_NUMBERS`, default false): masked before the console
+  moves, its edit-by-number and in-browser search stop finding tickets. Turn it
+  on per cell once the console has moved; then delete it and mask always.
+- **Not closed by this, stated rather than hidden:** the booking id and the item
+  id on those same surfaces still open the PUBLIC ticket pages
+  (`GET /bookings/{bookingId}/tickets`, `/bookings/tickets/{itemId}`), which show
+  the QR. Those pages need a key of their own (a random link token) before the
+  ids stop being credentials; until then masking stops the casual copy, the
+  export and the screenshot, not someone reading the raw JSON.
 
 ## A MERCHANT_ADMIN's token carries NO `merchantId` claim — the organization is the scope
 
@@ -3246,6 +3354,38 @@ answering a different way round it:
 - **Not the loyalty POS guide's concern**: nothing here touches `/loyalty/**` or
   `/auth/pos/token`. It does change the ticket-selling POS guide's rate-limit
   table, if one has been sent to a partner.
+
+## Super-app gate scanners at the scan (booking-service V30)
+
+**`POST /tickets/scan`, `POST /tickets/lookup`, `GET /scans/me` and
+`/scans/me/stats` also admit a CUSTOMER session: a gate scanner on the InnBucks
+super app, whose authority is event-service's scanner membership (event-service
+V14), asked on every call** (`GET /events/internal/scanner-access`, through
+`TicketScanService.superAppAccess`). The token carries no organizer scope at
+all, so nothing about the caller's reach is ever read from it.
+
+- **Routing** is `TicketScanService.isSuperAppScanner`: CUSTOMER and neither
+  EVENT_ORGANIZER nor TEAM_MEMBER. An organizer or scanner-app account that
+  also shops stays on its own path; a token with no roles is never routed here.
+- **Order on the super-app path:** `eventId` required (400) → access (503 when
+  it cannot be asked: never an allow, never a refusal) → ticket → another
+  event's ticket OR a booking stamped for another organizer is the same
+  `WRONG_EVENT` → not confirmed → event day → claim. Access is asked BEFORE the
+  ticket or booking is read, so a phone not on the team learns nothing.
+- **A caller not on the team writes no `scan_attempts` row** (logged, counted on
+  `tickets.scan.super_app_refused`): any customer can send that request, and an
+  event's scan report is its organizer's gate traffic.
+- **Rows are the scanned-for event's** (`recordAttempt`'s `scanEventId`), with
+  the name the organizer typed for the scanner and no email.
+- **The scanner app may send `eventId` too**: another event's ticket is
+  `WRONG_EVENT`, checked after its own team checks, and every row goes to the
+  named event. Without `eventId` nothing about that path changed.
+- **`/scans/me` and `/me/stats` take `eventId`**; with it, `from` may be omitted
+  for the whole event (and the stats' `from`/`to` are null). They only ever
+  return the caller's own rows, so they need no team check. A super-app
+  caller's stats name comes from their latest row (the session has none).
+- **Rollback caveat:** once a `WRONG_EVENT` row exists, an image without the
+  enum value cannot read it, and any scan report covering it is a 500.
 
 ## Scan reports: `to` is widened server-side, and why
 

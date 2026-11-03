@@ -12,4 +12,5 @@ public final class AuthDetailsKeys {
 
     public static final String USER_UUID = "userUuid";
     public static final String ORGANIZER_UUID = "organizerUuid";
+    public static final String PHONE_NUMBER = "phoneNumber";
 }

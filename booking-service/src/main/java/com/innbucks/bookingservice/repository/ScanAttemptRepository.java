@@ -32,6 +32,20 @@ public interface ScanAttemptRepository extends JpaRepository<ScanAttempt, UUID> 
                                                                  Instant to,
                                                                  Pageable pg);
 
+    Page<ScanAttempt> findByScannerUserUuidAndEventIdAndAttemptedAtBetween(UUID scanner,
+                                                                           UUID eventId,
+                                                                           Instant from,
+                                                                           Instant to,
+                                                                           Pageable pg);
+
+    /** The scanner's latest attempt at one event: where a super-app scanner's
+     *  name (the one the organizer typed, stamped on every row) is read from. */
+    java.util.Optional<ScanAttempt> findFirstByScannerUserUuidAndEventIdOrderByAttemptedAtDesc(UUID scanner,
+                                                                                               UUID eventId);
+
+    /** The same, across events. */
+    java.util.Optional<ScanAttempt> findFirstByScannerUserUuidOrderByAttemptedAtDesc(UUID scanner);
+
     Page<ScanAttempt> findByEventIdAndAttemptedAtBetween(UUID eventId,
                                                          Instant from,
                                                          Instant to,
@@ -52,6 +66,19 @@ public interface ScanAttemptRepository extends JpaRepository<ScanAttempt, UUID> 
     List<OutcomeCount> countOutcomesForScanner(@Param("scanner") UUID scanner,
                                                @Param("from") Instant from,
                                                @Param("to") Instant to);
+
+    @Query("""
+        SELECT new com.innbucks.bookingservice.dto.scan.OutcomeCount(s.outcome, COUNT(s))
+        FROM ScanAttempt s
+        WHERE s.scannerUserUuid = :scanner
+          AND s.eventId = :eventId
+          AND s.attemptedAt BETWEEN :from AND :to
+        GROUP BY s.outcome
+    """)
+    List<OutcomeCount> countOutcomesForScannerAtEvent(@Param("scanner") UUID scanner,
+                                                      @Param("eventId") UUID eventId,
+                                                      @Param("from") Instant from,
+                                                      @Param("to") Instant to);
 
     @Query("""
         SELECT new com.innbucks.bookingservice.dto.scan.OutcomeCount(s.outcome, COUNT(s))

@@ -17,4 +17,9 @@ public class GateLookupRequestDTO {
     @Schema(example = "INN-20260901-3C8849",
             description = "The booking's confirmation number, as printed in the SMS/WhatsApp messages.")
     private String confirmationNumber;
+
+    @Schema(example = "5772554b-9c1d-4e2f-a3b4-c5d6e7f8a9b0", nullable = true,
+            description = "The event the scanner is scanning for. REQUIRED from a super-app scanner; "
+                    + "optional for the scanner app. A booking for any other event is WRONG_EVENT.")
+    private java.util.UUID eventId;
 }

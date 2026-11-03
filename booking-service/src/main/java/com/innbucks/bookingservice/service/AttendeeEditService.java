@@ -48,15 +48,41 @@ public class AttendeeEditService {
         this.deploymentCountry = deploymentCountry;
     }
 
+    /** How the answer's ticket number reaches the editor (organizer or staff). Without it, in full. */
+    private TicketNumberDisplay ticketNumbers = TicketNumberDisplay.FULL;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTicketNumberDisplay(TicketNumberDisplay ticketNumbers) {
+        this.ticketNumbers = Objects.requireNonNull(ticketNumbers, "ticketNumbers");
+    }
+
+    /** The ticket addressed by its number: the original path, kept for the console until it moves. */
     @Transactional
     public AttendeeUpdateResponseDTO update(Authentication caller, UUID bookingId, String ticketNumber,
                                             AttendeeUpdateRequestDTO request) {
+        return update(caller, bookingId, i -> ticketNumber.equals(i.getTicketNumber()), request);
+    }
+
+    /**
+     * The ticket addressed by its own id. Replaces the ticket-number path: a
+     * masked guest list cannot address a ticket by number, and a ticket number
+     * in a URL lands in every access log on the way.
+     */
+    @Transactional
+    public AttendeeUpdateResponseDTO updateByItem(Authentication caller, UUID bookingId, UUID bookingItemId,
+                                                  AttendeeUpdateRequestDTO request) {
+        return update(caller, bookingId, i -> bookingItemId.equals(i.getId()), request);
+    }
+
+    private AttendeeUpdateResponseDTO update(Authentication caller, UUID bookingId,
+                                             java.util.function.Predicate<BookingItem> theTicket,
+                                             AttendeeUpdateRequestDTO request) {
         Booking booking = bookingRepository.lockById(bookingId)
                 .orElseThrow(() -> new NotFoundException("Booking not found"));
         requireOwnershipUnlessStaff(caller, booking);
 
         BookingItem item = booking.getItems() == null ? null : booking.getItems().stream()
-                .filter(i -> ticketNumber.equals(i.getTicketNumber()))
+                .filter(theTicket)
                 .findFirst().orElse(null);
         if (item == null) {
             throw new NotFoundException("Ticket not found on this booking");
@@ -92,12 +118,12 @@ public class AttendeeEditService {
             item.setAttendeeEmail(email);
             item.setAttendeePhone(phone);
             log.info("Attendee edited bookingId={} ref={} ticket={} by={} changed={} phone {} -> {}",
-                    booking.getId(), booking.getConfirmationNumber(), TicketNumbers.forLog(ticketNumber), caller.getName(),
+                    booking.getId(), booking.getConfirmationNumber(), TicketNumbers.forLog(item.getTicketNumber()), caller.getName(),
                     changed, MsisdnMasking.mask(oldPhone), MsisdnMasking.mask(phone));
         }
 
         return new AttendeeUpdateResponseDTO(booking.getId(), booking.getConfirmationNumber(),
-                item.getTicketNumber(), item.getAttendeeName(), item.getAttendeeEmail(),
+                ticketNumbers.forStaff(item.getTicketNumber()), item.getAttendeeName(), item.getAttendeeEmail(),
                 item.getAttendeePhone(), item.holderName(), List.copyOf(changed));
     }
 

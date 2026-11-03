@@ -50,6 +50,14 @@
             <artifactId>jsoup</artifactId>
         </dependency>
 
+        <!-- libphonenumber: canonicalises a super-app scanner's number to E.164
+             (MsisdnValidator). Same version as booking- and user-service. -->
+        <dependency>
+            <groupId>com.googlecode.libphonenumber</groupId>
+            <artifactId>libphonenumber</artifactId>
+            <version>9.0.41</version>
+        </dependency>
+
         <!-- JWT -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>

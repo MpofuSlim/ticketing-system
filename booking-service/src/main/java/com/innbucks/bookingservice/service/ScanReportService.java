@@ -62,6 +62,19 @@ public class ScanReportService {
     private final ScanAttemptRepository repository;
     private final MarketTimeZone marketTimeZone;
 
+    /**
+     * Every scan report is read by organizers, staff or the scanner, never by
+     * the ticket's holder, and a refused scan's number (wrong day, not yet
+     * paid) can still get in. Masked when the cell masks ticket numbers.
+     * Setter so hand-built instances keep their constructor; without it, in full.
+     */
+    private TicketNumberDisplay ticketNumbers = TicketNumberDisplay.FULL;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTicketNumberDisplay(TicketNumberDisplay ticketNumbers) {
+        this.ticketNumbers = java.util.Objects.requireNonNull(ticketNumbers, "ticketNumbers");
+    }
+
     @Transactional(readOnly = true)
     public PageResponse<ScanAttemptDTO> listMyScans(UUID scannerUserUuid,
                                                     Instant from,
@@ -70,6 +83,23 @@ public class ScanReportService {
                                                     int size) {
         Page<ScanAttempt> pg = repository.findByScannerUserUuidAndAttemptedAtBetween(
                 scannerUserUuid, from, to, pageable(page, size));
+        return PageResponse.from(pg.map(this::toDto));
+    }
+
+    /**
+     * The scanner's own attempts at one event, newest first: over
+     * {@code [from, to]}, or the whole event when both are null.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<ScanAttemptDTO> listMyScansAtEvent(UUID scannerUserUuid,
+                                                           UUID eventId,
+                                                           Instant from,
+                                                           Instant to,
+                                                           int page,
+                                                           int size) {
+        Page<ScanAttempt> pg = repository.findByScannerUserUuidAndEventIdAndAttemptedAtBetween(
+                scannerUserUuid, eventId, from == null ? Instant.EPOCH : from, to == null ? Instant.now() : to,
+                pageable(page, size));
         return PageResponse.from(pg.map(this::toDto));
     }
 
@@ -93,8 +123,37 @@ public class ScanReportService {
         List<OutcomeCount> rows = repository.countOutcomesForScanner(scannerUserUuid, from, to);
         Map<String, Long> byOutcome = zeroFilledOutcomes(rows);
         long total = byOutcome.values().stream().mapToLong(Long::longValue).sum();
-        return new ScannerStatsDTO(scannerUserUuid, scannerEmail, scannerDisplayName,
+        String name = scannerDisplayName != null ? scannerDisplayName
+                : repository.findFirstByScannerUserUuidOrderByAttemptedAtDesc(scannerUserUuid)
+                        .map(ScanAttempt::getScannerDisplayName).orElse(null);
+        return new ScannerStatsDTO(scannerUserUuid, scannerEmail, name,
                 marketTimeZone.atMarket(from), marketTimeZone.atMarket(to), total, byOutcome);
+    }
+
+    /**
+     * The scanner's own outcome counts at one event: over {@code [from, to]},
+     * or the whole event when both are null (and then the response's
+     * {@code from}/{@code to} are null too). A null name is read from the
+     * scanner's latest attempt there: a super-app scanner's session carries no
+     * name, and every row they wrote carries the one the organizer typed.
+     */
+    @Transactional(readOnly = true)
+    public ScannerStatsDTO myStatsAtEvent(UUID scannerUserUuid,
+                                          String scannerEmail,
+                                          String scannerDisplayName,
+                                          UUID eventId,
+                                          Instant from,
+                                          Instant to) {
+        List<OutcomeCount> rows = repository.countOutcomesForScannerAtEvent(scannerUserUuid, eventId,
+                from == null ? Instant.EPOCH : from, to == null ? Instant.now() : to);
+        Map<String, Long> byOutcome = zeroFilledOutcomes(rows);
+        long total = byOutcome.values().stream().mapToLong(Long::longValue).sum();
+        String name = scannerDisplayName != null ? scannerDisplayName
+                : repository.findFirstByScannerUserUuidAndEventIdOrderByAttemptedAtDesc(scannerUserUuid, eventId)
+                        .map(ScanAttempt::getScannerDisplayName).orElse(null);
+        return new ScannerStatsDTO(scannerUserUuid, scannerEmail, name,
+                from == null ? null : marketTimeZone.atMarket(from),
+                to == null ? null : marketTimeZone.atMarket(to), total, byOutcome, eventId);
     }
 
     @Transactional(readOnly = true)
@@ -153,7 +212,7 @@ public class ScanReportService {
                 s.getId(),
                 marketTimeZone.atMarket(s.getAttemptedAt()),
                 s.getOutcome() == null ? null : s.getOutcome().name(),
-                s.getTicketNumber(),
+                ticketNumbers.forStaff(s.getTicketNumber()),
                 s.getBookingItemId(),
                 s.getBookingId(),
                 s.getEventId(),

@@ -40,6 +40,11 @@ public class SecurityConfig {
                         // so a dropped annotation can't silently expose it). MUST precede
                         // the broad /events/** permitAll below — first match wins.
                         .requestMatchers(HttpMethod.GET, "/events/inactive").authenticated()
+                        // The super-app scanner's own events and invites: read from
+                        // the caller's session, so it is meaningless and must not be
+                        // reachable anonymously. Same reason as the line above for
+                        // sitting before the GET /events/** permitAll.
+                        .requestMatchers(HttpMethod.GET, "/events/gate").authenticated()
                         .requestMatchers(HttpMethod.GET, "/events").permitAll()
                         // Internal: full event lookup (tenantUserUuid intact) for sibling
                         // services — booking-service's ownership checks + tenant capture.

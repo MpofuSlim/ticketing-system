@@ -85,7 +85,7 @@ class BookingControllerInternalEndpointTest {
         dto.setPhoneNumber("+263782606983");
         dto.setTotalAmount(new BigDecimal("40.00"));
         // isAdmin=true + null userEmail = no ownership check (trusted S2S caller).
-        when(bookingService.getBookingById(eq(id), isNull(), eq(true))).thenReturn(dto);
+        when(bookingService.getBookingForService(id)).thenReturn(dto);
 
         ResponseEntity<ApiResult<BookingResponseDTO>> resp =
                 controller.getBookingByIdInternal(id, TOKEN);
@@ -93,7 +93,8 @@ class BookingControllerInternalEndpointTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody().getData().getPhoneNumber()).isEqualTo("+263782606983");
         assertThat(resp.getBody().getData().getTotalAmount()).isEqualByComparingTo("40.00");
-        verify(bookingService).getBookingById(id, null, true);
+        // The service read, never the staff one: what a sibling receives must not change with masking.
+        verify(bookingService).getBookingForService(id);
     }
 
     @Test
