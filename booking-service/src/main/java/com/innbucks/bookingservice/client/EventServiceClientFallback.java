@@ -26,6 +26,14 @@ public class EventServiceClientFallback implements EventServiceClient {
     }
 
     @Override
+    public ApiResult<com.innbucks.bookingservice.dto.ScannerAccessDTO> scannerAccess(
+            java.util.UUID userUuid, java.util.UUID eventId, String internalToken) {
+        log.warn("event-service circuit open or call failed (scannerAccess) eventId={}", eventId);
+        return ApiResult.<com.innbucks.bookingservice.dto.ScannerAccessDTO>builder()
+                .code("503").message("event unavailable").data(null).build();
+    }
+
+    @Override
     public ApiResult<AvailabilityResponseDTO> consumeAvailability(java.util.UUID id, int count, String internalToken) {
         log.warn("event-service circuit open or call failed (consumeAvailability) eventId={} count={}",
                 id, count);

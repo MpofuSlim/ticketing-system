@@ -6,6 +6,7 @@ import com.innbucks.bookingservice.config.CountryMdcConfig;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.ScanAccessDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
+import com.innbucks.bookingservice.dto.ScannerAccessDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.entity.ScanAttempt;
@@ -22,6 +23,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -232,6 +234,16 @@ public class TicketScanService {
      * javadoc for the phases.
      */
     public ScanTicketResponseDTO scan(String ticketNumber, String scannerDisplayName) {
+        return scan(ticketNumber, null, scannerDisplayName);
+    }
+
+    /**
+     * @param eventId the event the scanner is scanning for. Required from a
+     *                super-app scanner ({@link #isSuperAppScanner}); optional for
+     *                the scanner app. When given, a ticket for any other event
+     *                is {@code WRONG_EVENT} and is not redeemed.
+     */
+    public ScanTicketResponseDTO scan(String ticketNumber, UUID eventId, String scannerDisplayName) {
         long start = System.currentTimeMillis();
 
         if (ticketNumber == null || ticketNumber.isBlank()) {
@@ -239,6 +251,9 @@ public class TicketScanService {
         }
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (isSuperAppScanner(auth)) {
+            return scanForSuperApp(ticketNumber, eventId, auth, start);
+        }
         UUID scannerOrganizerUuid = AuthenticatedCaller.organizerUuid(auth);
         UUID scannerUserUuid = AuthenticatedCaller.userUuid(auth);
         String scannerEmail = auth == null ? null : auth.getName();
@@ -263,7 +278,7 @@ public class TicketScanService {
                     .ticketNumber(ticketNumber)
                     .build();
             recordRefusal(ticketNumber, null, ScanAttempt.Outcome.TICKET_NOT_FOUND,
-                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
+                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, eventId);
             return result;
         }
 
@@ -279,7 +294,7 @@ public class TicketScanService {
                     .bookingItemId(item.getId())
                     .build();
             recordRefusal(ticketNumber, item, ScanAttempt.Outcome.BOOKING_NOT_CONFIRMED,
-                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
+                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, eventId);
             return result;
         }
 
@@ -294,7 +309,7 @@ public class TicketScanService {
                     .bookingItemId(item.getId())
                     .build();
             recordRefusal(ticketNumber, item, ScanAttempt.Outcome.WRONG_ORGANIZER,
-                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
+                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, eventId);
             return result;
         }
 
@@ -319,52 +334,226 @@ public class TicketScanService {
                     .bookingItemId(item.getId())
                     .build();
             recordRefusal(ticketNumber, item, ScanAttempt.Outcome.NOT_ASSIGNED_TO_EVENT,
-                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
+                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, eventId);
             return result;
         }
 
-        // Event-day rule. A ticket redeems only on the market-local calendar
-        // days its event actually spans. Placed HERE deliberately:
-        //
-        //  - AFTER both authorization gates, so a scanner who does not own the
-        //    event cannot probe it for a schedule; and
-        //  - BEFORE the claim below, because claimRedemption is the
-        //    irreversible `UPDATE ... WHERE redeemed_at IS NULL` and the
-        //    repository has no inverse. Refusing after it would permanently
-        //    burn a ticket that is perfectly valid tomorrow.
-        if (eventDayCheckEnabled) {
-            EventDayRule.Verdict verdict = eventDayVerdict(booking.getEventId());
-            if (verdict == EventDayRule.Verdict.UNVERIFIABLE && !eventDayCheckFailOpen) {
-                // Not a verdict about the ticket — the server could not decide.
-                // 503 rather than a 200-carried refusal so the scanner app
-                // retries instead of turning a valid customer away, and so the
-                // ticket is not audited as WRONG_EVENT_DAY when we do not know
-                // that it is.
-                log.warn("Ticket scan unverifiable, event window unavailable ticketNumber={} eventId={} by={}",
-                        TicketNumbers.forLog(ticketNumber), booking.getEventId(), scannerEmail);
-                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                        "Could not confirm the event's date. Please try again.");
-            }
-            if (verdict == EventDayRule.Verdict.OFF_DAY) {
-                LocalDate eventDay = eventFirstLocalDay(booking.getEventId());
-                log.info("Ticket scan rejected, not the event's day ticketNumber={} eventId={} eventDay={} by={}",
-                        TicketNumbers.forLog(ticketNumber), booking.getEventId(), eventDay, scannerEmail);
-                ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
-                        .status(ScanTicketResponseDTO.Status.WRONG_EVENT_DAY)
-                        .ticketNumber(ticketNumber)
-                        .bookingItemId(item.getId())
-                        .eventDate(eventDay)
-                        .build();
-                recordRefusal(ticketNumber, item, ScanAttempt.Outcome.WRONG_EVENT_DAY,
-                        scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
-                return result;
-            }
+        // The event the scanner said they are scanning for, when they said:
+        // after both authorization gates (so it reveals nothing to a scanner
+        // who may not act on this booking), before the claim.
+        if (eventId != null && !eventId.equals(booking.getEventId())) {
+            log.info("Ticket scan rejected, ticket is for another event ticketNumber={} scanningFor={} by={}",
+                    TicketNumbers.forLog(ticketNumber), eventId, scannerEmail);
+            recordRefusal(ticketNumber, item, ScanAttempt.Outcome.WRONG_EVENT,
+                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, eventId);
+            return wrongEvent(ticketNumber, item);
+        }
+
+        ScanTicketResponseDTO offDay = eventDayRefusal(item, ticketNumber, scannerOrganizerUuid, scannerUserUuid,
+                scannerEmail, scannerDisplayName, start, eventId);
+        if (offDay != null) {
+            return offDay;
         }
 
         // Phase 3: the claim and its audit row, in ONE transaction, opened only
         // now that every remote question has been answered.
         return TransactionPhases.inTransaction(writeTx, () -> claimAndAudit(item, ticketNumber,
-                scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start));
+                scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, eventId));
+    }
+
+    /**
+     * A scan from the InnBucks super app. The caller is a customer session
+     * (the {@code /auth/exchange} token), which carries no organizer scope, so
+     * its authority is asked of event-service on every scan: an accepted,
+     * enabled scanner membership assigned to {@code eventId}. Nothing about the
+     * ticket is read until that answers yes, so a phone that is not on the
+     * event's team learns nothing about any ticket.
+     *
+     * <p>Order: event named → access (503 when it cannot be asked, never a
+     * refusal) → ticket found → ticket is for that event and its organizer →
+     * booking confirmed → event day → claim. Every row it audits is the
+     * scanned-for event's, with the scanner's name from their membership and no
+     * email (a super-app session has none to trust). A caller who is not on the
+     * team writes no row at all.
+     */
+    private ScanTicketResponseDTO scanForSuperApp(String ticketNumber, UUID eventId,
+                                                  Authentication auth, long start) {
+        if (eventId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "eventId is required");
+        }
+        UUID scannerUserUuid = AuthenticatedCaller.userUuid(auth);
+        if (scannerUserUuid == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+        ScannerAccessDTO access = superAppAccess(scannerUserUuid, eventId);
+        if (!access.isAllowed()) {
+            // Logged and counted, NOT written to scan_attempts: any customer
+            // can send this, and the event's scan report is the organizer's
+            // gate traffic, not a place a stranger can write rows into.
+            log.info("Super-app scan rejected, not on the event's team ticketNumber={} eventId={} userUuid={}",
+                    TicketNumbers.forLog(ticketNumber), eventId, scannerUserUuid);
+            MeterRegistry registry = meterRegistryProvider == null ? null : meterRegistryProvider.getIfAvailable();
+            if (registry != null) {
+                registry.counter("tickets.scan.super_app_refused").increment();
+            }
+            return ScanTicketResponseDTO.builder()
+                    .status(ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT)
+                    .ticketNumber(ticketNumber)
+                    .build();
+        }
+        UUID organizerUuid = access.getOrganizerUuid();
+        String displayName = access.getDisplayName();
+
+        BookingItem item = TransactionPhases.inTransaction(readTx,
+                () -> bookingItemRepository.findByTicketNumberWithBooking(ticketNumber))
+                .orElse(null);
+        if (item == null) {
+            log.info("Super-app scan miss ticketNumber={} eventId={} userUuid={}",
+                    TicketNumbers.forLog(ticketNumber), eventId, scannerUserUuid);
+            recordRefusal(ticketNumber, null, ScanAttempt.Outcome.TICKET_NOT_FOUND,
+                    organizerUuid, scannerUserUuid, null, displayName, start, eventId);
+            return ScanTicketResponseDTO.builder()
+                    .status(ScanTicketResponseDTO.Status.TICKET_NOT_FOUND)
+                    .ticketNumber(ticketNumber)
+                    .build();
+        }
+
+        // Another event's ticket, or one whose booking is not the organizer's
+        // (a stale stamp): the same answer, so a scanner at one gate learns
+        // nothing about which other event a ticket is for.
+        Booking booking = item.getBooking();
+        if (!eventId.equals(booking.getEventId()) || !scannerOwnsEvent(booking, organizerUuid)) {
+            log.info("Super-app scan rejected, ticket is for another event ticketNumber={} eventId={} userUuid={}",
+                    TicketNumbers.forLog(ticketNumber), eventId, scannerUserUuid);
+            recordRefusal(ticketNumber, item, ScanAttempt.Outcome.WRONG_EVENT,
+                    organizerUuid, scannerUserUuid, null, displayName, start, eventId);
+            return wrongEvent(ticketNumber, item);
+        }
+
+        if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
+            log.info("Super-app scan rejected, booking not confirmed ticketNumber={} status={} userUuid={}",
+                    TicketNumbers.forLog(ticketNumber), booking.getStatus(), scannerUserUuid);
+            recordRefusal(ticketNumber, item, ScanAttempt.Outcome.BOOKING_NOT_CONFIRMED,
+                    organizerUuid, scannerUserUuid, null, displayName, start, eventId);
+            return ScanTicketResponseDTO.builder()
+                    .status(ScanTicketResponseDTO.Status.BOOKING_NOT_CONFIRMED)
+                    .ticketNumber(ticketNumber)
+                    .bookingItemId(item.getId())
+                    .build();
+        }
+
+        ScanTicketResponseDTO offDay = eventDayRefusal(item, ticketNumber, organizerUuid, scannerUserUuid,
+                null, displayName, start, eventId);
+        if (offDay != null) {
+            return offDay;
+        }
+
+        return TransactionPhases.inTransaction(writeTx, () -> claimAndAudit(item, ticketNumber,
+                organizerUuid, scannerUserUuid, null, displayName, start, eventId));
+    }
+
+    /**
+     * True for a super-app scanner: a token holding CUSTOMER and neither
+     * EVENT_ORGANIZER nor TEAM_MEMBER. An organizer or scanner-app account
+     * stays on its own path even if it also shops; a token with no roles at all
+     * is never routed here.
+     */
+    public static boolean isSuperAppScanner(Authentication auth) {
+        if (auth == null) {
+            return false;
+        }
+        boolean customer = false;
+        for (GrantedAuthority authority : auth.getAuthorities()) {
+            String name = authority.getAuthority();
+            if ("ROLE_EVENT_ORGANIZER".equals(name) || "ROLE_TEAM_MEMBER".equals(name)) {
+                return false;
+            }
+            if ("ROLE_CUSTOMER".equals(name)) {
+                customer = true;
+            }
+        }
+        return customer;
+    }
+
+    /**
+     * event-service's answer to "may this account scan this event": an
+     * accepted, enabled scanner membership of the event's organizer, assigned
+     * to the event. An answer that cannot be had is a 503, never a refusal and
+     * never an allow: the app retries instead of telling a real scanner they
+     * are not on the team, and nobody is let through on an outage.
+     */
+    public ScannerAccessDTO superAppAccess(UUID userUuid, UUID eventId) {
+        EventServiceClient client = eventServiceClientProvider == null
+                ? null : eventServiceClientProvider.getIfAvailable();
+        ScannerAccessDTO access = null;
+        if (client != null) {
+            try {
+                ApiResult<ScannerAccessDTO> response = client.scannerAccess(userUuid, eventId, internalToken);
+                access = response == null ? null : response.getData();
+            } catch (Exception ex) {
+                log.warn("Scanner access check failed eventId={} error={}", eventId, ex.toString());
+            }
+        }
+        if (access == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Could not confirm you can scan for this event. Please try again.");
+        }
+        return access;
+    }
+
+    /**
+     * The event-day rule, shared by both scan paths. A ticket redeems only on
+     * the market-local calendar days its event actually spans. Called AFTER the
+     * authorization gates (so a scanner who may not act on the event cannot
+     * probe it for a schedule) and BEFORE the claim, because claimRedemption is
+     * the irreversible {@code UPDATE ... WHERE redeemed_at IS NULL} and the
+     * repository has no inverse: refusing after it would burn a ticket that is
+     * valid tomorrow.
+     *
+     * @return the WRONG_EVENT_DAY refusal (already audited), or null to go on
+     * @throws ResponseStatusException 503 when the event's dates cannot be
+     *         established and the fail-open flag is off. Not a verdict about the
+     *         ticket, so the scanner retries instead of turning a valid customer
+     *         away, and the ticket is not audited as WRONG_EVENT_DAY when we do
+     *         not know that it is.
+     */
+    private ScanTicketResponseDTO eventDayRefusal(BookingItem item, String ticketNumber,
+                                                  UUID scannerOrganizerUuid, UUID scannerUserUuid,
+                                                  String scannerEmail, String scannerDisplayName,
+                                                  long start, UUID scanEventId) {
+        if (!eventDayCheckEnabled) {
+            return null;
+        }
+        UUID eventId = item.getBooking().getEventId();
+        EventDayRule.Verdict verdict = eventDayVerdict(eventId);
+        if (verdict == EventDayRule.Verdict.UNVERIFIABLE && !eventDayCheckFailOpen) {
+            log.warn("Ticket scan unverifiable, event window unavailable ticketNumber={} eventId={} by={}",
+                    TicketNumbers.forLog(ticketNumber), eventId, scannerEmail);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Could not confirm the event's date. Please try again.");
+        }
+        if (verdict == EventDayRule.Verdict.OFF_DAY) {
+            LocalDate eventDay = eventFirstLocalDay(eventId);
+            log.info("Ticket scan rejected, not the event's day ticketNumber={} eventId={} eventDay={} by={}",
+                    TicketNumbers.forLog(ticketNumber), eventId, eventDay, scannerEmail);
+            recordRefusal(ticketNumber, item, ScanAttempt.Outcome.WRONG_EVENT_DAY,
+                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, scanEventId);
+            return ScanTicketResponseDTO.builder()
+                    .status(ScanTicketResponseDTO.Status.WRONG_EVENT_DAY)
+                    .ticketNumber(ticketNumber)
+                    .bookingItemId(item.getId())
+                    .eventDate(eventDay)
+                    .build();
+        }
+        return null;
+    }
+
+    private static ScanTicketResponseDTO wrongEvent(String ticketNumber, BookingItem item) {
+        return ScanTicketResponseDTO.builder()
+                .status(ScanTicketResponseDTO.Status.WRONG_EVENT)
+                .ticketNumber(ticketNumber)
+                .bookingItemId(item.getId())
+                .build();
     }
 
     /**
@@ -378,7 +567,8 @@ public class TicketScanService {
                                                 UUID scannerUserUuid,
                                                 String scannerEmail,
                                                 String scannerDisplayName,
-                                                long start) {
+                                                long start,
+                                                UUID scanEventId) {
         // Atomic claim. UPDATE returns 1 = first scanner wins; 0 = somebody
         // else already redeemed (or this caller already did on a previous
         // try). Re-read the row to surface the original audit fields in the
@@ -399,9 +589,10 @@ public class TicketScanService {
                     .redeemedAt(reloaded.getRedeemedAt())
                     .redeemedByName(reloaded.getRedeemedByName())
                     .holderName(reloaded.holderName())
+                    .categoryName(reloaded.getCategoryName())
                     .build();
             recordAttempt(ticketNumber, reloaded, ScanAttempt.Outcome.ALREADY_REDEEMED,
-                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
+                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, scanEventId);
             return result;
         }
 
@@ -416,9 +607,10 @@ public class TicketScanService {
                 // Who the ticket was issued to (V22) — the gate can greet or
                 // ID-check the holder. Attendee if named, else the purchaser.
                 .holderName(item.holderName())
+                .categoryName(item.getCategoryName())
                 .build();
         recordAttempt(ticketNumber, item, ScanAttempt.Outcome.ALLOWED,
-                scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
+                scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, scanEventId);
         return result;
     }
 
@@ -436,9 +628,10 @@ public class TicketScanService {
                                UUID scannerUserUuid,
                                String scannerEmail,
                                String scannerDisplayName,
-                               long start) {
+                               long start,
+                               UUID scanEventId) {
         TransactionPhases.runInTransaction(writeTx, () -> recordAttempt(ticketNumber, item, outcome,
-                scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start));
+                scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, scanEventId));
     }
 
     /**
@@ -486,6 +679,11 @@ public class TicketScanService {
      * <p>Note the limit of that protection: only failures raised BEFORE the
      * transaction flushes are caught here. See the class javadoc — the INSERT
      * itself lands at commit, outside this frame.
+     *
+     * <p>{@code scanEventId} is the event the scanner said they were scanning
+     * for. When given, the row is that event's, so a refusal at its gate (a
+     * ticket for another event, or one not found at all) shows in that event's
+     * scans. Null = the ticket's own event, as before.
      */
     private void recordAttempt(String ticketNumber,
                                BookingItem item,
@@ -494,7 +692,8 @@ public class TicketScanService {
                                UUID scannerUserUuid,
                                String scannerEmail,
                                String scannerDisplayName,
-                               long start) {
+                               long start,
+                               UUID scanEventId) {
         try {
             HttpServletRequest req = currentRequest();
             String clientIp = req == null ? null : req.getRemoteAddr();
@@ -517,7 +716,8 @@ public class TicketScanService {
                     .bookingItemId(item == null ? null : item.getId())
                     .bookingId(item == null || item.getBooking() == null
                             ? null : item.getBooking().getId())
-                    .eventId(item == null || item.getBooking() == null
+                    .eventId(scanEventId != null ? scanEventId
+                            : item == null || item.getBooking() == null
                             ? null : item.getBooking().getEventId())
                     .scannerUserUuid(scannerUserUuid)
                     .scannerEmail(scannerEmail)

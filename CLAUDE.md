@@ -44,6 +44,15 @@ never with a placeholder like `[Your name]`.
 - **Flag it when the owner's own request is the weak link.** Disagreeing with
   evidence is part of the job; silent compliance is not.
 
+## Every change says what it does to production (owner rule, 2026-10-30)
+
+**Before a change ships, tell the owner in plain words what it does to what
+already works in production, and put the same note in the PR body.** Say what
+existing users or clients will notice (a new key in a response, a new row on a
+screen, a changed error), what the deploy needs (order, a quiet time for a
+migration), and whether a rollback is still clean. "Nothing changes for
+existing callers" is a claim to prove from the code, not a default.
+
 ## Files for the owner: Markdown only for the frontend (owner rule, 2026-10-29)
 
 **Send a Markdown file (`SendUserFile`) only when it is a frontend integration
@@ -3243,6 +3252,38 @@ answering a different way round it:
 - **Not the loyalty POS guide's concern**: nothing here touches `/loyalty/**` or
   `/auth/pos/token`. It does change the ticket-selling POS guide's rate-limit
   table, if one has been sent to a partner.
+
+## Super-app gate scanners at the scan (booking-service V30)
+
+**`POST /tickets/scan`, `POST /tickets/lookup`, `GET /scans/me` and
+`/scans/me/stats` also admit a CUSTOMER session: a gate scanner on the InnBucks
+super app, whose authority is event-service's scanner membership (event-service
+V14), asked on every call** (`GET /events/internal/scanner-access`, through
+`TicketScanService.superAppAccess`). The token carries no organizer scope at
+all, so nothing about the caller's reach is ever read from it.
+
+- **Routing** is `TicketScanService.isSuperAppScanner`: CUSTOMER and neither
+  EVENT_ORGANIZER nor TEAM_MEMBER. An organizer or scanner-app account that
+  also shops stays on its own path; a token with no roles is never routed here.
+- **Order on the super-app path:** `eventId` required (400) → access (503 when
+  it cannot be asked: never an allow, never a refusal) → ticket → another
+  event's ticket OR a booking stamped for another organizer is the same
+  `WRONG_EVENT` → not confirmed → event day → claim. Access is asked BEFORE the
+  ticket or booking is read, so a phone not on the team learns nothing.
+- **A caller not on the team writes no `scan_attempts` row** (logged, counted on
+  `tickets.scan.super_app_refused`): any customer can send that request, and an
+  event's scan report is its organizer's gate traffic.
+- **Rows are the scanned-for event's** (`recordAttempt`'s `scanEventId`), with
+  the name the organizer typed for the scanner and no email.
+- **The scanner app may send `eventId` too**: another event's ticket is
+  `WRONG_EVENT`, checked after its own team checks, and every row goes to the
+  named event. Without `eventId` nothing about that path changed.
+- **`/scans/me` and `/me/stats` take `eventId`**; with it, `from` may be omitted
+  for the whole event (and the stats' `from`/`to` are null). They only ever
+  return the caller's own rows, so they need no team check. A super-app
+  caller's stats name comes from their latest row (the session has none).
+- **Rollback caveat:** once a `WRONG_EVENT` row exists, an image without the
+  enum value cannot read it, and any scan report covering it is a 500.
 
 ## Scan reports: `to` is widened server-side, and why
 

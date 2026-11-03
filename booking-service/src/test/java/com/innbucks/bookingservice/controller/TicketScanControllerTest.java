@@ -64,7 +64,7 @@ class TicketScanControllerTest {
     @Test
     void scan_usesFirstAndLastNameFromJwtClaims_notTheEmail() {
         TicketScanService service = mock(TicketScanService.class);
-        when(service.scan(eq("TKT-1"), any())).thenReturn(okResponse("TKT-1"));
+        when(service.scan(eq("TKT-1"), any(), any())).thenReturn(okResponse("TKT-1"));
 
         ScanTicketRequestDTO req = new ScanTicketRequestDTO();
         req.setTicketNumber("TKT-1");
@@ -74,7 +74,7 @@ class TicketScanControllerTest {
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
         ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
-        verify(service).scan(eq("TKT-1"), name.capture());
+        verify(service).scan(eq("TKT-1"), any(), name.capture());
         // The rejection-toast contract: human name, not the staff login email.
         assertThat(name.getValue()).isEqualTo("Tariro Chikomo");
     }
@@ -85,7 +85,7 @@ class TicketScanControllerTest {
         // intentionally omits display-name claims) must still produce a non-
         // null audit row — the fallback is the JWT subject (email).
         TicketScanService service = mock(TicketScanService.class);
-        when(service.scan(eq("TKT-2"), any())).thenReturn(okResponse("TKT-2"));
+        when(service.scan(eq("TKT-2"), any(), any())).thenReturn(okResponse("TKT-2"));
 
         ScanTicketRequestDTO req = new ScanTicketRequestDTO();
         req.setTicketNumber("TKT-2");
@@ -93,7 +93,7 @@ class TicketScanControllerTest {
         controller(service).scan(req, authWith("legacy@x.co", null, null));
 
         ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
-        verify(service).scan(eq("TKT-2"), name.capture());
+        verify(service).scan(eq("TKT-2"), any(), name.capture());
         assertThat(name.getValue()).isEqualTo("legacy@x.co");
     }
 
@@ -102,7 +102,7 @@ class TicketScanControllerTest {
         // Some users only have a first name on file; don't blank out the
         // audit just because lastName is null.
         TicketScanService service = mock(TicketScanService.class);
-        when(service.scan(eq("TKT-3"), any())).thenReturn(okResponse("TKT-3"));
+        when(service.scan(eq("TKT-3"), any(), any())).thenReturn(okResponse("TKT-3"));
 
         ScanTicketRequestDTO req = new ScanTicketRequestDTO();
         req.setTicketNumber("TKT-3");
@@ -110,7 +110,7 @@ class TicketScanControllerTest {
         controller(service).scan(req, authWith("rumbi@x.co", "Rumbi", null));
 
         ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
-        verify(service).scan(eq("TKT-3"), name.capture());
+        verify(service).scan(eq("TKT-3"), any(), name.capture());
         assertThat(name.getValue()).isEqualTo("Rumbi");
     }
 }

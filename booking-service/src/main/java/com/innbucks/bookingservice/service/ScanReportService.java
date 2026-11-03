@@ -73,6 +73,23 @@ public class ScanReportService {
         return PageResponse.from(pg.map(this::toDto));
     }
 
+    /**
+     * The scanner's own attempts at one event, newest first: over
+     * {@code [from, to]}, or the whole event when both are null.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<ScanAttemptDTO> listMyScansAtEvent(UUID scannerUserUuid,
+                                                           UUID eventId,
+                                                           Instant from,
+                                                           Instant to,
+                                                           int page,
+                                                           int size) {
+        Page<ScanAttempt> pg = repository.findByScannerUserUuidAndEventIdAndAttemptedAtBetween(
+                scannerUserUuid, eventId, from == null ? Instant.EPOCH : from, to == null ? Instant.now() : to,
+                pageable(page, size));
+        return PageResponse.from(pg.map(this::toDto));
+    }
+
     @Transactional(readOnly = true)
     public PageResponse<ScanAttemptDTO> listEventScans(UUID eventId,
                                                        Instant from,
@@ -93,8 +110,37 @@ public class ScanReportService {
         List<OutcomeCount> rows = repository.countOutcomesForScanner(scannerUserUuid, from, to);
         Map<String, Long> byOutcome = zeroFilledOutcomes(rows);
         long total = byOutcome.values().stream().mapToLong(Long::longValue).sum();
-        return new ScannerStatsDTO(scannerUserUuid, scannerEmail, scannerDisplayName,
+        String name = scannerDisplayName != null ? scannerDisplayName
+                : repository.findFirstByScannerUserUuidOrderByAttemptedAtDesc(scannerUserUuid)
+                        .map(ScanAttempt::getScannerDisplayName).orElse(null);
+        return new ScannerStatsDTO(scannerUserUuid, scannerEmail, name,
                 marketTimeZone.atMarket(from), marketTimeZone.atMarket(to), total, byOutcome);
+    }
+
+    /**
+     * The scanner's own outcome counts at one event: over {@code [from, to]},
+     * or the whole event when both are null (and then the response's
+     * {@code from}/{@code to} are null too). A null name is read from the
+     * scanner's latest attempt there: a super-app scanner's session carries no
+     * name, and every row they wrote carries the one the organizer typed.
+     */
+    @Transactional(readOnly = true)
+    public ScannerStatsDTO myStatsAtEvent(UUID scannerUserUuid,
+                                          String scannerEmail,
+                                          String scannerDisplayName,
+                                          UUID eventId,
+                                          Instant from,
+                                          Instant to) {
+        List<OutcomeCount> rows = repository.countOutcomesForScannerAtEvent(scannerUserUuid, eventId,
+                from == null ? Instant.EPOCH : from, to == null ? Instant.now() : to);
+        Map<String, Long> byOutcome = zeroFilledOutcomes(rows);
+        long total = byOutcome.values().stream().mapToLong(Long::longValue).sum();
+        String name = scannerDisplayName != null ? scannerDisplayName
+                : repository.findFirstByScannerUserUuidAndEventIdOrderByAttemptedAtDesc(scannerUserUuid, eventId)
+                        .map(ScanAttempt::getScannerDisplayName).orElse(null);
+        return new ScannerStatsDTO(scannerUserUuid, scannerEmail, name,
+                from == null ? null : marketTimeZone.atMarket(from),
+                to == null ? null : marketTimeZone.atMarket(to), total, byOutcome, eventId);
     }
 
     @Transactional(readOnly = true)
