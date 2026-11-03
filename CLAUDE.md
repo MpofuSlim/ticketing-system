@@ -2659,7 +2659,8 @@ query per category under every seat query.
   13 → 1; gate lookup 2 → 1; scan 4 → 3; reminders (4 bookings) 14 → 6;
   event-change broadcast (4 bookings) 5 → 1; expiry sweep (5 holds, with their
   notices) 17 → 13; seat category listing 2 + one per category → 2 (3 since
-  price tiers: one more query for every category's tiers). A new read
+  price tiers: one more query for every category's tiers; 4 since add-ons, one
+  more for every category's add-ons). A new read
   path that renders an association belongs in that IT. (Since H1 the sweep
   cancels each hold in a transaction of its own, so it is 1 + 5 per hold — 26
   for five — and confirm / cancel / reverse lock the booking row before
