@@ -84,6 +84,24 @@ public class SeatCategoryService {
         this(categoryRepository, null, seatRepository, bookingServiceClient, eventClientProvider, cacheManager);
     }
 
+    /**
+     * A category's add-ons (V12). A setter so the plain-{@code new} unit tests
+     * keep their construction; with none set, answers carry no add-ons.
+     */
+    private CategoryAddOns categoryAddOns;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setCategoryAddOns(CategoryAddOns categoryAddOns) {
+        this.categoryAddOns = categoryAddOns;
+    }
+
+    private CreateCategoryResponseDTO withAddOns(CreateCategoryResponseDTO dto) {
+        if (categoryAddOns != null) {
+            categoryAddOns.attach(dto);
+        }
+        return dto;
+    }
+
     /** No layout cache and no price tiers: every listing reads Postgres. */
     public SeatCategoryService(SeatCategoryRepository categoryRepository,
                                SeatRepository seatRepository,
@@ -253,8 +271,11 @@ public class SeatCategoryService {
                 category.getId(), request.getEventId(), request.getName(), totalSeats);
         // Just created — no bookings yet, so the whole category is available
         // and nothing is sold at any tier. Skip the booking-service round trip.
-        return toCreateResponseDTO(category, request.getSections(), category.getAvailableSeats(),
-                tiers, Map.of());
+        CreateCategoryResponseDTO created = toCreateResponseDTO(category, request.getSections(),
+                category.getAvailableSeats(), tiers, Map.of());
+        // Just created: no add-ons yet (they are set with PUT .../add-ons).
+        created.setAddOns(List.of());
+        return created;
     }
 
     /**
@@ -293,6 +314,9 @@ public class SeatCategoryService {
                 .name(category.getName())
                 .price(category.getPrice())
                 .priceTiers(CategoryPricing.terms(tierTermsOf(tiersOf(categoryId))))
+                // Terms only, read live: booking-service checks a ticket's
+                // add-ons against these and counts the limit under its lock.
+                .addOns(categoryAddOns == null ? List.of() : categoryAddOns.terms(categoryId))
                 .totalSeats(category.getTotalSeats())
                 .availableSeats(category.getAvailableSeats())
                 .build();
@@ -417,6 +441,24 @@ public class SeatCategoryService {
     }
 
     /**
+     * Replaces the category's add-ons (V12) with {@code request.addOns}. Same
+     * owner rule and phases as {@link #updateCategory}; the rules are
+     * {@link CategoryAddOns#replace}'s.
+     */
+    public CreateCategoryResponseDTO setAddOns(UUID categoryId,
+                                               com.innbucks.seatservice.dto.AddOnsRequestDTO request,
+                                               UUID callerOrganizerUuid,
+                                               String requesterEmail,
+                                               boolean isAdmin,
+                                               String authHeader) {
+        if (categoryAddOns == null) {
+            throw new IllegalStateException("Add-ons are not wired");
+        }
+        return editCategory(categoryId, callerOrganizerUuid, requesterEmail, isAdmin, authHeader,
+                category -> categoryAddOns.replace(category, request));
+    }
+
+    /**
      * The phases every category edit shares, so no remote call runs while a
      * transaction is open (see {@link #updateCategory}): an organizer's
      * ownership check with none open, then one write transaction that re-reads
@@ -456,8 +498,9 @@ public class SeatCategoryService {
         SeatCategory category = edited.category();
         Map<UUID, CategoryPricing.Sold> sold = soldByTier(categoryId, tierSoldCounts(
                 Map.of(categoryId, tierTermsOf(edited.tiers()))));
-        return toCreateResponseDTO(category, edited.sections(), liveAvailableSeats(category, counts),
-                edited.tiers(), sold);
+        // After the commit, like the counts above: no transaction is open.
+        return withAddOns(toCreateResponseDTO(category, edited.sections(), liveAvailableSeats(category, counts),
+                edited.tiers(), sold));
     }
 
     /**
@@ -847,7 +890,12 @@ public class SeatCategoryService {
             List<UUID> ids = categories.stream().map(SeatCategory::getId).collect(Collectors.toList());
             return EventLayout.of(categories, sectionsByCategory(ids), tiersByCategory(ids));
         });
-        return liveListing(layout.categories(), mirrorLoadedNow);
+        List<CreateCategoryResponseDTO> listing = liveListing(layout.categories(), mirrorLoadedNow);
+        // Add-ons are read live (one query) with best-effort counts; never cached.
+        if (categoryAddOns != null) {
+            categoryAddOns.attach(listing);
+        }
+        return listing;
     }
 
     /** Most events {@link #getCategoriesByEvents} answers in one call: an event-service list page. */

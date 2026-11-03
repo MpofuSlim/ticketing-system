@@ -109,6 +109,17 @@ public class BookingItem {
     private String attendeePhone;
 
     /**
+     * The add-ons bought with this ticket (V33), name and price as bought.
+     * Empty when none (stored as NULL). Counted against each add-on's limit
+     * while the booking is not CANCELLED. Not sensitive: on the ticket, the
+     * guest list and the gate scan.
+     */
+    @Convert(converter = BookingAddOnsConverter.class)
+    @Column(name = "add_ons", columnDefinition = "TEXT", updatable = false)
+    @Builder.Default
+    private java.util.List<com.innbucks.bookingservice.dto.BookingAddOnDTO> addOns = java.util.List.of();
+
+    /**
      * This ticket's answers to the organizer's booking questions (V32),
      * encrypted: {@code BookingAnswersCipher} ciphertext of a JSON array of
      * {questionId, label, type, value}. Null when nothing was answered, and
@@ -202,5 +213,17 @@ public class BookingItem {
         if (this.linkToken == null) {
             this.linkToken = com.innbucks.bookingservice.service.LinkTokens.newToken();
         }
+    }
+
+    /** The add-ons' names (V33), in the order bought; empty when none. */
+    public java.util.List<String> addOnNames() {
+        return addOns == null ? java.util.List.of()
+                : addOns.stream().map(com.innbucks.bookingservice.dto.BookingAddOnDTO::getName).toList();
+    }
+
+    /** "Parking pass, Meal voucher"; null when none. Printed on the ticket and in the receipt. */
+    public String addOnsLabel() {
+        java.util.List<String> names = addOnNames();
+        return names.isEmpty() ? null : String.join(", ", names);
     }
 }

@@ -160,6 +160,10 @@ public class Booking {
     @Column(name = "answers_purged_at", updatable = false)
     private LocalDateTime answersPurgedAt;
 
+    // The add-ons' total (V33), already inside totalAmount; null when none.
+    @Column(name = "add_ons_amount", precision = 10, scale = 2)
+    private BigDecimal addOnsAmount;
+
     // Why a CANCELLED booking was cancelled (V25, CHECK chk_bookings_cancel_reason).
     // Decides whether a payment that lands afterwards may resurrect it — see
     // CancelReason. NULL on every row cancelled before V25 (never resurrected)

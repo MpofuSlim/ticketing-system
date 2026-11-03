@@ -87,4 +87,8 @@ public class BookingItemDTO {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @Schema(nullable = true, description = "This ticket's answers. Authenticated reads only; absent elsewhere.")
     private java.util.List<BookingAnswerDTO> answers;
+
+    /** Add-ons bought with this ticket (V33), name and price as bought; [] when none. On every view. */
+    @Schema(description = "Add-ons bought with this ticket; [] when none.")
+    private java.util.List<BookingAddOnDTO> addOns;
 }

@@ -619,6 +619,86 @@ public class SeatCategoryController {
         return ResponseEntity.ok(ApiResult.ok("Price tiers set", updated));
     }
 
+    @PutMapping("/{id}/add-ons")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(summary = "Set the add-ons",
+            description = "Replaces the category's add-ons (V12) with `addOns`, in the order to show them; `[]` "
+                    + "removes them all. An add-on is an extra a buyer adds to each ticket, at most one per ticket, "
+                    + "at its own `price` (0 or more). `maxQuantity` optionally limits how many may sell in all, "
+                    + "and can never be more than the category's tickets. **Send the `id` of every add-on to keep**: "
+                    + "it is updated in place and its sales stay counted against its limit; one without an id is "
+                    + "new; a stored one left out stops selling (bookings keep it, with the name and price paid). "
+                    + "Lowering a limit below what has sold just stops further sales. At most 10 per category. "
+                    + "The event's organizer or a SUPER_ADMIN.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Add-ons set",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = CreateCategoryResponseDTO.class),
+                            examples = @ExampleObject(name = "Add-ons set", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Add-ons set",
+                                      "data": {
+                                        "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "name": "VIP",
+                                        "description": "Front-row seats",
+                                        "price": 150.00,
+                                        "currentPrice": 150.00,
+                                        "currentTierName": null,
+                                        "priceTiers": [],
+                                        "addOns": [
+                                          { "id": "a1b2c3d4-0e1f-4a2b-8c3d-4e5f6a7b8c01", "name": "Parking pass", "description": "One car, Lot B",
+                                            "price": 5.00, "maxQuantity": 50, "sold": 12, "remaining": 38, "soldOut": false },
+                                          { "id": "a1b2c3d4-0e1f-4a2b-8c3d-4e5f6a7b8c02", "name": "Meal voucher", "description": null,
+                                            "price": 10.00, "maxQuantity": null, "sold": 30, "remaining": null, "soldOut": false }
+                                        ],
+                                        "availableSeats": 58,
+                                        "sections": [ { "section": "A", "seatCount": 100 } ]
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "An add-on breaks a rule, or names an id that is not this category's",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Limit above the category's tickets", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "\"Parking pass\" can't be limited to more than this category's 100 tickets.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Duplicate name", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Two add-ons can't have the same name: \"Parking pass\".", "data": null }
+                                    """),
+                            @ExampleObject(name = "Bad price", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "The price of \"Parking pass\" must be 0 or more, with at most 2 decimals.", "data": null }
+                                    """),
+                            @ExampleObject(name = "More than 10", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "addOns": "At most 10 add-ons per category." } }
+                                    """)
+                    })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Not this event's organizer or a SUPER_ADMIN",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "No such category",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "404 NOT_FOUND", "message": "Seat category not found", "data": null }
+                            """)))
+    })
+    public ResponseEntity<ApiResult<CreateCategoryResponseDTO>> setAddOns(
+            @Parameter(description = "Seat category UUID") @PathVariable UUID id,
+            @Valid @RequestBody com.innbucks.seatservice.dto.AddOnsRequestDTO request,
+            Authentication authentication,
+            HttpServletRequest httpRequest
+    ) {
+        String requesterEmail = authentication.getName();
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        log.info("PUT /seat-categories/{}/add-ons addOns={} requesterEmail={} isAdmin={}", id,
+                request.getAddOns() == null ? 0 : request.getAddOns().size(), requesterEmail, isAdmin);
+        CreateCategoryResponseDTO updated = categoryService.setAddOns(id, request, organizerUuid(authentication),
+                requesterEmail, isAdmin, httpRequest.getHeader("Authorization"));
+        return ResponseEntity.ok(ApiResult.ok("Add-ons set", updated));
+    }
+
     /**
      * S2S only: booking-service's hourly tier-ending reminder job. Off the
      * internet (gateway {@code seat-internal-deny}); the GET is permitAll in

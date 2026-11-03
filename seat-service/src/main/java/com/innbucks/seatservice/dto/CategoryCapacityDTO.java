@@ -34,6 +34,8 @@ public class CategoryCapacityDTO {
     private String name;
     private BigDecimal price;
     private List<PriceTierDTO> priceTiers;
+    /** The add-ons' terms (V12), read live: booking-service checks and prices them under its stock lock. */
+    private List<AddOnDTO> addOns;
     private Integer totalSeats;
     private Integer availableSeats;
 }

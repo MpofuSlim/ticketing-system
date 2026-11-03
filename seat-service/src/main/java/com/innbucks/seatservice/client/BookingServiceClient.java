@@ -126,6 +126,53 @@ public class BookingServiceClient {
         }
     }
 
+    /**
+     * Add-ons held or sold (PENDING + CONFIRMED bookings), keyed by add-on id,
+     * for the categories given (V12). An add-on with none is absent (read it as
+     * 0). Empty Optional on any failure: the listing then shows add-ons without
+     * counts. Display only: booking-service enforces each limit from its own
+     * count, under the category's stock lock.
+     */
+    public Optional<Map<UUID, Long>> fetchAddOnSoldCounts(Collection<UUID> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) {
+            return Optional.of(Map.of());
+        }
+        try {
+            String body = restClient.get()
+                    .uri(uriBuilder -> {
+                        uriBuilder.path("/bookings/internal/categories/add-on-counts");
+                        for (UUID id : categoryIds) {
+                            uriBuilder.queryParam("categoryIds", id.toString());
+                        }
+                        return uriBuilder.build();
+                    })
+                    .header("X-Internal-Token", internalToken)
+                    .retrieve()
+                    .body(String.class);
+            Map<UUID, Long> counts = new HashMap<>();
+            if (body == null) {
+                return Optional.of(counts);
+            }
+            ApiResult<List<AddOnCountRow>> envelope = objectMapper.readValue(
+                    body, new TypeReference<ApiResult<List<AddOnCountRow>>>() {});
+            if (envelope.getData() != null) {
+                for (AddOnCountRow row : envelope.getData()) {
+                    if (row.addOnId() != null) {
+                        counts.put(row.addOnId(), row.count());
+                    }
+                }
+            }
+            return Optional.of(counts);
+        } catch (Exception e) {
+            log.warn("booking-service add-on counts unavailable categoryIds={} cause={}", categoryIds, e.toString());
+            return Optional.empty();
+        }
+    }
+
+    /** One row of booking-service's add-on counts. */
+    public record AddOnCountRow(UUID categoryId, UUID addOnId, long count) {
+    }
+
     public Optional<Map<UUID, Long>> fetchActiveCountsByCategories(Collection<UUID> categoryIds) {
         if (categoryIds == null || categoryIds.isEmpty()) {
             return Optional.of(Map.of());

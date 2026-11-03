@@ -272,6 +272,15 @@ public class BookingService {
             categoryById.put(categoryId, category);
         }
 
+        // Each ticket's add-ons (V33) must be its own category's, each at most
+        // once; refused before anything is held. Their limits are counted later,
+        // under the stock locks.
+        List<List<com.innbucks.bookingservice.dto.BookingAddOnDTO>> addOnsPerTicket =
+                BookingAddOns.resolve(request.getSeats(), categoryById);
+        for (int i = 0; i < ticketSpecs.size(); i++) {
+            ticketSpecs.set(i, ticketSpecs.get(i).withAddOns(addOnsPerTicket.get(i)));
+        }
+
         // The total is NOT worked out here: a ticket's price can depend on how
         // many tickets a price tier has already sold, which is only exact once
         // the category's stock row is locked. persistBooking prices every
@@ -507,16 +516,22 @@ public class BookingService {
      * the write transaction so persistBooking is pure writes.
      */
     private record TicketSpec(UUID categoryId, String attendeeName, String attendeeEmail, String attendeePhone,
-                              List<com.innbucks.bookingservice.dto.BookingAnswerDTO> answers) {
+                              List<com.innbucks.bookingservice.dto.BookingAnswerDTO> answers,
+                              List<com.innbucks.bookingservice.dto.BookingAddOnDTO> addOns) {
         static TicketSpec of(CreateBookingRequestDTO.SeatItemRequest item,
                              List<com.innbucks.bookingservice.dto.BookingAnswerDTO> answers) {
             CreateBookingRequestDTO.AttendeeRequest a = item.getAttendee();
             if (a == null) {
-                return new TicketSpec(item.getCategoryId(), null, null, null, answers);
+                return new TicketSpec(item.getCategoryId(), null, null, null, answers, List.of());
             }
             return new TicketSpec(item.getCategoryId(),
                     blankToNull(a.getFullName()), blankToNull(a.getEmail()), blankToNull(a.getPhoneNumber()),
-                    answers);
+                    answers, List.of());
+        }
+
+        TicketSpec withAddOns(List<com.innbucks.bookingservice.dto.BookingAddOnDTO> chosen) {
+            return new TicketSpec(categoryId, attendeeName, attendeeEmail, attendeePhone, answers,
+                    chosen == null ? List.of() : List.copyOf(chosen));
         }
 
         private static String blankToNull(String v) {
@@ -622,6 +637,20 @@ public class BookingService {
             booking.setPromoCode(code.getCode());
             booking.setDiscountAmount(discountTotal);
         }
+
+        // Add-ons (V33), at their listed price (no tier, no promo code). An
+        // add-on's limit is counted now, under the categories' stock locks:
+        // every booking, cancellation and expiry of these categories takes the
+        // same locks first, so the count cannot move until this commits. A
+        // refusal rolls the whole claim back.
+        List<List<com.innbucks.bookingservice.dto.BookingAddOnDTO>> addOnsPerTicket =
+                ticketSpecs.stream().map(TicketSpec::addOns).toList();
+        requireAddOnRoom(addOnsPerTicket, categoryById);
+        BigDecimal addOnsTotal = BookingAddOns.total(addOnsPerTicket);
+        if (addOnsTotal != null) {
+            total = total.add(addOnsTotal);
+            booking.setAddOnsAmount(addOnsTotal);
+        }
         booking.setTotalAmount(total);
 
         bookingRepository.save(booking);
@@ -658,6 +687,7 @@ public class BookingService {
                     .attendeeEmail(spec.attendeeEmail())
                     .attendeePhone(spec.attendeePhone())
                     .answersCiphertext(sealAnswers(spec.answers()))
+                    .addOns(spec.addOns())
                     .build());
         }
         bookingItemRepository.saveAllAndFlush(items);
@@ -974,6 +1004,7 @@ public class BookingService {
                 .termsVersion(b.getTermsVersion())
                 .termsAcceptedAt(b.getTermsAcceptedAt())
                 .answers(openAnswers(item))
+                .addOns(addOnsOf(item))
                 .holderName(item.holderName())
                 .eventId(b.getEventId())
                 .status(b.getStatus())
@@ -1209,6 +1240,7 @@ public class BookingService {
                                 .attendeeEmail(includeAttendeeContact ? i.getAttendeeEmail() : null)
                                 .attendeePhone(includeAttendeeContact ? i.getAttendeePhone() : null)
                                 .answers(withAnswers ? openAnswers(i) : null)
+                                .addOns(addOnsOf(i))
                                 .build())
                         .collect(Collectors.toList());
     }
@@ -2157,6 +2189,63 @@ public class BookingService {
                 TOO_MANY_UNPAID_BOOKINGS_MESSAGE, Map.of("retryAfterSeconds", retryAfterSeconds));
     }
 
+    // ---- Add-ons (V33) ------------------------------------------------------------
+
+    private static List<com.innbucks.bookingservice.dto.BookingAddOnDTO> addOnsOf(BookingItem item) {
+        return item.getAddOns() == null ? List.of() : item.getAddOns();
+    }
+
+    /** Refuses (409 ADD_ON_SOLD_OUT) an add-on past its limit; runs under the stock locks. */
+    private void requireAddOnRoom(List<List<com.innbucks.bookingservice.dto.BookingAddOnDTO>> addOnsPerTicket,
+                                  Map<UUID, CategoryLookupDTO> categoryById) {
+        Map<UUID, Integer> wanted = BookingAddOns.requested(addOnsPerTicket);
+        if (wanted.isEmpty()) {
+            return;
+        }
+        Map<UUID, CategoryLookupDTO.AddOn> terms = new HashMap<>();
+        java.util.Set<UUID> limitedCategories = new java.util.HashSet<>();
+        for (CategoryLookupDTO category : categoryById.values()) {
+            if (category.getAddOns() == null) {
+                continue;
+            }
+            for (CategoryLookupDTO.AddOn a : category.getAddOns()) {
+                terms.put(a.getId(), a);
+                if (a.getMaxQuantity() != null && wanted.containsKey(a.getId())) {
+                    limitedCategories.add(category.getSeatCategoryId());
+                }
+            }
+        }
+        if (limitedCategories.isEmpty()) {
+            return;
+        }
+        Map<UUID, Long> sold = new HashMap<>();
+        for (BookingItemRepository.CategoryAddOnCount row
+                : bookingItemRepository.countActiveAddOnsByCategories(limitedCategories)) {
+            if (row.getAddOnId() != null) {
+                sold.merge(UUID.fromString(row.getAddOnId()), row.getCount() == null ? 0L : row.getCount(), Long::sum);
+            }
+        }
+        BookingAddOns.requireRoom(wanted, terms, sold);
+    }
+
+    /** Add-ons held or sold per category and add-on: seat-service's display counts (internal endpoint). */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getActiveAddOnCountsByCategories(List<UUID> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (BookingItemRepository.CategoryAddOnCount row
+                : bookingItemRepository.countActiveAddOnsByCategories(categoryIds)) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("categoryId", row.getCategoryId());
+            out.put("addOnId", row.getAddOnId() == null ? null : UUID.fromString(row.getAddOnId()));
+            out.put("count", row.getCount() == null ? 0L : row.getCount());
+            rows.add(out);
+        }
+        return rows;
+    }
+
     // ---- Terms and booking answers (V32) ---------------------------------------
 
     private static final com.fasterxml.jackson.databind.ObjectMapper ANSWERS_JSON =
@@ -2389,6 +2478,7 @@ public class BookingService {
                 .tenantUserUuid(booking.getTenantUserUuid())
                 .termsVersion(booking.getTermsVersion())
                 .termsAcceptedAt(booking.getTermsAcceptedAt())
+                .addOnsAmount(booking.getAddOnsAmount())
                 .confirmationNumber(booking.getConfirmationNumber())
                 .status(booking.getStatus())
                 .totalAmount(booking.getTotalAmount())

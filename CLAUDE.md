@@ -2659,7 +2659,8 @@ query per category under every seat query.
   13 → 1; gate lookup 2 → 1; scan 4 → 3; reminders (4 bookings) 14 → 6;
   event-change broadcast (4 bookings) 5 → 1; expiry sweep (5 holds, with their
   notices) 17 → 13; seat category listing 2 + one per category → 2 (3 since
-  price tiers: one more query for every category's tiers). A new read
+  price tiers: one more query for every category's tiers; 4 since add-ons, one
+  more for every category's add-ons). A new read
   path that renders an association belongs in that IT. (Since H1 the sweep
   cancels each hold in a transaction of its own, so it is 1 + 5 per hold — 26
   for five — and confirm / cancel / reverse lock the booking row before
@@ -3607,6 +3608,62 @@ the answers are stored encrypted and deleted 90 days after the event ends.**
   only, plus bookings per accepted terms version and `answersDeleted`.
 - **Deploy:** event-service before booking-service, as for V15; and the
   `BOOKING_ANSWERS_KEY` Secret entry before booking-service.
+
+## Add-ons per ticket category (seat-service V12, booking-service V33)
+
+**An organizer gives a seat category up to 10 add-ons (`PUT /seat-categories/{id}/add-ons`,
+e.g. "Parking pass" 5.00); a buyer picks them per ticket (`seats[i].addOnIds`).
+One of each per ticket, and an optional limit that can never exceed the
+category's tickets: 100 VIP tickets may carry 50 parking passes, never 200.**
+
+- **Terms live in seat-service** (`seat_category_add_ons`, FK ON DELETE CASCADE,
+  CHECKs price ≥ 0 and limit > 0). The PUT replaces the whole list: a kept
+  add-on is sent with its `id` (its sales stay counted against its limit), one
+  left out is deleted, and its sold tickets keep the name and price they were
+  bought at. `CategoryAddOns` holds the rules and messages.
+- **The limit ≤ the category's tickets is checked at the PUT only**, because a
+  category's `totalSeats` cannot be edited after creation today. **A change that
+  makes capacity editable must refuse lowering it below the largest add-on
+  limit**, or the rule silently stops holding.
+- **What was bought is stored on the ticket**: `booking_items.add_ons` is a JSON
+  array of `{addOnId, name, price}` (`BookingAddOnsConverter`, insert-only),
+  never a join table — every booking read path renders it with no extra query,
+  so the `LazyAssociationsPostgresIT` statement counts are unchanged.
+  `bookings.add_ons_amount` is their total (NULL when none).
+- **The limit is exact because it is counted after the stock lock**, like price
+  tiers: `persistBooking` claims the categories' `category_inventory` rows, then
+  counts the limited add-ons on tickets of non-CANCELLED bookings
+  (`countActiveAddOnsByCategories`, a native `jsonb_array_elements` over
+  `add_ons::jsonb`), and refuses past the limit (409 `ADD_ON_SOLD_OUT`,
+  `data.addOnId`, `data.remaining`). Every booking, cancellation and expiry of
+  the category takes that row lock first. **Never move the count before the
+  claim, and never cache it.** A cancelled or expired booking frees its add-ons;
+  a resurrected one (H2) keeps them, so a limit can end up exceeded by that
+  booking: the buyer paid. Add-ons with no limit are never counted.
+- **A choice that is not the ticket's own category's add-on, or the same add-on
+  twice on one ticket**, is 400 `ADD_ONS_INVALID` with `data.addOns` keyed
+  `seats[i].<addOnId>`, before anything is held (`BookingAddOns.resolve`).
+- **Money:** add-ons are charged at their listed price — no price tier, no
+  promo code (a promo code discounts tickets only). `priceAtBooking` stays the
+  ticket alone; `totalAmount` includes add-ons. So the revenue summary,
+  per-event report, CSV and invoicing (all on `totalAmount`) include add-on
+  revenue, and the per-category report and seat analytics (on
+  `priceAtBooking`) do not. `GET /event-organizer/reports/add-ons` is the rest:
+  summary net = per-category ticket revenue + add-on revenue.
+- **Display counts** reach seat-service through
+  `GET /bookings/internal/categories/add-on-counts` (the internal trio: token in
+  the controller, the `/bookings/internal/**` permitAll, gateway
+  `booking-internal-deny`). Unreachable = `sold`/`remaining` null and never
+  sold out on screen; the booking still enforces the limit.
+- **Where add-ons show:** the buyer's and organizer's booking reads, the guest
+  list, the ticket page ("With Parking pass"), the receipt email's "Add-ons:"
+  line, and the scan answer (`addOns`, names only, on ALLOWED and
+  ALREADY_REDEEMED). They are not redeemed separately at the gate.
+- **Deploy seat-service and booking-service together, either order, and set no
+  add-ons until both run the new build.** A new booking-service beside an old
+  seat-service sees no add-ons on any category, so an `addOnIds` choice is 400;
+  clients only offer what the category list shows, so before anyone sets an
+  add-on nothing sends one.
 
 ## Cloudflare blocks `PUT` + multipart — uploads take `POST`
 

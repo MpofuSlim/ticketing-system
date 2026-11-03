@@ -337,4 +337,26 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
             + "(SELECT id FROM bookings WHERE event_id = :eventId AND answers_purge_after IS NOT NULL)",
             nativeQuery = true)
     int clearAnswersForEvent(@Param("eventId") UUID eventId);
+
+    // ---- Add-ons (V33) ----------------------------------------------------------
+
+    /**
+     * Add-ons on tickets of bookings that are not CANCELLED, per category and
+     * add-on: what counts against each add-on's limit. Read under the
+     * categories' stock row locks at booking (exact), and for seat-service's
+     * display (best effort).
+     */
+    @Query(value = "SELECT i.category_id AS categoryId, (a.elem ->> 'addOnId') AS addOnId, COUNT(*) AS count "
+            + "FROM booking_items i JOIN bookings b ON b.id = i.booking_id "
+            + "CROSS JOIN LATERAL jsonb_array_elements(i.add_ons::jsonb) AS a(elem) "
+            + "WHERE i.add_ons IS NOT NULL AND i.category_id IN (:categoryIds) AND b.status <> 'CANCELLED' "
+            + "GROUP BY i.category_id, (a.elem ->> 'addOnId')", nativeQuery = true)
+    List<CategoryAddOnCount> countActiveAddOnsByCategories(@Param("categoryIds") Collection<UUID> categoryIds);
+
+    interface CategoryAddOnCount {
+        UUID getCategoryId();
+        String getAddOnId();
+        Long getCount();
+    }
+
 }
