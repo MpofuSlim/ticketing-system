@@ -3663,6 +3663,23 @@ called-out reason, not a silent revert.**
   guard. This drops only the PR-time *direct-dependency* advisory surface;
   transitive/library CVEs remain covered by the Release Trivy image scan. The job
   auto-re-enables if the repo goes public again or GHAS is licensed.
+- **A Qodana scan that cannot import the project still "passes" or fails on
+  phantoms.** When the linter's IDE cannot load the Maven project, it inspects
+  with no classpath: master's full scan reports dozens of false problems
+  (Lombok getters "never populated", narrow catches "redundant",
+  `requireNonNull` "always fails"), and a PR's changed-files scan stays green.
+  The log says so: `Roots jar:///data/cache/.m2/... were not resolved` and a
+  "Sanity summary" of `Java sanity` problems. **Before fixing a Qodana
+  finding, check the log for those two; if they are there, the findings are
+  not real.** That happened when Dependabot moved the Maven wrapper to 3.10.0
+  (2026-10-05): the 2025.3 linter cannot start a Maven 3.10 server ("Unable to
+  create injector" in Qodana's `idea.log`). Master stayed green for four weeks
+  on a model cached before then, and went red on 2026-11-03 when that cache
+  was evicted. Fixed by the 2026.2 linter (`qodana.yaml`), `use-caches: false`
+  (a broken import shows on the next push, never hidden by a cache), and
+  dependencies resolved on the runner from setup-java's Maven cache. **A
+  Maven wrapper bump may need a linter bump**: the CLI's "non-compatible
+  Qodana linter" warning in the scan log is the signal.
 - **`innbucks-core-gateway` was retired** (A06) — it was an EOL Spring Boot
   3.2.4 connectivity spike, not a reactor module and not containerized, so
   nothing built or scanned it. It has been deleted from the repo. If the
