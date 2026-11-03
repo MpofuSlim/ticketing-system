@@ -3503,6 +3503,52 @@ UTC via `MarketTimeZone` before anything reads them; responses stay UTC with the
   need a one-off shift per cell, which is a deliberate data decision — see the
   PR for the query.
 
+## Ticket sales open at a scheduled time, and every booking asks first (event-service V15)
+
+**An organizer can set `salesStartDateTime` on an event: the event is listed
+from publication but sells nothing before then. `POST /bookings` asks
+event-service, live, whether the event is on sale before it reads a category
+or holds a ticket** (`GET /events/internal/sales-window`, X-Internal-Token,
+covered by the `/events/internal/*` permitAll and `event-internal-deny`).
+
+- **One rule, one place:** `SalesStatus.of` (event-service). Draft, rejected
+  or deleted = `NOT_PUBLISHED`; at or after the event's END = `ENDED`; before
+  the sales start = `NOT_YET_ON_SALE`; else `ON_SALE`. Door sales keep working
+  until the end. Every event response carries `salesStartDateTime` (market
+  offset) and `salesStatus`, worked out per request, never cached (the page
+  cache holds the time, `EventSnapshot.toDto` recomputes the status).
+- **Input is market-local** like the event's own times (`MarketTimeZone.toUtc`).
+  It must be before the end (400 "Ticket sales must open before the event
+  ends."); it may be in the past or after the start. On `PUT /events/{id}` an
+  ABSENT key leaves it and an explicit `null` clears it
+  (`UpdateEventRequestDTO.isSalesStartDateTimeSent`, set only by Jackson).
+- **The internal endpoint always answers 200 with a status**, `NOT_FOUND` for
+  an unknown event, so booking's Feign fallback (null data) only ever means
+  "could not ask".
+- **booking-service refuses, and fails CLOSED** (`BookingService.requireOnSale`):
+  `NOT_PUBLISHED`/`NOT_FOUND` = the same 404 `EVENT_NOT_FOUND` (a draft's
+  existence never leaks), `NOT_YET_ON_SALE` = 409 `SALES_NOT_STARTED` (the time
+  in words and as `data.salesStartDateTime`), `ENDED` = 409 `EVENT_ENDED`, a
+  status this build does not know = 409 `EVENT_NOT_ON_SALE`, and no answer =
+  503 `TRY_AGAIN`. Before this, a booking proceeded when event-service was down
+  with no organizer stamped (unscannable, missing from reports), and a draft's
+  or a past event's tickets could be bought. Counted on
+  `booking.create.event_refused{reason}` (all at 0).
+- **The organizer stamped on a new booking comes from the same answer**; the
+  old best-effort `getEventInternal` lookup at create is gone. Never cache the
+  sales window: it decides a sale.
+- **Deploy event-service BEFORE booking-service.** A booking-service that asks an
+  event-service without the endpoint gets the fallback, and every booking is a
+  503 until event-service is updated. Rollback order is the reverse.
+- **Tests:** a hand-built `BookingService` that creates bookings needs an event
+  client that answers (`testsupport/OnSaleEvents`); `BookingStockPostgresTestBase`
+  says every event is on sale unless a test stubs otherwise. Gate scanning does
+  not read the sales window.
+- event-service's unreadable request body (a malformed date) is now 400 "A date
+  or time in the request is not valid. Send it like 2026-11-14T10:00:00."
+  (`GlobalExceptionHandler.handleUnreadable`); it was a 500 through the
+  `RuntimeException` catch-all.
+
 ## Cloudflare blocks `PUT` + multipart — uploads take `POST`
 
 **The banner upload accepts BOTH `POST` and `PUT` on `/events/{id}/banner`, and

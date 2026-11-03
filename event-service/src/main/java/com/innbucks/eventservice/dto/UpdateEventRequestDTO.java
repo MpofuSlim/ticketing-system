@@ -1,13 +1,16 @@
 package com.innbucks.eventservice.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonSetter;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.innbucks.eventservice.config.FlexibleLocalDateTimeDeserializer;
 import com.innbucks.eventservice.entity.EventCategory;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
+import lombok.AccessLevel;
 import lombok.Data;
+import lombok.Setter;
 import java.time.LocalDateTime;
 
 @Data
@@ -94,6 +97,35 @@ public class UpdateEventRequestDTO {
     @Schema(description = "If set, must be >= 1.")
     @Min(value = 1, message = "Capacity must be at least 1")
     private Integer totalCapacity;
+
+    @Schema(
+            example = "2026-11-14T10:00:00",
+            nullable = true,
+            description = """
+                    When ticket sales open, as the market's local time (like `startDateTime`). Must be before
+                    the event's end.
+
+                    - Left out: unchanged.
+                    - A date-time: sales open then. A time at or before now opens them at once.
+                    - `null`: removes the schedule, so tickets are on sale whenever the event is published.
+                    """
+    )
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    private LocalDateTime salesStartDateTime;
+
+    // Set by the setter, so it tells "sent as null" (clear the schedule) apart
+    // from "not sent" (leave it alone). Every other field here treats null as
+    // "not sent", which is why this one needs its own flag.
+    @JsonIgnore
+    @Schema(hidden = true)
+    @Setter(AccessLevel.NONE)
+    private boolean salesStartDateTimeSent;
+
+    @JsonSetter("salesStartDateTime")
+    public void setSalesStartDateTime(LocalDateTime salesStartDateTime) {
+        this.salesStartDateTime = salesStartDateTime;
+        this.salesStartDateTimeSent = true;
+    }
 
     // Only validates when both ends are supplied in the same request; the
     // service applies a further guard against the merged (stored) values when

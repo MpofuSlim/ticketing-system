@@ -78,6 +78,7 @@ public class BookingMetrics {
     public static final String CONFIRM_RESURRECTED = "booking.confirm.resurrected";
     public static final String TICKET_CHECK = "booking.ticket_check";
     public static final String UNPAID_PER_NUMBER_REFUSED = "booking.create.unpaid_per_number_refused";
+    public static final String EVENT_REFUSED = "booking.create.event_refused";
 
     /** Which generated reference clashed; the {@code reference} tag of {@link #REFERENCE_COLLISION}. */
     public enum ReferenceKind {
@@ -114,6 +115,19 @@ public class BookingMetrics {
         }
     }
 
+    /**
+     * Why a new booking was refused for its EVENT (the sales window, V15).
+     * {@code UNAVAILABLE} is event-service not answering: a steady rise is an
+     * outage costing sales, not buyers doing anything wrong.
+     */
+    public enum EventRefusal {
+        NOT_FOUND, NOT_STARTED, ENDED, NOT_ON_SALE, UNAVAILABLE;
+
+        String tag() {
+            return name().toLowerCase(Locale.ROOT);
+        }
+    }
+
     public enum TicketCheckOutcome {
         HELD, NOT_HELD, INVALID, REJECTED;
 
@@ -123,6 +137,7 @@ public class BookingMetrics {
     }
 
     private final Map<TicketCheckOutcome, Counter> ticketChecks = new EnumMap<>(TicketCheckOutcome.class);
+    private final Map<EventRefusal, Counter> eventRefusals = new EnumMap<>(EventRefusal.class);
     private final Map<ClaimRetryOutcome, Counter> claimRetries = new EnumMap<>(ClaimRetryOutcome.class);
     private final Counter expirySkipped;
     private final Counter unpaidPerNumberRefused;
@@ -171,6 +186,12 @@ public class BookingMetrics {
         this.unpaidPerNumberRefused = Counter.builder(UNPAID_PER_NUMBER_REFUSED)
                 .description("New bookings refused because the phone already had too many unpaid ones")
                 .register(registry);
+        for (EventRefusal reason : EventRefusal.values()) {
+            eventRefusals.put(reason, Counter.builder(EVENT_REFUSED)
+                    .description("New bookings refused because the event could not be sold right now")
+                    .tag("reason", reason.tag())
+                    .register(registry));
+        }
         for (TicketCheckOutcome outcome : TicketCheckOutcome.values()) {
             ticketChecks.put(outcome, Counter.builder(TICKET_CHECK)
                     .description("Partner ticket checks, by outcome")
@@ -181,6 +202,10 @@ public class BookingMetrics {
 
     public void ticketCheck(TicketCheckOutcome outcome) {
         ticketChecks.get(outcome).increment();
+    }
+
+    public void eventRefused(EventRefusal reason) {
+        eventRefusals.get(reason).increment();
     }
 
     public void unpaidPerNumberRefused() {

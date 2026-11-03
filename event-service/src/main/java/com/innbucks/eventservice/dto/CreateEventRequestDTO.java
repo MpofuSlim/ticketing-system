@@ -94,6 +94,24 @@ public class CreateEventRequestDTO {
     @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     private LocalDateTime endDateTime;
 
+    @Schema(
+            example = "2026-11-14T10:00:00",
+            nullable = true,
+            description = """
+                    Optional: when ticket sales open (`yyyy-MM-ddTHH:mm:ss`). Leave it out to put tickets on
+                    sale as soon as the event is published.
+
+                    **Send the local time of the market**, exactly like `startDateTime`: no offset, no `Z`; the
+                    server converts it. Must be **before `endDateTime`**. It may be before the event starts,
+                    after it starts (door sales), or in the past (on sale as soon as published).
+
+                    A published event before this time is still listed ("On sale from ..."), but bookings are
+                    refused until it (`salesStatus: NOT_YET_ON_SALE`).
+                    """
+    )
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    private LocalDateTime salesStartDateTime;
+
     @Schema(description = "Maximum venue capacity.")
     @NotNull(message = "Total capacity is required")
     @Min(value = 1, message = "Capacity must be at least 1")

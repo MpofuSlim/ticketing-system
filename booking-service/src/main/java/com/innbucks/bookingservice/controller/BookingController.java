@@ -127,6 +127,19 @@ public class BookingController {
     static final String EXAMPLE_SEAT_SERVICE_DOWN = """
             { "code": "503 SERVICE_UNAVAILABLE", "message": "We're having trouble checking seat availability right now. Please try again in a moment.", "data": null }
             """;
+    // POST /bookings when the event is not on sale (event-service V15).
+    static final String EXAMPLE_SALES_NOT_STARTED = """
+            { "code": "409 CONFLICT", "message": "Tickets for this event go on sale on 14 Nov 2026 at 10:00.", "data": { "errorCode": "SALES_NOT_STARTED", "salesStartDateTime": "2026-11-14T10:00:00+02:00" } }
+            """;
+    static final String EXAMPLE_EVENT_ENDED = """
+            { "code": "409 CONFLICT", "message": "This event has ended, so tickets are no longer on sale.", "data": { "errorCode": "EVENT_ENDED" } }
+            """;
+    static final String EXAMPLE_EVENT_NOT_FOUND = """
+            { "code": "404 NOT_FOUND", "message": "Event not found", "data": { "errorCode": "EVENT_NOT_FOUND" } }
+            """;
+    static final String EXAMPLE_EVENT_UNCHECKED = """
+            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't check this event just now. Please try again.", "data": { "errorCode": "TRY_AGAIN" } }
+            """;
 
     @PostMapping
     @Operation(summary = "Create booking", description = "Creates a new pending booking. The phone number is taken from the JWT when present, otherwise from the request body's `phoneNumber`. " +
@@ -232,9 +245,14 @@ public class BookingController {
                     })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "409",
-                    description = "Not enough tickets left in a category the request names, or the promo code is used "
-                            + "up (overall, or by this buyer). Nothing was held.",
+                    description = "Nothing was held. Not enough tickets left in a category the request names; the "
+                            + "promo code is used up (overall, or by this buyer); or the event is not on sale right "
+                            + "now: SALES_NOT_STARTED (data.salesStartDateTime, at the market offset, is when sales "
+                            + "open; the message says it in words) or EVENT_ENDED.",
                     content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Sales have not opened yet (SALES_NOT_STARTED)",
+                                    value = EXAMPLE_SALES_NOT_STARTED),
+                            @ExampleObject(name = "The event has ended (EVENT_ENDED)", value = EXAMPLE_EVENT_ENDED),
                             @ExampleObject(name = "Sold out", value = """
                             { "code": "409 CONFLICT", "message": "Not enough tickets left in \\"VIP\\". Please choose fewer tickets or a different category.", "data": null }
                             """),
@@ -245,6 +263,13 @@ public class BookingController {
                             { "code": "409 CONFLICT", "message": "You've already used this promo code as many times as it allows.", "data": { "errorCode": "PROMO_CODE_LIMIT_REACHED" } }
                             """)
                     })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "EVENT_NOT_FOUND: the event is a draft, was rejected by an admin, was deleted, or "
+                            + "does not exist. One answer for all four, so a draft's existence never leaks.",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Event not published or unknown (EVENT_NOT_FOUND)",
+                            value = EXAMPLE_EVENT_NOT_FOUND))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "429",
                     description = "Nothing was held. TOO_MANY_UNPAID_BOOKINGS: the purchaser's phone already has 5 "
@@ -260,9 +285,12 @@ public class BookingController {
                     responseCode = "503",
                     description = "Nothing was held; the same request can be sent again. TRY_AGAIN: the hold's database "
                             + "transaction lost a deadlock (or serialization) race twice in a row, or a ticket or "
-                            + "confirmation number it generated was already taken on every one of its retries. "
-                            + "Without errorCode: seat-service could not be asked for the category.",
+                            + "confirmation number it generated was already taken on every one of its retries; or "
+                            + "event-service could not say whether the event is on sale (a booking is never made "
+                            + "unchecked). Without errorCode: seat-service could not be asked for the category.",
                     content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Could not check whether the event is on sale (TRY_AGAIN)",
+                                    value = EXAMPLE_EVENT_UNCHECKED),
                             @ExampleObject(name = "Hold lost a lock race twice, or its references kept clashing (TRY_AGAIN)", value = """
                                     { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't reserve your tickets just now. Please try again.", "data": { "errorCode": "TRY_AGAIN" } }
                                     """),

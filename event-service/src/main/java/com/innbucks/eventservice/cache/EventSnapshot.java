@@ -2,9 +2,11 @@ package com.innbucks.eventservice.cache;
 
 import com.innbucks.eventservice.dto.EventResponseDTO;
 import com.innbucks.eventservice.dto.LocationDTO;
+import com.innbucks.eventservice.dto.SalesStatus;
 import com.innbucks.eventservice.entity.EventCategory;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -22,6 +24,10 @@ import java.util.UUID;
  * <p>{@code storedAvailableTickets} is the event row's own mirror — the value
  * a response falls back to only when booking-service reports no live count for
  * the event. The live count itself is never cached.
+ *
+ * <p>The sales START is cached (it is the event's own field); the sales
+ * STATUS never is: {@link #toDto()} works it out at the moment it builds the
+ * DTO, so a sale opens on time on every replica whatever the page's age.
  */
 public record EventSnapshot(
         UUID eventId,
@@ -42,7 +48,8 @@ public record EventSnapshot(
         boolean active,
         boolean rejected,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+        LocalDateTime salesStartDateTime
 ) {
 
     /** Null in, null out (a mocked mapper may answer null). */
@@ -70,7 +77,8 @@ public record EventSnapshot(
                 dto.isActive(),
                 dto.isRejected(),
                 dto.getCreatedAt(),
-                dto.getUpdatedAt());
+                dto.getUpdatedAt(),
+                dto.getSalesStartDateTime());
     }
 
     /** A new, independent DTO carrying exactly what the mapper produced. */
@@ -89,6 +97,9 @@ public record EventSnapshot(
                 .bannerUrl(bannerUrl)
                 .startDateTime(startDateTime)
                 .endDateTime(endDateTime)
+                .salesStartDateTime(salesStartDateTime)
+                .salesStatus(SalesStatus.of(active, rejected, salesStartDateTime, endDateTime,
+                        LocalDateTime.now(ZoneOffset.UTC)))
                 .totalCapacity(totalCapacity)
                 .availableTickets(storedAvailableTickets)
                 .active(active)

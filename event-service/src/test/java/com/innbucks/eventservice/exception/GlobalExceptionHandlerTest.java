@@ -22,6 +22,37 @@ class GlobalExceptionHandlerTest {
     private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
 
     @Test
+    void unreadableBody_withABadDateTime_is400_naming_the_format_notA500() {
+        // A date-only startDateTime (or salesStartDateTime) used to fall to the
+        // RuntimeException catch-all and answer 500 "An unexpected error".
+        var parse = new java.time.format.DateTimeParseException("Text '2026-11-14' could not be parsed",
+                "2026-11-14", 10);
+        var ex = new org.springframework.http.converter.HttpMessageNotReadableException(
+                "JSON parse error", new RuntimeException("wrapped", parse),
+                new org.springframework.mock.http.MockHttpInputMessage(new byte[0]));
+
+        ResponseEntity<ApiResult<Void>> response = handler.handleUnreadable(ex);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("400 BAD_REQUEST", response.getBody().getCode());
+        assertEquals("A date or time in the request is not valid. Send it like 2026-11-14T10:00:00.",
+                response.getBody().getMessage());
+        assertNull(response.getBody().getData());
+    }
+
+    @Test
+    void unreadableBody_otherwise_is400_notValidJson() {
+        var ex = new org.springframework.http.converter.HttpMessageNotReadableException(
+                "JSON parse error", new RuntimeException("Unexpected character"),
+                new org.springframework.mock.http.MockHttpInputMessage(new byte[0]));
+
+        ResponseEntity<ApiResult<Void>> response = handler.handleUnreadable(ex);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("The request body is not valid JSON.", response.getBody().getMessage());
+    }
+
+    @Test
     void optimisticLockFailure_returns409Conflict() {
         ObjectOptimisticLockingFailureException ex = new ObjectOptimisticLockingFailureException(
                 "com.innbucks.eventservice.entity.Event", "id-123");

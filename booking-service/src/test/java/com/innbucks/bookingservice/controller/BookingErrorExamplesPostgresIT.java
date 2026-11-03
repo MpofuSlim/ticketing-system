@@ -1,5 +1,7 @@
 package com.innbucks.bookingservice.controller;
 
+import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.EventSalesWindowDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.exception.SeatServiceUnavailableException;
 import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
@@ -27,6 +29,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_BAD_INTERNAL_TOKEN;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_EVENT_ENDED;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_EVENT_NOT_FOUND;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_EVENT_UNCHECKED;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_FORBIDDEN;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_HOLD_CAP_REACHED;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_HOLD_NOT_EXTENDABLE;
@@ -35,18 +40,23 @@ import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_N
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_FOUND;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_PENDING;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_PAYMENT_IN_PROGRESS;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_SALES_NOT_STARTED;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_SEAT_SERVICE_DOWN;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_UNREADABLE_HOLD_UNTIL;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * The Swagger error examples of cancel, confirm, reverse and extend-hold
- * (H2 added the payment window, the hold caps and resurrect's),
+ * (H2 added the payment window, the hold caps and resurrect's), and of
+ * create's refusals when the event is not on sale (event-service V15),
  * compared STRICTLY against what the running service answers: the real
  * filter chain, the app's own JSON mapper (with its {@code LocalDateTime}
  * module, which the standalone dispatch test does not have) and real
@@ -310,6 +320,50 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
                         .header("Authorization", bearer("buyer@example.com", List.of("CUSTOMER"), Map.of())))
                 .andExpect(status().isForbidden())
                 .andExpect(content().json(EXAMPLE_FORBIDDEN, JsonCompareMode.STRICT));
+    }
+
+    // ---- create, when the event is not on sale (event-service V15) ------------------
+
+    @Test
+    void create_whenTheEventIsNotOnSale_isTheDocumentedBody_andHoldsNothing() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        EventSalesWindowDTO notYet = window(eventId, EventSalesWindowDTO.NOT_YET_ON_SALE);
+        // 08:00 UTC: rendered at the market offset as 10:00+02:00, and said in words.
+        notYet.setSalesStartDateTime(LocalDateTime.of(2026, 11, 14, 8, 0));
+
+        createAgainst(eventId, ApiResult.ok("Sales window resolved", notYet))
+                .andExpect(status().isConflict())
+                .andExpect(content().json(EXAMPLE_SALES_NOT_STARTED, JsonCompareMode.STRICT));
+        createAgainst(eventId, ApiResult.ok("Sales window resolved", window(eventId, EventSalesWindowDTO.ENDED)))
+                .andExpect(status().isConflict())
+                .andExpect(content().json(EXAMPLE_EVENT_ENDED, JsonCompareMode.STRICT));
+        for (String status : List.of(EventSalesWindowDTO.NOT_PUBLISHED, EventSalesWindowDTO.NOT_FOUND)) {
+            createAgainst(eventId, ApiResult.ok("Sales window resolved", window(eventId, status)))
+                    .andExpect(status().isNotFound())
+                    .andExpect(content().json(EXAMPLE_EVENT_NOT_FOUND, JsonCompareMode.STRICT));
+        }
+        // The Feign fallback's answer: event-service could not be asked.
+        createAgainst(eventId, ApiResult.<EventSalesWindowDTO>builder()
+                        .code("503").message("event unavailable").data(null).build())
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(content().json(EXAMPLE_EVENT_UNCHECKED, JsonCompareMode.STRICT));
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM bookings WHERE event_id = ?", Integer.class, eventId))
+                .isZero();
+        assertThat(remaining(category)).isEqualTo(5);
+    }
+
+    private org.springframework.test.web.servlet.ResultActions createAgainst(
+            UUID eventId, ApiResult<EventSalesWindowDTO> answer) throws Exception {
+        when(eventServiceClient.salesWindow(eq(eventId), any())).thenReturn(answer);
+        return mvc.perform(post("/bookings").contentType(MediaType.APPLICATION_JSON).content("""
+                {"eventId":"%s","customerName":"Rufaro Moyo","phoneNumber":"+263771234567",
+                 "seats":[{"categoryId":"%s"}]}
+                """.formatted(eventId, category)));
+    }
+
+    private static EventSalesWindowDTO window(UUID eventId, String status) {
+        return EventSalesWindowDTO.builder().eventId(eventId).status(status).build();
     }
 
     private static void awaitQuietly(CountDownLatch latch) {
