@@ -53,6 +53,8 @@ class EventControllerTest {
     MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired EventRepository eventRepository;
+    @Autowired com.innbucks.eventservice.repository.EventTermsVersionRepository termsVersionRepository;
+    @Autowired com.innbucks.eventservice.repository.EventBookingQuestionRepository bookingQuestionRepository;
     @Autowired WebApplicationContext wac;
 
     // UserUuidLookupGateway makes a real S2S HTTP call to user-service for the
@@ -83,6 +85,9 @@ class EventControllerTest {
     @BeforeEach
     void setUp() {
         mockMvc = webAppContextSetup(wac).apply(springSecurity()).build();
+        // V16's tables reference events, so they go first.
+        termsVersionRepository.deleteAll();
+        bookingQuestionRepository.deleteAll();
         eventRepository.deleteAll();
         // Reset the shared mock between tests so an assigned-events stub from
         // one team-member case can't bleed into another; default (unstubbed)
@@ -892,6 +897,147 @@ class EventControllerTest {
                         .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status", is("NOT_FOUND")));
+    }
+
+    // ---- Terms and booking questions (V16) -----------------------------------
+
+    @Test
+    void createEvent_withTerms_isVersion1_andItsTextReadsBackWithLineBreaks() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile("event", "event.json", MediaType.APPLICATION_JSON_VALUE,
+                eventJson(",\"termsText\":\"1. <b>No</b> refunds.\\n2. Bring ID.\""));
+
+        String body = mockMvc.perform(multipart("/events").file(eventPart)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
+                        .requestAttr("jwtCountry", "Zimbabwe"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.termsVersion", is(1)))
+                .andExpect(jsonPath("$.data.termsText", is("1. No refunds.\n2. Bring ID.")))
+                .andReturn().getResponse().getContentAsString();
+        UUID id = UUID.fromString(objectMapper.readTree(body).path("data").path("eventId").asText());
+
+        // A draft's terms are its owner's to read.
+        mockMvc.perform(get("/events/" + id + "/terms/1").with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version", is(1)))
+                .andExpect(jsonPath("$.data.text", is("1. No refunds.\n2. Bring ID.")));
+        mockMvc.perform(get("/events/" + id + "/terms/1"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message", is("Event not found")));
+    }
+
+    @Test
+    void updateEvent_newTermsAreTheNextVersion_andTheOldOneStaysReadable() throws Exception {
+        Event saved = eventRepository.save(eventBuilder().title("With terms")
+                .startDateTime(LocalDateTime.of(2030, 4, 18, 16, 0))
+                .endDateTime(LocalDateTime.of(2030, 4, 18, 21, 0)).build());
+        String path = "/events/" + saved.getEventId();
+
+        mockMvc.perform(put(path).with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"termsText\":\"First.\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.termsVersion", is(1)));
+        mockMvc.perform(put(path).with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"termsText\":\"Second.\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.termsVersion", is(2)))
+                .andExpect(jsonPath("$.data.termsText", is("Second.")));
+
+        mockMvc.perform(get(path + "/terms/1")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.text", is("First.")));
+        mockMvc.perform(get(path))
+                .andExpect(jsonPath("$.data.termsVersion", is(2)))
+                .andExpect(jsonPath("$.data.termsText", is("Second.")));
+        mockMvc.perform(get(path + "/terms/9"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message", is("Terms not found")));
+
+        mockMvc.perform(put(path).with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"termsText\":null}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.termsVersion", nullValue()));
+        mockMvc.perform(get(path + "/terms/2")).andExpect(status().isOk());
+    }
+
+    @Test
+    void updateEvent_termsOver20000Characters_is400_namingTheField() throws Exception {
+        Event saved = eventRepository.save(eventBuilder().title("Long terms")
+                .startDateTime(LocalDateTime.of(2030, 4, 18, 16, 0))
+                .endDateTime(LocalDateTime.of(2030, 4, 18, 21, 0)).build());
+
+        mockMvc.perform(put("/events/" + saved.getEventId()).with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"termsText\":\"" + "x".repeat(20_001) + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", is("Validation failed")))
+                .andExpect(jsonPath("$.data.termsText",
+                        is("Terms and conditions must be at most 20,000 characters.")));
+    }
+
+    @Test
+    void bookingQuestions_saveReadAndReachTheSalesWindow() throws Exception {
+        Event saved = eventRepository.save(eventBuilder().title("Half Marathon")
+                .startDateTime(LocalDateTime.of(2030, 4, 18, 4, 0))
+                .endDateTime(LocalDateTime.of(2030, 4, 18, 10, 0)).build());
+        String path = "/events/" + saved.getEventId();
+        String race = "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11";
+
+        String body = mockMvc.perform(put(path + "/booking-questions")
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"questions":[
+                                  {"label":"T-shirt size","type":"CHOICE","required":true,"options":["S","M","L"]},
+                                  {"label":"Date of birth","type":"DATE","required":true,"categoryIds":["%s"]}
+                                ]}
+                                """.formatted(race)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message", is("Booking questions saved")))
+                .andExpect(jsonPath("$.data.questions[0].options[1]", is("M")))
+                .andExpect(jsonPath("$.data.questions[1].categoryIds[0]", is(race)))
+                .andReturn().getResponse().getContentAsString();
+        String sizeId = objectMapper.readTree(body).path("data").path("questions").get(0).path("id").asText();
+
+        mockMvc.perform(get(path))
+                .andExpect(jsonPath("$.data.bookingQuestions[0].id", is(sizeId)))
+                .andExpect(jsonPath("$.data.bookingQuestions[0].type", is("CHOICE")))
+                .andExpect(jsonPath("$.data.bookingQuestions[1].label", is("Date of birth")));
+        mockMvc.perform(get("/events/internal/sales-window").param("eventId", saved.getEventId().toString())
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(jsonPath("$.data.bookingQuestions[0].id", is(sizeId)))
+                .andExpect(jsonPath("$.data.bookingQuestions[1].required", is(true)));
+
+        // Keep the size question (by id), drop the date one.
+        mockMvc.perform(put(path + "/booking-questions")
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"questions\":[{\"id\":\"" + sizeId
+                                + "\",\"label\":\"Shirt size\",\"type\":\"CHOICE\",\"options\":[\"S\",\"M\"]}]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.questions.length()", is(1)))
+                .andExpect(jsonPath("$.data.questions[0].id", is(sizeId)))
+                .andExpect(jsonPath("$.data.questions[0].label", is("Shirt size")));
+        assertEquals(1, bookingQuestionRepository.findByEventIdOrderByPositionAsc(saved.getEventId()).size());
+    }
+
+    @Test
+    void bookingQuestions_byAnotherOrganizer_is403_andABadQuestion_is400NamingIt() throws Exception {
+        Event saved = eventRepository.save(eventBuilder().title("Owned")
+                .startDateTime(LocalDateTime.of(2030, 4, 18, 4, 0))
+                .endDateTime(LocalDateTime.of(2030, 4, 18, 10, 0)).build());
+        String path = "/events/" + saved.getEventId() + "/booking-questions";
+
+        mockMvc.perform(put(path).with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"questions\":[]}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message", is("You are not authorized to update this event")));
+
+        mockMvc.perform(put(path).with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"questions\":[{\"label\":\"Size\",\"type\":\"CHOICE\",\"options\":[\"S\"]}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", is("Validation failed")))
+                .andExpect(jsonPath("$.data['questions[0].options']",
+                        is("A choice question needs 2 to 20 different options of at most 60 characters.")));
     }
 
     private static Event.EventBuilder eventBuilder() {

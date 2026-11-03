@@ -127,6 +127,30 @@ public class UpdateEventRequestDTO {
         this.salesStartDateTimeSent = true;
     }
 
+    @Schema(example = "1. Entry fees are not refundable.\n2. Runners must collect their race pack in person with ID.",
+            nullable = true,
+            description = """
+                    Terms and conditions (V16). Leave the key out to keep them. Different text becomes the
+                    next version, which buyers must accept again; the same text changes nothing. `null` or ""
+                    removes the terms (past bookings keep the version they accepted). Plain text, HTML
+                    stripped, at most 20,000 characters.
+                    """)
+    @Size(max = CreateEventRequestDTO.TERMS_MAX_LENGTH, message = CreateEventRequestDTO.TERMS_TOO_LONG_MESSAGE)
+    private String termsText;
+
+    // Same reason as salesStartDateTimeSent: null means "remove the terms",
+    // which must not be confused with "not sent".
+    @JsonIgnore
+    @Schema(hidden = true)
+    @Setter(AccessLevel.NONE)
+    private boolean termsTextSent;
+
+    @JsonSetter("termsText")
+    public void setTermsText(String termsText) {
+        this.termsText = termsText;
+        this.termsTextSent = true;
+    }
+
     // Only validates when both ends are supplied in the same request; the
     // service applies a further guard against the merged (stored) values when
     // only one side is updated.

@@ -234,6 +234,10 @@ public class BookingService {
         // never a sale. Its answer also names the organizer stamped on the
         // booking, so every new booking now carries one.
         EventSalesWindowDTO salesWindow = requireOnSale(request.getEventId());
+        // The event's terms and booking questions, from the same live answer
+        // (event-service V16): refused before anything is looked up or held.
+        com.innbucks.bookingservice.answers.BookingAnswers.Checked checked =
+                com.innbucks.bookingservice.answers.BookingAnswers.check(salesWindow, request);
 
         // Collapse the per-ticket request into a quantity per category (the
         // capacity claim is per category), but ALSO keep the per-ticket order
@@ -247,9 +251,10 @@ public class BookingService {
         // two counter rows in opposite orders and deadlock.
         Map<UUID, Integer> qtyByCategory = StockLedger.byCategory();
         List<TicketSpec> ticketSpecs = new ArrayList<>(request.getSeats().size());
-        for (CreateBookingRequestDTO.SeatItemRequest item : request.getSeats()) {
+        for (int i = 0; i < request.getSeats().size(); i++) {
+            CreateBookingRequestDTO.SeatItemRequest item = request.getSeats().get(i);
             qtyByCategory.merge(item.getCategoryId(), 1, Integer::sum);
-            ticketSpecs.add(TicketSpec.of(item));
+            ticketSpecs.add(TicketSpec.of(item, checked.forTicket(i)));
         }
 
         // Resolve each category's capacity + price + owning event from
@@ -280,9 +285,13 @@ public class BookingService {
         // booking with no organizer (unscannable, missing from reports).
         UUID tenantUserUuid = salesWindow.getTenantUserUuid();
 
+        // Answers are deleted a while after the event ends (V32); the retention
+        // job re-reads the event's live end before it deletes anything.
+        LocalDateTime answersPurgeAfter = checked.anyAnswers() && salesWindow.getEndDateTime() != null
+                ? salesWindow.getEndDateTime().plus(answersRetention) : null;
         ClaimInputs inputs = new ClaimInputs(userEmail, customerName, phoneNumber, request.getEventId(),
                 tenantUserUuid, qtyByCategory, categoryById, ticketSpecs,
-                PromoCodes.normalize(request.getPromoCode()));
+                PromoCodes.normalize(request.getPromoCode()), checked.acceptedTermsVersion(), answersPurgeAfter);
 
         // === Write phase — the ONLY place a DB connection is held. ===
         return claimWithRetries(inputs);
@@ -297,7 +306,7 @@ public class BookingService {
     private record ClaimInputs(String userEmail, String customerName, String phoneNumber, UUID eventId,
                                UUID tenantUserUuid, Map<UUID, Integer> qtyByCategory,
                                Map<UUID, CategoryLookupDTO> categoryById, List<TicketSpec> ticketSpecs,
-                               String promoCode) {
+                               String promoCode, Integer termsVersion, LocalDateTime answersPurgeAfter) {
     }
 
     /**
@@ -392,6 +401,9 @@ public class BookingService {
                 .confirmationNumber(references.nextConfirmationNumber())
                 .status(Booking.BookingStatus.PENDING)
                 .expiresAt(LocalDateTime.now(ZoneOffset.UTC).plusMinutes(holdTtlMinutes))
+                .termsVersion(inputs.termsVersion())
+                .termsAcceptedAt(inputs.termsVersion() == null ? null : LocalDateTime.now(ZoneOffset.UTC))
+                .answersPurgeAfter(inputs.answersPurgeAfter())
                 .build();
         return txTemplate.execute(status -> persistBooking(booking, inputs.qtyByCategory(),
                 inputs.categoryById(), inputs.ticketSpecs(), inputs.userEmail(), inputs.promoCode()));
@@ -494,14 +506,17 @@ public class BookingService {
      * attendee the purchaser named for it. Resolved from the request BEFORE
      * the write transaction so persistBooking is pure writes.
      */
-    private record TicketSpec(UUID categoryId, String attendeeName, String attendeeEmail, String attendeePhone) {
-        static TicketSpec of(CreateBookingRequestDTO.SeatItemRequest item) {
+    private record TicketSpec(UUID categoryId, String attendeeName, String attendeeEmail, String attendeePhone,
+                              List<com.innbucks.bookingservice.dto.BookingAnswerDTO> answers) {
+        static TicketSpec of(CreateBookingRequestDTO.SeatItemRequest item,
+                             List<com.innbucks.bookingservice.dto.BookingAnswerDTO> answers) {
             CreateBookingRequestDTO.AttendeeRequest a = item.getAttendee();
             if (a == null) {
-                return new TicketSpec(item.getCategoryId(), null, null, null);
+                return new TicketSpec(item.getCategoryId(), null, null, null, answers);
             }
             return new TicketSpec(item.getCategoryId(),
-                    blankToNull(a.getFullName()), blankToNull(a.getEmail()), blankToNull(a.getPhoneNumber()));
+                    blankToNull(a.getFullName()), blankToNull(a.getEmail()), blankToNull(a.getPhoneNumber()),
+                    answers);
         }
 
         private static String blankToNull(String v) {
@@ -642,6 +657,7 @@ public class BookingService {
                     .attendeeName(spec.attendeeName())
                     .attendeeEmail(spec.attendeeEmail())
                     .attendeePhone(spec.attendeePhone())
+                    .answersCiphertext(sealAnswers(spec.answers()))
                     .build());
         }
         bookingItemRepository.saveAllAndFlush(items);
@@ -955,6 +971,9 @@ public class BookingService {
                 .attendeeName(item.getAttendeeName())
                 .attendeeEmail(item.getAttendeeEmail())
                 .attendeePhone(item.getAttendeePhone())
+                .termsVersion(b.getTermsVersion())
+                .termsAcceptedAt(b.getTermsAcceptedAt())
+                .answers(openAnswers(item))
                 .holderName(item.holderName())
                 .eventId(b.getEventId())
                 .status(b.getStatus())
@@ -1160,6 +1179,16 @@ public class BookingService {
      *        QR left out when the cell masks ticket numbers.
      */
     private List<BookingItemDTO> toItemDTOs(Booking booking, boolean includeAttendeeContact, boolean staffView) {
+        return toItemDTOs(booking, includeAttendeeContact, staffView, false);
+    }
+
+    /**
+     * @param withAnswers true on the reads a person makes of a booking they may
+     *        see answers on (the buyer's own, the organizer's and staff's):
+     *        never the public views, the S2S read or a confirm/cancel answer.
+     */
+    private List<BookingItemDTO> toItemDTOs(Booking booking, boolean includeAttendeeContact, boolean staffView,
+                                            boolean withAnswers) {
         boolean masked = staffView && ticketNumbers.masking();
         return booking.getItems() == null
                 ? List.of()
@@ -1179,6 +1208,7 @@ public class BookingService {
                                 .attendeeName(i.getAttendeeName())
                                 .attendeeEmail(includeAttendeeContact ? i.getAttendeeEmail() : null)
                                 .attendeePhone(includeAttendeeContact ? i.getAttendeePhone() : null)
+                                .answers(withAnswers ? openAnswers(i) : null)
                                 .build())
                         .collect(Collectors.toList());
     }
@@ -1202,7 +1232,7 @@ public class BookingService {
             throw new org.springframework.security.access.AccessDeniedException("Access denied");
         }
 
-        return toDTO(booking, !owner);
+        return toDTO(booking, !owner, true);
     }
 
     /**
@@ -1268,7 +1298,7 @@ public class BookingService {
             throw new NotFoundException("Booking not found");
         }
 
-        return toDTO(booking, !owner);
+        return toDTO(booking, !owner, true);
     }
 
     /** True when {@code organizerUuid} owns the booking's event. A null on either side is false. */
@@ -2127,6 +2157,66 @@ public class BookingService {
                 TOO_MANY_UNPAID_BOOKINGS_MESSAGE, Map.of("retryAfterSeconds", retryAfterSeconds));
     }
 
+    // ---- Terms and booking answers (V32) ---------------------------------------
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper ANSWERS_JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+    private static final com.fasterxml.jackson.core.type.TypeReference<List<com.innbucks.bookingservice.dto.BookingAnswerDTO>>
+            ANSWER_LIST = new com.fasterxml.jackson.core.type.TypeReference<>() { };
+
+    private volatile com.innbucks.bookingservice.answers.BookingAnswersCipher answersCipher;
+    private java.time.Duration answersRetention = java.time.Duration.ofDays(90);
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAnswersCipher(com.innbucks.bookingservice.answers.BookingAnswersCipher answersCipher) {
+        this.answersCipher = answersCipher;
+    }
+
+    // An ISO-8601 string parsed here, not a Duration binding: slim test
+    // contexts (no Boot conversion service) build this bean too.
+    @org.springframework.beans.factory.annotation.Value("${app.booking.answers-retention:P90D}")
+    public void setAnswersRetention(String answersRetention) {
+        this.answersRetention = java.time.Duration.parse(answersRetention.strip());
+    }
+
+    /** The ticket's answers sealed for its row; null when it gave none. */
+    private String sealAnswers(List<com.innbucks.bookingservice.dto.BookingAnswerDTO> answers) {
+        if (answers == null || answers.isEmpty()) {
+            return null;
+        }
+        com.innbucks.bookingservice.answers.BookingAnswersCipher cipher = answersCipher;
+        if (cipher == null) {
+            throw new IllegalStateException("Booking answers cannot be stored: no BookingAnswersCipher is wired");
+        }
+        try {
+            return cipher.encrypt(ANSWERS_JSON.writeValueAsString(answers));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("Could not write booking answers", e);
+        }
+    }
+
+    /**
+     * The ticket's answers, opened; [] when it has none or they were deleted.
+     * One that cannot be opened (a rotated key) is logged without its content
+     * and read as none: a booking read never fails over its answers.
+     */
+    List<com.innbucks.bookingservice.dto.BookingAnswerDTO> openAnswers(BookingItem item) {
+        String sealed = item.getAnswersCiphertext();
+        com.innbucks.bookingservice.answers.BookingAnswersCipher cipher = answersCipher;
+        if (sealed == null || cipher == null) {
+            return List.of();
+        }
+        try {
+            List<com.innbucks.bookingservice.dto.BookingAnswerDTO> answers =
+                    ANSWERS_JSON.readValue(cipher.decrypt(sealed), ANSWER_LIST);
+            return answers == null ? List.of() : answers;
+        } catch (Exception e) {
+            log.warn("Booking answers could not be read bookingItemId={} reason={}", item.getId(),
+                    e.getClass().getSimpleName());
+            return List.of();
+        }
+    }
+
     // ---- The sales window (event-service V15) --------------------------------
 
     public static final String EVENT_NOT_FOUND = "EVENT_NOT_FOUND";
@@ -2271,7 +2361,7 @@ public class BookingService {
      * is never set there.
      */
     private BookingResponseDTO toBuyerDTO(Booking booking) {
-        BookingResponseDTO dto = toDTO(booking, false);
+        BookingResponseDTO dto = toDTO(booking, false, true);
         dto.setViewToken(booking.getLinkToken());
         return dto;
     }
@@ -2282,8 +2372,13 @@ public class BookingService {
      * ticket numbers masked and no QR when the cell masks them).
      */
     private BookingResponseDTO toDTO(Booking booking, boolean staffView) {
+        return toDTO(booking, staffView, false);
+    }
+
+    /** @param withAnswers see {@link #toItemDTOs(Booking, boolean, boolean, boolean)}. */
+    private BookingResponseDTO toDTO(Booking booking, boolean staffView, boolean withAnswers) {
         // Authenticated/owner view: the full attendee record travels.
-        List<BookingItemDTO> itemDTOs = toItemDTOs(booking, true, staffView);
+        List<BookingItemDTO> itemDTOs = toItemDTOs(booking, true, staffView, withAnswers);
 
         return BookingResponseDTO.builder()
                 .id(booking.getId())
@@ -2292,6 +2387,8 @@ public class BookingService {
                 .phoneNumber(booking.getPhoneNumber())
                 .eventId(booking.getEventId())
                 .tenantUserUuid(booking.getTenantUserUuid())
+                .termsVersion(booking.getTermsVersion())
+                .termsAcceptedAt(booking.getTermsAcceptedAt())
                 .confirmationNumber(booking.getConfirmationNumber())
                 .status(booking.getStatus())
                 .totalAmount(booking.getTotalAmount())

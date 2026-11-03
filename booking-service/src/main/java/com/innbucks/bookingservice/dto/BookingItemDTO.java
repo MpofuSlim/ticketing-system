@@ -77,4 +77,14 @@ public class BookingItemDTO {
     @Schema(example = "+263772000000", nullable = true,
             description = "Attendee phone (E.164). Authenticated views only; absent from public views.")
     private String attendeePhone;
+
+    /**
+     * This ticket's answers to the organizer's booking questions (V32), on the
+     * buyer's own reads and the organizer's and staff's: never on a public
+     * view, the S2S read or a confirm/cancel answer, where the key is absent.
+     * [] when none, or once deleted (90 days after the event ends).
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @Schema(nullable = true, description = "This ticket's answers. Authenticated reads only; absent elsewhere.")
+    private java.util.List<BookingAnswerDTO> answers;
 }

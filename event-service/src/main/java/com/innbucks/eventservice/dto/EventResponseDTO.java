@@ -83,6 +83,22 @@ public class EventResponseDTO {
                     + "Show the Buy button only for ON_SALE; never work it out on the device.")
     private SalesStatus salesStatus;
 
+    @Schema(example = "2", nullable = true,
+            description = "The terms-and-conditions version a buyer must accept now (V16); null = no terms. "
+                    + "Sent on every event response, lists included.")
+    private Integer termsVersion;
+
+    @Schema(example = "1. Entry fees are not refundable.\n2. Runners must collect their race pack in person with ID.",
+            nullable = true,
+            description = "The current terms text, plain text with line breaks. On GET /events/{id} and the "
+                    + "create and update answers; null on every list (read the detail).")
+    private String termsText;
+
+    @Schema(nullable = true,
+            description = "The questions asked for each ticket at checkout, in order (V16). [] when there are "
+                    + "none. On GET /events/{id} only; null on lists and on the other answers.")
+    private java.util.List<BookingQuestionDTO> bookingQuestions;
+
     @Schema(description = "Maximum venue capacity.")
     private Integer totalCapacity;
 

@@ -49,7 +49,8 @@ public record EventSnapshot(
         boolean rejected,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
-        LocalDateTime salesStartDateTime
+        LocalDateTime salesStartDateTime,
+        Integer termsVersion
 ) {
 
     /** Null in, null out (a mocked mapper may answer null). */
@@ -78,7 +79,8 @@ public record EventSnapshot(
                 dto.isRejected(),
                 dto.getCreatedAt(),
                 dto.getUpdatedAt(),
-                dto.getSalesStartDateTime());
+                dto.getSalesStartDateTime(),
+                dto.getTermsVersion());
     }
 
     /** A new, independent DTO carrying exactly what the mapper produced. */
@@ -100,6 +102,7 @@ public record EventSnapshot(
                 .salesStartDateTime(salesStartDateTime)
                 .salesStatus(SalesStatus.of(active, rejected, salesStartDateTime, endDateTime,
                         LocalDateTime.now(ZoneOffset.UTC)))
+                .termsVersion(termsVersion)
                 .totalCapacity(totalCapacity)
                 .availableTickets(storedAvailableTickets)
                 .active(active)

@@ -33,4 +33,8 @@ public class EventSalesWindowDTO {
     private LocalDateTime salesStartDateTime;
     private LocalDateTime endDateTime;
     private UUID tenantUserUuid;
+    /** The terms version a buyer must accept now (event-service V16); null = no terms. */
+    private Integer termsVersion;
+    /** The questions each ticket is checked against; null or empty = none. */
+    private java.util.List<BookingQuestionDTO> bookingQuestions;
 }

@@ -49,6 +49,12 @@ public class CreateBookingRequestDTO {
     @Size(max = 40, message = "Promo code must be at most 40 characters")
     private String promoCode;
 
+    @Schema(example = "2", nullable = true,
+            description = "The event's termsVersion the buyer read and accepted. Required when the event has "
+                    + "terms (TERMS_NOT_ACCEPTED otherwise); a version that is no longer current is "
+                    + "TERMS_CHANGED. Leave it out when the event has none.")
+    private Integer acceptedTermsVersion;
+
     @Schema(description = "One entry per ticket to book, in the order the tickets should be issued. "
             + "Each may name the attendee who will hold that ticket.")
     @NotEmpty(message = "At least one seat is required")
@@ -77,6 +83,27 @@ public class CreateBookingRequestDTO {
                         + "if that send fails); an `email` additionally gets a one-ticket confirmation.")
         @Valid
         private AttendeeRequest attendee;
+
+        @Schema(nullable = true,
+                description = "This ticket's answers to the event's booking questions: the ones whose "
+                        + "categoryIds is empty or names this ticket's category. Leave out an optional "
+                        + "question that was skipped. Checked at booking (ANSWERS_INVALID).")
+        @Size(max = 20, message = "At most 20 answers per ticket")
+        private List<@Valid AnswerRequest> answers;
+    }
+
+    @Data
+    @Schema(name = "AnswerRequest", description = "One answer to a booking question.")
+    public static class AnswerRequest {
+
+        @Schema(example = "7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e01")
+        @NotNull(message = "questionId is required")
+        private UUID questionId;
+
+        @Schema(example = "M", description = "Always a string. CHECKBOX: \"true\" or \"false\"; DATE: yyyy-MM-dd; "
+                + "CHOICE: one of the options as written.")
+        @Size(max = 2000, message = "Answer must be at most 2000 characters")
+        private String value;
     }
 
     @Data

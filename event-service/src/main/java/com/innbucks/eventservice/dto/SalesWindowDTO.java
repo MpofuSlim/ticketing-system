@@ -38,4 +38,11 @@ public class SalesWindowDTO {
 
     @Schema(nullable = true, description = "The owning organizer, which booking-service stamps on the booking.")
     private UUID tenantUserUuid;
+
+    @Schema(nullable = true, description = "The terms version a buyer must accept now (V16). Null: no terms.")
+    private Integer termsVersion;
+
+    @Schema(description = "The questions each ticket's answers are checked against (V16). [] when none; null "
+            + "for NOT_FOUND.")
+    private java.util.List<BookingQuestionDTO> bookingQuestions;
 }

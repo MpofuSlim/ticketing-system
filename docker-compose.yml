@@ -259,6 +259,8 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
+      # Seals buyers' answers to booking questions (V32); boot-required under prod.
+      BOOKING_ANSWERS_KEY: ${BOOKING_ANSWERS_KEY:?set BOOKING_ANSWERS_KEY in .env (openssl rand -base64 32)}
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
       WHATSAPP_EVENT_QR_CODE_PATH: ${WHATSAPP_EVENT_QR_CODE_PATH:-/api/messages/event-qr-code}

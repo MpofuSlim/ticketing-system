@@ -31,6 +31,9 @@ public class EventMapper {
                 // Worked out per call, never cached (see SalesStatus).
                 .salesStatus(SalesStatus.of(event.isActive(), event.isRejected(), event.getSalesStartAt(),
                         event.getEndDateTime(), LocalDateTime.now(ZoneOffset.UTC)))
+                // The version only; the text and the questions are attached by
+                // EventService where a response carries them (never on lists).
+                .termsVersion(event.getTermsVersion())
                 .totalCapacity(event.getTotalCapacity())
                 .availableTickets(event.getAvailableTickets())
                 .active(event.isActive())

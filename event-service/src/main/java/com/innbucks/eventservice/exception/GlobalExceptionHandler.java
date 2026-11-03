@@ -211,11 +211,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResult<Void>> handleUnreadable(
             org.springframework.http.converter.HttpMessageNotReadableException ex) {
         boolean badDate = false;
+        Throwable deepest = ex;
         for (Throwable t = ex; t != null && !badDate; t = t.getCause() == t ? null : t.getCause()) {
             badDate = t instanceof java.time.format.DateTimeParseException;
+            deepest = t;
         }
-        log.warn("Unreadable request body badDate={} type={}", badDate,
-                ex.getMostSpecificCause().getClass().getSimpleName());
+        log.warn("Unreadable request body badDate={} type={}", badDate, deepest.getClass().getSimpleName());
         return ResponseEntity.badRequest()
                 .body(ApiResult.error(HttpStatus.BAD_REQUEST,
                         badDate ? INVALID_DATE_TIME_MESSAGE : UNREADABLE_BODY_MESSAGE));
@@ -236,6 +237,16 @@ public class GlobalExceptionHandler {
      * previous 422 response was technically more REST-correct but forced the
      * frontend to special-case event-service.
      */
+    @ExceptionHandler(FieldErrorsException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handleFieldErrors(FieldErrorsException ex) {
+        log.warn("Validation failed fields={}", ex.getErrors().keySet());
+        return ResponseEntity.badRequest().body(ApiResult.<Map<String, String>>builder()
+                .code("400 BAD_REQUEST")
+                .message("Validation failed")
+                .data(ex.getErrors())
+                .build());
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResult<Map<String, String>>> handleValidation(MethodArgumentNotValidException ex) {
         Map<String, String> fieldErrors = ex.getBindingResult()

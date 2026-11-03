@@ -38,6 +38,8 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
     @Autowired EventRepository eventRepository;
     @Autowired EventScannerRepository scannerRepository;
     @Autowired EventScannerAssignmentRepository assignmentRepository;
+    @Autowired EventTermsVersionRepository termsVersionRepository;
+    @Autowired EventBookingQuestionRepository bookingQuestionRepository;
     @Autowired ScannerService scannerService;
 
     private final LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.SECONDS);
@@ -52,6 +54,10 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
     void clean() {
         assignmentRepository.deleteAll();
         scannerRepository.deleteAll();
+        // V16's tables reference events: clear them first, or another IT's
+        // terms or questions make this delete fail.
+        termsVersionRepository.deleteAll();
+        bookingQuestionRepository.deleteAll();
         eventRepository.deleteAll();
     }
 

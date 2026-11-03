@@ -125,6 +125,11 @@ public class Event {
     @Column(name = "sales_start_at")
     private LocalDateTime salesStartAt;
 
+    // The terms-and-conditions version a buyer must accept now (V16); null =
+    // no terms. The text of every version is in event_terms_versions.
+    @Column(name = "terms_version")
+    private Integer termsVersion;
+
     @Column(updatable = false)
     private LocalDateTime createdAt;
 

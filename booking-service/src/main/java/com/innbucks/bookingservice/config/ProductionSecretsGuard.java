@@ -84,6 +84,15 @@ public class ProductionSecretsGuard {
         // already provide REDIS_PASSWORD; this makes a forgotten one fail fast
         // instead of silently running an unauthenticated Redis that an
         // in-cluster attacker could use to tamper with revocation state.
+        // A02: the buyers' answers to booking questions are sealed with this
+        // key (BookingAnswersCipher). Outside a deployment a blank key is a
+        // throwaway; in one it would make every answer unreadable after the
+        // next restart, so it is boot-required.
+        String answersKey = env.getProperty("app.booking.answers-key");
+        if (answersKey == null || answersKey.isBlank()) {
+            offenders.add("app.booking.answers-key (BOOKING_ANSWERS_KEY is blank: generate one with "
+                    + "openssl rand -base64 32)");
+        }
         String redisPassword = env.getProperty("spring.data.redis.password");
         if (redisPassword != null && redisPassword.isBlank()) {
             offenders.add("spring.data.redis.password (blank — Redis AUTH required under deployment)");
