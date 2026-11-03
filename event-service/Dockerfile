@@ -38,7 +38,7 @@ FROM eclipse-temurin:21-jre-alpine AS runtime
 #   CVE-2026-45447 (HIGH) — PKCS#7 / S/MIME signed-message handling.
 # p11-kit / p11-kit-trust >= 0.26.2-r0
 #   CVE-2026-2100 (HIGH) — NULL-deref via C_DeriveKey with NULL params.
-# libexpat >= 2.9.0-r0
+# libexpat >= 2.10.0-r0
 #   CVE-2026-56131 / CVE-2026-56407 / CVE-2026-56408 (HIGH) — missing call-depth
 #   tracking + integer overflows in doProlog / copyString. Fixed in 2.8.2-r0.
 #   CVE-2026-66046 (HIGH) — denial of service in Expat through 2.8.3.
@@ -47,6 +47,9 @@ FROM eclipse-temurin:21-jre-alpine AS runtime
 #   2.8.5-r0.
 #   CVE-2026-77214 (HIGH) — heap buffer over-read in XML_ParseBuffer (information
 #   disclosure). Fixed in 2.9.0-r0.
+#   CVE-2026-117610 (HIGH) — NULL pointer dereference; CVE-2026-118370 (HIGH) —
+#   signed integer overflow. Both "through 2.9.0", fixed in 2.10.0-r0. Failed
+#   the Release Trivy gate on the 2026-11-03 merges (#753-#756).
 #   NOTE: the previous floor of 2.8.2-r0 was SATISFIED by the vulnerable
 #   2.8.3-r0, so apk had no reason to upgrade and both CVEs shipped. That is
 #   precisely why the floor exists and must be raised per CVE, not left behind.
@@ -58,7 +61,7 @@ RUN apk update \
  && apk add --no-cache --upgrade \
       'libssl3>=3.5.8-r0' 'libcrypto3>=3.5.8-r0' 'openssl>=3.5.8-r0' \
       'p11-kit>=0.26.2-r0' 'p11-kit-trust>=0.26.2-r0' \
-      'libexpat>=2.9.0-r0' \
+      'libexpat>=2.10.0-r0' \
       'brotli-libs>=1.2.1-r0' \
  && addgroup -S app && adduser -S -G app app
 WORKDIR /app
