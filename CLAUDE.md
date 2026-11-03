@@ -1455,20 +1455,18 @@ organizer's bookings view from a list of MSISDNs into a guest list.
   `singleLine`), its body has no `Booking reference` line, the guest's own
   WhatsApp caption omits it, and so does the buyer's caption for a guest's
   ticket (`TicketDeliveryService.isGuestTicket`, below). A named guest's email links
-  `GET /bookings/tickets/{itemId}` (`TicketRenderingService.holderTicketPath`):
-  one ticket, keyed by the item's own UUID, with its QR at `.../qr` and
-  `.../qr.png` by the same id, so neither the link nor the page's image address
-  carries the booking id (dropping the last segment must never reach the whole
-  booking). No reference, total or other tickets on it. `SecurityConfig` permits
-  exactly those three paths, and the mappings pin `itemId` to a canonical UUID:
-  unpinned, `/bookings/tickets/tickets` tied with the booking page and was a
-  500. **Never add a booking id, a confirmation number or a URL keyed by either
-  to anything sent to a guest or to a buyer's message for a guest's ticket.**
-  Two exceptions, neither in a message we compose: the WhatsApp QR's media path
-  still names the booking (Twilio fetches it, and the guest sees only the
-  image), and the notification API's delivery reference for a guest's email
-  (`ATT-<confirmation>-…`) still names it (it travels as the API's own
-  `reference` field, never in the subject or body, and the SES path drops it).
+  `GET /bookings/ticket/{itemToken}` (`TicketRenderingService.holderTicketPath`,
+  V31; before it, `/bookings/tickets/{itemId}`): one ticket, keyed by the
+  ticket's own link token, with its QR at `.../qr.png` by the same token, so
+  neither the link nor the page's image address carries anything of the booking.
+  No reference, total or other tickets on it. **Never add a booking id, a
+  booking token, a confirmation number or a URL keyed by any of them to
+  anything sent to a guest or to a buyer's message for a guest's ticket.** One
+  exception, not in a message we compose: the notification API's delivery
+  reference for a guest's email (`ATT-<confirmation>-…`) still names the
+  booking (it travels as the API's own `reference` field, never in the subject
+  or body, and the SES path drops it). The WhatsApp QR's media path no longer
+  names the booking or the ticket number (V31).
 - **Every WhatsApp QR the purchaser receives names only its own ticket**
   (`<title> (booking INN-…, ticket 2 of 3, total … — <its number> (<holder>))`,
   the holder only when the ticket names one, `1 ticket` for a one-ticket
@@ -1607,12 +1605,63 @@ before the real holder.
   `BOOKINGS_MASK_TICKET_NUMBERS`, default false): masked before the console
   moves, its edit-by-number and in-browser search stop finding tickets. Turn it
   on per cell once the console has moved; then delete it and mask always.
-- **Not closed by this, stated rather than hidden:** the booking id and the item
-  id on those same surfaces still open the PUBLIC ticket pages
-  (`GET /bookings/{bookingId}/tickets`, `/bookings/tickets/{itemId}`), which show
-  the QR. Those pages need a key of their own (a random link token) before the
-  ids stop being credentials; until then masking stops the casual copy, the
-  export and the screenshot, not someone reading the raw JSON.
+- **The ids on those same surfaces stop being credentials with V31** (next
+  section): the public ticket pages are keyed by link tokens, and the id-keyed
+  routes close behind `app.booking.id-links`. Until a cell is `legacy` or
+  `closed`, a booking id or item id still opens its QR codes, and masking stops
+  the casual copy, the export and the screenshot, not someone reading the raw
+  JSON.
+
+## Public ticket pages are keyed by link tokens (booking-service V31)
+
+**Every public ticket page and QR image is reached by a random link token,
+never by a record id.** The booking id and item id are on staff screens, scan
+reports, support tools, logs and partner payloads, so while a page answered by
+id, anyone who could read the id could open the QR codes. Each booking and each
+ticket now carries `link_token` (128 random bits, `LinkTokens`, 32 lower-case
+hex; V31 backfilled 122 from `gen_random_uuid()`).
+
+- **The token routes** (`TicketController`, `BookingController`; GET, anonymous,
+  exact paths in `SecurityConfig`, each `{token}` pinned to `[0-9a-f]{32}`):
+  - `/bookings/view/{bookingToken}`: the PII-free JSON view, the checkout's
+    status poll. Replaces `/bookings/public/{id}`.
+  - `/bookings/view/{bookingToken}/tickets`: the buyer's page, every QR.
+  - `/bookings/ticket/{itemToken}`: one ticket's page, for its holder.
+  - `/bookings/ticket/{itemToken}/qr(.png)` and the `/brand/...` alias: one QR,
+    the image in every email and page and the WhatsApp media path. It names
+    neither the booking nor the ticket number.
+- **Every link we send is built in `TicketRenderingService`** (`bookingPagePath`,
+  `holderTicketPath`, `ticketQrPath`), from tokens. Never build one from an id.
+- **The buyer's token goes to the buyer only**: `viewToken` on the
+  `POST /bookings` response (what checkout polls with) and on
+  `GET /bookings/my` (`BookingService.toBuyerDTO`). Never in `toDTO` itself,
+  which also builds the confirm, cancel and reverse answers for payment-service
+  and staff. Never on a staff view, a public view, the S2S read or a log line.
+  `RequestPaths.forLog` replaces a token segment with `****`.
+- **A page opened by ID never embeds a token.** It renders exactly as before
+  V31 (images keyed by the booking id and ticket number, or the item id).
+  Otherwise anyone holding an id could collect the tokens while the id routes
+  are open and keep the tickets after they close. `idPage_rendersAsBefore_andNeverEmbedsAToken`.
+- **The id routes close behind `app.booking.id-links`** (`IdLinkPolicy`,
+  `BOOKINGS_ID_LINKS`): `open` (default, today's behaviour), then `legacy` (only
+  bookings created before `BOOKINGS_ID_LINKS_LEGACY_BEFORE`, an instant AFTER
+  the V31 image finished rolling out; `legacy` without it fails the boot), then
+  `closed`. Refused = the same 404 as an unknown id. It governs
+  `/bookings/public/{id}`, `/bookings/{bookingId}/tickets` and its QR images,
+  and `/bookings/tickets/{itemId}` and its QR. Move to `legacy` once every client
+  polls `/bookings/view/{viewToken}`; to `closed` once the last legacy booking's
+  event has ended and `booking_id_link_total{outcome="served"}` is flat. Then
+  delete the id routes and the switch.
+- **V31 keeps the column DEFAULT on purpose**: during the rolling update the
+  previous image inserts rows without the column, and the volatile default
+  gives each its own token. Adding the columns rewrites `bookings` and
+  `booking_items` under an ACCESS EXCLUSIVE lock, bounded by
+  `lock_timeout = 10s` (the migration fails and the old pod serves on, rather
+  than every booking request queueing). `LinkTokenPostgresIT`.
+- **A super-app scanner's `/scans/me` rows carry no `bookingId`**
+  (`ScanReportController.forCaller`): such a scanner is anyone whose number an
+  organizer added, and a booking id names every ticket of a booking, other
+  events' included. The organizer's own team keeps it.
 
 ## A MERCHANT_ADMIN's token carries NO `merchantId` claim — the organization is the scope
 

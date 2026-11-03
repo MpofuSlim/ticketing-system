@@ -196,6 +196,18 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     """)
     Optional<Booking> findByIdWithItems(@Param("id") UUID id);
 
+    /**
+     * A booking by its link token (V31), with its items: the buyer's public
+     * page and the checkout's status poll. Same shape as
+     * {@link #findByIdWithItems}.
+     */
+    @Query("""
+        SELECT DISTINCT b FROM Booking b
+        LEFT JOIN FETCH b.items
+        WHERE b.linkToken = :token
+    """)
+    Optional<Booking> findByLinkTokenWithItems(@Param("token") String token);
+
     // Same, keyed by confirmation number: the owner lookup
     // (GET /bookings/confirmation/{n}) and the gate lookup both render the
     // booking's tickets.

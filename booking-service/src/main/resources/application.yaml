@@ -215,6 +215,16 @@ app:
     # the gate credential. Off until the console has moved its attendee edit
     # and ticket search to the item-id and server-side forms; then on per cell.
     mask-ticket-numbers: ${BOOKINGS_MASK_TICKET_NUMBERS:false}
+    # Public ticket pages by RECORD ID (/bookings/public/{id}, /bookings/{id}/tickets
+    # and its QR images, /bookings/tickets/{itemId} and its QR). Every message
+    # links by token since V31 (IdLinkPolicy): open = every booking (the rollout
+    # state, clients still poll /bookings/public/{id}); legacy = only bookings
+    # created before legacy-before (an ISO instant with an offset, set AFTER the
+    # V31 image finished rolling out); closed = none. Refused = the same 404 as
+    # an unknown id.
+    id-links:
+      mode: ${BOOKINGS_ID_LINKS:open}
+      legacy-before: ${BOOKINGS_ID_LINKS_LEGACY_BEFORE:}
     # Pre-event WhatsApp reminder (EventReminderScheduler): sent once per
     # CONFIRMED booking when its event starts within this window. Hourly cron.
     reminder-window-hours: ${BOOKING_REMINDER_WINDOW_HOURS:24}

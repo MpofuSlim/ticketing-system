@@ -159,6 +159,39 @@ class ScanReportControllerTest {
         verify(svc).listMyScans(eq(userUuid), eq(from), eq(widened(to)), eq(0), eq(20));
     }
 
+    private static ScanAttemptDTO row(UUID bookingId) {
+        return new ScanAttemptDTO(UUID.randomUUID(), zw(Instant.parse("2026-11-07T17:42:11Z")), "WRONG_EVENT",
+                "20261107-7KQ4M-9XZ2B", UUID.randomUUID(), bookingId, UUID.randomUUID(), null, "Tendai Moyo",
+                UUID.randomUUID());
+    }
+
+    @Test
+    void myScans_aSuperAppScanner_getsNoBookingId_theTeamKeepsIt() {
+        // A super-app scanner is anyone whose number an organizer added; a
+        // booking id names every ticket of a booking, another event's included.
+        ScanReportService svc = mock(ScanReportService.class);
+        UUID userUuid = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        UUID bookingId = UUID.randomUUID();
+        ScanAttemptDTO stored = row(bookingId);
+        when(svc.listMyScansAtEvent(eq(userUuid), eq(eventId), any(), any(), anyInt(), anyInt()))
+                .thenReturn(new PageResponse<>(List.of(stored), 0, 20, 1L, 1));
+        var customer = new UsernamePasswordAuthenticationToken("+263771234567", null,
+                List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER")));
+        customer.setDetails(new JwtAuthDetails("+263771234567", null, userUuid, null, null, null));
+
+        PageResponse<ScanAttemptDTO> superApp = controller(svc, null)
+                .myScans(customer, null, null, 0, 20, eventId).getBody().getData();
+        PageResponse<ScanAttemptDTO> team = controller(svc, null)
+                .myScans(teamMemberAuth(UUID.randomUUID(), userUuid), null, null, 0, 20, eventId).getBody().getData();
+
+        ScanAttemptDTO seen = superApp.content().get(0);
+        assertThat(seen.bookingId()).isNull();
+        assertThat(seen).usingRecursiveComparison().ignoringFields("bookingId").isEqualTo(stored);
+        assertThat(superApp.totalElements()).isEqualTo(1L);
+        assertThat(team.content().get(0).bookingId()).isEqualTo(bookingId);
+    }
+
     @Test
     void myScans_rejectsTokenMissingUserUuidClaim() {
         // Legacy token with no userUuid claim: scoping to "whose scans?" is

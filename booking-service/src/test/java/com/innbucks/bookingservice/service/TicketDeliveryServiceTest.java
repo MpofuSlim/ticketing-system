@@ -29,8 +29,9 @@ import static org.mockito.Mockito.*;
  * prepends its own configured BASE_URL, which ends in {@code /foundry/brand}
  * (it was provisioned for brand assets), and hands the result to Twilio as a
  * MediaUrl. So the path we send must be exactly
- * {@code /bookings/{id}/tickets/{tn}/qr.png} — no edge prefix — because the
- * gateway's base already carries one. {@code TicketController} serves the
+ * {@code /bookings/ticket/{itemToken}/qr.png} (V31; it names neither the
+ * booking nor the ticket number) — no edge prefix — because the gateway's base
+ * already carries one. {@code TicketController} serves the
  * {@code /brand/bookings/...} alias precisely so this resolves without any
  * change to the gateway's config.
  *
@@ -46,6 +47,8 @@ class TicketDeliveryServiceTest {
 
     private static final UUID BOOKING_ID = UUID.fromString("8f6e4c06-e357-4980-852c-40de5fc97916");
     private static final String TICKET = "20260825-76931C";
+    private static final String BOOKING_TOKEN = "0123456789abcdef0123456789abcdef";
+    private static final String ITEM_TOKEN = "fedcba9876543210fedcba9876543210";
 
     private record Fixture(TicketDeliveryService service,
                            WhatsAppNotificationClient whatsApp,
@@ -65,8 +68,10 @@ class TicketDeliveryServiceTest {
                 .eventId(UUID.randomUUID())
                 .confirmationNumber("INN-20260825-31D117")
                 .phoneNumber("+263782606983")
+                .linkToken(BOOKING_TOKEN)
                 .items(List.of(BookingItem.builder()
                         .id(UUID.randomUUID())
+                        .linkToken(ITEM_TOKEN)
                         .ticketNumber(TICKET)
                         .categoryName("General")
                         .build()))
@@ -86,7 +91,7 @@ class TicketDeliveryServiceTest {
 
         f.service().deliver(bookingWithOneTicket());
 
-        assertEquals("/bookings/" + BOOKING_ID + "/tickets/" + TICKET + "/qr.png",
+        assertEquals("/bookings/ticket/" + ITEM_TOKEN + "/qr.png",
                 capturedQrPath(f),
                 "The gateway prepends its own BASE_URL, which ends in /foundry/brand. "
                         + "Any prefix added here doubles it and Twilio fails the media "
@@ -113,6 +118,21 @@ class TicketDeliveryServiceTest {
     }
 
     @Test
+    void qrPath_namesNeitherTheBookingNorTheTicketNumber() {
+        // Twilio fetches it, and the gateway logs it: a URL holding the ticket
+        // number carried the gate credential, one holding the booking id the
+        // key to every ticket of the booking.
+        Fixture f = fixture();
+
+        f.service().deliver(bookingWithOneTicket());
+
+        String path = capturedQrPath(f);
+        assertFalse(path.contains(BOOKING_ID.toString()), path);
+        assertFalse(path.contains(TICKET), path);
+        assertFalse(path.contains(BOOKING_TOKEN), path);
+    }
+
+    @Test
     void qrPath_endsInPng_soTwilioSeesAnImageExtension() {
         Fixture f = fixture();
 
@@ -126,16 +146,16 @@ class TicketDeliveryServiceTest {
         Fixture f = fixture();
         Booking booking = bookingWithOneTicket();
         booking.setItems(List.of(
-                BookingItem.builder().id(UUID.randomUUID()).ticketNumber("TN-1").build(),
-                BookingItem.builder().id(UUID.randomUUID()).ticketNumber("TN-2").build()));
+                BookingItem.builder().id(UUID.randomUUID()).linkToken("tok-TN-1").ticketNumber("TN-1").build(),
+                BookingItem.builder().id(UUID.randomUUID()).linkToken("tok-TN-2").ticketNumber("TN-2").build()));
 
         TicketDeliveryService.Outcome outcome = f.service().deliver(booking);
 
         ArgumentCaptor<String> paths = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp(), times(2)).sendEventQrCode(anyString(), anyString(), paths.capture());
         assertEquals(List.of(
-                        "/bookings/" + BOOKING_ID + "/tickets/TN-1/qr.png",
-                        "/bookings/" + BOOKING_ID + "/tickets/TN-2/qr.png"),
+                        "/bookings/ticket/tok-TN-1/qr.png",
+                        "/bookings/ticket/tok-TN-2/qr.png"),
                 paths.getAllValues());
         assertEquals(2, outcome.qrTicketsSent());
     }
@@ -157,8 +177,8 @@ class TicketDeliveryServiceTest {
         Fixture f = fixture();
         Booking booking = bookingWithOneTicket();
         booking.setItems(List.of(
-                BookingItem.builder().id(UUID.randomUUID()).ticketNumber("TN-BAD").build(),
-                BookingItem.builder().id(UUID.randomUUID()).ticketNumber("TN-OK").build()));
+                BookingItem.builder().id(UUID.randomUUID()).linkToken("tok-TN-BAD").ticketNumber("TN-BAD").build(),
+                BookingItem.builder().id(UUID.randomUUID()).linkToken("tok-TN-OK").ticketNumber("TN-OK").build()));
         doThrow(new NotificationDeliveryException("gateway said no"))
                 .when(f.whatsApp()).sendEventQrCode(anyString(), anyString(), contains("TN-BAD"));
 
@@ -171,9 +191,15 @@ class TicketDeliveryServiceTest {
 
     // -- V22: named attendees get their own ticket --------------------------
 
+    /**
+     * A ticket whose stand-in link token names it ({@code tok-<tn>}), so a test
+     * can tell which ticket a QR path or a link is for. Real tokens are random
+     * hex and name nothing.
+     */
     private static BookingItem ticketFor(String tn, String name, String email, String phone) {
         return BookingItem.builder()
                 .id(UUID.randomUUID())
+                .linkToken("tok-" + tn)
                 .ticketNumber(tn)
                 .categoryName("General")
                 .attendeeName(name)
@@ -280,8 +306,10 @@ class TicketDeliveryServiceTest {
         verify(f.email()).sendEmail(eq("rudo@example.com"), rudoSubject.capture(), rudoBody.capture(),
                 startsWith("ATT-"));
         String text = rudoBody.getValue();
-        assertTrue(text.contains("View your ticket online: https://dtx.example/foundry/bookings/tickets/"
-                + rudo.getId()), text);
+        assertTrue(text.contains("View your ticket online: https://dtx.example/foundry/bookings/ticket/tok-TN-RUDO"),
+                text);
+        assertFalse(text.contains(rudo.getId().toString()), text);
+        assertFalse(text.contains(BOOKING_TOKEN), text);
         // Nothing in a guest's email opens the booking: not its page, not its
         // id, not its confirmation number (the gate lookup's key to every
         // ticket of the booking).
@@ -298,8 +326,9 @@ class TicketDeliveryServiceTest {
         ArgumentCaptor<String> receipt = ArgumentCaptor.forClass(String.class);
         verify(f.email()).sendEmail(eq("alice@example.com"), receiptSubject.capture(), receipt.capture(),
                 startsWith("CONF-"));
-        assertTrue(receipt.getValue().contains("https://dtx.example/foundry/bookings/" + BOOKING_ID + "/tickets"),
+        assertTrue(receipt.getValue().contains("https://dtx.example/foundry/bookings/view/" + BOOKING_TOKEN + "/tickets"),
                 receipt.getValue());
+        assertFalse(receipt.getValue().contains(BOOKING_ID.toString()), receipt.getValue());
         assertTrue(receipt.getValue().contains("Booking reference: " + booking.getConfirmationNumber()),
                 receipt.getValue());
         assertTrue(receiptSubject.getValue().contains(booking.getConfirmationNumber()), receiptSubject.getValue());
