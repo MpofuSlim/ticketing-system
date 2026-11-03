@@ -46,3 +46,6 @@ build/
 # / API keys in deploy/cells/cell.<iso>.local.env on the host, never in git.
 # See deploy/README.md for the layered-config workflow.
 deploy/cells/*.local.env
+# ...and every copy of one (cell.zw.local.env.bak, .bak.2026-08-26-1235, ...):
+# a backup holds the same secrets, and untracked it rides along with `git add -A`.
+deploy/cells/*.local.env.*
