@@ -182,12 +182,14 @@ class ServiceSuspensionIT extends StaffItSupport {
         when(events.liveEventCount(anyCollection())).thenReturn(OptionalLong.of(0));
         suspend(org.getId(), "ticketing").andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.membersSignedOut").value(1));
-        JsonNode suspended = claims(refresh(session).at("/token").asText());
+        // Each refresh rotates the token: the next one must present the successor, or it reads as reuse.
+        JsonNode rotated = refresh(session);
+        JsonNode suspended = claims(rotated.at("/token").asText());
         assertThat(strings(suspended.path("roles"))).doesNotContain("EVENT_ORGANIZER");
         assertThat(suspended.has("organizerUuid")).isFalse();
 
         reinstate(org.getId(), "ticketing").andExpect(status().isOk());
-        JsonNode back = claims(refresh(session).at("/token").asText());
+        JsonNode back = claims(refresh(rotated).at("/token").asText());
         assertThat(strings(back.path("roles"))).contains("EVENT_ORGANIZER");
         assertThat(back.path("organizerUuid").asText()).isEqualTo(owner.getUserUuid().toString());
     }
