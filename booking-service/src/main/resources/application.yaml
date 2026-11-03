@@ -209,6 +209,12 @@ app:
     # caller sends as X-Api-Key. Blank = the endpoint is off (404). A secret:
     # set it per host in cell.<iso>.local.env, never in a committed file.
     ticket-check-api-key: ${BOOKINGS_TICKET_CHECK_API_KEY:}
+    # Ticket numbers on the organizer and staff surfaces (guest list, a booking
+    # read by anyone but its buyer, scan reports, the attendee edit's answer):
+    # true = masked (20261030-*****-**7CB) and no QR image. A ticket number is
+    # the gate credential. Off until the console has moved its attendee edit
+    # and ticket search to the item-id and server-side forms; then on per cell.
+    mask-ticket-numbers: ${BOOKINGS_MASK_TICKET_NUMBERS:false}
     # Pre-event WhatsApp reminder (EventReminderScheduler): sent once per
     # CONFIRMED booking when its event starts within this window. Hourly cron.
     reminder-window-hours: ${BOOKING_REMINDER_WINDOW_HOURS:24}

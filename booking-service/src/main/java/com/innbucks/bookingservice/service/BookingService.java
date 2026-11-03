@@ -1,5 +1,7 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.common.ticket.TicketNumbers;
+
 import com.innbucks.bookingservice.cache.EventLookupCache;
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
@@ -867,6 +869,29 @@ public class BookingService {
     }
 
     /**
+     * The guest-list row of one ticket number a person typed, within one event:
+     * the server-side search that replaces filtering the loaded list, which
+     * cannot match a masked number. Same scope as {@link #getBookingsByEvent}
+     * (ownership first, so a non-owner learns nothing). The typed value is
+     * read as issued ({@link TicketNumbers#canonical}: any case, dashes
+     * optional, no letter swapped). Empty when it is not a ticket number or the
+     * ticket is not this event's.
+     */
+    public List<CategoryBookingDTO> findInEventByTicketNumber(UUID eventId,
+                                                              String typedTicketNumber,
+                                                              UUID requesterOrganizerUuid,
+                                                              boolean isAdmin) {
+        if (!isAdmin) {
+            requireEventOwnership(eventId, requesterOrganizerUuid);
+        }
+        return TicketNumbers.canonical(typedTicketNumber)
+                .flatMap(bookingItemRepository::findByTicketNumberWithBooking)
+                .filter(item -> eventId.equals(item.getBooking().getEventId()))
+                .map(item -> List.of(toCategoryBookingDTO(item)))
+                .orElse(List.of());
+    }
+
+    /**
      * Looks up the event in event-service and throws AccessDeniedException if
      * its {@code tenantUserUuid} doesn't match the requester's organizer uuid
      * (the stable cross-service organizer identifier, NOT the email).
@@ -920,6 +945,7 @@ public class BookingService {
         Booking b = item.getBooking();
         return CategoryBookingDTO.builder()
                 .bookingId(b.getId())
+                .bookingItemId(item.getId())
                 .userEmail(b.getUserEmail())
                 .customerName(b.getCustomerName())
                 .phoneNumber(b.getPhoneNumber())
@@ -935,7 +961,8 @@ public class BookingService {
                 .categoryName(item.getCategoryName())
                 .rowLabel(item.getRowLabel())
                 .seatNumber(item.getSeatNumber())
-                .ticketNumber(item.getTicketNumber())
+                // Read by organizers and staff only, never the holder.
+                .ticketNumber(ticketNumbers.forStaff(item.getTicketNumber()))
                 .priceAtBooking(item.getPriceAtBooking())
                 .priceTierName(item.getPriceTierName())
                 .discountAmount(item.getDiscountAmount())
@@ -968,11 +995,16 @@ public class BookingService {
     // Returns only CONFIRMED bookings for a phone number — excludes PENDING and
     // CANCELLED so customers see only paid, valid tickets.
     public List<BookingResponseDTO> getActiveByPhoneNumber(String phoneNumber) {
+        return getActiveByPhoneNumber(phoneNumber, true);
+    }
+
+    /** @param forBuyer false when platform staff read someone else's number: masked, no QR. */
+    public List<BookingResponseDTO> getActiveByPhoneNumber(String phoneNumber, boolean forBuyer) {
         log.debug("Fetching confirmed bookings phoneNumber={}", MsisdnMasking.mask(phoneNumber));
         return loadWithItems(() -> bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber))
                 .stream()
                 .filter(b -> b.getStatus() == Booking.BookingStatus.CONFIRMED)
-                .map(this::toDTO)
+                .map(b -> toDTO(b, !forBuyer))
                 .collect(Collectors.toList());
     }
 
@@ -990,7 +1022,7 @@ public class BookingService {
                         .findByPhoneNumberAndTenantUserUuidOrderByCreatedAtDesc(phoneNumber, organizerUuid))
                 .stream()
                 .filter(b -> b.getStatus() == Booking.BookingStatus.CONFIRMED)
-                .map(this::toDTO)
+                .map(b -> toDTO(b, true))
                 .collect(Collectors.toList());
     }
 
@@ -1116,10 +1148,21 @@ public class BookingService {
      *        contact is PII an enumerating caller must not harvest.
      */
     private List<BookingItemDTO> toItemDTOs(Booking booking, boolean includeAttendeeContact) {
+        return toItemDTOs(booking, includeAttendeeContact, false);
+    }
+
+    /**
+     * @param staffView true when the reader is not the booking's buyer (an
+     *        organizer or staff member): the ticket number is masked and the
+     *        QR left out when the cell masks ticket numbers.
+     */
+    private List<BookingItemDTO> toItemDTOs(Booking booking, boolean includeAttendeeContact, boolean staffView) {
+        boolean masked = staffView && ticketNumbers.masking();
         return booking.getItems() == null
                 ? List.of()
                 : booking.getItems().stream()
                         .map(i -> BookingItemDTO.builder()
+                                .bookingItemId(includeAttendeeContact ? i.getId() : null)
                                 .seatId(i.getSeatId())
                                 .categoryId(i.getCategoryId())
                                 .categoryName(i.getCategoryName())
@@ -1128,8 +1171,8 @@ public class BookingService {
                                 .priceAtBooking(i.getPriceAtBooking())
                                 .priceTierName(i.getPriceTierName())
                             .discountAmount(i.getDiscountAmount())
-                                .ticketNumber(i.getTicketNumber())
-                                .qrCode(qrCodeGenerator.toDataUri(i.getTicketNumber()))
+                                .ticketNumber(masked ? ticketNumbers.forStaff(i.getTicketNumber()) : i.getTicketNumber())
+                                .qrCode(masked ? null : qrCodeGenerator.toDataUri(i.getTicketNumber()))
                                 .attendeeName(i.getAttendeeName())
                                 .attendeeEmail(includeAttendeeContact ? i.getAttendeeEmail() : null)
                                 .attendeePhone(includeAttendeeContact ? i.getAttendeePhone() : null)
@@ -1149,13 +1192,26 @@ public class BookingService {
                     return new NotFoundException("Booking not found");
                 });
 
-        if (!isAdmin && (booking.getUserEmail() == null || !booking.getUserEmail().equals(userEmail))) {
+        boolean owner = booking.getUserEmail() != null && booking.getUserEmail().equals(userEmail);
+        if (!isAdmin && !owner) {
             log.warn("Booking access denied bookingId={} requesterEmail={} ownerEmail={}",
                     bookingId, userEmail, booking.getUserEmail());
             throw new org.springframework.security.access.AccessDeniedException("Access denied");
         }
 
-        return toDTO(booking);
+        return toDTO(booking, !owner);
+    }
+
+    /**
+     * A booking for a sibling service ({@code GET /bookings/internal/{id}},
+     * behind the internal token): exactly as stored, never masked. Services are
+     * not people reading a screen, and what they receive must not change with
+     * the masking switch.
+     */
+    public BookingResponseDTO getBookingForService(UUID bookingId) {
+        Booking booking = bookingRepository.findByIdWithItems(bookingId)
+                .orElseThrow(() -> new NotFoundException("Booking not found"));
+        return toDTO(booking, false);
     }
 
     /**
@@ -1200,8 +1256,8 @@ public class BookingService {
                     return new NotFoundException("Booking not found");
                 });
 
-        if (!isAdmin && !ownedByCaller(booking, callerEmail, callerPhoneE164)
-                && !organizesBookingEvent(booking, organizerUuid)) {
+        boolean owner = ownedByCaller(booking, callerEmail, callerPhoneE164);
+        if (!isAdmin && !owner && !organizesBookingEvent(booking, organizerUuid)) {
             // 404, not 403: don't reveal that this confirmation number exists to
             // a caller who doesn't own the booking.
             log.warn("Booking confirmation lookup denied — caller not owner confirmation={} bookingId={}",
@@ -1209,7 +1265,7 @@ public class BookingService {
             throw new NotFoundException("Booking not found");
         }
 
-        return toDTO(booking);
+        return toDTO(booking, !owner);
     }
 
     /** True when {@code organizerUuid} owns the booking's event. A null on either side is false. */
@@ -1977,6 +2033,14 @@ public class BookingService {
         this.promoCodeRepository = promoCodeRepository;
     }
 
+    /** How ticket numbers reach organizers and staff. Setter for the same reason; without it, in full. */
+    private volatile TicketNumberDisplay ticketNumbers = TicketNumberDisplay.FULL;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setTicketNumberDisplay(TicketNumberDisplay ticketNumbers) {
+        this.ticketNumbers = Objects.requireNonNull(ticketNumbers, "ticketNumbers");
+    }
+
     /** Setter for the same reason; without it the claim retry is simply not counted. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setMetrics(BookingMetrics metrics) {
@@ -2052,8 +2116,17 @@ public class BookingService {
     }
 
     private BookingResponseDTO toDTO(Booking booking) {
+        return toDTO(booking, false);
+    }
+
+    /**
+     * A booking as its buyer reads it ({@code staffView} false), or as an
+     * organizer or staff member reads someone else's ({@code staffView} true:
+     * ticket numbers masked and no QR when the cell masks them).
+     */
+    private BookingResponseDTO toDTO(Booking booking, boolean staffView) {
         // Authenticated/owner view: the full attendee record travels.
-        List<BookingItemDTO> itemDTOs = toItemDTOs(booking, true);
+        List<BookingItemDTO> itemDTOs = toItemDTOs(booking, true, staffView);
 
         return BookingResponseDTO.builder()
                 .id(booking.getId())

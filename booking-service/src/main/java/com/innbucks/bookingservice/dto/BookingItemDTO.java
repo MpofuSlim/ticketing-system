@@ -11,6 +11,13 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 public class BookingItemDTO {
+    /**
+     * This ticket's own id, on the authenticated views only: the key for the
+     * attendee edit by item. Never on the public magic-link or phone views.
+     */
+    @Schema(example = "f1c0d2e3-2345-6789-abcd-ef0123456789", nullable = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private UUID bookingItemId;
     private UUID seatId;
     private UUID categoryId;
     private String categoryName;
@@ -31,10 +38,14 @@ public class BookingItemDTO {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private BigDecimal discountAmount;
 
-    private String ticketNumber; // e.g. 20260419-7KQ4M-9XZ2B (legacy tickets: 20260419-48291X)
+    // e.g. 20260419-7KQ4M-9XZ2B (legacy tickets: 20260419-48291X). Masked
+    // (20260419-*****-**Z2B) when someone other than the buyer reads the
+    // booking and the cell masks ticket numbers.
+    private String ticketNumber;
 
     // Per-seat scan code. Base64 PNG wrapped as a data URI so the frontend
-    // can render with `<img src={qrCode} />`. Encodes the ticketNumber.
+    // can render with `<img src={qrCode} />`. Encodes the ticketNumber. Null
+    // wherever the ticketNumber is masked: it IS the credential.
     private String qrCode;
 
     /**

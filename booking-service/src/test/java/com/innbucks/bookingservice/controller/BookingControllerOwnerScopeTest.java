@@ -28,6 +28,7 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.any;
@@ -110,7 +111,7 @@ class BookingControllerOwnerScopeTest {
     @Test
     void phone_owner_getsOwnBookingsWithQr_andLookupUsesNormalisedNumber() {
         BookingService bookingService = mock(BookingService.class);
-        when(bookingService.getActiveByPhoneNumber(OWNER_PHONE_E164))
+        when(bookingService.getActiveByPhoneNumber(OWNER_PHONE_E164, true))
                 .thenReturn(List.of(bookingWithQr()));
 
         // Owner queries in LOCAL form; JWT carries the E.164 form. They match
@@ -123,7 +124,7 @@ class BookingControllerOwnerScopeTest {
         assertThat(resp.getBody().getData()).hasSize(1);
         assertThat(resp.getBody().getData().get(0).getItems().get(0).getQrCode())
                 .startsWith("data:image/png;base64,");
-        verify(bookingService).getActiveByPhoneNumber(OWNER_PHONE_E164);
+        verify(bookingService).getActiveByPhoneNumber(OWNER_PHONE_E164, true);
     }
 
     @Test
@@ -135,7 +136,7 @@ class BookingControllerOwnerScopeTest {
                 OTHER_PHONE_E164, auth(OWNER_EMAIL, OWNER_PHONE_E164, "ROLE_CUSTOMER")))
                 .isInstanceOf(AccessDeniedException.class);
 
-        verify(bookingService, never()).getActiveByPhoneNumber(any());
+        verify(bookingService, never()).getActiveByPhoneNumber(any(), anyBoolean());
     }
 
     @Test
@@ -147,7 +148,7 @@ class BookingControllerOwnerScopeTest {
                 OWNER_PHONE_E164, auth(OWNER_EMAIL, null, "ROLE_CUSTOMER")))
                 .isInstanceOf(AccessDeniedException.class);
 
-        verify(bookingService, never()).getActiveByPhoneNumber(any());
+        verify(bookingService, never()).getActiveByPhoneNumber(any(), anyBoolean());
     }
 
     @Test
@@ -164,19 +165,19 @@ class BookingControllerOwnerScopeTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         verify(bookingService).getActiveByPhoneNumberForOrganizer(OTHER_PHONE_E164, ORGANIZER_UUID);
         // The unscoped lookup returned every organizer's bookings for the number.
-        verify(bookingService, never()).getActiveByPhoneNumber(any());
+        verify(bookingService, never()).getActiveByPhoneNumber(any(), anyBoolean());
     }
 
     @Test
     void phone_eventOrganizer_readingTheirOwnNumber_getsAllTheirOwnBookings() {
         BookingService bookingService = mock(BookingService.class);
-        when(bookingService.getActiveByPhoneNumber(OWNER_PHONE_E164)).thenReturn(List.of(bookingWithQr()));
+        when(bookingService.getActiveByPhoneNumber(OWNER_PHONE_E164, true)).thenReturn(List.of(bookingWithQr()));
 
         // Their own tickets, bought as a customer, whoever organizes those events.
         controller(bookingService).getBookingsByPhoneNumber(OWNER_PHONE_LOCAL,
                 auth("org@example.com", OWNER_PHONE_E164, ORGANIZER_UUID, "ROLE_EVENT_ORGANIZER"));
 
-        verify(bookingService).getActiveByPhoneNumber(OWNER_PHONE_E164);
+        verify(bookingService).getActiveByPhoneNumber(OWNER_PHONE_E164, true);
         verify(bookingService, never()).getActiveByPhoneNumberForOrganizer(any(), any());
     }
 
@@ -188,25 +189,25 @@ class BookingControllerOwnerScopeTest {
                 OTHER_PHONE_E164, auth("org@example.com", null, "ROLE_EVENT_ORGANIZER")))
                 .isInstanceOf(AccessDeniedException.class);
 
-        verify(bookingService, never()).getActiveByPhoneNumber(any());
+        verify(bookingService, never()).getActiveByPhoneNumber(any(), anyBoolean());
         verify(bookingService, never()).getActiveByPhoneNumberForOrganizer(any(), any());
     }
 
     @Test
     void phone_productOfficer_mayQueryAnyPhone_unscoped() {
         BookingService bookingService = mock(BookingService.class);
-        when(bookingService.getActiveByPhoneNumber(OTHER_PHONE_E164)).thenReturn(List.of());
+        when(bookingService.getActiveByPhoneNumber(OTHER_PHONE_E164, false)).thenReturn(List.of());
 
         controller(bookingService).getBookingsByPhoneNumber(
                 OTHER_PHONE_E164, auth("officer@innbucks.co.zw", null, "ROLE_PRODUCT_OFFICER"));
 
-        verify(bookingService).getActiveByPhoneNumber(OTHER_PHONE_E164);
+        verify(bookingService).getActiveByPhoneNumber(OTHER_PHONE_E164, false);
     }
 
     @Test
     void phone_superAdmin_mayQueryAnyPhone() {
         BookingService bookingService = mock(BookingService.class);
-        when(bookingService.getActiveByPhoneNumber(OTHER_PHONE_E164))
+        when(bookingService.getActiveByPhoneNumber(OTHER_PHONE_E164, false))
                 .thenReturn(List.of());
 
         ResponseEntity<ApiResult<List<BookingResponseDTO>>> resp =
@@ -214,7 +215,7 @@ class BookingControllerOwnerScopeTest {
                         OTHER_PHONE_E164, auth("admin@example.com", null, "ROLE_SUPER_ADMIN"));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        verify(bookingService).getActiveByPhoneNumber(OTHER_PHONE_E164);
+        verify(bookingService).getActiveByPhoneNumber(OTHER_PHONE_E164, false);
     }
 
     // ---------------- GET /bookings/me/tickets ----------------
