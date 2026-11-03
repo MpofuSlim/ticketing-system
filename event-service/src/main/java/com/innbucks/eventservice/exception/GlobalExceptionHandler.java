@@ -211,11 +211,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResult<Void>> handleUnreadable(
             org.springframework.http.converter.HttpMessageNotReadableException ex) {
         boolean badDate = false;
+        Throwable deepest = ex;
         for (Throwable t = ex; t != null && !badDate; t = t.getCause() == t ? null : t.getCause()) {
             badDate = t instanceof java.time.format.DateTimeParseException;
+            deepest = t;
         }
-        log.warn("Unreadable request body badDate={} type={}", badDate,
-                ex.getMostSpecificCause().getClass().getSimpleName());
+        log.warn("Unreadable request body badDate={} type={}", badDate, deepest.getClass().getSimpleName());
         return ResponseEntity.badRequest()
                 .body(ApiResult.error(HttpStatus.BAD_REQUEST,
                         badDate ? INVALID_DATE_TIME_MESSAGE : UNREADABLE_BODY_MESSAGE));
