@@ -212,6 +212,8 @@ public class GateLookupService {
                 .redeemed(redeemed)
                 .redeemedAt(item.getRedeemedAt())
                 .redeemedByName(redeemed ? item.getRedeemedByName() : null)
+                .assignedNumber(item.getAssignedNumber())
+                .numberLabel(item.getNumberLabel())
                 .build();
     }
 

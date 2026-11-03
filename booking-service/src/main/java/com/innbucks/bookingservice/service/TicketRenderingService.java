@@ -259,6 +259,10 @@ public class TicketRenderingService {
         if (item.addOnsLabel() != null) {
             sb.append("<div class=\"seat\">With ").append(esc(item.addOnsLabel())).append("</div>");
         }
+        // Its assigned number (V34), e.g. the bib a runner wears: a label, not the entry credential.
+        if (item.numberText() != null) {
+            sb.append("<div class=\"cat\">").append(esc(item.numberText())).append("</div>");
+        }
         if (item.getRowLabel() != null || item.getSeatNumber() != null) {
             sb.append("<div class=\"seat\">Row ").append(esc(nullSafe(item.getRowLabel(), "-")))
                     .append(", Seat ").append(item.getSeatNumber() == null ? "-" : item.getSeatNumber())
@@ -300,6 +304,10 @@ public class TicketRenderingService {
             if (item.addOnsLabel() != null) {
                 sb.append("<div style=\"color:#475569;font-size:14px\">With ")
                         .append(esc(item.addOnsLabel())).append("</div>");
+            }
+            if (item.numberText() != null) {
+                sb.append("<div style=\"font-weight:bold;margin-top:4px\">")
+                        .append(esc(item.numberText())).append("</div>");
             }
             if (item.getRowLabel() != null || item.getSeatNumber() != null) {
                 sb.append("<div style=\"color:#475569;font-size:14px\">Row ")

@@ -252,7 +252,7 @@ public class OrganizerReportService {
         // old export keeps working; totalAmount is already after the discount.
         // V29 appends paymentMethod (in words, empty when not recorded) after them.
         StringBuilder sb = new StringBuilder();
-        sb.append("confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees,promoCode,discountAmount,paymentMethod\n");
+        sb.append("confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees,promoCode,discountAmount,paymentMethod,assignedNumbers\n");
         for (Booking b : confirmed) {
             sb.append(csv(b.getConfirmationNumber())).append(',')
               .append(csv(b.getEventId())).append(',')
@@ -266,9 +266,21 @@ public class OrganizerReportService {
               .append(csv(attendeeNames(b))).append(',')
               .append(csv(b.getPromoCode())).append(',')
               .append(b.getDiscountAmount() == null ? "" : scale2(b.getDiscountAmount())).append(',')
-              .append(csv(PaymentMethods.label(b.getPaymentRail()))).append('\n');
+              .append(csv(PaymentMethods.label(b.getPaymentRail()))).append(',')
+              .append(csv(assignedNumbers(b))).append('\n');
         }
         return sb.toString();
+    }
+
+    /** The booking's assigned numbers (V34), "; "-joined in ticket order; empty when none. */
+    private static String assignedNumbers(Booking b) {
+        if (b.getItems() == null) return "";
+        return b.getItems().stream()
+                .sorted(java.util.Comparator.comparing((BookingItem i) -> i.getSeatNumber() == null
+                        ? Integer.MAX_VALUE : i.getSeatNumber()))
+                .map(BookingItem::getAssignedNumber)
+                .filter(n -> n != null && !n.isBlank())
+                .collect(Collectors.joining("; "));
     }
 
     /** Named attendees across the booking's tickets, "; "-joined; empty when none. */

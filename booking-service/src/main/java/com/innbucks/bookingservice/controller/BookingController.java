@@ -1408,13 +1408,22 @@ public class BookingController {
                     + "(any case, dashes optional). Returns that ticket's row only, or an empty list.",
                     example = "20260502-3fq7m-x9k2d")
             @RequestParam(required = false) String ticketNumber,
+            @io.swagger.v3.oas.annotations.Parameter(description = "An assigned number (V34), e.g. a bib "
+                    + "(any case). Returns the rows of the tickets that carry it — one per category that has "
+                    + "it — or an empty list.", example = "T014")
+            @RequestParam(required = false) String assignedNumber,
             Authentication authentication) {
         UUID requesterOrganizerUuid = com.innbucks.bookingservice.security.AuthenticatedCaller
                 .organizerUuid(authentication);
         boolean isAdmin = AuthenticatedCaller.isPlatformStaff(authentication);
         boolean search = ticketNumber != null;
         log.debug("GET /bookings/by-event/{} requesterOrganizerUuid={} isAdmin={} search={}",
-                eventId, requesterOrganizerUuid, isAdmin, search);
+                eventId, requesterOrganizerUuid, isAdmin, search || assignedNumber != null);
+        if (assignedNumber != null && !search) {
+            return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
+                    bookingService.findInEventByAssignedNumber(eventId, assignedNumber, requesterOrganizerUuid,
+                            isAdmin)));
+        }
         if (search) {
             return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
                     bookingService.findInEventByTicketNumber(eventId, ticketNumber, requesterOrganizerUuid, isAdmin)));
