@@ -79,6 +79,14 @@ public class GlobalExceptionHandler {
                         "Could not read the uploaded file. Please retry the upload."));
     }
 
+    /** A refusal with a domain code — see {@link ApiProblemException}. */
+    @ExceptionHandler(ApiProblemException.class)
+    public ResponseEntity<ApiResult<Map<String, Object>>> handleApiProblem(ApiProblemException ex) {
+        log.warn("ApiProblem status={} errorCode={}", ex.getStatus().value(), ex.getErrorCode());
+        return ResponseEntity.status(ex.getStatus())
+                .body(ApiResult.of(ex.getStatus(), ex.getMessage(), ex.data()));
+    }
+
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ApiResult<Void>> handleNotFound(NotFoundException ex) {
         log.warn("NotFound: {}", ex.getMessage());
