@@ -3726,6 +3726,64 @@ entry credential: the gate admits on the ticket number alone.**
   bookings wait for those seconds, so deploy at a quiet time). Rollback: the
   previous image ignores all of it; a confirm on it gives no number.
 
+## Box office: cash sales at the organizer's outlet (booking-service V35)
+
+**`POST /bookings/box-office` lets an event's organizer sell tickets for cash
+from the Foundry portal; `POST /bookings/box-office/{bookingId}/void` voids a
+sale; `GET /event-organizer/reports/cash-up` reconciles the till.** Owner
+decisions (2026-11-03): only the organizer's OWN account sells (its login has a
+second factor; a team member's shared-handset login does not, and the cash-up
+reconciles by the account that sold); the organizer voids, with a reason, until
+the event starts and while none of the sale's tickets is scanned; cash sales
+count in the invoice commission like online ones; and the box office sells in
+the same window as online.
+
+- **A sale is an online sale, confirmed at once.** `BoxOfficeService.sell`
+  asks event-service (live, fail-closed) that the caller is the event's
+  organizer, then `BookingService.createBoxOfficeBooking` runs the ordinary
+  create — sales window, terms and answers, add-ons, promo codes, the
+  per-booking ceiling, the stock lock — and `confirmBoxOfficeSale` confirms it
+  under the row lock through `markConfirmed`, so tickets, assigned numbers and
+  messages are an online sale's exactly. It never touches payment-service. The
+  per-number unpaid limit is not asked (the booking is paid the moment it
+  exists). A failure between the two steps leaves an unpaid hold that expires
+  on its own; the seller sees the error and takes no cash.
+- **The buyer is the BODY, never the token.** The token is the organizer's, so
+  the controller takes the buyer's name, phone (required: the tickets go to it)
+  and email from the request only, validated exactly like `POST /bookings`'s.
+- **A cash sale is `payment_rail = CASH` AND `sold_by_user_uuid` set.**
+  `PaymentMethods.CASH` ("Cash (box office)"). `recordPaymentRail` drops a
+  CASH rail from payment-service's confirm, so nothing but the box office can
+  make a booking look like a cash sale. `soldBy` / `voidedBy` / `voidedAt` /
+  `voidReason` are on staff views and the guest list only, never the buyer's.
+- **`Idempotency-Key` is required** (400 `IDEMPOTENCY_KEY_REQUIRED`); the
+  existing `IdempotencyFilter` (per caller, 24 h) answers a retry with the
+  first sale, so a double click never sells twice.
+- **A void** (`CASH_VOIDED`, never resurrected) is shaped like the admin
+  reversal: read; the event's start asked live (fail-closed 503); event-service
+  availability released; then one transaction that takes the booking row, then
+  LOCKS ITS TICKETS (`lockByBookingId`) before re-checking that none is
+  scanned, releases the stock, and cancels. Refusals: 404 for anyone but the
+  organizer (no existence oracle), 409 `NOT_A_CASH_SALE`, `ALREADY_VOIDED`,
+  `TICKET_SCANNED`, `EVENT_STARTED`. The buyer is told the tickets no longer
+  admit and to see the box office (`cashVoidText`, SMS-safe), never "refund in
+  progress". Assigned numbers stay with the voided tickets (never reused).
+- **The scan's claim requires `is_active`** (`claimRedemption`), which the V5
+  trigger clears on CANCELLED. Before it, a scan that read a CONFIRMED booking
+  could claim a ticket after a void or an admin reversal committed. A claim that
+  loses this way (the ticket never redeemed) answers `BOOKING_NOT_CONFIRMED`,
+  not `ALREADY_REDEEMED`.
+- **Reports:** the cash-up counts a sale on the day it was made and a void on
+  the day it was made (UTC days, like every organizer report), per account,
+  `net` = what the till should hold, with every entry. The revenue summary's
+  `byPaymentMethod` gains a CASH row; a voided sale counts as a refund there
+  (CANCELLED + `availabilityReleased`, the reversal's own shape). Invoicing
+  sums confirmed totals, so cash sales carry commission.
+- **Residuals, stated:** a void of a sale whose event event-service no longer
+  answers for (deleted) is a 503 until it does; a void that loses the ticket
+  re-check after releasing event-service's availability leaves that display
+  mirror short by the sale's tickets.
+
 ## Cloudflare blocks `PUT` + multipart — uploads take `POST`
 
 **The banner upload accepts BOTH `POST` and `PUT` on `/events/{id}/banner`, and

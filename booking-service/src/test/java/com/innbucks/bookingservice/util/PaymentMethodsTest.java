@@ -18,6 +18,12 @@ class PaymentMethodsTest {
     }
 
     @Test
+    void aBoxOfficeCashSale_isCashInWords() {
+        assertThat(PaymentMethods.code(PaymentMethods.CASH)).isEqualTo("CASH");
+        assertThat(PaymentMethods.label(PaymentMethods.CASH)).isEqualTo("Cash (box office)");
+    }
+
+    @Test
     void aRailAddedLater_isShownByItsOwnName_neverHidden() {
         assertThat(PaymentMethods.code("ONEMONEY")).isEqualTo("ONEMONEY");
         assertThat(PaymentMethods.label("ONEMONEY")).isEqualTo("ONEMONEY");

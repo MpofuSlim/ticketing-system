@@ -336,6 +336,74 @@ public class OrganizerReportService {
      * so they are not counted. Ticket prices are the per-category report's;
      * together they make up the revenue summary's net.
      */
+    /**
+     * The box office cash-up (V35): per account, the cash taken by its sales
+     * and handed back by its voids in the window, and every entry behind it.
+     * A sale counts on the day it was made, a void on the day it was made, so
+     * a sale voided the next day is in both days' cash-ups, each on its side.
+     */
+    @Transactional(readOnly = true)
+    public com.innbucks.bookingservice.dto.report.CashUpReportDTO cashUp(
+            UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {
+        Range r = resolveRange(from, to);
+        final class Till {
+            int sales;
+            int tickets;
+            BigDecimal taken = BigDecimal.ZERO;
+            int voids;
+            BigDecimal returned = BigDecimal.ZERO;
+        }
+        Map<String, Till> tills = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        List<com.innbucks.bookingservice.dto.report.CashUpReportDTO.Entry> entries = new ArrayList<>();
+        for (Booking b : repository.findCashSalesWithItems(organizerUuid, eventId, r.start(), r.end())) {
+            int tickets = b.getItems() == null ? 0 : b.getItems().size();
+            BigDecimal amount = scale2(nz(b.getTotalAmount()));
+            if (within(b.getCreatedAt(), r)) {
+                Till t = tills.computeIfAbsent(nameOr(b.getSoldByName()), k -> new Till());
+                t.sales++;
+                t.tickets += tickets;
+                t.taken = t.taken.add(amount);
+                entries.add(new com.innbucks.bookingservice.dto.report.CashUpReportDTO.Entry("SALE", b.getCreatedAt(),
+                        nameOr(b.getSoldByName()), b.getId(), b.getConfirmationNumber(), b.getEventId(),
+                        b.getCustomerName(), tickets, amount, null));
+            }
+            if (b.getCancelReason() == Booking.CancelReason.CASH_VOIDED && within(b.getVoidedAt(), r)) {
+                Till t = tills.computeIfAbsent(nameOr(b.getVoidedByName()), k -> new Till());
+                t.voids++;
+                t.returned = t.returned.add(amount);
+                entries.add(new com.innbucks.bookingservice.dto.report.CashUpReportDTO.Entry("VOID", b.getVoidedAt(),
+                        nameOr(b.getVoidedByName()), b.getId(), b.getConfirmationNumber(), b.getEventId(),
+                        b.getCustomerName(), tickets, amount, b.getVoidReason()));
+            }
+        }
+        entries.sort(Comparator.comparing(com.innbucks.bookingservice.dto.report.CashUpReportDTO.Entry::at));
+        List<com.innbucks.bookingservice.dto.report.CashUpReportDTO.Seller> sellers = new ArrayList<>();
+        int sales = 0, tickets = 0, voids = 0;
+        BigDecimal taken = BigDecimal.ZERO, returned = BigDecimal.ZERO;
+        for (Map.Entry<String, Till> e : tills.entrySet()) {
+            Till t = e.getValue();
+            sellers.add(new com.innbucks.bookingservice.dto.report.CashUpReportDTO.Seller(e.getKey(), t.sales,
+                    t.tickets, scale2(t.taken), t.voids, scale2(t.returned), scale2(t.taken.subtract(t.returned))));
+            sales += t.sales;
+            tickets += t.tickets;
+            voids += t.voids;
+            taken = taken.add(t.taken);
+            returned = returned.add(t.returned);
+        }
+        return new com.innbucks.bookingservice.dto.report.CashUpReportDTO(sellers,
+                new com.innbucks.bookingservice.dto.report.CashUpReportDTO.Totals(sales, tickets, scale2(taken), voids,
+                        scale2(returned), scale2(taken.subtract(returned))),
+                entries);
+    }
+
+    private static boolean within(LocalDateTime at, Range r) {
+        return at != null && !at.isBefore(r.start()) && at.isBefore(r.end());
+    }
+
+    private static String nameOr(String name) {
+        return name == null || name.isBlank() ? "Unknown" : name;
+    }
+
     @Transactional(readOnly = true)
     public List<com.innbucks.bookingservice.dto.report.AddOnSalesDTO> addOnSales(
             UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {

@@ -102,7 +102,11 @@ public class BookingCancelledNotificationListener {
             return;
         }
 
-        boolean refund = booking.isAvailabilityReleased();
+        // A voided box office sale (V35): the cash went back over the counter,
+        // so no "refund in progress" line; the buyer is told the tickets are
+        // void and to see the box office.
+        boolean cashVoid = event.reason() == Booking.CancelReason.CASH_VOIDED;
+        boolean refund = !cashVoid && booking.isAvailabilityReleased();
         // Ref <=46 chars (API limit), unique per send; subject plain ASCII —
         // the API rejects typographic punctuation in subjects ("Invalid subject").
         String ref = "CANCEL-" + booking.getConfirmationNumber() + "-"
@@ -110,7 +114,7 @@ public class BookingCancelledNotificationListener {
         String subject = refund
                 ? "Your InnBucks booking " + booking.getConfirmationNumber() + " was cancelled - refund in progress"
                 : "Your InnBucks booking " + booking.getConfirmationNumber() + " was cancelled";
-        String message = buildCancellationText(booking, refund);
+        String message = cashVoid ? cashVoidText(booking) : buildCancellationText(booking, refund);
 
         String emailAddr = booking.getUserEmail();
         if (emailAddr != null && !emailAddr.isBlank()) {
@@ -175,6 +179,12 @@ public class BookingCancelledNotificationListener {
      * questions." rather than "Questions?", and a comma rather than the em dash
      * the refund line used to carry.
      */
+    /** Plain ASCII with no colon or semicolon: the same text goes by SMS, whose gateway refuses them. */
+    static String cashVoidText(Booking booking) {
+        return "Your booking " + booking.getConfirmationNumber() + " was cancelled at the box office where you "
+                + "bought it, and its tickets no longer get you in. Please speak to the box office about your money.";
+    }
+
     private String buildCancellationText(Booking booking, boolean refund) {
         String ref = booking.getConfirmationNumber();
         if (refund) {

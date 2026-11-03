@@ -48,6 +48,15 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
     """)
     List<BookingItem> findByEventIdWithBooking(@Param("eventId") UUID eventId);
 
+    /**
+     * A booking's tickets, locked (V35 cash void): taken after the booking
+     * row and before the scan check, so a scan's claim of one of them waits
+     * for the void and then finds it inactive.
+     */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT i FROM BookingItem i WHERE i.booking.id = :bookingId ORDER BY i.id")
+    List<BookingItem> lockByBookingId(@Param("bookingId") UUID bookingId);
+
     /** An assigned number's tickets within one event (V34), any letter case. */
     @Query("""
         SELECT i FROM BookingItem i
@@ -172,6 +181,7 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
             i.redeemedByName = :redeemedByName
         WHERE i.id = :id
         AND i.redeemedAt IS NULL
+        AND i.isActive = true
     """)
     int claimRedemption(
             @Param("id") UUID id,

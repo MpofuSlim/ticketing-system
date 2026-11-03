@@ -53,8 +53,9 @@ public interface OrganizerReportRepository extends Repository<Booking, UUID> {
     /**
      * Reversed (refunded) bookings: CONFIRMED then admin-reversed, which flips
      * the status to CANCELLED and sets availabilityReleased=true. That flag is
-     * set ONLY by reverseConfirmedBooking, so it cleanly distinguishes a refund
-     * from a PENDING hold that merely expired (never paid). Items are not
+     * set ONLY by reverseConfirmedBooking and a box office void (V35: the cash
+     * handed back), both of which return money, so it cleanly distinguishes a
+     * refund from a PENDING hold that merely expired (never paid). Items are not
      * needed here — only the refunded value — so no fetch join.
      */
     @Query("""
@@ -69,4 +70,24 @@ public interface OrganizerReportRepository extends Repository<Booking, UUID> {
                                @Param("eventId") UUID eventId,
                                @Param("start") LocalDateTime start,
                                @Param("end") LocalDateTime end);
+
+    /**
+     * Box office cash sales (V35) sold OR voided in the window, with their
+     * tickets, for the cash-up: a sale counts on the day the cash was taken,
+     * a void on the day it was handed back.
+     */
+    @Query("""
+        SELECT DISTINCT b FROM Booking b
+        LEFT JOIN FETCH b.items
+        WHERE b.soldByUserUuid IS NOT NULL
+          AND (:organizerUuid IS NULL OR b.tenantUserUuid = :organizerUuid)
+          AND (:eventId IS NULL OR b.eventId = :eventId)
+          AND ((b.createdAt >= :start AND b.createdAt < :end)
+               OR (b.voidedAt >= :start AND b.voidedAt < :end))
+        ORDER BY b.createdAt ASC
+    """)
+    List<Booking> findCashSalesWithItems(@Param("organizerUuid") @Nullable UUID organizerUuid,
+                                         @Param("eventId") UUID eventId,
+                                         @Param("start") LocalDateTime start,
+                                         @Param("end") LocalDateTime end);
 }

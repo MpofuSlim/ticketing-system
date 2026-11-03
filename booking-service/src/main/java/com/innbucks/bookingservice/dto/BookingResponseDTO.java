@@ -40,6 +40,22 @@ public class BookingResponseDTO {
             description = "The add-ons' part of totalAmount; absent when the booking has none.")
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     private BigDecimal addOnsAmount;
+
+    @io.swagger.v3.oas.annotations.media.Schema(description = "Box office (V35): the organiser account that sold this booking for cash. Organiser and staff views only; absent otherwise.", example = "organizer@example.com")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String soldBy;
+
+    @io.swagger.v3.oas.annotations.media.Schema(description = "A voided cash sale (V35): who voided it. Organiser and staff views only.", example = "organizer@example.com")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String voidedBy;
+
+    @io.swagger.v3.oas.annotations.media.Schema(description = "A voided cash sale (V35): when.")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private java.time.LocalDateTime voidedAt;
+
+    @io.swagger.v3.oas.annotations.media.Schema(description = "A voided cash sale (V35): the organiser's reason.", example = "Buyer changed their mind")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String voidReason;
     // Set after a confirm that included points. Null on PENDING/cancelled
     // bookings and pure-cash confirmations.
     private BigDecimal pointsUsed;

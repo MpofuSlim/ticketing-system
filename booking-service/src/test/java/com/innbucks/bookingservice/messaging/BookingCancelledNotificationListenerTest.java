@@ -147,6 +147,24 @@ class BookingCancelledNotificationListenerTest {
     }
 
     @Test
+    void aVoidedCashSale_isAnnounced_withoutPromisingARefund() {
+        Mocks m = mocks();
+        Booking b = booking("+263771234567", "rufaro@example.com", true);
+        b.setCancelReason(Booking.CancelReason.CASH_VOIDED);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingCancelled(eventFor(b));
+
+        verify(m.email()).sendEmail(eq("rufaro@example.com"),
+                eq("Your InnBucks booking INN-20260610-A1B2C3 was cancelled"), contains("box office"), anyString());
+        verify(m.sms()).sendSms(eq("+263771234567"), contains("no longer get you in"), anyString());
+        verify(m.sms(), never()).sendSms(anyString(), contains("refund"), anyString());
+        String text = BookingCancelledNotificationListener.cashVoidText(b);
+        assertThat(text).doesNotContain(":").doesNotContain(";");
+        assertThat(com.innbucks.bookingservice.util.SmsTextSanitizer.toGsmSafe(text)).isEqualTo(text);
+    }
+
+    @Test
     void aBookingResurrectedBeforeTheNoticeWentOut_isNotToldItWasCancelled() {
         // The cancellation committed, then a late payment brought the booking
         // back before this (async) listener read it. Its tickets are on their

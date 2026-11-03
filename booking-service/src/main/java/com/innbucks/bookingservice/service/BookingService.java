@@ -196,6 +196,25 @@ public class BookingService {
             String phoneNumber,
             CreateBookingRequestDTO request
     ) {
+        return createBooking(userEmail, phoneNumber, request, false);
+    }
+
+    /**
+     * A box office sale's booking (V35): created exactly like an online one,
+     * except that the buyer's per-number unpaid limit is not asked. That limit
+     * bounds the EcoCash prompts an unpaid booking can lead to, and this one is
+     * paid in cash the moment it exists ({@link #confirmBoxOfficeSale}).
+     */
+    BookingResponseDTO createBoxOfficeBooking(String userEmail, String phoneNumber, CreateBookingRequestDTO request) {
+        return createBooking(userEmail, phoneNumber, request, true);
+    }
+
+    private BookingResponseDTO createBooking(
+            String userEmail,
+            String phoneNumber,
+            CreateBookingRequestDTO request,
+            boolean boxOffice
+    ) {
         log.info("Creating booking userEmail={} eventId={} seats={}",
                 userEmail, request.getEventId(), request.getSeats().size());
 
@@ -206,7 +225,9 @@ public class BookingService {
                     "You may book at most " + maxSeatsPerBooking + " seats per booking.");
         }
 
-        requireUnpaidRoomFor(phoneNumber);
+        if (!boxOffice) {
+            requireUnpaidRoomFor(phoneNumber);
+        }
 
         // === Resolution phase — NO transaction, NO DB connection held. ===
         // Every seat-service / event-service round trip below runs BEFORE the
@@ -1029,6 +1050,7 @@ public class BookingService {
                 .addOns(addOnsOf(item))
                 .assignedNumber(item.getAssignedNumber())
                 .numberLabel(item.getNumberLabel())
+                .soldBy(b.getSoldByName())
                 .holderName(item.holderName())
                 .eventId(b.getEventId())
                 .status(b.getStatus())
@@ -1566,6 +1588,121 @@ public class BookingService {
      * left without its local flip is unchanged: the same rare manual-fix case
      * the comment below describes.
      */
+    // ---- Box office (V35) ---------------------------------------------------
+
+    static final String NOT_A_CASH_SALE = "NOT_A_CASH_SALE";
+    static final String ALREADY_VOIDED = "ALREADY_VOIDED";
+    static final String TICKET_SCANNED = "TICKET_SCANNED";
+    static final String EVENT_STARTED = "EVENT_STARTED";
+
+    /**
+     * The second half of a box office sale: the booking {@link
+     * #createBoxOfficeBooking} just made becomes CONFIRMED, paid in CASH,
+     * stamped with its seller, under its row lock. {@link #markConfirmed} is
+     * the online confirm's own, so the tickets, numbers and messages are
+     * exactly an online sale's. Answers the organizer's (staff) view.
+     */
+    BookingResponseDTO confirmBoxOfficeSale(UUID bookingId, UUID sellerUserUuid, String sellerName) {
+        return Objects.requireNonNull(txTemplate.execute(status -> {
+            Booking booking = lockWithItems(bookingId, "Box office sale");
+            if (booking.getStatus() != Booking.BookingStatus.PENDING) {
+                log.warn("Box office sale not confirmable bookingId={} status={}", bookingId, booking.getStatus());
+                throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
+            }
+            booking.setSoldByUserUuid(sellerUserUuid);
+            booking.setSoldByName(sellerName);
+            booking.setPaymentRail(PaymentMethods.CASH);
+            markConfirmed(booking, null);
+            log.info("Box office sale bookingId={} seller={} total={}", bookingId, sellerUserUuid,
+                    booking.getTotalAmount());
+            return toDTO(booking, true, false);
+        }));
+    }
+
+    /**
+     * Voids a box office cash sale: CANCELLED with CASH_VOIDED, its tickets no
+     * longer admit, its stock, add-ons and promo use go back on sale, and its
+     * assigned numbers stay with it (never reused). Only the event's organizer
+     * (anyone else gets the same 404 as an unknown booking), only a cash sale,
+     * only before the event starts and before any of its tickets is scanned.
+     *
+     * <p>Shaped like {@link #reverseConfirmedBooking}: read, then the remote
+     * calls with no transaction open (the event's start, asked live through
+     * {@code eventStart}, which fails CLOSED; event-service's availability
+     * release), then one write transaction under the booking row's lock that
+     * re-checks what it decided on. The tickets are locked there too, before
+     * the scan check, so a scan racing the void either lands first (and the
+     * void is refused) or finds the ticket inactive (the scan's claim requires
+     * {@code is_active}, which the status change clears).
+     */
+    BookingResponseDTO voidCashSale(UUID bookingId, UUID callerOrganizerUuid, UUID actorUserUuid,
+                                    String actorName, String reason,
+                                    java.util.function.Function<UUID, LocalDateTime> eventStart) {
+        Booking snapshot = readTx.execute(status -> bookingRepository.findByIdWithItems(bookingId)
+                .orElseThrow(() -> new NotFoundException("Booking not found")));
+        if (callerOrganizerUuid == null || !callerOrganizerUuid.equals(snapshot.getTenantUserUuid())) {
+            throw new NotFoundException("Booking not found");
+        }
+        requireVoidable(snapshot);
+        LocalDateTime start = eventStart.apply(snapshot.getEventId());
+        if (start != null && !LocalDateTime.now(ZoneOffset.UTC).isBefore(start)) {
+            throw new ApiProblemException(HttpStatus.CONFLICT, EVENT_STARTED,
+                    "The event has started, so this sale can't be voided.");
+        }
+        if (!snapshot.isAvailabilityReleased()) {
+            releaseEventAvailability(snapshot);
+        }
+        BookingResponseDTO voided = txTemplate.execute(status -> {
+            Booking booking = bookingRepository.lockById(bookingId)
+                    .orElseThrow(() -> new NotFoundException("Booking not found"));
+            if (!Objects.equals(booking.getVersion(), snapshot.getVersion())) {
+                throw new ObjectOptimisticLockingFailureException(Booking.class, bookingId);
+            }
+            if (bookingItemRepository.lockByBookingId(bookingId).stream().anyMatch(i -> i.getRedeemedAt() != null)) {
+                throw ticketScanned();
+            }
+            Hibernate.initialize(booking.getItems());
+            if (!booking.isAvailabilityReleased()) {
+                stockLedger.release(booking);
+                booking.setAvailabilityReleased(true);
+            }
+            booking.setStatus(Booking.BookingStatus.CANCELLED);
+            booking.setCancelReason(Booking.CancelReason.CASH_VOIDED);
+            booking.setVoidedByUserUuid(actorUserUuid);
+            booking.setVoidedByName(actorName);
+            booking.setVoidedAt(LocalDateTime.now(ZoneOffset.UTC));
+            booking.setVoidReason(reason);
+            bookingRepository.save(booking);
+            eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
+            return toDTO(booking, true, false);
+        });
+        log.info("Box office sale voided bookingId={} actor={}", bookingId, actorUserUuid);
+        return voided;
+    }
+
+    private static void requireVoidable(Booking booking) {
+        if (booking.getSoldByUserUuid() == null || !PaymentMethods.CASH.equals(booking.getPaymentRail())) {
+            throw new ApiProblemException(HttpStatus.CONFLICT, NOT_A_CASH_SALE,
+                    "Only a box office cash sale can be voided.");
+        }
+        if (booking.getStatus() == Booking.BookingStatus.CANCELLED
+                && booking.getCancelReason() == Booking.CancelReason.CASH_VOIDED) {
+            throw new ApiProblemException(HttpStatus.CONFLICT, ALREADY_VOIDED, "This sale has already been voided.");
+        }
+        if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
+            throw new ApiProblemException(HttpStatus.CONFLICT, NOT_A_CASH_SALE,
+                    "Only a box office cash sale can be voided.");
+        }
+        if (booking.getItems() != null && booking.getItems().stream().anyMatch(i -> i.getRedeemedAt() != null)) {
+            throw ticketScanned();
+        }
+    }
+
+    private static ApiProblemException ticketScanned() {
+        return new ApiProblemException(HttpStatus.CONFLICT, TICKET_SCANNED,
+                "A ticket of this sale has already been scanned, so the sale can't be voided.");
+    }
+
     public BookingResponseDTO reverseConfirmedBooking(UUID bookingId, String adminEmail) {
         log.info("Reversing confirmed booking bookingId={} adminEmail={}", bookingId, adminEmail);
         Booking snapshot = readTx.execute(status -> {
@@ -2084,7 +2221,9 @@ public class BookingService {
     private static void recordPaymentRail(Booking booking, ConfirmBookingRequestDTO confirmRequest) {
         if (booking.getPaymentRail() != null || confirmRequest == null) return;
         String rail = PaymentMethods.cleanRail(confirmRequest.getPaymentRail());
-        if (rail != null) {
+        // CASH is the box office's alone: a confirm from payment-service never
+        // makes a booking look like a cash sale.
+        if (rail != null && !PaymentMethods.CASH.equals(rail)) {
             booking.setPaymentRail(rail);
         }
     }
@@ -2530,6 +2669,12 @@ public class BookingService {
                 .discountAmount(booking.getDiscountAmount())
                 .paymentMethod(PaymentMethods.code(booking.getPaymentRail()))
                 .paymentMethodLabel(PaymentMethods.label(booking.getPaymentRail()))
+                // Who sold or voided a cash sale (V35): the organizer's own
+                // account, for the organizer and staff only, never the buyer.
+                .soldBy(staffView ? booking.getSoldByName() : null)
+                .voidedBy(staffView ? booking.getVoidedByName() : null)
+                .voidedAt(staffView ? booking.getVoidedAt() : null)
+                .voidReason(staffView ? booking.getVoidReason() : null)
                 .items(itemDTOs)
                 .createdAt(booking.getCreatedAt())
                 .updatedAt(booking.getUpdatedAt())
