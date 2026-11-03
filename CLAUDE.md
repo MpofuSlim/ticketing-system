@@ -89,8 +89,16 @@ file. Don't re-send a file because one line in it changed; say what changed.
   - the **Till / POS integration**, e.g. GAAP's cloud, server to server;
   - **Ticketize web**, or a partner backend.
 
-  When a guide spans several, label each section with its client. A guide that
-  does not say who builds it gets built by nobody, or by the wrong team.
+  A guide that does not say who builds it gets built by nobody, or by the wrong
+  team.
+- **One guide per client app, never combined (owner rule, 2026-11-03).** A
+  change that touches the Super app AND the Foundry portal (or any two clients)
+  ships as two Markdown files, e.g. `Super-App-<Feature>-Frontend-Integration.md`
+  and `Foundry-Portal-<Feature>-Frontend-Integration.md`, each complete on its
+  own: its own base URL and auth, its own errors and gotchas. Different teams
+  build each client, and a shared file makes each team read the other's half.
+  Labelling sections by client inside one file is NOT enough; the owner has
+  had to ask for this more than once.
 - The redemption guide also covers the staging `/loyalty/public/**` surface and
   its planned `x-api-key` gating — keep new guides consistent with that
   authenticated-public-for-staging posture where relevant.
