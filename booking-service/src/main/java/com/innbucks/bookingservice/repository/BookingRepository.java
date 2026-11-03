@@ -247,4 +247,27 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         Long getUses();
         java.math.BigDecimal getDiscountGiven();
     }
+
+    // ---- Booking answers retention (V32) -------------------------------------------
+
+    /** Events with bookings whose answers are due for deletion (answers_purge_after passed). */
+    @Query(value = "SELECT DISTINCT event_id FROM bookings WHERE answers_purge_after < :now LIMIT :limit",
+            nativeQuery = true)
+    List<UUID> findEventIdsWithAnswersDue(@Param("now") LocalDateTime now, @Param("limit") int limit);
+
+    @Modifying
+    @Query(value = "UPDATE bookings SET answers_purge_after = NULL, answers_purged_at = :now "
+            + "WHERE event_id = :eventId AND answers_purge_after IS NOT NULL", nativeQuery = true)
+    int markAnswersPurged(@Param("eventId") UUID eventId, @Param("now") LocalDateTime now);
+
+    /** The event moved: its bookings' answers are now due at {@code purgeAfter}. */
+    @Modifying
+    @Query(value = "UPDATE bookings SET answers_purge_after = :purgeAfter "
+            + "WHERE event_id = :eventId AND answers_purge_after IS NOT NULL", nativeQuery = true)
+    int rescheduleAnswersPurge(@Param("eventId") UUID eventId, @Param("purgeAfter") LocalDateTime purgeAfter);
+
+    /** Whether any of the event's confirmed bookings had its answers deleted. */
+    @Query("SELECT COUNT(b) > 0 FROM Booking b WHERE b.eventId = :eventId AND b.answersPurgedAt IS NOT NULL "
+            + "AND b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CONFIRMED")
+    boolean anyAnswersPurged(@Param("eventId") UUID eventId);
 }

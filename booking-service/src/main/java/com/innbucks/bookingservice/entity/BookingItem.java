@@ -109,6 +109,20 @@ public class BookingItem {
     private String attendeePhone;
 
     /**
+     * This ticket's answers to the organizer's booking questions (V32),
+     * encrypted: {@code BookingAnswersCipher} ciphertext of a JSON array of
+     * {questionId, label, type, value}. Null when nothing was answered, and
+     * after the answers were deleted (the event's end + 90 days). Never logged,
+     * never on a public view, a message, a scan or an S2S payload.
+     */
+    // Insert-only for JPA (the retention job deletes with one UPDATE): a stale
+    // item saved later must not write deleted answers back.
+    @Column(name = "answers", columnDefinition = "TEXT", updatable = false)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
+    private String answersCiphertext;
+
+    /**
      * The person this ticket is for, as the gate/ticket should show it: the
      * named attendee when there is one, otherwise the purchaser. Null only for
      * pre-V22 rows whose booking carries no name.

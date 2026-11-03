@@ -112,6 +112,19 @@ public class CreateEventRequestDTO {
     @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     private LocalDateTime salesStartDateTime;
 
+    @Schema(example = "1. Entry fees are not refundable.\n2. Runners must collect their race pack in person with ID.",
+            nullable = true,
+            description = """
+                    Optional terms and conditions a buyer must accept before booking (V16). Plain text: HTML
+                    is stripped, line breaks are kept. At most 20,000 characters. Leave it out (or blank) for
+                    no terms. Saving terms makes them version 1; each later change is the next version.
+                    """)
+    @Size(max = TERMS_MAX_LENGTH, message = TERMS_TOO_LONG_MESSAGE)
+    private String termsText;
+
+    public static final int TERMS_MAX_LENGTH = 20_000;
+    public static final String TERMS_TOO_LONG_MESSAGE = "Terms and conditions must be at most 20,000 characters.";
+
     @Schema(description = "Maximum venue capacity.")
     @NotNull(message = "Total capacity is required")
     @Min(value = 1, message = "Capacity must be at least 1")

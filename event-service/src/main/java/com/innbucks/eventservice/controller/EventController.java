@@ -1360,6 +1360,117 @@ public class EventController {
         return ResponseEntity.ok(ApiResult.ok("Event updated successfully", updated));
     }
 
+    @PutMapping("/{id}/booking-questions")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(
+            summary = "Replace the event's booking questions",
+            description = """
+                    Replaces the WHOLE list of questions asked for each ticket at checkout (V16), in the order
+                    to ask them. Send the `id` of each question to keep (answers already given stay linked to
+                    it); leave `id` out for a new question; a stored question left out is removed (answers
+                    already given keep its label). `{"questions": []}` removes them all.
+
+                    At most 10 questions. Types: TEXT (maxLength 1 to 500, default 100), NUMBER, DATE, CHOICE
+                    (2 to 20 different options of at most 60 characters), CHECKBOX (required = must be ticked).
+                    `categoryIds` limits a question to some ticket categories; [] asks every ticket.
+
+                    The event's organizer or a SUPER_ADMIN only. A refusal names every problem by its place in
+                    the list and changes nothing.
+                    """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Saved; every question with its id",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Booking questions saved",
+                              "data": {
+                                "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                "questions": [
+                                  { "id": "7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e01", "label": "T-shirt size", "type": "CHOICE",
+                                    "required": true, "helpText": "Unisex sizes", "options": ["S", "M", "L", "XL"],
+                                    "maxLength": null, "categoryIds": [] },
+                                  { "id": "7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e02", "label": "Emergency contact (name and phone)",
+                                    "type": "TEXT", "required": true, "helpText": null, "options": [], "maxLength": 120,
+                                    "categoryIds": [] },
+                                  { "id": "7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e03", "label": "Date of birth", "type": "DATE",
+                                    "required": true, "helpText": "Runners in the 21 km must be 18 or older on race day.",
+                                    "options": [], "maxLength": null, "categoryIds": ["8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11"] },
+                                  { "id": "7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e04", "label": "Send me news about future races",
+                                    "type": "CHECKBOX", "required": false, "helpText": null, "options": [], "maxLength": null,
+                                    "categoryIds": [] }
+                                ]
+                              }
+                            }
+                            """))),
+            @ApiResponse(responseCode = "400", description = "A question breaks a rule; data names each by its place",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "400 BAD_REQUEST",
+                              "message": "Validation failed",
+                              "data": {
+                                "questions[0].options": "A choice question needs 2 to 20 different options of at most 60 characters.",
+                                "questions[3].label": "Two questions can't have the same label."
+                              }
+                            }
+                            """))),
+            @ApiResponse(responseCode = "403", description = "Not this event's organizer or a SUPER_ADMIN",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "403 FORBIDDEN", "message": "You are not authorized to update this event", "data": null }
+                            """))),
+            @ApiResponse(responseCode = "404", description = "No such event",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "404 NOT_FOUND", "message": "Event not found", "data": null }
+                            """)))
+    })
+    public ResponseEntity<ApiResult<com.innbucks.eventservice.dto.BookingQuestionsResponseDTO>> replaceBookingQuestions(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            @RequestBody com.innbucks.eventservice.dto.BookingQuestionsRequestDTO request,
+            Authentication authentication) {
+        UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller.organizerUuid(authentication);
+        String role = getCurrentRole(authentication);
+        return ResponseEntity.ok(ApiResult.ok("Booking questions saved",
+                eventService.replaceBookingQuestions(tenantUserUuid, role, id, request)));
+    }
+
+    @GetMapping("/{id}/terms/{version}")
+    @SecurityRequirements()
+    @Operation(
+            summary = "One version of the event's terms and conditions",
+            description = """
+                    The exact text of a terms version (V16): what a booking with that `termsVersion` accepted.
+                    Readable by whoever can read the event (anyone once published; its owner and staff while
+                    it is a draft). Plain text with line breaks.
+                    """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The terms version",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Terms retrieved",
+                              "data": {
+                                "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                "version": 1,
+                                "text": "1. Entry fees are not refundable.\n2. Runners must collect their race pack in person.",
+                                "createdAt": "2026-11-03T16:20:00+02:00"
+                              }
+                            }
+                            """))),
+            @ApiResponse(responseCode = "404", description = "No such version, or an event the caller cannot read",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Unknown version", value = """
+                                    { "code": "404 NOT_FOUND", "message": "Terms not found", "data": null }
+                                    """),
+                            @ExampleObject(name = "Unknown or unpublished event", value = """
+                                    { "code": "404 NOT_FOUND", "message": "Event not found", "data": null }
+                                    """)
+                    }))
+    })
+    public ResponseEntity<ApiResult<com.innbucks.eventservice.dto.EventTermsDTO>> getTerms(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            @Parameter(description = "Terms version", example = "1") @PathVariable int version) {
+        return ResponseEntity.ok(ApiResult.ok("Terms retrieved", eventService.getTerms(id, version)));
+    }
+
     @PutMapping("/{id}/activate")
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_MANAGER')")
     @Operation(

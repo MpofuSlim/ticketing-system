@@ -67,6 +67,7 @@ import static org.mockito.Mockito.when;
         "app.booking.reminder-cron=-",
         "app.booking.organizer-reminder-cron=-",
         "app.booking.tier-reminder-cron=-",
+        "app.booking.answers-retention-cron=-",
         "app.booking.expiration-poll-interval-ms=86400000",
         "app.invoicing.scheduler-enabled=false",
         "innbucks.scan.event-day-check.enabled=false"

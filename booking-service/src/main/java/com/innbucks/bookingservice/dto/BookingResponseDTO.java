@@ -28,6 +28,13 @@ public class BookingResponseDTO {
     // Captured at booking creation via EventLookupDTO; the loyalty attribution
     // key and the ticket-scan ownership pointer.
     private UUID tenantUserUuid;
+    // The terms-and-conditions version the buyer accepted, and when (V32).
+    // Both null when the event had no terms.
+    @io.swagger.v3.oas.annotations.media.Schema(example = "2", nullable = true,
+            description = "The event's terms version the buyer accepted; null when it had none.")
+    private Integer termsVersion;
+    @io.swagger.v3.oas.annotations.media.Schema(nullable = true, description = "When the terms were accepted.")
+    private LocalDateTime termsAcceptedAt;
     // Set after a confirm that included points. Null on PENDING/cancelled
     // bookings and pure-cash confirmations.
     private BigDecimal pointsUsed;

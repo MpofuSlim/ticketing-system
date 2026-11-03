@@ -25,6 +25,8 @@ class ProductionSecretsGuardSupportKeyTest {
         when(env.getActiveProfiles()).thenReturn(profiles);
         when(env.getProperty("jwt.secret")).thenReturn(REAL_JWT);
         when(env.getProperty("SUPPORT_ASSERTION_PRIVATE_KEY")).thenReturn(supportKey);
+        // V32: the answers key is boot-required too (ProductionSecretsGuardAnswersKeyTest).
+        when(env.getProperty("app.booking.answers-key")).thenReturn("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
         return env;
     }
 

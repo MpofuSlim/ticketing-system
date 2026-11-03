@@ -3549,6 +3549,65 @@ covered by the `/events/internal/*` permitAll and `event-internal-deny`).
   (`GlobalExceptionHandler.handleUnreadable`); it was a 500 through the
   `RuntimeException` catch-all.
 
+## Event terms and booking questions (event-service V16, booking-service V32)
+
+**An organizer can give an event terms and conditions (versioned) and up to 10
+questions answered per ticket at checkout. `POST /bookings` checks both against
+the event LIVE, through the same sales-window answer, before anything is held;
+the answers are stored encrypted and deleted 90 days after the event ends.**
+
+- **Terms are versioned and append-only** (`event_terms_versions`,
+  `EventTermsAndQuestions`). Different text = the next version, the same text =
+  nothing, blank or `null` = `events.terms_version` cleared and no version
+  deleted. A number is never reused (`maxVersion + 1`), so "version 2" always
+  means one text. `GET /events/{id}/terms/{version}` reads any version with the
+  event's own visibility. Plain text, HTML stripped LINE BY LINE so line breaks
+  survive (`cleanTerms`).
+- **The buyer must accept the CURRENT version** (`BookingAnswers`): missing =
+  400 `TERMS_NOT_ACCEPTED`, stale = 409 `TERMS_CHANGED`, both with
+  `data.termsVersion`. The booking stores `terms_version` + `terms_accepted_at`
+  (insert-only): the consent record, never deleted.
+- **Questions are replaced as a whole** (`PUT /events/{id}/booking-questions`,
+  owner or SUPER_ADMIN): a kept question keeps its `id`, one left out is
+  deleted, every problem is named by its place (400 `Validation failed`,
+  `FieldErrorsException`). Types TEXT/NUMBER/DATE/CHOICE/CHECKBOX; a required
+  CHECKBOX means ticked. `categoryIds` limits a question to some ticket
+  categories. `options` and `category_ids` are JSON arrays in TEXT columns
+  (`JsonStringListConverter`). The question rules exist twice, on purpose:
+  `EventTermsAndQuestions` (what may be asked) and `BookingAnswers` (what an
+  answer may be); change them together.
+- **Each answer is stored with the question's label and type as they were**,
+  so renaming or removing a question never rewrites a booking. Unknown question,
+  wrong category, twice, missing, malformed: one 400 `ANSWERS_INVALID` with
+  `data.answers` = `seats[i].<questionId>` → message.
+- **Answers are AES-GCM-256 at rest** (`booking_items.answers`,
+  `BookingAnswersCipher`, `v1:` prefix). The key `BOOKING_ANSWERS_KEY` (Base64 of
+  32 bytes) is boot-required under a deployment profile (`ProductionSecretsGuard`);
+  dev/test get a throwaway key per process. **Add it to the cell Secret BEFORE
+  deploying** (without it the new pod never starts and the rollout stalls on
+  the old one). **Never rotate it without re-encrypting the rows.** An answer
+  that cannot be opened reads as none (logged without content): a booking read
+  never fails over its answers.
+- **Who sees answers:** the buyer's own reads (create answer, `/bookings/my`,
+  `GET /bookings/{id}`, `/confirmation/{n}`), the organizer's and staff's reads
+  of those, and the guest list. **Never** a public view, the S2S read
+  (`getBookingForService`), a confirm/cancel/reverse answer, a scan, a message
+  or a log line. `BookingItemDTO.answers` is `NON_NULL` so those views carry no
+  key; `toDTO(booking, staffView, withAnswers)` is the switch.
+- **Deleted 90 days after the event's LIVE end** (`BookingAnswersRetentionJob`,
+  daily under ShedLock, `BOOKING_ANSWERS_RETENTION` / `_CRON`). The booking stores
+  `answers_purge_after` (end + 90 d as known at booking); before deleting, the job
+  re-reads the sales window: moved later = rescheduled, NOT_FOUND = deleted by
+  the stored date, unreachable = skipped (a day late beats deleting a postponed
+  event's answers). The read runs with no transaction open; the deletes are one
+  short transaction per event, stamping `answers_purged_at`. The columns are
+  insert-only for JPA, so a stale entity save cannot write deleted answers back.
+- **Report:** `GET /event-organizer/reports/booking-questions?eventId=` (CONFIRMED
+  tickets): CHOICE counts per option, CHECKBOX yes/no, TEXT/NUMBER/DATE answered
+  only, plus bookings per accepted terms version and `answersDeleted`.
+- **Deploy:** event-service before booking-service, as for V15; and the
+  `BOOKING_ANSWERS_KEY` Secret entry before booking-service.
+
 ## Cloudflare blocks `PUT` + multipart — uploads take `POST`
 
 **The banner upload accepts BOTH `POST` and `PUT` on `/events/{id}/banner`, and

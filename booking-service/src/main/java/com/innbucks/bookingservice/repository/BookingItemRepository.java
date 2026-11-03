@@ -311,4 +311,30 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
         UUID getPriceTierId();
         Long getCount();
     }
+
+    // ---- Booking answers (V32) ---------------------------------------------------
+
+    /**
+     * Every ticket of the event's CONFIRMED bookings with its booking, newest
+     * booking first: the booking-questions report reads their answers and terms.
+     * Platform-wide: staff. The organizer's own read is the next query.
+     */
+    @Query("SELECT i FROM BookingItem i JOIN FETCH i.booking b WHERE b.eventId = :eventId "
+            + "AND b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CONFIRMED "
+            + "ORDER BY b.createdAt DESC, i.id")
+    List<BookingItem> findConfirmedWithBookingByEventId(@Param("eventId") UUID eventId);
+
+    @Query("SELECT i FROM BookingItem i JOIN FETCH i.booking b WHERE b.eventId = :eventId "
+            + "AND b.tenantUserUuid = :organizerUuid "
+            + "AND b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CONFIRMED "
+            + "ORDER BY b.createdAt DESC, i.id")
+    List<BookingItem> findConfirmedWithBookingByEventIdAndOrganizer(@Param("eventId") UUID eventId,
+                                                                    @Param("organizerUuid") UUID organizerUuid);
+
+    /** Deletes the answers of the event's bookings still due for it (BookingAnswersRetentionJob). */
+    @Modifying
+    @Query(value = "UPDATE booking_items SET answers = NULL WHERE answers IS NOT NULL AND booking_id IN "
+            + "(SELECT id FROM bookings WHERE event_id = :eventId AND answers_purge_after IS NOT NULL)",
+            nativeQuery = true)
+    int clearAnswersForEvent(@Param("eventId") UUID eventId);
 }

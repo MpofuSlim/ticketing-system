@@ -90,6 +90,15 @@ public class CategoryBookingDTO {
     private String attendeeName;
     private String attendeeEmail;
     private String attendeePhone;
+
+    // The terms version the buyer accepted and when (V32): the same for every
+    // ticket of a booking; null when the event had no terms.
+    private Integer termsVersion;
+    private LocalDateTime termsAcceptedAt;
+
+    // This ticket's answers to the booking questions (V32), label and type as
+    // answered. [] when none, and once deleted (90 days after the event ends).
+    private java.util.List<BookingAnswerDTO> answers;
     /**
      * Convenience: {@code attendeeName} when set, else {@code customerName} —
      * the name to print on a guest list without the consumer re-deriving it.

@@ -139,6 +139,27 @@ public class Booking {
     @Column(name = "payment_open_until")
     private LocalDateTime paymentOpenUntil;
 
+    // The terms-and-conditions version the buyer accepted, and when (V32);
+    // both null when the event had no terms. Never deleted: the consent record.
+    // Written once, at insert: no later save of a stale entity can change
+    // what the buyer accepted.
+    @Column(name = "terms_version", updatable = false)
+    private Integer termsVersion;
+
+    @Column(name = "terms_accepted_at", updatable = false)
+    private LocalDateTime termsAcceptedAt;
+
+    // When this booking's answers are deleted (the event's end + 90 days),
+    // and when they were. Null purge-after = nothing left to delete. See
+    // BookingAnswersRetentionJob. UTC. Insert-only for JPA: the job changes
+    // them with one UPDATE per event, and a stale entity saved later (a
+    // reverse, an attendee edit) must not write the old values back.
+    @Column(name = "answers_purge_after", updatable = false)
+    private LocalDateTime answersPurgeAfter;
+
+    @Column(name = "answers_purged_at", updatable = false)
+    private LocalDateTime answersPurgedAt;
+
     // Why a CANCELLED booking was cancelled (V25, CHECK chk_bookings_cancel_reason).
     // Decides whether a payment that lands afterwards may resurrect it — see
     // CancelReason. NULL on every row cancelled before V25 (never resurrected)

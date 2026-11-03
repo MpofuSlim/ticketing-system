@@ -100,6 +100,14 @@ public class EventService {
         this.publicEventCatalog = publicEventCatalog;
     }
 
+    /** Terms and booking questions (V16); absent in hand-built tests, which then neither save nor show them. */
+    private EventTermsAndQuestions termsAndQuestions;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setTermsAndQuestions(EventTermsAndQuestions termsAndQuestions) {
+        this.termsAndQuestions = termsAndQuestions;
+    }
+
     /** No list cache: every public listing reads Postgres. */
     public EventService(EventRepository eventRepository,
                         com.innbucks.eventservice.config.MarketTimeZone marketTimeZone,
@@ -419,6 +427,13 @@ public class EventService {
         // The same answer the lists give. For the public it comes from the
         // layout fetchForEvent just cached; it is still worked out now.
         response.setPriceFrom(priceFrom(List.of(eventId)).get(eventId));
+        // What checkout must show (V16): the current terms text and the
+        // questions. Read live, like the row; the detail is the one response
+        // that carries them.
+        if (termsAndQuestions != null) {
+            response.setTermsText(termsAndQuestions.currentText(event));
+            response.setBookingQuestions(termsAndQuestions.questions(eventId));
+        }
         // Keep the organizer's internal id for the owner/admin who act on it;
         // strip it for anonymous/other-organizer (public) consumption.
         return owner ? response : stripInternalIds(response);
@@ -705,6 +720,8 @@ public class EventService {
         LocalDateTime salesStartUtc = request.getSalesStartDateTime() == null
                 ? null : marketTimeZone.toUtc(request.getSalesStartDateTime());
         requireSalesOpenBeforeEnd(salesStartUtc, endUtc);
+        // Terms become version 1, written once the event row exists (FK).
+        String terms = termsAndQuestions == null ? null : EventTermsAndQuestions.cleanTerms(request.getTermsText());
 
         if (eventRepository.existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
                 tenantUserUuid, request.getTitle(), request.getVenue(), startUtc)) {
@@ -728,6 +745,7 @@ public class EventService {
                 .startDateTime(startUtc)
                 .endDateTime(endUtc)
                 .salesStartAt(salesStartUtc)
+                .termsVersion(terms == null ? null : 1)
                 .totalCapacity(request.getTotalCapacity())
                 .availableTickets(request.getTotalCapacity())
                 .deleted(false)
@@ -745,9 +763,16 @@ public class EventService {
         if (banner != null) {
             eventRepository.writeBannerImage(saved.getEventId(), banner.bytes());
         }
+        if (terms != null) {
+            termsAndQuestions.recordFirstVersion(saved.getEventId(), terms);
+        }
         log.info("Event created eventId={} tenantUserUuid={}",
                 saved.getEventId(), saved.getTenantUserUuid());
-        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+        EventResponseDTO created = toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+        if (created != null) {
+            created.setTermsText(terms);
+        }
+        return created;
     }
 
     /**
@@ -1065,6 +1090,9 @@ public class EventService {
                     ? null : marketTimeZone.toUtc(request.getSalesStartDateTime()));
         }
         requireSalesOpenBeforeEnd(event.getSalesStartAt(), event.getEndDateTime());
+        if (request.isTermsTextSent() && termsAndQuestions != null) {
+            termsAndQuestions.applyEdit(event, request.getTermsText());
+        }
         if (request.getTotalCapacity() != null) {
             requireCapacityCoversAllocation(eventId, request.getTotalCapacity());
             int diff = request.getTotalCapacity() - event.getTotalCapacity();
@@ -1092,7 +1120,11 @@ public class EventService {
                     venueChanged ? saved.getVenue() : null);
         }
 
-        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+        EventResponseDTO updated = toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+        if (termsAndQuestions != null && updated != null) {
+            updated.setTermsText(termsAndQuestions.currentText(saved));
+        }
+        return updated;
     }
 
     public EventResponseDTO updateEvent(UUID tenantUserUuid, UUID eventId, UpdateEventRequestDTO request) {
@@ -1182,11 +1214,58 @@ public class EventService {
                         .salesStartDateTime(event.getSalesStartAt())
                         .endDateTime(event.getEndDateTime())
                         .tenantUserUuid(event.getTenantUserUuid())
+                        .termsVersion(event.getTermsVersion())
+                        .bookingQuestions(termsAndQuestions == null
+                                ? List.of() : termsAndQuestions.questions(event.getEventId()))
                         .build())
                 .orElseGet(() -> SalesWindowDTO.builder()
                         .eventId(eventId)
                         .status(SalesWindowDTO.NOT_FOUND)
                         .build());
+    }
+
+    /**
+     * One version of the event's terms (V16): what a buyer of that version
+     * accepted. Readable by whoever can read the event, so a draft's terms are
+     * the same 404 as the draft.
+     */
+    @Transactional(readOnly = true)
+    public com.innbucks.eventservice.dto.EventTermsDTO getTerms(UUID eventId, int version) {
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> new NotFoundException("Event not found"));
+        boolean published = event.isActive() && !event.isRejected();
+        if (!published && !callerMayViewUnpublished(event)) {
+            throw new NotFoundException("Event not found");
+        }
+        if (termsAndQuestions == null) {
+            throw new NotFoundException("Terms not found");
+        }
+        return termsAndQuestions.terms(eventId, version);
+    }
+
+    /**
+     * Replaces the event's booking questions (V16). The same people who may
+     * edit the event may do this: its organizer, or a SUPER_ADMIN.
+     */
+    @Transactional
+    public com.innbucks.eventservice.dto.BookingQuestionsResponseDTO replaceBookingQuestions(
+            UUID tenantUserUuid, String role, UUID eventId,
+            com.innbucks.eventservice.dto.BookingQuestionsRequestDTO request) {
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> new NotFoundException("Event not found"));
+        boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
+        if (!isAdmin && !java.util.Objects.equals(event.getTenantUserUuid(), tenantUserUuid)) {
+            log.warn("Booking questions refused, not the owner eventId={} tenantUserUuid={} owner={}",
+                    eventId, tenantUserUuid, event.getTenantUserUuid());
+            throw new ForbiddenException("You are not authorized to update this event");
+        }
+        if (termsAndQuestions == null) {
+            throw new IllegalStateException("Booking questions are not wired");
+        }
+        return com.innbucks.eventservice.dto.BookingQuestionsResponseDTO.builder()
+                .eventId(eventId)
+                .questions(termsAndQuestions.replace(eventId, request))
+                .build();
     }
 
     @Transactional

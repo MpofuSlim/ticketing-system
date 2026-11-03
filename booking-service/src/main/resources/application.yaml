@@ -209,6 +209,17 @@ app:
     # caller sends as X-Api-Key. Blank = the endpoint is off (404). A secret:
     # set it per host in cell.<iso>.local.env, never in a committed file.
     ticket-check-api-key: ${BOOKINGS_TICKET_CHECK_API_KEY:}
+    # AES-GCM-256 key sealing buyers' answers to booking questions
+    # (booking_items.answers, V32): Base64 of exactly 32 bytes. A secret, set per
+    # host in cell.<iso>.local.env. Boot-required under a deployment profile
+    # (ProductionSecretsGuard); blank in dev/test = a random key per process.
+    # Never rotate it without re-encrypting the rows.
+    answers-key: ${BOOKING_ANSWERS_KEY:}
+    # Answers are deleted this long after the event ends (the event's live
+    # end, re-read before deleting). The consent record (terms version) stays.
+    answers-retention: ${BOOKING_ANSWERS_RETENTION:P90D}
+    # Daily, under ShedLock; "-" switches the deletion off.
+    answers-retention-cron: ${BOOKING_ANSWERS_RETENTION_CRON:0 40 2 * * *}
     # Ticket numbers on the organizer and staff surfaces (guest list, a booking
     # read by anyone but its buyer, scan reports, the attendee edit's answer):
     # true = masked (20261030-*****-**7CB) and no QR image. A ticket number is

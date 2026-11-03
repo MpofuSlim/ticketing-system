@@ -137,6 +137,16 @@ public class BookingController {
     static final String EXAMPLE_EVENT_NOT_FOUND = """
             { "code": "404 NOT_FOUND", "message": "Event not found", "data": { "errorCode": "EVENT_NOT_FOUND" } }
             """;
+    // POST /bookings when the terms or answers are refused (V32).
+    static final String EXAMPLE_TERMS_NOT_ACCEPTED = """
+            { "code": "400 BAD_REQUEST", "message": "Please accept the event's terms and conditions.", "data": { "errorCode": "TERMS_NOT_ACCEPTED", "termsVersion": 2 } }
+            """;
+    static final String EXAMPLE_TERMS_CHANGED = """
+            { "code": "409 CONFLICT", "message": "The event's terms and conditions have changed. Please read them and accept again.", "data": { "errorCode": "TERMS_CHANGED", "termsVersion": 3 } }
+            """;
+    static final String EXAMPLE_ANSWERS_INVALID = """
+            { "code": "400 BAD_REQUEST", "message": "Please check your answers.", "data": { "errorCode": "ANSWERS_INVALID", "answers": { "seats[0].7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e03": "Must be a date like 1990-05-21.", "seats[1].7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e02": "This question is required." } } }
+            """;
     static final String EXAMPLE_EVENT_UNCHECKED = """
             { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't check this event just now. Please try again.", "data": { "errorCode": "TRY_AGAIN" } }
             """;
@@ -212,8 +222,10 @@ public class BookingController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation or domain error (includes exceeding the per-booking seat ceiling, a missing purchaser name, or a malformed purchaser/attendee phone)",
+                    description = "Validation or domain error (includes exceeding the per-booking seat ceiling, a missing purchaser name, or a malformed purchaser/attendee phone). TERMS_NOT_ACCEPTED: the event has terms and acceptedTermsVersion is missing (data.termsVersion is the current one). ANSWERS_INVALID: data.answers maps seats[i].<questionId> to what is wrong with that ticket's answer. Nothing was held.",
                     content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Terms not accepted (TERMS_NOT_ACCEPTED)", value = EXAMPLE_TERMS_NOT_ACCEPTED),
+                            @ExampleObject(name = "Answers missing or wrong (ANSWERS_INVALID)", value = EXAMPLE_ANSWERS_INVALID),
                             @ExampleObject(name = "Missing purchaser name (guest)", value = """
                                     { "code": "400 BAD_REQUEST", "message": "Please provide your full name.", "data": null }
                                     """),
@@ -248,11 +260,14 @@ public class BookingController {
                     description = "Nothing was held. Not enough tickets left in a category the request names; the "
                             + "promo code is used up (overall, or by this buyer); or the event is not on sale right "
                             + "now: SALES_NOT_STARTED (data.salesStartDateTime, at the market offset, is when sales "
-                            + "open; the message says it in words) or EVENT_ENDED.",
+                            + "open; the message says it in words) or EVENT_ENDED; or the event's terms changed after checkout opened: "
+                            + "TERMS_CHANGED (data.termsVersion is the new version; show the terms again).",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Sales have not opened yet (SALES_NOT_STARTED)",
                                     value = EXAMPLE_SALES_NOT_STARTED),
                             @ExampleObject(name = "The event has ended (EVENT_ENDED)", value = EXAMPLE_EVENT_ENDED),
+                            @ExampleObject(name = "The terms changed after checkout opened (TERMS_CHANGED)",
+                                    value = EXAMPLE_TERMS_CHANGED),
                             @ExampleObject(name = "Sold out", value = """
                             { "code": "409 CONFLICT", "message": "Not enough tickets left in \\"VIP\\". Please choose fewer tickets or a different category.", "data": null }
                             """),

@@ -236,6 +236,16 @@ public class GlobalExceptionHandler {
      * previous 422 response was technically more REST-correct but forced the
      * frontend to special-case event-service.
      */
+    @ExceptionHandler(FieldErrorsException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handleFieldErrors(FieldErrorsException ex) {
+        log.warn("Validation failed fields={}", ex.getErrors().keySet());
+        return ResponseEntity.badRequest().body(ApiResult.<Map<String, String>>builder()
+                .code("400 BAD_REQUEST")
+                .message("Validation failed")
+                .data(ex.getErrors())
+                .build());
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResult<Map<String, String>>> handleValidation(MethodArgumentNotValidException ex) {
         Map<String, String> fieldErrors = ex.getBindingResult()

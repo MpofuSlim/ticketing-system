@@ -61,6 +61,74 @@ public class OrganizerReportController {
 
     private final OrganizerReportService reportService;
 
+    /** Booking questions (V32); a setter so the one-service constructor tests use stays. */
+    private com.innbucks.bookingservice.service.BookingQuestionReportService bookingQuestionReportService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setBookingQuestionReportService(
+            com.innbucks.bookingservice.service.BookingQuestionReportService bookingQuestionReportService) {
+        this.bookingQuestionReportService = bookingQuestionReportService;
+    }
+
+    @GetMapping("/booking-questions")
+    @Operation(summary = "How an event's tickets answered its booking questions",
+            description = "Counts over the event's CONFIRMED tickets (V32): per question, how many answered it; "
+                    + "CHOICE gives each option's count (most picked first), CHECKBOX gives yes/no; TEXT, NUMBER "
+                    + "and DATE give the count only (read the values in the guest list). `termsAccepted` counts "
+                    + "confirmed bookings per accepted terms version. Answers are deleted 90 days after the event "
+                    + "ends: `answersDeleted` is then true and `questions` []. `eventId` is required. An "
+                    + "organizer reads only their own event's bookings; staff read any.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Report",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Booking question report retrieved",
+                              "data": {
+                                "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                "confirmedTickets": 120,
+                                "answersDeleted": false,
+                                "questions": [
+                                  { "questionId": "7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e01", "label": "T-shirt size", "type": "CHOICE",
+                                    "answered": 118, "options": [ { "value": "M", "count": 61 }, { "value": "L", "count": 30 },
+                                    { "value": "S", "count": 20 }, { "value": "XL", "count": 7 } ], "yes": null, "no": null },
+                                  { "questionId": "7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e02", "label": "Emergency contact (name and phone)",
+                                    "type": "TEXT", "answered": 120, "options": [], "yes": null, "no": null },
+                                  { "questionId": "7b1e2c4a-0d3f-4e5a-9b6c-1a2b3c4d5e04", "label": "Send me news about future races",
+                                    "type": "CHECKBOX", "answered": 120, "options": [], "yes": 45, "no": 75 }
+                                ],
+                                "termsAccepted": [ { "version": 2, "bookings": 80 }, { "version": 1, "bookings": 10 } ]
+                              },
+                              "meta": { "from": null, "to": null, "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "organizerUuid": null, "platformWide": true }
+                            }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "eventId missing",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "eventId": "Required." } }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Not an organizer or platform staff",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                            """)))
+    })
+    public ResponseEntity<ApiResult<?>> bookingQuestions(
+            Authentication authentication,
+            @RequestParam(required = false) UUID eventId) {
+        if (eventId == null) {
+            return ResponseEntity.badRequest().body(ApiResult.<java.util.Map<String, String>>builder()
+                    .code("400 BAD_REQUEST")
+                    .message("Validation failed")
+                    .data(java.util.Map.of("eventId", "Required."))
+                    .build());
+        }
+        UUID organizerUuid = resolveScope(authentication);
+        return ResponseEntity.ok(ApiResult.ok("Booking question report retrieved",
+                bookingQuestionReportService.report(organizerUuid, eventId),
+                com.innbucks.bookingservice.dto.report.ReportMetaDTO.of(null, null, eventId, organizerUuid)));
+    }
+
     @GetMapping("/revenue")
     @Operation(summary = "Revenue summary",
             description = "Period revenue for the calling organizer — gross (pre-refund), cash vs points, " +
