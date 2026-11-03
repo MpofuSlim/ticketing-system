@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.EventSalesWindowDTO;
 import com.innbucks.bookingservice.testsupport.BookingStockPostgresTestBase;
@@ -28,9 +29,11 @@ import static com.innbucks.bookingservice.controller.BoxOfficeController.EXAMPLE
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -62,6 +65,13 @@ class BoxOfficePostgresIT extends BookingStockPostgresTestBase {
                 EventSalesWindowDTO.builder().eventId(eventId).status(EventSalesWindowDTO.ON_SALE)
                         .tenantUserUuid(organizer).build()));
         eventStartsIn(30);
+        // A void hands its tickets back to event-service's availability mirror
+        // first, like the admin reversal, and refuses (503) when that is not
+        // acknowledged.
+        AvailabilityResponseDTO released = new AvailabilityResponseDTO();
+        released.setAvailableTickets(98);
+        when(eventServiceClient.releaseAvailability(eq(eventId), anyInt(), anyString()))
+                .thenReturn(ApiResult.ok(released));
     }
 
     @AfterEach
@@ -181,6 +191,10 @@ class BoxOfficePostgresIT extends BookingStockPostgresTestBase {
         voidSale(voided, organizerBearer())
                 .andExpect(status().isConflict())
                 .andExpect(content().json(EXAMPLE_ALREADY_VOIDED, JsonCompareMode.STRICT));
+        // Released once, for the voided sale's one ticket: neither the
+        // stranger's attempt nor the repeat reached event-service.
+        verify(eventServiceClient, times(1)).releaseAvailability(eq(eventId), anyInt(), anyString());
+        verify(eventServiceClient).releaseAvailability(eq(eventId), eq(1), anyString());
 
         String today = LocalDate.now(ZoneOffset.UTC).toString();
         mvc.perform(get("/event-organizer/reports/cash-up").param("eventId", eventId.toString())
