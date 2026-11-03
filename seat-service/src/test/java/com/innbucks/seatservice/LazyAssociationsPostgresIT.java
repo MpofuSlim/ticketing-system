@@ -132,11 +132,11 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
                             .andExpect(jsonPath("$.data[0].sections[1].imageUrl").value("https://cdn.example.com/box.png"))
                             .andExpect(jsonPath("$.data[*].availableSeats", everyItem(is(10)))));
         }
-        // Categories, their sections, and their price tiers: one query each,
-        // whatever the number of categories.
+        // Categories, their sections, their price tiers and their add-ons
+        // (V12): one query each, whatever the number of categories.
         assertThat(measured.get("[C=6] GET /seat-categories?eventId"))
                 .isEqualTo(measured.get("[C=2] GET /seat-categories?eventId"))
-                .isEqualTo(3);
+                .isEqualTo(4);
     }
 
     @Test
