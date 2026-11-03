@@ -194,6 +194,33 @@ public class GlobalExceptionHandler {
      * {@link ConflictException}, {@link ForbiddenException}) at the throw site
      * rather than widening this fallback.
      */
+    /** The 400 for a date-time in a request body that is not a full date and time. */
+    public static final String INVALID_DATE_TIME_MESSAGE =
+            "A date or time in the request is not valid. Send it like 2026-11-14T10:00:00.";
+    public static final String UNREADABLE_BODY_MESSAGE = "The request body is not valid JSON.";
+
+    /**
+     * A body (or a multipart JSON part) the converter could not read. It used
+     * to fall to the RuntimeException catch-all below and answer 500 "An
+     * unexpected error occurred", so a date-only {@code startDateTime} read as
+     * a server fault. The date-time deserializers let the parse exception
+     * through, so a date is told apart by its cause; the message never echoes
+     * the value or Jackson's own text (which names internal types).
+     */
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResult<Void>> handleUnreadable(
+            org.springframework.http.converter.HttpMessageNotReadableException ex) {
+        boolean badDate = false;
+        for (Throwable t = ex; t != null && !badDate; t = t.getCause() == t ? null : t.getCause()) {
+            badDate = t instanceof java.time.format.DateTimeParseException;
+        }
+        log.warn("Unreadable request body badDate={} type={}", badDate,
+                ex.getMostSpecificCause().getClass().getSimpleName());
+        return ResponseEntity.badRequest()
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                        badDate ? INVALID_DATE_TIME_MESSAGE : UNREADABLE_BODY_MESSAGE));
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResult<Void>> handleRuntime(RuntimeException ex) {
         log.error("Unhandled RuntimeException — returning 500 to client", ex);

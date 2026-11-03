@@ -73,6 +73,16 @@ public class EventResponseDTO {
     )
     private LocalDateTime endDateTime;
 
+    @Schema(example = "2026-11-14T10:00:00+02:00", nullable = true,
+            description = "When ticket sales open. Null: on sale as soon as the event is published. A published "
+                    + "event before this time is listed but cannot be booked (see salesStatus).")
+    private LocalDateTime salesStartDateTime;
+
+    @Schema(example = "NOT_YET_ON_SALE",
+            description = "Whether tickets can be bought right now, worked out when this response was built. "
+                    + "Show the Buy button only for ON_SALE; never work it out on the device.")
+    private SalesStatus salesStatus;
+
     @Schema(description = "Maximum venue capacity.")
     private Integer totalCapacity;
 

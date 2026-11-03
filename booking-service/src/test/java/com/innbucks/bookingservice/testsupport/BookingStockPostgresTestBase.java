@@ -9,6 +9,7 @@ import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
 import com.innbucks.bookingservice.config.BookingMetrics;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.CategoryLookupDTO;
+import com.innbucks.bookingservice.dto.EventSalesWindowDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
@@ -17,6 +18,7 @@ import com.innbucks.bookingservice.security.JwtUtil;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -43,6 +45,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 /**
@@ -95,6 +98,20 @@ public abstract class BookingStockPostgresTestBase extends PostgresIntegrationTe
 
     private final List<UUID> seededBookings = new ArrayList<>();
     private final List<UUID> seededCategories = new ArrayList<>();
+
+    /**
+     * Every event is on sale unless a test says otherwise. {@code POST /bookings}
+     * asks event-service before anything else (event-service V15), and an
+     * unanswered mock would read as "could not ask": a 503 on every booking.
+     * A subclass's own {@code @BeforeEach} runs after this one, so it can
+     * replace the answer (to name the organizer, or to refuse).
+     */
+    @BeforeEach
+    void everyEventIsOnSale() {
+        when(eventServiceClient.salesWindow(any(), any())).thenAnswer(call -> ApiResult.ok(
+                "Sales window resolved",
+                EventSalesWindowDTO.builder().eventId(call.getArgument(0)).status(EventSalesWindowDTO.ON_SALE).build()));
+    }
 
     // ---- the sweep's ShedLock -----------------------------------------------
 

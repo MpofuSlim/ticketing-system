@@ -3,6 +3,7 @@ package com.innbucks.bookingservice.client;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
+import com.innbucks.bookingservice.dto.EventSalesWindowDTO;
 import com.innbucks.bookingservice.dto.ScannerAccessDTO;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,6 +33,16 @@ public interface EventServiceClient {
     @GetMapping("/events/internal/{id}")
     ApiResult<EventLookupDTO> getEventInternal(
             @PathVariable("id") UUID id,
+            @RequestHeader("X-Internal-Token") String internalToken
+    );
+
+    // May this event be sold right now (event-service V15)? Asked before EVERY
+    // booking, live. event-service answers an unknown event with status
+    // NOT_FOUND, so the fallback's null data only ever means "could not ask",
+    // which the booking refuses with a retryable 503: never sold unchecked.
+    @GetMapping("/events/internal/sales-window")
+    ApiResult<EventSalesWindowDTO> salesWindow(
+            @RequestParam("eventId") UUID eventId,
             @RequestHeader("X-Internal-Token") String internalToken
     );
 

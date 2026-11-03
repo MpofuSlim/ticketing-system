@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
+import com.innbucks.bookingservice.dto.EventSalesWindowDTO;
 import com.innbucks.bookingservice.testsupport.BookingStockPostgresTestBase;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +51,9 @@ class BookingPromoCodePostgresIT extends BookingStockPostgresTestBase {
         category(eventId, categoryId, "VIP", 1_000);
         when(eventServiceClient.getEventInternal(eq(eventId), any())).thenReturn(ApiResult.ok(
                 EventLookupDTO.builder().eventId(eventId).tenantUserUuid(owner).build()));
+        when(eventServiceClient.salesWindow(eq(eventId), any())).thenReturn(ApiResult.ok(
+                EventSalesWindowDTO.builder().eventId(eventId).status(EventSalesWindowDTO.ON_SALE)
+                        .tenantUserUuid(owner).build()));
     }
 
     @AfterEach

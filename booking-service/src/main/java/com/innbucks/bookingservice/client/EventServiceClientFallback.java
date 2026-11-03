@@ -6,9 +6,11 @@ import com.innbucks.bookingservice.dto.EventLookupDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-// Returns a null payload on event-service failure. Booking creation stays
-// possible even when event-service is down; the resulting booking just has
-// tenantId=null. Booking flow is never blocked by an event-service outage.
+// Returns a null payload on event-service failure. Each caller decides what
+// "could not ask" means for it: display reads degrade, while booking creation
+// (salesWindow) and super-app scans (scannerAccess) refuse with a retryable 503,
+// because selling or admitting unchecked is worse than asking the buyer to
+// retry.
 @Component
 @Slf4j
 public class EventServiceClientFallback implements EventServiceClient {
@@ -23,6 +25,16 @@ public class EventServiceClientFallback implements EventServiceClient {
     public ApiResult<EventLookupDTO> getEventInternal(java.util.UUID id, String internalToken) {
         log.warn("event-service circuit open or call failed (getEventInternal) eventId={}", id);
         return ApiResult.<EventLookupDTO>builder().code("503").message("event unavailable").data(null).build();
+    }
+
+    // Null data = "could not ask". createBooking refuses that with a retryable
+    // 503: an outage is never read as "on sale".
+    @Override
+    public ApiResult<com.innbucks.bookingservice.dto.EventSalesWindowDTO> salesWindow(
+            java.util.UUID eventId, String internalToken) {
+        log.warn("event-service circuit open or call failed (salesWindow) eventId={}", eventId);
+        return ApiResult.<com.innbucks.bookingservice.dto.EventSalesWindowDTO>builder()
+                .code("503").message("event unavailable").data(null).build();
     }
 
     @Override

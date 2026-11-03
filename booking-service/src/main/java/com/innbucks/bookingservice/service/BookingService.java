@@ -228,6 +228,13 @@ public class BookingService {
             throw new BadRequestException("Please provide your full name.");
         }
 
+        // May this event be sold right now? Asked live of event-service before
+        // anything is looked up or held: published, not rejected, past its
+        // sales start, not over. Fails CLOSED: no answer is a retryable 503,
+        // never a sale. Its answer also names the organizer stamped on the
+        // booking, so every new booking now carries one.
+        EventSalesWindowDTO salesWindow = requireOnSale(request.getEventId());
+
         // Collapse the per-ticket request into a quantity per category (the
         // capacity claim is per category), but ALSO keep the per-ticket order
         // — each request entry may name its own attendee, and the ticket
@@ -265,17 +272,13 @@ public class BookingService {
         // the category's stock row is locked. persistBooking prices every
         // ticket and sums the total inside the claim.
 
-        // Capture the owning organizer's stable cross-service uuid so the
-        // ticket scan path can authorize the redeemer (events.tenant_user_uuid
-        // must equal the scanner's JWT organizerUuid) and loyalty earn/redeem
-        // can attribute to the right merchant. Best-effort: if event-service is
-        // unreachable lookupEvent returns null and the booking is created
-        // without it — a scan of such a ticket later refuses with
-        // WRONG_ORGANIZER. Runs for guests too (previously guarded on
-        // userEmail != null, which left every guest ticket unscannable at the
-        // gate and invisible in organizer revenue reports).
-        EventLookupDTO eventLookup = lookupEvent(request.getEventId());
-        UUID tenantUserUuid = eventLookup == null ? null : eventLookup.getTenantUserUuid();
+        // The owning organizer's stable cross-service uuid, so the ticket scan
+        // path can authorize the redeemer (events.tenant_user_uuid must equal
+        // the scanner's JWT organizerUuid) and the organizer's reports find the
+        // booking. Taken from the sales window just checked: it used to come
+        // from a best-effort lookup that, with event-service down, created the
+        // booking with no organizer (unscannable, missing from reports).
+        UUID tenantUserUuid = salesWindow.getTenantUserUuid();
 
         ClaimInputs inputs = new ClaimInputs(userEmail, customerName, phoneNumber, request.getEventId(),
                 tenantUserUuid, qtyByCategory, categoryById, ticketSpecs,
@@ -2122,6 +2125,121 @@ public class BookingService {
                 MsisdnMasking.mask(phoneNumber), unpaid, maxUnpaidPerNumber, retryAfterSeconds);
         throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, TOO_MANY_UNPAID_BOOKINGS,
                 TOO_MANY_UNPAID_BOOKINGS_MESSAGE, Map.of("retryAfterSeconds", retryAfterSeconds));
+    }
+
+    // ---- The sales window (event-service V15) --------------------------------
+
+    public static final String EVENT_NOT_FOUND = "EVENT_NOT_FOUND";
+    public static final String SALES_NOT_STARTED = "SALES_NOT_STARTED";
+    public static final String EVENT_ENDED = "EVENT_ENDED";
+    public static final String EVENT_NOT_ON_SALE = "EVENT_NOT_ON_SALE";
+    static final String EVENT_NOT_FOUND_MESSAGE = "Event not found";
+    static final String EVENT_ENDED_MESSAGE = "This event has ended, so tickets are no longer on sale.";
+    static final String EVENT_NOT_ON_SALE_MESSAGE = "Tickets for this event are not on sale.";
+    static final String EVENT_UNCHECKED_MESSAGE = "We couldn't check this event just now. Please try again.";
+    private static final java.time.format.DateTimeFormatter SALES_START_FORMAT =
+            java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy 'at' HH:mm", java.util.Locale.ENGLISH);
+
+    private volatile com.innbucks.bookingservice.config.MarketTimeZone marketTimeZone;
+
+    /** Renders the sales start in the refusal message; without it the time is printed in UTC. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMarketTimeZone(com.innbucks.bookingservice.config.MarketTimeZone marketTimeZone) {
+        this.marketTimeZone = marketTimeZone;
+    }
+
+    /**
+     * Refuses a booking unless event-service says the event is on sale right
+     * now, and returns its answer (which names the organizer).
+     *
+     * <ul>
+     *   <li>draft, rejected, deleted or unknown: 404 {@code EVENT_NOT_FOUND},
+     *       the same answer for all four, so a draft's existence never leaks;</li>
+     *   <li>before its sales start: 409 {@code SALES_NOT_STARTED}, with the
+     *       time in the message and as {@code data.salesStartDateTime};</li>
+     *   <li>at or after its end: 409 {@code EVENT_ENDED};</li>
+     *   <li>a status this build does not know: 409 {@code EVENT_NOT_ON_SALE}
+     *       (fail closed against a newer event-service);</li>
+     *   <li>no answer at all: 503 {@code TRY_AGAIN}. Nothing has been looked up
+     *       or held, so the same request can simply be sent again.</li>
+     * </ul>
+     * Read live on every call (never the event-lookup cache): it decides a sale.
+     */
+    private EventSalesWindowDTO requireOnSale(UUID eventId) {
+        EventSalesWindowDTO window = fetchSalesWindow(eventId);
+        if (window == null || window.getStatus() == null) {
+            countEventRefusal(BookingMetrics.EventRefusal.UNAVAILABLE);
+            log.warn("Booking refused, event-service could not say whether the event is on sale eventId={}", eventId);
+            throw new ApiProblemException(HttpStatus.SERVICE_UNAVAILABLE, TRY_AGAIN, EVENT_UNCHECKED_MESSAGE,
+                    Map.of());
+        }
+        switch (window.getStatus()) {
+            case EventSalesWindowDTO.ON_SALE -> {
+                return window;
+            }
+            case EventSalesWindowDTO.NOT_YET_ON_SALE -> {
+                countEventRefusal(BookingMetrics.EventRefusal.NOT_STARTED);
+                log.info("Booking refused, sales not open yet eventId={} salesStartUtc={}",
+                        eventId, window.getSalesStartDateTime());
+                Map<String, Object> extra = new LinkedHashMap<>();
+                if (window.getSalesStartDateTime() != null) {
+                    extra.put("salesStartDateTime", window.getSalesStartDateTime());
+                }
+                throw new ApiProblemException(HttpStatus.CONFLICT, SALES_NOT_STARTED,
+                        salesNotStartedMessage(window.getSalesStartDateTime()), extra);
+            }
+            case EventSalesWindowDTO.ENDED -> {
+                countEventRefusal(BookingMetrics.EventRefusal.ENDED);
+                log.info("Booking refused, event has ended eventId={}", eventId);
+                throw new ApiProblemException(HttpStatus.CONFLICT, EVENT_ENDED, EVENT_ENDED_MESSAGE, Map.of());
+            }
+            case EventSalesWindowDTO.NOT_PUBLISHED, EventSalesWindowDTO.NOT_FOUND -> {
+                countEventRefusal(BookingMetrics.EventRefusal.NOT_FOUND);
+                log.info("Booking refused, event not published or unknown eventId={} status={}",
+                        eventId, window.getStatus());
+                throw new ApiProblemException(HttpStatus.NOT_FOUND, EVENT_NOT_FOUND, EVENT_NOT_FOUND_MESSAGE,
+                        Map.of());
+            }
+            default -> {
+                countEventRefusal(BookingMetrics.EventRefusal.NOT_ON_SALE);
+                log.warn("Booking refused, unknown sales status eventId={} status={}", eventId, window.getStatus());
+                throw new ApiProblemException(HttpStatus.CONFLICT, EVENT_NOT_ON_SALE, EVENT_NOT_ON_SALE_MESSAGE,
+                        Map.of());
+            }
+        }
+    }
+
+    private EventSalesWindowDTO fetchSalesWindow(UUID eventId) {
+        EventServiceClient client = eventClientProvider == null ? null : eventClientProvider.getIfAvailable();
+        if (client == null) {
+            return null;
+        }
+        try {
+            ApiResult<EventSalesWindowDTO> envelope = client.salesWindow(eventId, eventInternalToken);
+            return envelope == null ? null : envelope.getData();
+        } catch (Exception ex) {
+            log.warn("Sales window lookup failed eventId={} reason={}", eventId, ex.getMessage());
+            return null;
+        }
+    }
+
+    /** "Tickets for this event go on sale on 14 Nov 2026 at 10:00.", in the market's own time. */
+    String salesNotStartedMessage(LocalDateTime salesStartUtc) {
+        if (salesStartUtc == null) {
+            return EVENT_NOT_ON_SALE_MESSAGE;
+        }
+        com.innbucks.bookingservice.config.MarketTimeZone zone = marketTimeZone;
+        String when = zone == null
+                ? SALES_START_FORMAT.format(salesStartUtc) + " UTC"
+                : SALES_START_FORMAT.format(zone.atMarketFromUtc(salesStartUtc));
+        return "Tickets for this event go on sale on " + when + ".";
+    }
+
+    private void countEventRefusal(BookingMetrics.EventRefusal reason) {
+        BookingMetrics m = metrics;
+        if (m != null) {
+            m.eventRefused(reason);
+        }
     }
 
     private EventLookupDTO fetchEventLookup(UUID eventId) {

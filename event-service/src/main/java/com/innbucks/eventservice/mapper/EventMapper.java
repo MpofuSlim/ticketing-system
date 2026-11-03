@@ -2,9 +2,13 @@ package com.innbucks.eventservice.mapper;
 
 import com.innbucks.eventservice.dto.EventResponseDTO;
 import com.innbucks.eventservice.dto.LocationDTO;
+import com.innbucks.eventservice.dto.SalesStatus;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.Location;
 import org.springframework.stereotype.Component;
+
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 @Component
 public class EventMapper {
@@ -23,6 +27,10 @@ public class EventMapper {
                 .bannerUrl(bannerUrl(event))
                 .startDateTime(event.getStartDateTime())
                 .endDateTime(event.getEndDateTime())
+                .salesStartDateTime(event.getSalesStartAt())
+                // Worked out per call, never cached (see SalesStatus).
+                .salesStatus(SalesStatus.of(event.isActive(), event.isRejected(), event.getSalesStartAt(),
+                        event.getEndDateTime(), LocalDateTime.now(ZoneOffset.UTC)))
                 .totalCapacity(event.getTotalCapacity())
                 .availableTickets(event.getAvailableTickets())
                 .active(event.isActive())

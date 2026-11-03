@@ -118,6 +118,13 @@ public class Event {
     @Builder.Default
     private boolean rejected = false;
 
+    // When ticket sales open (UTC, V15). Null = on sale as soon as the event is
+    // published. Visibility is still `active`/`rejected`: a published event
+    // before this time is listed ("On sale from ...") but cannot be booked.
+    // See SalesStatus for the one rule every reader applies.
+    @Column(name = "sales_start_at")
+    private LocalDateTime salesStartAt;
+
     @Column(updatable = false)
     private LocalDateTime createdAt;
 

@@ -10,6 +10,7 @@ import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryLookupDTO;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
+import com.innbucks.bookingservice.dto.EventSalesWindowDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
@@ -403,8 +404,9 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         when(seatServiceClient.getCategory(categoryId)).thenReturn(ApiResult.ok(CategoryLookupDTO.builder()
                 .seatCategoryId(categoryId).eventId(eventId).name("General").price(new BigDecimal("10.00"))
                 .totalSeats(100).build()));
-        when(eventServiceClient.getEventInternal(eq(eventId), anyString())).thenReturn(ApiResult.ok(
-                EventLookupDTO.builder().eventId(eventId).tenantUserUuid(organizer).build()));
+        when(eventServiceClient.salesWindow(eq(eventId), anyString())).thenReturn(ApiResult.ok(
+                EventSalesWindowDTO.builder().eventId(eventId).status(EventSalesWindowDTO.ON_SALE)
+                        .tenantUserUuid(organizer).build()));
 
         measure("POST /bookings", post("/bookings").contentType(MediaType.APPLICATION_JSON).content("""
                         {"eventId":"%s","customerName":"Rufaro Moyo","phoneNumber":"+263771234567",

@@ -1732,6 +1732,71 @@ public class EventController {
         return ResponseEntity.ok(ApiResult.ok("Event retrieved successfully", eventService.getEventInternal(id)));
     }
 
+    @GetMapping("/internal/sales-window")
+    @SecurityRequirements()
+    @Operation(
+            summary = "May this event be sold right now? (internal)",
+            description = """
+                    Internal endpoint: booking-service asks this before EVERY sale and refuses the booking
+                    unless `status` is `ON_SALE`. Read live from the event row on every call, never cached.
+
+                    `status` is one of `ON_SALE`, `NOT_YET_ON_SALE` (sales open at `salesStartDateTime`),
+                    `ENDED` (the event's end has passed), `NOT_PUBLISHED` (draft or rejected) and `NOT_FOUND`
+                    (no such event, or deleted). Always a 200 for a valid id, an unknown event included, so a
+                    caller's circuit-breaker fallback can only mean "event-service could not be asked".
+
+                    Times are UTC (`Z`) on this S2S path. Requires the `X-Internal-Token` shared secret; the
+                    gateway's `event-internal-deny` route makes `/events/internal/**` unreachable from the
+                    public internet.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The event's sales window",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Published, sales not open yet", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Sales window resolved",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "status": "NOT_YET_ON_SALE",
+                                        "salesStartDateTime": "2026-11-14T08:00:00Z",
+                                        "endDateTime": "2026-12-05T21:00:00Z",
+                                        "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e"
+                                      }
+                                    }
+                                    """),
+                            @ExampleObject(name = "No such event", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Sales window resolved",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "status": "NOT_FOUND",
+                                        "salesStartDateTime": null,
+                                        "endDateTime": null,
+                                        "tenantUserUuid": null
+                                      }
+                                    }
+                                    """)
+                    })),
+            @ApiResponse(responseCode = "401", description = "Missing or invalid X-Internal-Token",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "401 UNAUTHORIZED", "message": "Missing or invalid X-Internal-Token", "data": null }
+                            """)))
+    })
+    public ResponseEntity<ApiResult<SalesWindowDTO>> salesWindow(
+            @Parameter(description = "Event UUID") @RequestParam UUID eventId,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken
+    ) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized GET /events/internal/sales-window — missing or wrong X-Internal-Token");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing or invalid X-Internal-Token"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Sales window resolved", eventService.salesWindow(eventId)));
+    }
+
     @GetMapping("/internal/ended")
     @SecurityRequirements()
     @Operation(

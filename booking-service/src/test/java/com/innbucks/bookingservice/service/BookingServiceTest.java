@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
+import com.innbucks.bookingservice.config.BookingMetrics;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.BookingItemDTO;
@@ -10,6 +11,7 @@ import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.CategoryLookupDTO;
 import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
+import com.innbucks.bookingservice.dto.EventSalesWindowDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.entity.PromoCode;
@@ -20,7 +22,9 @@ import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
 import com.innbucks.bookingservice.repository.PromoCodeRepository;
+import com.innbucks.bookingservice.testsupport.OnSaleEvents;
 import com.innbucks.common.ticket.TicketNumbers;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
@@ -143,11 +147,11 @@ class BookingServiceTest {
                                        SeatServiceClient seatClient,
                                        ApplicationEventPublisher eventPublisher) {
         // Real QrCodeGenerator — fast (in-memory ZXing) and lets us assert
-        // qrCode round-trips without mocking. null loyalty/event providers —
-        // BookingService treats these as "loyalty not wired" and just confirms
-        // cash-only bookings.
+        // qrCode round-trips without mocking. The event client says every
+        // event is on sale: createBooking asks before anything else and
+        // refuses (503) when nobody answers.
         return new BookingService(bookingRepo, itemRepo, inventoryRepo, seatClient, eventPublisher,
-                new QrCodeGenerator(), null,
+                new QrCodeGenerator(), OnSaleEvents.provider(),
                 mock(PlatformTransactionManager.class));
     }
 
@@ -1817,90 +1821,190 @@ class BookingServiceTest {
         assertInstanceOf(BookingDomainEvent.BookingCancelled.class, captor.getValue());
     }
 
-    @Test
-    void createBooking_guestPath_capturesTenantUserUuidFromEventService() {
-        // Replaces the old "guest MUST NOT call event-service" optimization
-        // guard — that optimization was the bug. Without tenantUserUuid on
-        // the row, a guest's CONFIRMED ticket fails the gate scan
-        // (WRONG_ORGANIZER, because TicketScanService matches the scanner's
-        // organizerUuid JWT claim against booking.tenantUserUuid), and the
-        // booking is invisible in every organizer report (those scope by
-        // tenantUserUuid). Guest checkout is a wired, intended path, so the
-        // event-service lookup must run for it too — same as logged-in.
-        BookingRepository bookingRepo = mock(BookingRepository.class);
-        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
-        RequestFixture fx = request(new BigDecimal("20.00"));
+    // ---- the sales window (event-service V15) --------------------------------
 
-        UUID organizerUuid = UUID.randomUUID();
+    /** A service whose event-service answers {@code window}; null = the fallback's "could not ask". */
+    private BookingService serviceAnswering(BookingRepository bookingRepo, SeatServiceClient seats,
+                                            EventSalesWindowDTO window, SimpleMeterRegistry registry) {
         EventServiceClient eventClient = mock(EventServiceClient.class);
-        com.innbucks.bookingservice.dto.EventLookupDTO eventLookup =
-                com.innbucks.bookingservice.dto.EventLookupDTO.builder()
-                        .eventId(fx.eventId)
-                        .tenantUserUuid(organizerUuid)
-                        .build();
-        when(eventClient.getEventInternal(eq(fx.eventId), any()))
-                .thenReturn(ApiResult.ok("ok", eventLookup));
+        when(eventClient.salesWindow(any(), any())).thenReturn(window == null
+                ? ApiResult.<EventSalesWindowDTO>builder().code("503").message("event unavailable").data(null).build()
+                : ApiResult.ok("Sales window resolved", window));
+        return serviceWith(bookingRepo, seats, OnSaleEvents.providerFor(eventClient), registry);
+    }
 
-        @SuppressWarnings("unchecked")
-        org.springframework.beans.factory.ObjectProvider<EventServiceClient> provider =
-                mock(org.springframework.beans.factory.ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(eventClient);
+    private BookingService serviceWith(BookingRepository bookingRepo, SeatServiceClient seats,
+                                       org.springframework.beans.factory.ObjectProvider<EventServiceClient> events,
+                                       SimpleMeterRegistry registry) {
+        BookingService service = new BookingService(bookingRepo, mock(BookingItemRepository.class),
+                successfulInventory(), seats, mock(ApplicationEventPublisher.class),
+                new QrCodeGenerator(), events, mock(PlatformTransactionManager.class));
+        service.setMetrics(new BookingMetrics(registry));
+        return service;
+    }
 
-        BookingService service = new BookingService(bookingRepo, itemRepo,
-                successfulInventory(), stubClient(fx), mock(ApplicationEventPublisher.class),
-                new QrCodeGenerator(), provider,
-                mock(PlatformTransactionManager.class));
+    private static EventSalesWindowDTO window(String status) {
+        return EventSalesWindowDTO.builder().eventId(UUID.randomUUID()).status(status).build();
+    }
 
-        // Guest path: userEmail = null.
+    private static double refused(SimpleMeterRegistry registry, String reason) {
+        return registry.get(BookingMetrics.EVENT_REFUSED).tag("reason", reason).counter().count();
+    }
+
+    /** The refusal, after checking nothing was looked up in seat-service or written. */
+    private static ApiProblemException refusedBeforeAnything(BookingService service, RequestFixture fx,
+                                                             BookingRepository bookingRepo, SeatServiceClient seats) {
+        ApiProblemException ex = assertThrows(ApiProblemException.class,
+                () -> service.createBooking(null, "+263770000001", fx.request));
+        verifyNoInteractions(seats);
+        verify(bookingRepo, never()).save(any());
+        return ex;
+    }
+
+    @Test
+    void createBooking_stampsTheOrganizerFromTheSalesWindow_guestPathToo() {
+        // Without tenantUserUuid on the row a CONFIRMED ticket fails the gate
+        // scan (WRONG_ORGANIZER) and the booking is missing from every
+        // organizer report. The sales window that decided the sale names the
+        // organizer, so the old best-effort event lookup is not made at all.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        RequestFixture fx = request(new BigDecimal("20.00"));
+        UUID organizerUuid = UUID.randomUUID();
+        EventServiceClient eventClient = OnSaleEvents.client(organizerUuid);
+        BookingService service = serviceWith(bookingRepo, stubClient(fx),
+                OnSaleEvents.providerFor(eventClient), new SimpleMeterRegistry());
+
         service.createBooking(null, "+263770000001", fx.request);
 
-        // The lookup MUST run on the guest path.
-        verify(eventClient).getEventInternal(eq(fx.eventId), any());
-        // And the captured organizer uuid MUST land on the saved booking,
-        // so a later scan/ report can resolve to the organizer.
-        // createBooking saves the booking more than once (PENDING insert,
-        // post-items update); atLeastOnce matches the rest of this suite.
+        verify(eventClient).salesWindow(eq(fx.eventId), any());
+        verify(eventClient, never()).getEventInternal(any(), any());
         ArgumentCaptor<Booking> saved = ArgumentCaptor.forClass(Booking.class);
         verify(bookingRepo, atLeastOnce()).save(saved.capture());
         assertEquals(organizerUuid, saved.getValue().getTenantUserUuid(),
                 "guest booking must carry tenantUserUuid for scan + report scoping");
-        assertNull(saved.getValue().getUserEmail(),
-                "guest path still leaves userEmail null — the lookup is the only change");
+        assertNull(saved.getValue().getUserEmail());
     }
 
     @Test
-    void createBooking_guestPath_eventServiceDown_proceedsWithNullTenantUserUuid() {
-        // Failure-isolation contract — event-service being down does NOT
-        // break a guest booking: lookupEvent swallows the failure and
-        // returns null, the booking is created with tenantUserUuid=null
-        // (legacy / unscannable, same fate a logged-in user's booking
-        // gets under the same outage). Pinned because adding event-service
-        // to the guest hot path made this surface area visible.
+    void createBooking_eventServiceCannotBeAsked_is503TryAgain_withNothingHeld() {
+        // It used to proceed with no organizer (an unscannable booking). Now an
+        // outage is never read as "on sale": the buyer retries the same request.
         BookingRepository bookingRepo = mock(BookingRepository.class);
-        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        SeatServiceClient seats = mock(SeatServiceClient.class);
         RequestFixture fx = request(new BigDecimal("20.00"));
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
-        EventServiceClient eventClient = mock(EventServiceClient.class);
-        when(eventClient.getEventInternal(any(), any())).thenThrow(new RuntimeException("event-service down"));
+        ApiProblemException ex = refusedBeforeAnything(serviceAnswering(bookingRepo, seats, null, registry),
+                fx, bookingRepo, seats);
 
-        @SuppressWarnings("unchecked")
-        org.springframework.beans.factory.ObjectProvider<EventServiceClient> provider =
-                mock(org.springframework.beans.factory.ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(eventClient);
+        assertEquals(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+        assertEquals(BookingService.TRY_AGAIN, ex.getErrorCode());
+        assertEquals("We couldn't check this event just now. Please try again.", ex.getMessage());
+        assertEquals(1.0, refused(registry, "unavailable"));
+    }
 
-        BookingService service = new BookingService(bookingRepo, itemRepo,
-                successfulInventory(), stubClient(fx), mock(ApplicationEventPublisher.class),
-                new QrCodeGenerator(), provider,
-                mock(PlatformTransactionManager.class));
+    @Test
+    void createBooking_eventServiceThrowsOrIsNotWired_is503TryAgain() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        SeatServiceClient seats = mock(SeatServiceClient.class);
+        RequestFixture fx = request(new BigDecimal("20.00"));
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
-        service.createBooking(null, "+263770000001", fx.request);
+        EventServiceClient throwing = mock(EventServiceClient.class);
+        when(throwing.salesWindow(any(), any())).thenThrow(new RuntimeException("event-service down"));
+        ApiProblemException thrown = refusedBeforeAnything(
+                serviceWith(bookingRepo, seats, OnSaleEvents.providerFor(throwing), registry),
+                fx, bookingRepo, seats);
+        ApiProblemException notWired = refusedBeforeAnything(
+                serviceWith(bookingRepo, seats, null, registry), fx, bookingRepo, seats);
 
-        // createBooking saves the booking more than once (PENDING insert,
-        // post-items update); atLeastOnce matches the rest of this suite.
-        ArgumentCaptor<Booking> saved = ArgumentCaptor.forClass(Booking.class);
-        verify(bookingRepo, atLeastOnce()).save(saved.capture());
-        assertNull(saved.getValue().getTenantUserUuid(),
-                "event-service outage leaves tenantUserUuid null — booking still succeeds");
+        assertEquals(BookingService.TRY_AGAIN, thrown.getErrorCode());
+        assertEquals(BookingService.TRY_AGAIN, notWired.getErrorCode());
+        assertEquals(2.0, refused(registry, "unavailable"));
+    }
+
+    @Test
+    void createBooking_beforeSalesOpen_is409_namingTheMarketTime() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        SeatServiceClient seats = mock(SeatServiceClient.class);
+        RequestFixture fx = request(new BigDecimal("20.00"));
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        LocalDateTime opensUtc = LocalDateTime.of(2026, 11, 14, 8, 0);
+        EventSalesWindowDTO notYet = window(EventSalesWindowDTO.NOT_YET_ON_SALE);
+        notYet.setSalesStartDateTime(opensUtc);
+        BookingService service = serviceAnswering(bookingRepo, seats, notYet, registry);
+        service.setMarketTimeZone(new com.innbucks.bookingservice.config.MarketTimeZone("ZW"));
+
+        ApiProblemException ex = refusedBeforeAnything(service, fx, bookingRepo, seats);
+
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals(BookingService.SALES_NOT_STARTED, ex.getErrorCode());
+        // 08:00 UTC is 10:00 in Harare.
+        assertEquals("Tickets for this event go on sale on 14 Nov 2026 at 10:00.", ex.getMessage());
+        assertEquals(opensUtc, ex.getExtra().get("salesStartDateTime"));
+        assertEquals(1.0, refused(registry, "not_started"));
+    }
+
+    @Test
+    void salesNotStartedMessage_withoutAMarketZone_saysUtc_andWithoutATime_saysNotOnSale() {
+        BookingService service = serviceWith(mock(BookingRepository.class), mock(SeatServiceClient.class),
+                OnSaleEvents.provider(), new SimpleMeterRegistry());
+
+        assertEquals("Tickets for this event go on sale on 14 Nov 2026 at 08:00 UTC.",
+                service.salesNotStartedMessage(LocalDateTime.of(2026, 11, 14, 8, 0)));
+        assertEquals("Tickets for this event are not on sale.", service.salesNotStartedMessage(null));
+    }
+
+    @Test
+    void createBooking_afterTheEventEnded_is409EventEnded() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        SeatServiceClient seats = mock(SeatServiceClient.class);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+        ApiProblemException ex = refusedBeforeAnything(
+                serviceAnswering(bookingRepo, seats, window(EventSalesWindowDTO.ENDED), registry),
+                request(new BigDecimal("20.00")), bookingRepo, seats);
+
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals(BookingService.EVENT_ENDED, ex.getErrorCode());
+        assertEquals("This event has ended, so tickets are no longer on sale.", ex.getMessage());
+        assertTrue(ex.getExtra().isEmpty());
+        assertEquals(1.0, refused(registry, "ended"));
+    }
+
+    @Test
+    void createBooking_draftRejectedOrUnknownEvent_isTheSame404() {
+        // A draft's existence must not leak: unpublished and unknown read alike.
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        for (String status : List.of(EventSalesWindowDTO.NOT_PUBLISHED, EventSalesWindowDTO.NOT_FOUND)) {
+            BookingRepository bookingRepo = mock(BookingRepository.class);
+            SeatServiceClient seats = mock(SeatServiceClient.class);
+
+            ApiProblemException ex = refusedBeforeAnything(
+                    serviceAnswering(bookingRepo, seats, window(status), registry),
+                    request(new BigDecimal("20.00")), bookingRepo, seats);
+
+            assertEquals(org.springframework.http.HttpStatus.NOT_FOUND, ex.getStatus(), status);
+            assertEquals(BookingService.EVENT_NOT_FOUND, ex.getErrorCode(), status);
+            assertEquals("Event not found", ex.getMessage(), status);
+        }
+        assertEquals(2.0, refused(registry, "not_found"));
+    }
+
+    @Test
+    void createBooking_aStatusThisBuildDoesNotKnow_isRefused_neverSold() {
+        // Fails closed against a newer event-service adding a status.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        SeatServiceClient seats = mock(SeatServiceClient.class);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+        ApiProblemException ex = refusedBeforeAnything(
+                serviceAnswering(bookingRepo, seats, window("PAUSED"), registry),
+                request(new BigDecimal("20.00")), bookingRepo, seats);
+
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals(BookingService.EVENT_NOT_ON_SALE, ex.getErrorCode());
+        assertEquals(1.0, refused(registry, "not_on_sale"));
     }
 
     // ---- reverseConfirmedBooking (audit #3 — saga compensation) ----

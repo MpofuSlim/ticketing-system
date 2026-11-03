@@ -13,6 +13,7 @@ import com.innbucks.bookingservice.exception.BookingConflictException;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
+import com.innbucks.bookingservice.testsupport.OnSaleEvents;
 import com.innbucks.bookingservice.testsupport.RecordingTransactionManager;
 import com.innbucks.common.ticket.TicketNumbers;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -77,7 +78,7 @@ class BookingClaimRetryTest {
         when(inventory.tryClaim(any(), anyInt())).thenReturn(1);
         when(itemRepo.saveAllAndFlush(anyList())).thenAnswer(inv -> inv.getArgument(0));
         service = new BookingService(bookingRepo, itemRepo, inventory, seats, mock(ApplicationEventPublisher.class),
-                new QrCodeGenerator(), null, txManager);
+                new QrCodeGenerator(), OnSaleEvents.provider(), txManager);
         service.setMetrics(new BookingMetrics(registry));
     }
 

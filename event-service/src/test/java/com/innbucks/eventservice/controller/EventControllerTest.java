@@ -37,6 +37,8 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -758,6 +760,138 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.data.content[0].title", is("ZW Concert")))
                 .andExpect(jsonPath("$.data.content[0].country", is("Zimbabwe")))
                 .andExpect(jsonPath("$.data.content[0].category", is("CONCERT")));
+    }
+
+    // ---- Scheduled ticket sales (V15) ---------------------------------------
+    // The organizer types the market-local time sales open; it is stored UTC,
+    // rendered back at the market offset, and booking-service asks
+    // /events/internal/sales-window before every sale.
+
+    private static byte[] eventJson(String extra) {
+        return ("{\"title\":\"Scheduled Concert\",\"venue\":\"Harare Gardens\",\"category\":\"CONCERT\","
+                + "\"location\":{\"latitude\":-17.8252,\"longitude\":31.0335},"
+                + "\"startDateTime\":\"2030-04-18T18:00:00\",\"endDateTime\":\"2030-04-18T23:00:00\","
+                + "\"totalCapacity\":50" + extra + "}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void createEvent_withSalesStart_storesUtc_andAnswersItAtTheMarketOffset() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile("event", "event.json",
+                MediaType.APPLICATION_JSON_VALUE, eventJson(",\"salesStartDateTime\":\"2030-04-01T10:00:00\""));
+
+        String body = mockMvc.perform(multipart("/events").file(eventPart)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
+                        .requestAttr("jwtCountry", "Zimbabwe"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.salesStartDateTime", is("2030-04-01T10:00:00+02:00")))
+                .andExpect(jsonPath("$.data.salesStatus", is("NOT_PUBLISHED")))
+                .andReturn().getResponse().getContentAsString();
+
+        UUID id = UUID.fromString(objectMapper.readTree(body).path("data").path("eventId").asText());
+        assertEquals(LocalDateTime.of(2030, 4, 1, 8, 0),
+                eventRepository.findById(id).orElseThrow().getSalesStartAt(), "10:00 Harare is 08:00 UTC");
+    }
+
+    @Test
+    void createEvent_withSalesOpeningAfterTheEnd_is400() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile("event", "event.json",
+                MediaType.APPLICATION_JSON_VALUE, eventJson(",\"salesStartDateTime\":\"2030-04-18T23:00:00\""));
+
+        mockMvc.perform(multipart("/events").file(eventPart)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
+                        .requestAttr("jwtCountry", "Zimbabwe"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", is("Ticket sales must open before the event ends.")));
+    }
+
+    @Test
+    void createEvent_withADateOnlySalesStart_is400_notA500() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile("event", "event.json",
+                MediaType.APPLICATION_JSON_VALUE, eventJson(",\"salesStartDateTime\":\"2030-04-01\""));
+
+        mockMvc.perform(multipart("/events").file(eventPart)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
+                        .requestAttr("jwtCountry", "Zimbabwe"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code", is("400 BAD_REQUEST")))
+                .andExpect(jsonPath("$.message",
+                        is("A date or time in the request is not valid. Send it like 2026-11-14T10:00:00.")));
+    }
+
+    @Test
+    void updateEvent_explicitNull_clearsTheSchedule_andAbsentLeavesIt() throws Exception {
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Scheduled")
+                .startDateTime(LocalDateTime.of(2030, 4, 18, 16, 0))
+                .endDateTime(LocalDateTime.of(2030, 4, 18, 21, 0))
+                .salesStartAt(LocalDateTime.of(2030, 4, 1, 8, 0))
+                .build());
+
+        mockMvc.perform(put("/events/" + saved.getEventId())
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Renamed\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.salesStartDateTime", is("2030-04-01T10:00:00+02:00")))
+                .andExpect(jsonPath("$.data.salesStatus", is("NOT_YET_ON_SALE")));
+
+        mockMvc.perform(put("/events/" + saved.getEventId())
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"salesStartDateTime\":null}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.salesStartDateTime", nullValue()))
+                .andExpect(jsonPath("$.data.salesStatus", is("ON_SALE")));
+        assertNull(eventRepository.findById(saved.getEventId()).orElseThrow().getSalesStartAt());
+    }
+
+    @Test
+    void publicEvent_beforeItsSalesOpen_isListed_withItsSalesStatus() throws Exception {
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Coming soon")
+                .startDateTime(LocalDateTime.of(2030, 4, 18, 16, 0))
+                .endDateTime(LocalDateTime.of(2030, 4, 18, 21, 0))
+                .salesStartAt(LocalDateTime.of(2030, 4, 1, 8, 0))
+                .build());
+
+        mockMvc.perform(get("/events/" + saved.getEventId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.salesStartDateTime", is("2030-04-01T10:00:00+02:00")))
+                .andExpect(jsonPath("$.data.salesStatus", is("NOT_YET_ON_SALE")));
+    }
+
+    @Test
+    void salesWindow_withoutInternalToken_returns401() throws Exception {
+        mockMvc.perform(get("/events/internal/sales-window").param("eventId", UUID.randomUUID().toString()))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/events/internal/sales-window").param("eventId", UUID.randomUUID().toString())
+                        .header("X-Internal-Token", "wrong-token"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void salesWindow_answersTheStatus_inUtc_forTheS2SCaller() throws Exception {
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Coming soon")
+                .startDateTime(LocalDateTime.of(2030, 4, 18, 16, 0))
+                .endDateTime(LocalDateTime.of(2030, 4, 18, 21, 0))
+                .salesStartAt(LocalDateTime.of(2030, 4, 1, 8, 0))
+                .build());
+
+        mockMvc.perform(get("/events/internal/sales-window").param("eventId", saved.getEventId().toString())
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("NOT_YET_ON_SALE")))
+                .andExpect(jsonPath("$.data.salesStartDateTime", is("2030-04-01T08:00:00Z")))
+                .andExpect(jsonPath("$.data.tenantUserUuid", is(ORGANIZER_1.toString())));
+    }
+
+    @Test
+    void salesWindow_unknownEvent_isA200_withNotFound() throws Exception {
+        mockMvc.perform(get("/events/internal/sales-window").param("eventId", UUID.randomUUID().toString())
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("NOT_FOUND")));
     }
 
     private static Event.EventBuilder eventBuilder() {

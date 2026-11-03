@@ -702,6 +702,9 @@ public class EventService {
         // local value would miss an existing event stored in UTC.
         LocalDateTime startUtc = marketTimeZone.toUtc(request.getStartDateTime());
         LocalDateTime endUtc = marketTimeZone.toUtc(request.getEndDateTime());
+        LocalDateTime salesStartUtc = request.getSalesStartDateTime() == null
+                ? null : marketTimeZone.toUtc(request.getSalesStartDateTime());
+        requireSalesOpenBeforeEnd(salesStartUtc, endUtc);
 
         if (eventRepository.existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
                 tenantUserUuid, request.getTitle(), request.getVenue(), startUtc)) {
@@ -724,6 +727,7 @@ public class EventService {
                 .location(toLocation(request.getLocation()))
                 .startDateTime(startUtc)
                 .endDateTime(endUtc)
+                .salesStartAt(salesStartUtc)
                 .totalCapacity(request.getTotalCapacity())
                 .availableTickets(request.getTotalCapacity())
                 .deleted(false)
@@ -1053,6 +1057,14 @@ public class EventService {
                 && !event.getEndDateTime().isAfter(event.getStartDateTime())) {
             throw new BadRequestException("The event end time must be after the start time.");
         }
+        // Explicit null clears the schedule; left out leaves it alone (see the
+        // DTO's flag). Checked against the MERGED end, so moving the end before
+        // a stored sales time is refused too.
+        if (request.isSalesStartDateTimeSent()) {
+            event.setSalesStartAt(request.getSalesStartDateTime() == null
+                    ? null : marketTimeZone.toUtc(request.getSalesStartDateTime()));
+        }
+        requireSalesOpenBeforeEnd(event.getSalesStartAt(), event.getEndDateTime());
         if (request.getTotalCapacity() != null) {
             requireCapacityCoversAllocation(eventId, request.getTotalCapacity());
             int diff = request.getTotalCapacity() - event.getTotalCapacity();
@@ -1139,6 +1151,42 @@ public class EventService {
         log.info("Availability released eventId={} count={} remaining={}",
                 eventId, count, event.getAvailableTickets());
         return event.getAvailableTickets();
+    }
+
+    /** The refusal when ticket sales would open at or after the event's end. */
+    public static final String SALES_START_AFTER_END_MESSAGE = "Ticket sales must open before the event ends.";
+
+    /** Sales open strictly before the end, or never would; both values UTC. Null start = no schedule. */
+    private static void requireSalesOpenBeforeEnd(LocalDateTime salesStartUtc, LocalDateTime endUtc) {
+        if (salesStartUtc != null && endUtc != null && !salesStartUtc.isBefore(endUtc)) {
+            throw new BadRequestException(SALES_START_AFTER_END_MESSAGE);
+        }
+    }
+
+    /**
+     * Whether this event can be sold right now, for booking-service, which
+     * asks before every sale ({@code GET /events/internal/sales-window}).
+     * Read live from the row on every call, never from a cache: it decides a
+     * sale. An unknown or deleted event is an ANSWER ({@code NOT_FOUND}), not
+     * an error, so booking-service's Feign fallback can only ever mean
+     * "event-service could not be asked". A draft or rejected event is
+     * {@code NOT_PUBLISHED}; booking-service answers both with the same 404.
+     */
+    @Transactional(readOnly = true)
+    public SalesWindowDTO salesWindow(UUID eventId) {
+        return eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .map(event -> SalesWindowDTO.builder()
+                        .eventId(event.getEventId())
+                        .status(SalesStatus.of(event.isActive(), event.isRejected(), event.getSalesStartAt(),
+                                event.getEndDateTime(), LocalDateTime.now(ZoneOffset.UTC)).name())
+                        .salesStartDateTime(event.getSalesStartAt())
+                        .endDateTime(event.getEndDateTime())
+                        .tenantUserUuid(event.getTenantUserUuid())
+                        .build())
+                .orElseGet(() -> SalesWindowDTO.builder()
+                        .eventId(eventId)
+                        .status(SalesWindowDTO.NOT_FOUND)
+                        .build());
     }
 
     @Transactional
