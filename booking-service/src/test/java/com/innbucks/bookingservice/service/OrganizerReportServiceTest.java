@@ -403,6 +403,53 @@ class OrganizerReportServiceTest {
     }
 
     @Test
+    void cashUp_countsEachSaleOnTheDayItWasMade_andEachVoidOnItsOwnDay_perSeller() {
+        OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
+        LocalDate day = LocalDate.of(2026, 11, 20);
+        Booking kept = confirmed(EVENT_A, "300.00", "300.00", null, day.atTime(8, 2),
+                item(CAT_VIP, "VIP", "150.00"), item(CAT_VIP, "VIP", "150.00"));
+        kept.setSoldByName("alice@example.com");
+        Booking voidedSameDay = confirmed(EVENT_A, "150.00", "150.00", null, day.atTime(9, 40),
+                item(CAT_VIP, "VIP", "150.00"));
+        voidedSameDay.setSoldByName("bob@example.com");
+        voidedSameDay.setStatus(Booking.BookingStatus.CANCELLED);
+        voidedSameDay.setCancelReason(Booking.CancelReason.CASH_VOIDED);
+        voidedSameDay.setVoidedByName("alice@example.com");
+        voidedSameDay.setVoidedAt(day.atTime(9, 52));
+        voidedSameDay.setVoidReason("Buyer changed their mind");
+        Booking voidedToday = confirmed(EVENT_A, "50.00", "50.00", null, day.minusDays(1).atTime(16, 0),
+                item(CAT_GA, "GA", "50.00"));
+        voidedToday.setSoldByName("bob@example.com");
+        voidedToday.setStatus(Booking.BookingStatus.CANCELLED);
+        voidedToday.setCancelReason(Booking.CancelReason.CASH_VOIDED);
+        voidedToday.setVoidedByName("bob@example.com");
+        voidedToday.setVoidedAt(day.atTime(7, 0));
+        when(repo.findCashSalesWithItems(eq(ORG), eq(EVENT_A), any(), any()))
+                .thenReturn(List.of(voidedToday, kept, voidedSameDay));
+
+        var report = service(repo).cashUp(ORG, EVENT_A, day, day);
+
+        assertThat(report.sellers()).extracting("seller").containsExactly("alice@example.com", "bob@example.com");
+        var alice = report.sellers().get(0);
+        assertThat(alice.sales()).isEqualTo(1);
+        assertThat(alice.taken()).isEqualByComparingTo("300.00");
+        assertThat(alice.voids()).isEqualTo(1);
+        assertThat(alice.returned()).isEqualByComparingTo("150.00");
+        assertThat(alice.net()).isEqualByComparingTo("150.00");
+        var bob = report.sellers().get(1);
+        assertThat(bob.sales()).isEqualTo(1); // yesterday's sale is not today's cash
+        assertThat(bob.taken()).isEqualByComparingTo("150.00");
+        assertThat(bob.voids()).isEqualTo(1);
+        assertThat(bob.returned()).isEqualByComparingTo("50.00");
+        assertThat(report.totals().taken()).isEqualByComparingTo("450.00");
+        assertThat(report.totals().returned()).isEqualByComparingTo("200.00");
+        assertThat(report.totals().net()).isEqualByComparingTo("250.00");
+        assertThat(report.totals().tickets()).isEqualTo(3);
+        assertThat(report.entries()).extracting("type").containsExactly("VOID", "SALE", "SALE", "VOID");
+        assertThat(report.entries().get(3).reason()).isEqualTo("Buyer changed their mind");
+    }
+
+    @Test
     void resolveRange_rejectsFromAfterTo() {
         OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
         assertThatThrownBy(() -> service(repo).revenueSummary(ORG, null,

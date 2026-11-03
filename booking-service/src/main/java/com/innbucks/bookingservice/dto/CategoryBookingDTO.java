@@ -103,6 +103,10 @@ public class CategoryBookingDTO {
     // Add-ons bought with this ticket (V33), as bought; [] when none.
     private java.util.List<BookingAddOnDTO> addOns;
 
+    @io.swagger.v3.oas.annotations.media.Schema(description = "Box office (V35): the organiser account that sold this ticket's booking for cash. Absent on online sales.", example = "organizer@example.com")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String soldBy;
+
     @io.swagger.v3.oas.annotations.media.Schema(description = "The ticket's assigned number (bib or seat), given when it is paid for. Absent when it has none.", example = "T014")
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     private String assignedNumber;

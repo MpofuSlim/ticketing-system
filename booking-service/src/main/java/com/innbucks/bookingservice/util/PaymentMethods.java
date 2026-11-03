@@ -31,13 +31,22 @@ public final class PaymentMethods {
         return RAIL.matcher(trimmed).matches() ? trimmed : null;
     }
 
-    /** The method code for a stored rail: INNBUCKS, ECOCASH, CARD, the rail itself, or null. */
+    /**
+     * A box office cash sale (V35). Recorded only by {@code BoxOfficeService},
+     * never accepted from payment-service's confirm: it is what the cash-up
+     * report reconciles, and a sale is a box office sale only when it also
+     * names its seller ({@code sold_by_user_uuid}).
+     */
+    public static final String CASH = "CASH";
+
+    /** The method code for a stored rail: INNBUCKS, ECOCASH, CARD, CASH, the rail itself, or null. */
     public static String code(String rail) {
         if (rail == null) return null;
         return switch (rail) {
             case "INNBUCKS_CODE" -> "INNBUCKS";
             case "ECOCASH" -> "ECOCASH";
             case "ZIMSWITCH_CARD" -> "CARD";
+            case CASH -> "CASH";
             default -> rail;
         };
     }
@@ -49,6 +58,7 @@ public final class PaymentMethods {
             case "INNBUCKS_CODE" -> "InnBucks";
             case "ECOCASH" -> "EcoCash";
             case "ZIMSWITCH_CARD" -> "Bank card (ZimSwitch)";
+            case CASH -> "Cash (box office)";
             default -> rail;
         };
     }

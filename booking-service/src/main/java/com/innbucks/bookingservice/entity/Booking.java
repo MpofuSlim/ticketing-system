@@ -181,6 +181,29 @@ public class Booking {
     @Column(name = "payment_rail", length = 32)
     private String paymentRail;
 
+    // Box office (V35): the organizer account that took the cash for this
+    // booking. NULL on every online booking; that, with payment_rail = CASH,
+    // is what marks a cash sale. Stamped once, under the row lock, at the
+    // sale's confirm.
+    @Column(name = "sold_by_user_uuid")
+    private UUID soldByUserUuid;
+
+    @Column(name = "sold_by_name", length = 254)
+    private String soldByName;
+
+    // A voided cash sale (V35, cancel_reason CASH_VOIDED): who, when and why.
+    @Column(name = "voided_by_user_uuid")
+    private UUID voidedByUserUuid;
+
+    @Column(name = "voided_by_name", length = 254)
+    private String voidedByName;
+
+    @Column(name = "voided_at")
+    private LocalDateTime voidedAt;
+
+    @Column(name = "void_reason", length = 500)
+    private String voidReason;
+
     // When the DAY-OF pre-event reminder was sent (or consumed) for this
     // CONFIRMED booking. Set on the reminder attempt — success or failure —
     // so the hourly EventReminderScheduler never retries into spam; also set
@@ -239,7 +262,9 @@ public class Booking {
         /** The buyer released an unpaid booking through the public release (P2-4). */
         BUYER_RELEASED(true),
         /** A SUPER_ADMIN reversed a CONFIRMED booking: the money is being returned, never resurrected. */
-        ADMIN_REVERSED(false);
+        ADMIN_REVERSED(false),
+        /** The organizer voided a box office cash sale (V35): the cash went back over the counter. */
+        CASH_VOIDED(false);
 
         private final boolean resurrectable;
 

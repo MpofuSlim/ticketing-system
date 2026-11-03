@@ -70,6 +70,66 @@ public class OrganizerReportController {
         this.bookingQuestionReportService = bookingQuestionReportService;
     }
 
+    @GetMapping("/cash-up")
+    @Operation(summary = "Box office cash-up",
+            description = "Cash taken and handed back at the box office (V35), per organiser account, with every "
+                    + "sale and void behind it, oldest first. A sale counts on the day it was made, a void on the "
+                    + "day it was made: a sale voided the next day is in both days' cash-ups, each on its side. "
+                    + "`net` is what the account's till should hold. For one day, send `from` and `to` the same "
+                    + "date; days are UTC days, like every organiser report. Optional `eventId`; `from`/`to` "
+                    + "default to the last 30 days.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Cash-up",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Cash-up retrieved",
+                              "data": {
+                                "sellers": [
+                                  { "seller": "organizer@example.com", "sales": 2, "tickets": 3, "taken": 450.00,
+                                    "voids": 1, "returned": 150.00, "net": 300.00 }
+                                ],
+                                "totals": { "sales": 2, "tickets": 3, "taken": 450.00, "voids": 1, "returned": 150.00, "net": 300.00 },
+                                "entries": [
+                                  { "type": "SALE", "at": "2026-11-20T10:02:00+02:00", "by": "organizer@example.com",
+                                    "bookingId": "9b2e4c1a-7d3f-4e5a-8b6c-1a2b3c4d5e6f", "confirmationNumber": "INN-20261120-4F2A9C",
+                                    "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "customerName": "Rufaro Moyo",
+                                    "tickets": 2, "amount": 300.00, "reason": null },
+                                  { "type": "SALE", "at": "2026-11-20T11:40:00+02:00", "by": "organizer@example.com",
+                                    "bookingId": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f", "confirmationNumber": "INN-20261120-7B1D03",
+                                    "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "customerName": "Tendai Ncube",
+                                    "tickets": 1, "amount": 150.00, "reason": null },
+                                  { "type": "VOID", "at": "2026-11-20T11:52:00+02:00", "by": "organizer@example.com",
+                                    "bookingId": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f", "confirmationNumber": "INN-20261120-7B1D03",
+                                    "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "customerName": "Tendai Ncube",
+                                    "tickets": 1, "amount": 150.00, "reason": "Buyer changed their mind" }
+                                ]
+                              },
+                              "meta": { "from": "2026-11-20", "to": "2026-11-20", "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "organizerUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e", "platformWide": false }
+                            }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid range",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "400 BAD_REQUEST", "message": "'from' (2026-06-01) must not be after 'to' (2026-05-31).", "data": null }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Not an organizer or platform staff",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                            """)))
+    })
+    public ResponseEntity<ApiResult<com.innbucks.bookingservice.dto.report.CashUpReportDTO>> cashUp(
+            Authentication authentication,
+            @RequestParam(required = false) UUID eventId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        UUID organizerUuid = resolveScope(authentication);
+        return ResponseEntity.ok(ApiResult.ok("Cash-up retrieved",
+                reportService.cashUp(organizerUuid, eventId, from, to),
+                reportService.resolvedMeta(organizerUuid, eventId, from, to)));
+    }
+
     @GetMapping("/add-ons")
     @Operation(summary = "Add-on sales",
             description = "Add-ons sold on CONFIRMED bookings in the window (V33), one row per add-on, highest "

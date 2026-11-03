@@ -580,6 +580,25 @@ public class TicketScanService {
         if (updated == 0) {
             BookingItem reloaded = bookingItemRepository.findByTicketNumberWithBooking(ticketNumber)
                     .orElse(item);
+            boolean cancelledMeanwhile = reloaded.getRedeemedAt() == null
+                    && (Boolean.FALSE.equals(reloaded.getIsActive())
+                        || (reloaded.getBooking() != null
+                            && reloaded.getBooking().getStatus() != Booking.BookingStatus.CONFIRMED));
+            if (cancelledMeanwhile) {
+                // Not redeemed and no longer active, so the claim lost to a
+                // cancellation that committed after this scan read the booking
+                // (a voided cash sale, an admin reversal): the ticket no longer
+                // admits.
+                log.info("Ticket scan rejected, booking cancelled during the scan ticketNumber={} scanner={}",
+                        TicketNumbers.forLog(ticketNumber), scannerEmail);
+                recordAttempt(ticketNumber, reloaded, ScanAttempt.Outcome.BOOKING_NOT_CONFIRMED,
+                        scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, scanEventId);
+                return ScanTicketResponseDTO.builder()
+                        .status(ScanTicketResponseDTO.Status.BOOKING_NOT_CONFIRMED)
+                        .ticketNumber(ticketNumber)
+                        .bookingItemId(reloaded.getId())
+                        .build();
+            }
             log.info("Ticket scan rejected, already redeemed ticketNumber={} firstScanAt={} firstScanBy={} retryBy={}",
                     TicketNumbers.forLog(ticketNumber), reloaded.getRedeemedAt(), reloaded.getRedeemedByName(), scannerEmail);
             ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
