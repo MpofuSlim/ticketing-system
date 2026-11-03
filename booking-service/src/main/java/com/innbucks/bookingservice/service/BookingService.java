@@ -17,6 +17,7 @@ import com.innbucks.bookingservice.exception.NotFoundException;
 import com.innbucks.bookingservice.util.MsisdnMasking;
 import com.innbucks.bookingservice.util.PaymentMethods;
 import com.innbucks.bookingservice.repository.*;
+import com.innbucks.bookingservice.numbering.TicketNumberAssigner;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.Hibernate;
 import org.springframework.beans.factory.ObjectProvider;
@@ -941,6 +942,27 @@ public class BookingService {
     }
 
     /**
+     * The guest-list rows of an assigned number (V34) within one event, e.g.
+     * "T014", in any letter case. Two categories can each have a 14, so this
+     * can be more than one row. Same scope as {@link #getBookingsByEvent}.
+     */
+    public List<CategoryBookingDTO> findInEventByAssignedNumber(UUID eventId,
+                                                                String assignedNumber,
+                                                                UUID requesterOrganizerUuid,
+                                                                boolean isAdmin) {
+        if (!isAdmin) {
+            requireEventOwnership(eventId, requesterOrganizerUuid);
+        }
+        String wanted = assignedNumber == null ? "" : assignedNumber.strip();
+        if (wanted.isEmpty() || wanted.length() > 32) {
+            return List.of();
+        }
+        return bookingItemRepository.findByEventIdAndAssignedNumberWithBooking(eventId, wanted).stream()
+                .map(this::toCategoryBookingDTO)
+                .toList();
+    }
+
+    /**
      * Looks up the event in event-service and throws AccessDeniedException if
      * its {@code tenantUserUuid} doesn't match the requester's organizer uuid
      * (the stable cross-service organizer identifier, NOT the email).
@@ -1005,6 +1027,8 @@ public class BookingService {
                 .termsAcceptedAt(b.getTermsAcceptedAt())
                 .answers(openAnswers(item))
                 .addOns(addOnsOf(item))
+                .assignedNumber(item.getAssignedNumber())
+                .numberLabel(item.getNumberLabel())
                 .holderName(item.holderName())
                 .eventId(b.getEventId())
                 .status(b.getStatus())
@@ -1241,6 +1265,8 @@ public class BookingService {
                                 .attendeePhone(includeAttendeeContact ? i.getAttendeePhone() : null)
                                 .answers(withAnswers ? openAnswers(i) : null)
                                 .addOns(addOnsOf(i))
+                                .assignedNumber(i.getAssignedNumber())
+                                .numberLabel(i.getNumberLabel())
                                 .build())
                         .collect(Collectors.toList());
     }
@@ -2024,6 +2050,14 @@ public class BookingService {
         booking.setExpiresAt(null); // paid — hold no longer applicable
         bookingRepository.save(booking);
 
+        // Assigned numbers (V34) are given here, at payment, under the booking
+        // row's lock this method's callers hold: the series rows are taken
+        // after it (and after the counter rows on a resurrect), never before.
+        TicketNumberAssigner assigner = ticketNumberAssigner;
+        if (assigner != null) {
+            assigner.assignOnConfirm(booking);
+        }
+
         // The event-service availableTickets decrement used to be a Feign call
         // made here, inside this transaction — a pooled connection held across
         // a remote call for a best-effort mirror. It now runs AFTER COMMIT,
@@ -2130,6 +2164,14 @@ public class BookingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setTicketNumberDisplay(TicketNumberDisplay ticketNumbers) {
         this.ticketNumbers = Objects.requireNonNull(ticketNumbers, "ticketNumbers");
+    }
+
+    private volatile TicketNumberAssigner ticketNumberAssigner;
+
+    /** Setter for the same reason; without it a confirm gives no assigned number (V34). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setTicketNumberAssigner(TicketNumberAssigner ticketNumberAssigner) {
+        this.ticketNumberAssigner = ticketNumberAssigner;
     }
 
     /** Setter for the same reason; without it the claim retry is simply not counted. */

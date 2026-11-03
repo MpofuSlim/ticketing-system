@@ -331,9 +331,11 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
         verify(email, timeout(10_000)).sendEmail(eq(f.email), anyString(), anyString(), anyString());
         measured.put("confirm + async delivery", stats.getPrepareStatementCount());
         // lock the booking row, load its items (lockById cannot fetch-join
-        // them: Postgres refuses FOR UPDATE on an outer join), update the
-        // booking, and the listener's one fetch-join read after commit.
-        assertThat(stats.getPrepareStatementCount()).isEqualTo(4);
+        // them: Postgres refuses FOR UPDATE on an outer join), ask which of
+        // its categories number their tickets (V34: none here, so nothing is
+        // claimed), update the booking, and the listener's one fetch-join
+        // read after commit.
+        assertThat(stats.getPrepareStatementCount()).isEqualTo(5);
 
         stats.clear();
         mvc.perform(post("/bookings/" + b.getId() + "/resend-ticket").header("Authorization", bearer(admin())))

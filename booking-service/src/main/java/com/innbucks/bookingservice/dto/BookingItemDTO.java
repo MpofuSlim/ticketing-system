@@ -91,4 +91,12 @@ public class BookingItemDTO {
     /** Add-ons bought with this ticket (V33), name and price as bought; [] when none. On every view. */
     @Schema(description = "Add-ons bought with this ticket; [] when none.")
     private java.util.List<BookingAddOnDTO> addOns;
+
+    @io.swagger.v3.oas.annotations.media.Schema(description = "The ticket's assigned number (bib or seat), given when it is paid for. Absent when it has none.", example = "T014")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String assignedNumber;
+
+    @io.swagger.v3.oas.annotations.media.Schema(description = "What the number is called, e.g. Bib, Seat, Table. Absent when the ticket has no number.", example = "Bib")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String numberLabel;
 }

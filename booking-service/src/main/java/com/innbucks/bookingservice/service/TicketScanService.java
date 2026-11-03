@@ -591,6 +591,8 @@ public class TicketScanService {
                     .holderName(reloaded.holderName())
                     .categoryName(reloaded.getCategoryName())
                     .addOns(reloaded.addOnNames())
+                    .assignedNumber(reloaded.getAssignedNumber())
+                    .numberLabel(reloaded.getNumberLabel())
                     .build();
             recordAttempt(ticketNumber, reloaded, ScanAttempt.Outcome.ALREADY_REDEEMED,
                     scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, scanEventId);
@@ -610,6 +612,8 @@ public class TicketScanService {
                 .holderName(item.holderName())
                 .categoryName(item.getCategoryName())
                 .addOns(item.addOnNames())
+                .assignedNumber(item.getAssignedNumber())
+                .numberLabel(item.getNumberLabel())
                 .build();
         recordAttempt(ticketNumber, item, ScanAttempt.Outcome.ALLOWED,
                 scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, scanEventId);

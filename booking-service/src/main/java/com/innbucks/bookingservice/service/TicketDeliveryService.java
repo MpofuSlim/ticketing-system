@@ -551,6 +551,10 @@ public class TicketDeliveryService {
         if (addOns != null) {
             sb.append("Add-ons: ").append(addOns).append('\n');
         }
+        String numbers = assignedNumbers(items);
+        if (numbers != null) {
+            sb.append("Numbers: ").append(numbers).append('\n');
+        }
         if (!items.isEmpty()) {
             sb.append("Ticket numbers: ");
             for (int i = 0; i < items.size(); i++) {
@@ -623,6 +627,9 @@ public class TicketDeliveryService {
         if (item.ticketTypeLabel() != null) {
             sb.append("Ticket type: ").append(item.ticketTypeLabel()).append('\n');
         }
+        if (item.numberText() != null) {
+            sb.append("Your number: ").append(item.numberText()).append('\n');
+        }
         boolean hasPhone = item.getAttendeePhone() != null && !item.getAttendeePhone().isBlank();
         String buyer = booking.getCustomerName() == null || booking.getCustomerName().isBlank()
                 ? "the person who booked" : booking.getCustomerName().trim();
@@ -673,6 +680,18 @@ public class TicketDeliveryService {
      * "2 x Parking pass at 5.00, 1 x Meal voucher at 10.00" (V33), or null when
      * no ticket has an add-on. Plain ASCII, like the price line.
      */
+    /**
+     * "Bib T014, Bib T015": the booking's assigned numbers (V34) in ticket
+     * order, for the receipt. Null when no ticket has one.
+     */
+    static String assignedNumbers(List<BookingItem> items) {
+        String joined = items.stream()
+                .map(BookingItem::numberText)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.joining(", "));
+        return joined.isEmpty() ? null : joined;
+    }
+
     static String addOnsBreakdown(List<BookingItem> items) {
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (BookingItem item : items) {

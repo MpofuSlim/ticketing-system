@@ -3664,6 +3664,67 @@ category's tickets: 100 VIP tickets may carry 50 parking passes, never 200.**
   clients only offer what the category list shows, so before anyone sets an
   add-on nothing sends one.
 
+## Assigned ticket numbers: bib and seat numbers (booking-service V34)
+
+**An organizer gives a seat category a number series (`PUT /bookings/numbering/{categoryId}`:
+label "Bib", prefix "T", start 1, padding 3), and every ticket of it gets the
+next number WHEN IT IS PAID FOR: T001, T002, … The number is a label, never an
+entry credential: the gate admits on the ticket number alone.**
+
+- **The series lives in booking-service, not on the seat category**
+  (`category_number_series`), because numbers are handed out at confirm, under
+  the booking row's lock, and confirm makes no remote call
+  (`RemoteCallsOutsideTransactionTest`). Terms in seat-service would need a
+  remote read on every paid confirm, or a cross-service freeze that races the
+  first booking. The endpoints are under `/bookings/numbering` (the existing
+  `/bookings/**` route), keyed by the seat category id; ownership is asked of
+  seat-service (the category's event) and event-service (its owner) before any
+  transaction, fail-closed like promo codes.
+- **Given at payment, never at hold.** `BookingService.markConfirmed` (both the
+  ordinary confirm and the resurrect) calls `TicketNumberAssigner.assignOnConfirm`:
+  one look (`findNumberedCategoryIds`) for the booking's categories, then per
+  numbered category, in `StockLedger.CATEGORY_ORDER`, ONE
+  `UPDATE … SET assigned_count = assigned_count + k … RETURNING` that claims a
+  block under the series row's lock, and ONE guarded write of the block
+  (`assigned_number IS NULL`, an `unnest` of two array literals). Within a
+  booking, tickets are numbered in the order the buyer listed them
+  (`seat_number` is that index). A replayed confirm finds every ticket numbered
+  and claims nothing. Lock order: booking row → (counter rows on a resurrect) →
+  series rows; nothing holding a series row takes a booking or counter row.
+- **Never reused, so a series has gaps.** The counter only grows; a refunded
+  ticket keeps its number; every ticket is written once. The partial unique
+  index `uq_booking_items_assigned_number (category_id, assigned_number)` is the
+  backstop: a write that would repeat a number fails the confirm loudly (the
+  payment then retries as `COMPLETED_UNCONFIRMED`) instead of printing two
+  identical bibs. Nothing reachable writes one: every path holds the series
+  lock, and `writeNumbers` refuses (and rolls back) a short write.
+- **Locked once the first number is out.** The terms change, and the series is
+  removed, only in statements guarded `WHERE assigned_count = 0` — upsert and
+  delete each carry the guard, so a request cannot pass a check a concurrent
+  confirm is about to invalidate. After that: 409 `NUMBERING_IN_USE`
+  (`data.assigned`).
+- **Numbering added after sales began** numbers only tickets paid from then on.
+  `POST /bookings/numbering/{categoryId}/assign-sold` numbers the paid tickets
+  that have none, in booking order, continuing the series: it locks the series
+  row FIRST, then reads the candidates, so no confirm claims a block in
+  between. Idempotent (a second call numbers 0).
+- **Where it shows:** `assignedNumber` + `numberLabel` (both `NON_NULL`, absent
+  when none) on every booking item view (buyer, staff, public view, wallet),
+  the guest list (+ `GET /bookings/by-event/{id}?assignedNumber=`, any case,
+  possibly several rows: two categories can each have a 14), the scan answer
+  (ALLOWED / ALREADY_REDEEMED) and the gate lookup's tickets; "Bib T014" on both
+  ticket pages, a "Numbers:" line on the buyer's receipt and "Your number:" on a
+  guest's email; the bookings CSV's last column `assignedNumbers`. The WhatsApp
+  QR caption is unchanged (template-variable length). It is not masked: it is
+  not a credential.
+- **Statement cost:** confirm is one statement more (the look) for a booking with
+  no numbered category, 5 in `LazyAssociationsPostgresIT`; a numbered category
+  adds a claim and a write.
+- **Deploy:** booking-service alone. V34 adds a table, two nullable columns and
+  a partial unique index on `booking_items` (built once under a SHARE lock:
+  bookings wait for those seconds, so deploy at a quiet time). Rollback: the
+  previous image ignores all of it; a confirm on it gives no number.
+
 ## Cloudflare blocks `PUT` + multipart — uploads take `POST`
 
 **The banner upload accepts BOTH `POST` and `PUT` on `/events/{id}/banner`, and

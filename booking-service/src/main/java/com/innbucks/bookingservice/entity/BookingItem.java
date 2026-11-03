@@ -120,6 +120,20 @@ public class BookingItem {
     private java.util.List<com.innbucks.bookingservice.dto.BookingAddOnDTO> addOns = java.util.List.of();
 
     /**
+     * The ticket's assigned number (V34), e.g. "T014", and what it is called,
+     * e.g. "Bib": given when the ticket is PAID for, from its category's series
+     * ({@code TicketNumberAssigner}), and never changed. Null when its category
+     * numbers nothing or it is not paid yet. Written only by one native,
+     * guarded UPDATE, so a stale entity save can never write it, or clear it.
+     * A label, not a credential: the gate admits on {@link #ticketNumber}.
+     */
+    @Column(name = "assigned_number", length = 32, insertable = false, updatable = false)
+    private String assignedNumber;
+
+    @Column(name = "number_label", length = 20, insertable = false, updatable = false)
+    private String numberLabel;
+
+    /**
      * This ticket's answers to the organizer's booking questions (V32),
      * encrypted: {@code BookingAnswersCipher} ciphertext of a JSON array of
      * {questionId, label, type, value}. Null when nothing was answered, and
@@ -219,6 +233,14 @@ public class BookingItem {
     public java.util.List<String> addOnNames() {
         return addOns == null ? java.util.List.of()
                 : addOns.stream().map(com.innbucks.bookingservice.dto.BookingAddOnDTO::getName).toList();
+    }
+
+    /** "Bib T014"; null when the ticket has no number. Printed on the ticket and in the emails. */
+    public String numberText() {
+        if (assignedNumber == null) {
+            return null;
+        }
+        return (numberLabel == null || numberLabel.isBlank() ? "Number" : numberLabel) + " " + assignedNumber;
     }
 
     /** "Parking pass, Meal voucher"; null when none. Printed on the ticket and in the receipt. */

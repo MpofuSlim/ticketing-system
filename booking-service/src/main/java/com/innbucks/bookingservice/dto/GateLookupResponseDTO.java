@@ -80,6 +80,14 @@ public class GateLookupResponseDTO {
         @Schema(example = "Tariro Chikomo", nullable = true,
                 description = "Who admitted it. Present only when redeemed.")
         private String redeemedByName;
+
+        @io.swagger.v3.oas.annotations.media.Schema(description = "The ticket's assigned number (bib or seat), given when it is paid for. Absent when it has none.", example = "T014")
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        private String assignedNumber;
+
+        @io.swagger.v3.oas.annotations.media.Schema(description = "What the number is called, e.g. Bib, Seat, Table. Absent when the ticket has no number.", example = "Bib")
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        private String numberLabel;
     }
 
     public enum Status {

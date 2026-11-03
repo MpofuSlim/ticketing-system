@@ -48,6 +48,16 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
     """)
     List<BookingItem> findByEventIdWithBooking(@Param("eventId") UUID eventId);
 
+    /** An assigned number's tickets within one event (V34), any letter case. */
+    @Query("""
+        SELECT i FROM BookingItem i
+        JOIN FETCH i.booking b
+        WHERE b.eventId = :eventId AND UPPER(i.assignedNumber) = UPPER(:assignedNumber)
+        ORDER BY i.categoryName, i.id
+    """)
+    List<BookingItem> findByEventIdAndAssignedNumberWithBooking(@Param("eventId") UUID eventId,
+                                                                 @Param("assignedNumber") String assignedNumber);
+
     // Counts active (non-CANCELLED, i.e. PENDING + CONFIRMED) booking items
     // grouped by event. Powers event-service's availableTickets safety net:
     // events return availableTickets = totalCapacity − activeCount, so the
