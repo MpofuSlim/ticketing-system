@@ -178,7 +178,8 @@ public class StaffDispatchHarness {
         mvc = MockMvcBuilders.standaloneSetup(
                         new AdminStaffController(staffAccounts),
                         new StaffInviteController(staffInvites),
-                        new AdminUserController(users, mock(TenantProfileRepository.class), userAdmin, mfa),
+                        new AdminUserController(users, mock(TenantProfileRepository.class),
+                                mock(com.innbucks.userservice.repository.StaffProfileRepository.class), userAdmin, mfa),
                         new RoleAdminController(roleAdmin),
                         new AdminOrganizationController(organizationService),
                         new OrganizationController(organizationService, users),

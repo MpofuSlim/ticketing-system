@@ -119,7 +119,8 @@ public class AdminDispatchHarness {
                 guard, revoker, audit);
         mvc = MockMvcBuilders.standaloneSetup(
                         new RoleAdminController(roleAdmin),
-                        new AdminUserController(users, mock(TenantProfileRepository.class), userAdmin, mfa),
+                        new AdminUserController(users, mock(TenantProfileRepository.class),
+                                mock(com.innbucks.userservice.repository.StaffProfileRepository.class), userAdmin, mfa),
                         new com.innbucks.userservice.controller.AdminSuperAdminController(superAdmins))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

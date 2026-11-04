@@ -187,6 +187,9 @@ class DataInitializerTest {
         verify(userRepository).save(saved.capture());
         assertThat(saved.getValue().getRoles()).containsExactly(User.Role.SUPER_ADMIN.name());
         assertThat(saved.getValue().isMustChangePassword()).isTrue();
+        // No placeholder phone: "0000000000" was printed by the console as a
+        // number and worked as a second sign-in name. The owner signs in by email.
+        assertThat(saved.getValue().getPhoneNumber()).isNull();
     }
 
     // --- the platform owner (V52) ----------------------------------------------

@@ -39,14 +39,27 @@ public class UserResponseDTO {
     @Schema(example = "alice@innbucks.co.zw", nullable = true)
     private String email;
 
-    @Schema(example = "+263771234567")
+    @Schema(example = "+263771234567",
+            description = "The account's SIGN-IN phone. A staff account has none (accepting the staff invite "
+                    + "moves the number to the staff profile as a contact number), so it is absent on staff "
+                    + "rows; see `contactPhone`.")
     private String phoneNumber;
+
+    @Schema(example = "+263779637565",
+            description = "A staff account's contact number, from its staff profile. Only on "
+                    + "`GET /admin/users`, only for staff accounts, and only when the caller may read the "
+                    + "Staff tab (`staff:read`, SUPER_ADMIN). Never a sign-in identifier. Absent otherwise.")
+    private String contactPhone;
 
     @Schema(example = "[\"EVENT_ORGANIZER\"]",
             description = "The account's roles, WITHOUT `CUSTOMER` when it holds any other role. "
                     + "CUSTOMER is the account's super-app side and is not managed from the console; "
                     + "`PUT /admin/users/{id}/roles` keeps it when a submitted set leaves it out. "
-                    + "A customer-only account (listed with `?includeCustomers=true`) shows `[\"CUSTOMER\"]`.")
+                    + "A customer-only account (listed with `?includeCustomers=true`) shows `[\"CUSTOMER\"]`. "
+                    + "A SUPER_ADMIN shows `[\"SUPER_ADMIN\"]` alone: it already holds every permission, so the "
+                    + "staff roles beside it add nothing. A business role (EVENT_ORGANIZER, MERCHANT_ADMIN, shop "
+                    + "or team roles) on one is still shown after it. The account keeps every role; "
+                    + "`GET /admin/super-admins` lists them all.")
     private List<String> roles;
 
     @Schema(example = "[\"ticketing\"]", nullable = true)
@@ -162,7 +175,36 @@ public class UserResponseDTO {
     static List<String> consoleRoles(Set<String> roles) {
         if (roles == null || roles.isEmpty()) return List.of();
         String customer = User.Role.CUSTOMER.name();
+        String superAdmin = User.Role.SUPER_ADMIN.name();
+        if (roles.contains(superAdmin)) {
+            return superAdminRoles(roles, superAdmin, customer);
+        }
         if (roles.size() == 1 || !roles.contains(customer)) return List.copyOf(roles);
         return roles.stream().filter(r -> !customer.equals(r)).toList();
+    }
+
+    /**
+     * A SUPER_ADMIN holds every permission through the {@code *} wildcard, so
+     * the staff roles beside it (PRODUCT_MANAGER, CALL_CENTER_SUPERVISOR,
+     * FRAUD_DESK, a custom role, ...) grant it nothing more, and listing them
+     * reads as if they did. The row shows {@code SUPER_ADMIN} first and alone,
+     * except for a business built-in (EVENT_ORGANIZER, MERCHANT_ADMIN, shop or
+     * team roles): those carry scope claims the wildcard does not, and staff
+     * never belong to a business, so one on a SUPER_ADMIN is worth seeing.
+     *
+     * <p>Display only, as for CUSTOMER. The account keeps every role, and they
+     * apply again if the person is demoted (demotion keeps the other roles).
+     * {@code GET /admin/super-admins} still lists them all, and the role writers
+     * refuse a SUPER_ADMIN target, so nothing can PUT this shorter list back.
+     */
+    private static List<String> superAdminRoles(Set<String> roles, String superAdmin, String customer) {
+        List<String> shown = new java.util.ArrayList<>();
+        shown.add(superAdmin);
+        roles.stream()
+                .filter(r -> !superAdmin.equals(r) && !customer.equals(r)
+                        && com.innbucks.userservice.security.StaffRoles.isBusinessBuiltIn(r))
+                .sorted()
+                .forEach(shown::add);
+        return List.copyOf(shown);
     }
 }
