@@ -435,6 +435,10 @@ public class TicketDeliveryService {
      * every ticket of the booking at the gate lookup. The buyer's own tickets
      * and unnamed spares keep it.
      *
+     * <p>A ticket bought with add-ons names them last
+     * ({@link #addOnsCaption}), its own and no other ticket's:
+     * <pre>InnBucks Annual Gala 2025 (ticket 2 of 3, total 30.00 — ticket number TN2 (Rudo Sibanda), with Parking pass)</pre>
+     *
      * <p><b>It names this message's ticket and no other.</b> A ticket number is
      * the gate credential, and the buyer forwards these messages: a guest's QR
      * that fell back to them, a name-only or email-only guest's, or simply the
@@ -487,8 +491,38 @@ public class TicketDeliveryService {
         if (who != null && !who.isBlank()) {
             sb.append(" (").append(singleLine(who)).append(')');
         }
-        sb.append(')');
+        sb.append(addOnsCaption(item)).append(')');
         return sb.toString();
+    }
+
+    /** Above this many characters the add-on names are counted, not listed. */
+    static final int ADD_ONS_CAPTION_MAX = 100;
+
+    /**
+     * What this ticket was bought with (V33), for both QR captions:
+     * {@code ", with Parking pass, Meal voucher"}, or {@code ", with 4 add-ons"}
+     * when the names run past {@link #ADD_ONS_CAPTION_MAX}; {@code ""} when none.
+     *
+     * <p>Each name goes through {@link #singleLine}: organizers type them, and a
+     * line break or a run of spaces in a template variable makes Twilio refuse
+     * the whole QR (63021). The cap keeps the variable short whatever the
+     * category offers (up to 10 add-ons of up to 60 characters): a QR that is
+     * refused for length never reaches the gate. The full list is on the ticket
+     * page and in the receipt email.
+     */
+    static String addOnsCaption(BookingItem item) {
+        List<String> names = item.addOnNames().stream()
+                .map(TicketDeliveryService::singleLine)
+                .filter(name -> !name.isEmpty())
+                .toList();
+        if (names.isEmpty()) {
+            return "";
+        }
+        String listed = String.join(", ", names);
+        if (listed.length() <= ADD_ONS_CAPTION_MAX) {
+            return ", with " + listed;
+        }
+        return ", with " + names.size() + (names.size() == 1 ? " add-on" : " add-ons");
     }
 
     /** 1-based position of {@code item} in the booking's items as loaded for this send, by identity; 0 if absent. */
@@ -514,6 +548,7 @@ public class TicketDeliveryService {
             sb.append(", booked by ").append(singleLine(booking.getCustomerName()));
         }
         sb.append(", ticket number ").append(item.getTicketNumber())
+          .append(addOnsCaption(item))
           .append(')');
         return sb.toString();
     }
