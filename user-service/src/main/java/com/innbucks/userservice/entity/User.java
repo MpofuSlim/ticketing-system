@@ -224,10 +224,10 @@ public class User {
     private UUID loyaltyMerchantId;
 
     // @Builder.Default is load-bearing: without it Lombok's builder ignores the
-    // initializer, and every account created through User.builder() (all of
-    // them: registration, app sign-in, staff create, the seeded admin) was
-    // stored with created_at NULL, so the console's "Registered" column was
-    // blank on every row. Pinned by UserCreationTimeTest.
+    // initializer, and every account created through the builder (all of them:
+    // registration, app sign-in, staff create, the seeded admin) was stored
+    // with created_at NULL, so the console's "Registered" column was blank on
+    // every row. Pinned by UserCreationTimeTest.
     @Column(updatable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now(ZoneOffset.UTC);
