@@ -59,7 +59,8 @@ class AuthControllerExchangeTest {
                 mock(OtpService.class), mock(CellAffinityChecker.class), mock(JwtUtil.class),
                 mock(LoyaltySessionTokenIssuer.class), mock(LoginRateLimiter.class), mock(AuditService.class),
                 mock(PasswordResetService.class), mock(MfaService.class), mock(MfaTokenService.class),
-                mock(MfaPolicy.class), mock(UserRepository.class), federatedLoginService);
+                mock(MfaPolicy.class), mock(UserRepository.class), federatedLoginService,
+                mock(com.innbucks.userservice.service.BusinessRegistrationService.class));
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

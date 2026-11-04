@@ -57,6 +57,7 @@ public class AuthController {
     private final MfaPolicy mfaPolicy;
     private final UserRepository userRepository;
     private final com.innbucks.userservice.service.FederatedLoginService federatedLoginService;
+    private final com.innbucks.userservice.service.BusinessRegistrationService businessRegistrationService;
 
     @PostMapping("/register")
     @SecurityRequirements()
@@ -74,7 +75,17 @@ public class AuthController {
                     "**This is business self-sign-up only.** A non-empty `roles` list is refused (400 " +
                     "`roles_not_accepted`) — staff accounts are created with `POST /admin/staff`; an absent or " +
                     "empty `roles` is accepted. An address on an InnBucks staff domain is refused (400 " +
-                    "`email_domain_reserved`), checked before the duplicate-email check.")
+                    "`email_domain_reserved`), checked before the duplicate-email check.\n\n" +
+                    "**A phone that already has an InnBucks app account.** When the number belongs to an account " +
+                    "that is only a customer (the person signed in to the InnBucks app), registering without " +
+                    "`phoneCode` is 409 `phone_code_required`. Ask for a code with `POST /auth/register/phone-code`, " +
+                    "then send the same registration again with `phoneCode`. The business is then ADDED to that " +
+                    "account: its email, name and business details are set, and each service becomes a service " +
+                    "request waiting for a SUPER_ADMIN (201 with `addedToExistingAccount: true`). The account " +
+                    "stays a customer until a request is approved, and the InnBucks app keeps working. A wrong or " +
+                    "expired code is 400 `phone_code_invalid`; a registration already waiting is 409 " +
+                    "`business_registration_pending`. Any other account on the number, or a number that is an " +
+                    "InnBucks staff member's contact phone, is 400 \"Phone number already registered\".")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -130,6 +141,39 @@ public class AuthController {
                                       "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
                                       "data": { "errorCode": "email_domain_reserved", "field": "email" }
                                     }
+                                    """),
+                            @ExampleObject(name = "Phone already registered", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Phone number already registered",
+                                      "data": null
+                                    }
+                                    """),
+                            @ExampleObject(name = "Wrong or expired code", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "That code is wrong or has expired. Ask for a new one.",
+                                      "data": { "errorCode": "phone_code_invalid" }
+                                    }
+                                    """)
+                    })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "The phone has an InnBucks app account: send a code first, or a registration "
+                            + "on it is already waiting",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Code required", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "This number already has an InnBucks app account. We can add your business to it: ask for a code, then send your registration again with the code.",
+                                      "data": { "errorCode": "phone_code_required" }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Already waiting", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "Your business registration is already waiting for approval.",
+                                      "data": { "errorCode": "business_registration_pending" }
+                                    }
                                     """)
                     }))
     })
@@ -137,9 +181,95 @@ public class AuthController {
         cellAffinityChecker.requireDomesticMsisdn(request.getPhoneNumber());
         log.info("Received registration request email={}", request.getEmail());
         AuthResponseDTO response = authService.register(request);
+        if (Boolean.TRUE.equals(response.getAddedToExistingAccount())) {
+            log.info("Registration added to an existing app account, pending approval email={}", request.getEmail());
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .body(ApiResult.created(ADDED_TO_EXISTING_ACCOUNT_MESSAGE, response));
+        }
         log.info("Registration submitted, pending approval email={}", request.getEmail());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Registration submitted. Your account is pending approval by a SUPER_ADMIN.", response));
+    }
+
+    static final String ADDED_TO_EXISTING_ACCOUNT_MESSAGE = "Your business was added to your InnBucks app account "
+            + "and is waiting for approval. We'll email you when it's approved.";
+
+    static final String PHONE_CODE_SENT_MESSAGE =
+            "We sent a code to your phone. It expires in 5 minutes.";
+
+    @PostMapping("/register/phone-code")
+    @SecurityRequirements()
+    @Operation(summary = "Send a code to add a business to an InnBucks app account",
+            description = "For a registration whose phone already has an InnBucks app account (`POST /auth/register` "
+                    + "answered 409 `phone_code_required`). Sends a 6-digit code to that phone by SMS (WhatsApp if "
+                    + "SMS fails). Send it as `phoneCode` with the same registration to add the business to the "
+                    + "account. The code lasts 5 minutes, three wrong tries void it, and a number may ask for 3 "
+                    + "codes in 10 minutes (then 429 for 30 minutes). It is only ever good for adding a business: "
+                    + "it signs nobody in.\n\n"
+                    + "Refused, sending nothing: a number with no account (409 `phone_code_not_needed`: register "
+                    + "without a code); an account that is not only a customer, or an InnBucks staff member's "
+                    + "contact phone (400 \"Phone number already registered\"); a business registration already "
+                    + "waiting on the account (409 `business_registration_pending`).")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Code sent",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Code sent",
+                            value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "We sent a code to your phone. It expires in 5 minutes.",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Invalid phone, or the number is already registered to another kind of account",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Phone already registered", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Phone number already registered",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "No code is needed, or a registration is already waiting",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "No account on the number", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "This number has no InnBucks account yet. Register without a code.",
+                                      "data": { "errorCode": "phone_code_not_needed" }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Already waiting", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "Your business registration is already waiting for approval.",
+                                      "data": { "errorCode": "business_registration_pending" }
+                                    }
+                                    """)
+                    })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429",
+                    description = "Too many codes for this number",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Too many codes", value = """
+                                    {
+                                      "code": "429 TOO_MANY_REQUESTS",
+                                      "message": "Too many OTP requests. Try again in 30 minute(s).",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<Void>> requestRegistrationPhoneCode(
+            @Valid @RequestBody com.innbucks.userservice.dto.OtpRequestDTO request) {
+        cellAffinityChecker.requireDomesticMsisdn(request.getPhoneNumber());
+        log.info("Business registration code requested phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
+        try {
+            businessRegistrationService.sendCode(request.getPhoneNumber());
+        } catch (OtpService.OtpRateLimitException e) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(ApiResult.error(HttpStatus.TOO_MANY_REQUESTS, e.getMessage()));
+        }
+        return ResponseEntity.ok(ApiResult.ok(PHONE_CODE_SENT_MESSAGE, null));
     }
 
     @PostMapping("/login")

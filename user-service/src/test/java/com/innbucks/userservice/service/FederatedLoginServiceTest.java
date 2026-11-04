@@ -208,11 +208,42 @@ class FederatedLoginServiceTest {
     }
 
     @Test
-    @DisplayName("a phone that belongs to a STAFF account is refused — a middleware login never becomes a staff session")
-    void staffPhone_isRefused() {
+    @DisplayName("a business owner's first app sign-in adds CUSTOMER — the session is still CUSTOMER-only")
+    void aBusinessOwner_gainsTheCustomerRole_atTheirFirstAppSignIn_andGetsACustomerSession() {
+        // Registration gives an organizer or merchant admin the business role
+        // only, and this sign-in used to refuse that account (not_a_customer),
+        // so a business owner could never use the Super app on their number.
         User merchantAdmin = User.builder().id(9L).userUuid(UUID.randomUUID()).phoneNumber(PHONE)
-                .roles(User.roleNames(User.Role.MERCHANT_ADMIN)).active(true).approved(true).password("x").build();
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN, User.Role.EVENT_ORGANIZER))
+                .active(true).approved(true).password("x").build();
         when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(merchantAdmin));
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(profileRepository.findByUserId(9L)).thenReturn(Optional.empty());
+        when(profileRepository.saveAndFlush(any(CustomerProfile.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service(true).exchange(assertion(PHONE, "j1", 60), null, CTX);
+
+        assertThat(merchantAdmin.getRoles()).containsExactlyInAnyOrder("MERCHANT_ADMIN", "EVENT_ORGANIZER", "CUSTOMER");
+        org.mockito.ArgumentCaptor<CustomerProfile> profile = org.mockito.ArgumentCaptor.forClass(CustomerProfile.class);
+        verify(profileRepository).saveAndFlush(profile.capture());
+        assertThat(profile.getValue().getRegistrationTier()).isEqualTo(1);
+        assertThat(profile.getValue().isPhoneVerified()).isTrue();
+        // The session is the scoped phone-proof mint (CUSTOMER only), never the business one.
+        verify(authService).issuePhoneProofToken(merchantAdmin, null);
+        verify(auditService).recordSuccess(eq(AuditEventType.AUTH_FEDERATED_LOGIN_SUCCESS), eq(PHONE), any(),
+                eq(PHONE), any(), eq(Map.of("newAccount", false, "customerRoleAdded", true)), eq(CTX));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.EnumSource(value = User.Role.class,
+            names = {"TEAM_MEMBER", "SHOP_USER", "SHOP_ADMIN", "PRODUCT_MANAGER", "CALL_CENTER_AGENT"})
+    void anyOtherNonCustomerAccount_isStillRefused_andGainsNothing(User.Role role) {
+        // Gate team members (one more role would end their 2FA exemption), shop
+        // staff, and anything holding a staff role stay refused.
+        User account = User.builder().id(9L).userUuid(UUID.randomUUID()).phoneNumber(PHONE)
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER, role)).active(true).approved(true)
+                .password("x").build();
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(account));
 
         ResponseStatusException ex = statusOf(() -> service(true).exchange(assertion(PHONE, "j1", 60), null, CTX));
 
@@ -220,8 +251,40 @@ class FederatedLoginServiceTest {
         assertThat(ex.getReason()).isEqualTo(FederatedLoginService.REJECTED_REASON);
         verify(auditService).recordFailure(eq(AuditEventType.AUTH_FEDERATED_LOGIN_REJECTED), eq(PHONE), any(),
                 eq(PHONE), any(), eq("not_a_customer"), any(), eq(CTX));
+        assertThat(account.getRoles()).doesNotContain("CUSTOMER");
         verify(authService, never()).issuePhoneProofToken(any(), any());
-        verify(userRepository, never()).save(any());
+        verify(userRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void aBusinessOwnerNotYetApproved_isRefused_andGainsNothing() {
+        User pending = User.builder().id(9L).userUuid(UUID.randomUUID()).phoneNumber(PHONE)
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER)).active(false).approved(false)
+                .password("x").build();
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(pending));
+
+        ResponseStatusException ex = statusOf(() -> service(true).exchange(assertion(PHONE, "j1", 60), null, CTX));
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verify(auditService).recordFailure(eq(AuditEventType.AUTH_FEDERATED_LOGIN_REJECTED), eq(PHONE), any(),
+                eq(PHONE), any(), eq("not_a_customer"), any(), eq(CTX));
+        assertThat(pending.getRoles()).containsExactly("EVENT_ORGANIZER");
+    }
+
+    @Test
+    void aBusinessOwnerSwitchedOff_isRefused_andGainsNothing() {
+        User deactivated = User.builder().id(9L).userUuid(UUID.randomUUID()).phoneNumber(PHONE)
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER)).active(false).approved(true)
+                .password("x").build();
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(deactivated));
+
+        ResponseStatusException ex = statusOf(() -> service(true).exchange(assertion(PHONE, "j1", 60), null, CTX));
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verify(auditService).recordFailure(eq(AuditEventType.AUTH_FEDERATED_LOGIN_REJECTED), eq(PHONE), any(),
+                eq(PHONE), any(), eq("account_inactive"), any(), eq(CTX));
+        assertThat(deactivated.getRoles()).containsExactly("EVENT_ORGANIZER");
+        verify(userRepository, never()).saveAndFlush(any());
     }
 
     @Test

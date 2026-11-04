@@ -56,6 +56,13 @@ public class AuthResponseDTO {
             nullable = true)
     private String email;
 
+    @Schema(description = "Registration only: `true` when the business was added to the InnBucks app account "
+            + "that already holds the phone (registered with `phoneCode`). Its services are waiting for approval "
+            + "as service requests, and `roles` are the account's current ones (CUSTOMER until approval). "
+            + "Absent on an ordinary registration and on every sign-in.",
+            example = "true", nullable = true)
+    private Boolean addedToExistingAccount;
+
     @Schema(description = "True when MFA is required to complete this login. `token`/`refreshToken` are null; "
             + "the FE prompts for the 6-digit TOTP (or a backup code) and POSTs it to /auth/login/mfa together "
             + "with the `mfaToken` field.",

@@ -76,9 +76,20 @@ public class OtpService {
      */
     private TransactionTemplate tx;
 
+    /**
+     * Commits on its own whatever the caller's transaction does: the business
+     * registration code is checked inside the registration's transaction, and a
+     * wrong guess must stay counted when that registration then fails, or the
+     * three-guess limit would never be reached.
+     */
+    private TransactionTemplate requiresNew;
+
     @Autowired
     void setTransactionManager(PlatformTransactionManager transactionManager) {
         this.tx = new TransactionTemplate(transactionManager);
+        this.requiresNew = new TransactionTemplate(transactionManager);
+        this.requiresNew.setPropagationBehavior(
+                org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /**
@@ -136,6 +147,37 @@ public class OtpService {
      */
     public String canonicalPhone(String phoneNumber) {
         return normalize(phoneNumber);
+    }
+
+    /**
+     * The code that proves a phone before a business is added to the InnBucks
+     * app account on it ({@code BusinessRegistrationService}). Kept under its
+     * own key, never the phone itself, so a code sent for anything else (the
+     * customer OTP, a password reset) can never add a business, and this code can
+     * never sign anyone in. Its retry quota is its own too.
+     */
+    static final String BUSINESS_REGISTRATION_KEY_PREFIX = "business-registration:";
+
+    static final String BUSINESS_REGISTRATION_MESSAGE = "Your InnBucks code to add a business to your account is %s. "
+            + "It expires in " + OTP_TTL.toMinutes() + " minutes. Do not share this code with anyone.";
+
+    /** Sends the business-registration code to {@code canonicalPhone} (E.164). Same quota and delivery as {@link #sendOtp}. */
+    public void sendBusinessRegistrationCode(String canonicalPhone) {
+        issueAndDeliver(BUSINESS_REGISTRATION_KEY_PREFIX + canonicalPhone,
+                code -> dispatchMessage(canonicalPhone, String.format(BUSINESS_REGISTRATION_MESSAGE, code)));
+    }
+
+    /**
+     * Uses up the business-registration code for {@code canonicalPhone}. Commits
+     * on its own (see {@link #requiresNew}), so a wrong guess counts toward the
+     * three that void the code even though the caller then refuses the request.
+     */
+    public boolean verifyBusinessRegistrationCode(String canonicalPhone, String code) {
+        if (code == null || code.isBlank()) return false;
+        String key = BUSINESS_REGISTRATION_KEY_PREFIX + canonicalPhone;
+        boolean ok = Boolean.TRUE.equals(TransactionPhases.inTransaction(requiresNew, () -> consumeOtp(key, code)));
+        log.info("Business registration code verify phone={} ok={}", MsisdnMasking.mask(canonicalPhone), ok);
+        return ok;
     }
 
     /**

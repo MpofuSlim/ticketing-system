@@ -110,6 +110,19 @@ public enum AuditEventType {
      */
     USER_REGISTRATION_REJECTED,
     /**
+     * A business registration was added to the InnBucks app account that
+     * already holds its phone ({@code POST /auth/register} with {@code phoneCode};
+     * {@code BusinessRegistrationService}), after the phone was proven with a
+     * code. The account gained an email, its name (when it still had the
+     * placeholder) and the business details, and a PENDING service request per
+     * service. No role: those arrive with approval. Written fail-closed
+     * ({@code recordRequired}) as the transaction's last statement, because the
+     * email it set is where password resets now go. Actor and target are the
+     * account's {@code userUuid}; metadata carries the services, the request
+     * ids and the email MASKED.
+     */
+    BUSINESS_ADDED_TO_EXISTING_ACCOUNT,
+    /**
      * SUPER_ADMIN re-activated an already-approved user — admin lifted a
      * previous deactivation, no password reset involved.
      */

@@ -72,7 +72,8 @@ class AccountInactiveDispatchTest {
                 mock(OtpService.class), mock(CellAffinityChecker.class), jwtUtil,
                 mock(LoyaltySessionTokenIssuer.class), mock(LoginRateLimiter.class), mock(AuditService.class),
                 mock(PasswordResetService.class), mfaService, mfaTokenService,
-                mock(MfaPolicy.class), userRepository, mock(FederatedLoginService.class));
+                mock(MfaPolicy.class), userRepository, mock(FederatedLoginService.class),
+                mock(com.innbucks.userservice.service.BusinessRegistrationService.class));
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

@@ -137,6 +137,49 @@ public class ServiceRequestService {
     }
 
     /**
+     * The business half of a registration on an InnBucks app account that
+     * already holds the phone ({@code BusinessRegistrationService}): one PENDING
+     * request per service, made by the account itself (it has no portal session
+     * to submit them from). Approving one grants the role, the bundle and the
+     * product exactly as any other approval does, which is what keeps the
+     * account an ordinary customer until a SUPER_ADMIN decides. The caller has
+     * already refused a staff account and a request already pending.
+     *
+     * @return the saved requests' ids, in service order
+     */
+    @Transactional
+    public List<Long> submitBusinessRegistration(User user, java.util.Collection<String> services, String reason) {
+        if (staffEligibility != null) {
+            staffEligibility.requireNotStaffAccount(user, String.valueOf(user.getUserUuid()), "business_registration");
+        }
+        java.util.UUID organizationId = organizationService == null ? null
+                : organizationService.organizationForRequest(user, null);
+        List<Long> ids = new ArrayList<>();
+        for (String service : new java.util.TreeSet<>(services)) {
+            ServiceRequest saved = serviceRequestRepository.save(ServiceRequest.builder()
+                    .userId(user.getId())
+                    .organizationId(organizationId)
+                    .service(service)
+                    .reason(reason)
+                    .status(ServiceRequest.Status.PENDING)
+                    .createdAt(LocalDateTime.now(ZoneOffset.UTC))
+                    .build());
+            log.info("Business registration request submitted id={} userId={} service={}",
+                    saved.getId(), user.getId(), service);
+            notifyReviewersOfSubmission(saved, user, service);
+            ids.add(saved.getId());
+        }
+        return ids;
+    }
+
+    /** True when the account already has a request waiting for any of {@code services}. */
+    @Transactional(readOnly = true)
+    public boolean hasPending(Long userId, java.util.Collection<String> services) {
+        return services.stream().anyMatch(service -> serviceRequestRepository
+                .findByUserIdAndServiceAndStatus(userId, service, ServiceRequest.Status.PENDING).isPresent());
+    }
+
+    /**
      * List the caller's service bundles, newest first. Combines two sources:
      *   1. Rows from {@code service_requests} (PENDING / APPROVED) — i.e. anything
      *      they explicitly asked for via the request flow.

@@ -69,6 +69,15 @@ public class OrganizationService {
      */
     private final StaffEligibility staffEligibility;
 
+    /**
+     * Names the organization an approval creates after the business the person
+     * registered (a business added to an InnBucks app account has its details
+     * here and no organization until approval). Field-injected so the plain unit
+     * tests keep their construction; null there names it after the person.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.repository.TenantProfileRepository tenantProfiles;
+
     // ----------------------------------------------------------------------
     // Creation
     // ----------------------------------------------------------------------
@@ -248,8 +257,11 @@ public class OrganizationService {
             if (owned.size() == 1) {
                 target = owned.get(0).getOrganizationId();
             } else if (owned.isEmpty()) {
-                target = createForOwner(requester, null, requester.getEmail(), requester.getPhoneNumber(),
-                        null, null, List.of()).getId();
+                com.innbucks.userservice.entity.TenantProfile business = tenantProfiles == null ? null
+                        : tenantProfiles.findByUserId(requester.getId()).orElse(null);
+                target = createForOwner(requester, business == null ? null : business.getBusinessName(),
+                        requester.getEmail(), requester.getPhoneNumber(),
+                        business == null ? null : business.getBusinessAddress(), null, List.of()).getId();
             } else {
                 log.warn("Product not granted to an organization — requester owns {} and the request named none "
                         + "userId={} product={}", owned.size(), requester.getId(), normalised);

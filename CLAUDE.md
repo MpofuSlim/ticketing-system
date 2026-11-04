@@ -2047,7 +2047,8 @@ no further change and cannot tell how the customer proved themselves.
   never double as a login, and the verifier requires both `iss` and `aud`.
 - **Only ever a CUSTOMER — enforced in TWO places, because the guard alone was a
   hole.** `FederatedLoginService` refuses a phone belonging to an account with NO
-  customer role (`not_a_customer`). That check reads like it delivers the
+  customer role (`not_a_customer`), except a business owner, who gains CUSTOMER
+  there (see "One account for the app and the business"). That check reads like it delivers the
   headline, and for a *pure staff* account it does. **It never did for a DUAL-role
   account**: a merchant admin who also shops holds both roles, passes the guard,
   and `buildResponse` used to hand back every role it found plus the `merchantId`
@@ -2125,6 +2126,51 @@ no further change and cannot tell how the customer proved themselves.
 - **What still needs the middleware team:** sign the assertion at login and hand
   over the public key. Until then the endpoint stays off and the super app has no
   path to any `CUSTOMER`-gated endpoint — that is the documented state, not a bug.
+
+## One account for the app and the business (user-service, owner's go 2026-11-04)
+
+**An InnBucks app customer can register a business on the number their app
+account holds, and a business owner can sign in to the Super app on theirs. Both
+end with ONE account holding CUSTOMER and the business role.** Before this,
+neither order worked: registration only creates new accounts, so it refused
+the app customer's number ("Phone number already registered"); and
+registration gives the business role only, so `/auth/exchange` refused the
+owner's number (`not_a_customer`). Found on staging when the owner tried it.
+
+- **App customer, then business** (`BusinessRegistrationService`): the Foundry
+  portal's `POST /auth/register` on a number whose account is exactly
+  `[CUSTOMER]`, active, approved and not staff-profiled is 409
+  `phone_code_required`. `POST /auth/register/phone-code` sends a code; the same
+  registration with `phoneCode` then ADDS the business to that account: email,
+  name (only while it is the `Customer Pending` placeholder), business flag,
+  tenant profile, and one PENDING service request per service. **No role and no
+  product until a SUPER_ADMIN approves** the requests in the service-request
+  queue (the account is customer-only, so it is not on the System Users list
+  yet; the request reason carries the business details). Not made inactive while
+  it waits: that would sign the customer out of the app. Approval creates the
+  organization, named from the tenant profile. The person sets a Foundry
+  password with forgot-password on the new email; the approval message says so.
+  REQUIRED audit `BUSINESS_ADDED_TO_EXISTING_ACCOUNT` (the email it sets is where
+  resets go).
+- **The code is its own**: `OtpService` keys it `business-registration:<phone>`,
+  never the phone, so a customer OTP or a reset code can never add a business and
+  this code signs nobody in. Its quota is its own. It is checked in a
+  REQUIRES_NEW transaction, so a wrong guess stays counted when the registration
+  then fails (three void it). Every refusal that does not need the code (pending
+  request, BPO held elsewhere, changed account) comes BEFORE it, so they cost no
+  code.
+- **Gateway: `auth-register-phone-code-route`** (POST, exact path, IP-keyed,
+  fail-safe, the OTP rates). The register route is an exact path and
+  bearer-keyed, so the SMS endpoint needs its own.
+- **A staff member's contact phone can never become a business**, with or
+  without an account on it: "Phone number already registered", the same answer
+  as any taken number, so it says nothing about who is staff.
+- **Business owner, then app** (`FederatedLoginService.mayAlsoBeCustomer`): an
+  approved, active account whose every role is EVENT_ORGANIZER or MERCHANT_ADMIN
+  gains CUSTOMER (and a tier-1 profile) at its first Super app sign-in. The
+  session is the scoped phone-proof mint as always. TEAM_MEMBER (one more role
+  ends the 2FA exemption), shop staff and any staff role stay `not_a_customer`.
+  A concurrent first sign-in's unique-index loss is retried like the create race.
 
 ## DTX device security — the phone is checked before staging's PIN login (user-service V40)
 

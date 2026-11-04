@@ -91,8 +91,17 @@ class RoleWriterInventoryTest {
                 "set_email", 1);
         writer("service/FederatedLoginService.java",
                 "UNREACHABLE — creates a CUSTOMER matched by PHONE; a profiled account has no sign-in phone, "
-                        + "and legacy staff are covered by the §2.9 phone guards.",
-                "new_user", 1);
+                        + "and legacy staff are covered by the §2.9 phone guards. GUARDED — the one role it adds is "
+                        + "CUSTOMER, to an approved, active account whose every role is EVENT_ORGANIZER or "
+                        + "MERCHANT_ADMIN (mayAlsoBeCustomer: never a staff, shop or team role), and the session it "
+                        + "mints is scoped to CUSTOMER.",
+                "new_user", 1, "mutate_roles", 1);
+        writer("service/BusinessRegistrationService.java",
+                "GUARDED — sets the email of a customer-only account (no staff profile) that holds the "
+                        + "registering phone, after the phone is proven with a code; register has already run "
+                        + "requireEmailNotReserved and the case-insensitive duplicate check (excluding this account), "
+                        + "and refuses a staff contact phone. Adds no role: approval does.",
+                "set_email", 1);
         writer("service/OtpService.java",
                 "UNREACHABLE — materializeOrRefreshLocalAccount creates a CUSTOMER matched by PHONE; see "
                         + "FederatedLoginService.",

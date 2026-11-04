@@ -75,6 +75,27 @@ spring:
                     # Fail-SAFE: keep throttling this SMS/abuse surface if Redis is down.
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # The code that adds a business to an InnBucks app account (user-service
+            # BusinessRegistrationService). It sends a real SMS, so it gets the OTP
+            # routes' IP-keyed, fail-SAFE limiter and their rates, not the
+            # register route's bearer-keyed one (a caller picks its own bearer).
+            # The path is NOT matched by auth-register-route (an exact path), so
+            # without this it would ride the limiter-free /auth/** catch-all.
+            # POST-only, exact path. MUST precede the /auth/** catch-all below.
+            - id: auth-register-phone-code-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/register/phone-code
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_OTP_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${AUTH_OTP_RATE_LIMIT_BURST_CAPACITY:3}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             # OTP request/verify trigger real SMS sends, so they are the one
             # money-cost surface on the otherwise-limiter-free /auth/** family.
             # OtpService already caps a SINGLE msisdn at 3 / 10 min, but an
