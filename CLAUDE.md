@@ -3772,8 +3772,14 @@ category's tickets: 100 VIP tickets may carry 50 parking passes, never 200.**
   sold out on screen; the booking still enforces the limit.
 - **Where add-ons show:** the buyer's and organizer's booking reads, the guest
   list, the ticket page ("With Parking pass"), the receipt email's "Add-ons:"
-  line, and the scan answer (`addOns`, names only, on ALLOWED and
-  ALREADY_REDEEMED). They are not redeemed separately at the gate.
+  line, the scan answer (`addOns`, names only, on ALLOWED and
+  ALREADY_REDEEMED), and each ticket's WhatsApp QR caption, buyer's and guest's
+  (`, with Parking pass, Meal voucher`, that ticket's own). The caption counts
+  them instead (`, with 4 add-ons`) past 100 characters
+  (`TicketDeliveryService.ADD_ONS_CAPTION_MAX`), and each name goes through
+  `singleLine`: the caption is a template variable, and a line break, a run of
+  spaces or a length WhatsApp refuses loses the QR itself. They are not
+  redeemed separately at the gate.
 - **Deploy seat-service and booking-service together, either order, and set no
   add-ons until both run the new build.** A new booking-service beside an old
   seat-service sees no add-ons on any category, so an `addOnIds` choice is 400;

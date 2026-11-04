@@ -208,6 +208,60 @@ class TicketDeliveryServiceTest {
                 .build();
     }
 
+    private static com.innbucks.bookingservice.dto.BookingAddOnDTO addOn(String name) {
+        return new com.innbucks.bookingservice.dto.BookingAddOnDTO(UUID.randomUUID(), name, new java.math.BigDecimal("5.00"));
+    }
+
+    @Test
+    void eachCaption_namesItsOwnTicketsAddOns_buyerAndGuestAlike() {
+        Fixture f = fixture();
+        Booking booking = bookingWithOneTicket();
+        booking.setCustomerName("Alice Moyo");
+        BookingItem alices = ticketFor("TN-ALICE", null, null, null);
+        alices.setAddOns(List.of(addOn("Parking pass"), addOn("Meal voucher")));
+        BookingItem tendais = ticketFor("TN-TENDAI", "Tendai Ncube", null, "+263772000000");
+        tendais.setAddOns(List.of(addOn("Race T-shirt")));
+        BookingItem spare = ticketFor("TN-SPARE", null, null, null);
+        booking.setItems(List.of(alices, tendais, spare));
+
+        f.service().deliver(booking);
+
+        String reference = booking.getConfirmationNumber();
+        ArgumentCaptor<String> buyer = ArgumentCaptor.forClass(String.class);
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), buyer.capture(), contains("TN-ALICE"));
+        assertEquals("your event (booking " + reference
+                + ", ticket 1 of 3 — ticket number TN-ALICE, with Parking pass, Meal voucher)", buyer.getValue());
+        // Each message names its OWN ticket's add-ons, never the booking's.
+        ArgumentCaptor<String> guest = ArgumentCaptor.forClass(String.class);
+        verify(f.whatsApp()).sendEventQrCode(eq("+263772000000"), guest.capture(), contains("TN-TENDAI"));
+        assertEquals("your event (ticket for Tendai Ncube, booked by Alice Moyo, ticket number TN-TENDAI, "
+                + "with Race T-shirt)", guest.getValue());
+        // A ticket with none reads exactly as before.
+        ArgumentCaptor<String> plain = ArgumentCaptor.forClass(String.class);
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), plain.capture(), contains("TN-SPARE"));
+        assertEquals("your event (booking " + reference + ", ticket 3 of 3 — ticket number TN-SPARE)",
+                plain.getValue());
+    }
+
+    @Test
+    void addOnsCaption_flattensOrganizerText_andCountsALongList() {
+        BookingItem oneLine = ticketFor("TN-1", null, null, null);
+        // A line break or a run of spaces makes Twilio refuse the whole QR (63021).
+        oneLine.setAddOns(List.of(addOn("Parking\npass"), addOn("Meal     voucher"), addOn("   ")));
+        assertEquals(", with Parking pass, Meal voucher", TicketDeliveryService.addOnsCaption(oneLine));
+
+        BookingItem many = ticketFor("TN-2", null, null, null);
+        many.setAddOns(List.of(
+                addOn("VIP lounge access for the whole weekend"),
+                addOn("Reserved parking at the north gate"),
+                addOn("Commemorative finisher's medal")));
+        // Listed, these would pass ADD_ONS_CAPTION_MAX: counted instead, so the
+        // template variable stays short whatever the category offers.
+        assertEquals(", with 3 add-ons", TicketDeliveryService.addOnsCaption(many));
+
+        assertEquals("", TicketDeliveryService.addOnsCaption(ticketFor("TN-3", null, null, null)));
+    }
+
     @Test
     void eachHolderGetsExactlyTheirOwnTicket_neverSomeoneElses() {
         // The core routing rule: A gets A's QR, B gets B's — the purchaser
