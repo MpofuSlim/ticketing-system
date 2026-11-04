@@ -84,7 +84,11 @@ public class ServiceRequestDecisionListener {
                     // The claims ride in the JWT, so the grant is invisible until
                     // a fresh token is minted. Saying so here is what stops a
                     // "it says approved but I still cannot see it" support ticket.
-                    .append("Please sign out and sign in again to pick up your new access.");
+                    .append("Please sign out and sign in again to pick up your new access.")
+                    // A business added to an InnBucks app account has no
+                    // Foundry password yet (the app signs in another way).
+                    .append(" If you have no Foundry password yet, use Forgot password with this email address "
+                            + "to set one.");
             if (hasText(event.decisionReason())) {
                 sb.append("\n\nNote from the reviewer: ").append(event.decisionReason());
             }

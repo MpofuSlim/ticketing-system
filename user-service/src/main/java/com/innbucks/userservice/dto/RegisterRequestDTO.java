@@ -135,6 +135,20 @@ public class RegisterRequestDTO {
                     + "POST /admin/staff.")
     private List<String> roles;
 
+    /**
+     * The code sent by {@code POST /auth/register/phone-code} when the phone
+     * already belongs to an InnBucks app account. With it, the business is added
+     * to that account instead of a new one being created; without it, such a
+     * number is 409 {@code phone_code_required}. Ignored for a number with no
+     * account.
+     */
+    @Pattern(regexp = "^\\d{6}$", message = "The code is the 6 digits we sent to your phone")
+    @Schema(nullable = true, example = "482913",
+            description = "Only when the phone already has an InnBucks app account: the 6-digit code from "
+                    + "`POST /auth/register/phone-code`. The business is then added to that account. Omit it "
+                    + "for a number with no account.")
+    private String phoneCode;
+
     @AssertTrue(message = "businessName is required for a business account")
     @JsonIgnore
     @Schema(hidden = true)

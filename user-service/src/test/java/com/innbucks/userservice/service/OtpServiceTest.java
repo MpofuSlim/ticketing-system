@@ -416,4 +416,49 @@ class OtpServiceTest {
         verify(otpRepo).save(saved.capture());
         assertEquals(1, saved.getValue().getFailedAttempts());
     }
+
+    // --- the business registration code (BusinessRegistrationService) --------
+
+    @Test
+    void businessRegistrationCode_isKeptUnderItsOwnKey_andSaysWhatItIsFor() {
+        // Its own key: a code sent for anything else (the customer OTP, a reset)
+        // can never add a business, and this one can never sign anyone in.
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class),
+                mock(PendingRegistrationRepository.class), mock(WhatsAppNotificationClient.class), sms)
+                .sendBusinessRegistrationCode("+263771234567");
+
+        ArgumentCaptor<Otp> saved = ArgumentCaptor.forClass(Otp.class);
+        verify(otpRepo).save(saved.capture());
+        assertEquals("business-registration:+263771234567", saved.getValue().getPhoneNumber());
+        // The quota is counted under the same key (read once for the snapshot, once to count).
+        verify(retryRepo, atLeastOnce()).findByPhoneNumber("business-registration:+263771234567");
+        verify(retryRepo, never()).findByPhoneNumber("+263771234567");
+        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
+        verify(sms).sendSms(eq("+263771234567"), message.capture(), anyString());
+        assertTrue(message.getValue().startsWith("Your InnBucks code to add a business to your account is "),
+                message.getValue());
+        assertEquals(HASHER.hash(extractCode(message.getValue())), saved.getValue().getCode());
+        // The SMS gateway refuses these characters; the message must carry none.
+        assertTrue(message.getValue().chars().noneMatch(c -> "!:/?\"*;".indexOf(c) >= 0), message.getValue());
+    }
+
+    @Test
+    void businessRegistrationCode_isCheckedAgainstItsOwnKey_never_thePhonesOtp() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        when(otpRepo.consume(eq("business-registration:+263771234567"), eq(HASHER.hash("482913")), any()))
+                .thenReturn(1);
+        OtpService service = newService(otpRepo, mock(OtpRetryAttemptRepository.class), mock(UserRepository.class),
+                mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class),
+                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class));
+
+        assertTrue(service.verifyBusinessRegistrationCode("+263771234567", "482913"));
+        assertFalse(service.verifyBusinessRegistrationCode("+263771234567", "111111"));
+        assertFalse(service.verifyBusinessRegistrationCode("+263771234567", null));
+        verify(otpRepo, never()).consume(eq("+263771234567"), anyString(), any());
+    }
 }

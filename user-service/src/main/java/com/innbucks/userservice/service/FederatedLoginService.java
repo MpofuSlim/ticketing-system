@@ -37,6 +37,7 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Federated customer login: trades a middleware-signed assertion for a fleet
@@ -272,8 +273,13 @@ public class FederatedLoginService {
                 AuditEventType.AUTH_FEDERATED_LOGIN_SUCCESS,
                 phone, AuditService.ACTOR_TYPE_USER,
                 phone, AuditService.TARGET_TYPE_USER,
-                Map.of("newAccount", account.created()), auditContext);
-        log.info("Federated login phone={} newAccount={}", MsisdnMasking.mask(phone), account.created());
+                // The key only when it happened, so an ordinary sign-in's row is unchanged.
+                account.customerRoleAdded()
+                        ? Map.of("newAccount", account.created(), "customerRoleAdded", true)
+                        : Map.of("newAccount", account.created()),
+                auditContext);
+        log.info("Federated login phone={} newAccount={} customerRoleAdded={}", MsisdnMasking.mask(phone),
+                account.created(), account.customerRoleAdded());
 
         return authService.issuePhoneProofToken(account.user(), deviceId);
     }
@@ -306,7 +312,29 @@ public class FederatedLoginService {
         }
     }
 
-    private record FoundOrCreated(User user, boolean created) {}
+    private record FoundOrCreated(User user, boolean created, boolean customerRoleAdded) {}
+
+    /**
+     * Who may gain the customer role at their first Super app sign-in: a
+     * business OWNER (an organizer or merchant admin, approved), whose every role
+     * is one of these. Their business account and their app account are then
+     * one account, the shape the owner asked for on 2026-09-22 ("a merchant admin
+     * CAN be a customer on the same number"), which nothing could create before:
+     * registration gives the business role only, and this sign-in refused it
+     * ({@code not_a_customer}). Not a gate team member ({@code TEAM_MEMBER}: one
+     * more role would cost them their 2FA exemption; moving them to the app is its
+     * own change), not shop staff, and never a staff role. Staff accounts have no
+     * sign-in phone, so they never reach here at all.
+     */
+    static final Set<String> MAY_ALSO_BE_CUSTOMER = Set.of(
+            User.Role.EVENT_ORGANIZER.name(), User.Role.MERCHANT_ADMIN.name());
+
+    static boolean mayAlsoBeCustomer(User user) {
+        return user.isApproved()
+                && user.getRoles() != null
+                && !user.getRoles().isEmpty()
+                && MAY_ALSO_BE_CUSTOMER.containsAll(user.getRoles());
+    }
 
     private FoundOrCreated findOrCreateCustomer(String phone, AuditContext auditContext) {
         Optional<User> existing = userRepository.findByPhoneNumber(phone);
@@ -317,17 +345,41 @@ public class FederatedLoginService {
             // account with no customer role has no customer identity to sign
             // in AS, so scoping it down to CUSTOMER would invent one. A
             // DUAL-role account — the shopkeeper who also shops, on one number —
-            // passes here on purpose and is narrowed at the mint instead.
+            // passes here on purpose and is narrowed at the mint instead. A
+            // business owner with no customer role yet gains it here
+            // (mayAlsoBeCustomer); every other account is still refused.
+            boolean addCustomer = false;
             if (!user.hasRole(User.Role.CUSTOMER)) {
-                log.warn("Federated login refused: phone belongs to a non-customer account phone={}",
-                        MsisdnMasking.mask(phone));
-                throw reject("not_a_customer", phone, auditContext);
+                if (!mayAlsoBeCustomer(user)) {
+                    log.warn("Federated login refused: phone belongs to a non-customer account phone={}",
+                            MsisdnMasking.mask(phone));
+                    throw reject("not_a_customer", phone, auditContext);
+                }
+                addCustomer = true;
             }
             if (!user.isActive()) {
                 throw reject("account_inactive", phone, auditContext);
             }
-            CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
-                    .orElseGet(() -> newProfile(user));
+            Optional<CustomerProfile> existingProfile = customerProfileRepository.findByUserId(user.getId());
+            if (addCustomer) {
+                // CUSTOMER only, and the session minted below is scoped to it
+                // (issuePhoneProofToken): the app never gets the business
+                // authority, which still needs the password and 2FA.
+                user.getRoles().add(User.Role.CUSTOMER.name());
+                try {
+                    userRepository.saveAndFlush(user);
+                    if (existingProfile.isEmpty()) {
+                        existingProfile = Optional.ofNullable(customerProfileRepository.saveAndFlush(newProfile(user)));
+                    }
+                } catch (DataIntegrityViolationException raced) {
+                    // Two first sign-ins at once: the other one added the role
+                    // (uk_user_roles) or the profile first. Retry and use its rows.
+                    throw new CreateRaceLost(raced);
+                }
+                log.info("Customer role added to a business owner at Super app sign-in phone={} userId={}",
+                        MsisdnMasking.mask(phone), user.getId());
+            }
+            CustomerProfile profile = existingProfile.orElseGet(() -> newProfile(user));
             // A01/A04: refresh the proof-of-ownership window on every login, as
             // OtpService does on every verify — the tier-upgrade gate reads it.
             profile.setPhoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC));
@@ -335,10 +387,10 @@ public class FederatedLoginService {
                 profile.setPhoneVerified(true);
             }
             customerProfileRepository.save(profile);
-            return new FoundOrCreated(user, false);
+            return new FoundOrCreated(user, false, addCustomer);
         }
         try {
-            return new FoundOrCreated(createCustomer(phone), true);
+            return new FoundOrCreated(createCustomer(phone), true, false);
         } catch (DataIntegrityViolationException raced) {
             // Lost the create race: this transaction is now unusable (aborted on
             // Postgres), so leave it — signIn retries in a fresh one, where the

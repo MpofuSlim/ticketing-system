@@ -114,6 +114,14 @@ public class AuthService implements ApplicationEventPublisherAware {
     private StaffEligibility staffEligibility;
 
     /**
+     * Adds a business to the InnBucks app account that already holds the phone
+     * (registration with {@code phoneCode}). Field-injected like the rest; null
+     * only in the plain unit tests, where a taken phone is refused as before.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private BusinessRegistrationService businessRegistrations;
+
+    /**
      * The mint-time eligibility filter (V44) — see {@link StaffMintFilter}. Null
      * only in a plain unit test, where the token is minted unfiltered.
      */
@@ -337,10 +345,26 @@ public class AuthService implements ApplicationEventPublisherAware {
                     "We don't have a role available for the services you selected.");
         }
 
+        // The InnBucks app account already on this phone, when it is one a
+        // business can be added to (BusinessRegistrationService). Looked up
+        // quietly here so the email check below can leave out that account's
+        // own address: the customer may have given it at tier 2.
+        String phoneForLookup = MsisdnValidator.normalizeToE164(request.getPhoneNumber(), deploymentCountry)
+                .orElse(null);
+        User appAccount = businessRegistrations == null || phoneForLookup == null ? null
+                : userRepository.findByPhoneNumber(phoneForLookup)
+                        .filter(u -> deploymentCountry.equalsIgnoreCase(u.getHomeCountry()))
+                        .filter(businessRegistrations::isCustomerOnly)
+                        .orElse(null);
+
         // Case-insensitive so a case-variant of an existing address is caught
         // (uk_users_email is case-sensitive, so an exact check alone would let
         // John@Example.com register alongside john@example.com).
-        if (userRepository.existsByEmailIgnoreCase(request.getEmail())) {
+        boolean emailTaken = appAccount == null
+                ? userRepository.existsByEmailIgnoreCase(request.getEmail())
+                : userRepository.findAllByEmailIgnoreCase(request.getEmail()).stream()
+                        .anyMatch(other -> !other.getId().equals(appAccount.getId()));
+        if (emailTaken) {
             log.warn("Registration failed, email already registered email={}", request.getEmail());
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already registered");
         }
@@ -355,7 +379,19 @@ public class AuthService implements ApplicationEventPublisherAware {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Invalid phone number: " + request.getPhoneNumber()));
         if (userRepository.existsByPhoneNumberAndHomeCountry(normalizedPhone, deploymentCountry)) {
+            if (appAccount != null) {
+                // An InnBucks app customer registering a business: add it to
+                // that account once the phone is proven with a code.
+                return businessRegistrations.addBusiness(appAccount, normalizedPhone, request, bundles);
+            }
             log.warn("Registration failed, phone already registered phone={}", MsisdnMasking.mask(normalizedPhone));
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone number already registered");
+        }
+        // Staff never belong to a business (owner rule): a staff member's own
+        // phone cannot become one either. Answered like any taken number, so it
+        // tells an anonymous caller nothing about who is staff.
+        if (businessRegistrations != null && businessRegistrations.isStaffContactPhone(normalizedPhone)) {
+            log.warn("Registration failed, phone is a staff contact phone phone={}", MsisdnMasking.mask(normalizedPhone));
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone number already registered");
         }
 
