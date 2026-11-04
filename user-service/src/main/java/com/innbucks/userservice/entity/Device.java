@@ -33,7 +33,10 @@ public class Device {
 
     private String pushToken;
 
+    // @Builder.Default: without it the builder (the only way devices are made)
+    // ignores the initializer and stores registered_at NULL. UserCreationTimeTest.
     @Column(updatable = false)
+    @Builder.Default
     private LocalDateTime registeredAt = LocalDateTime.now(ZoneOffset.UTC);
 
     /**
