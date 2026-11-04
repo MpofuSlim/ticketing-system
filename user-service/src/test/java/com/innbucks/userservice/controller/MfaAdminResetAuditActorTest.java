@@ -93,6 +93,7 @@ class MfaAdminResetAuditActorTest {
         ReflectionTestUtils.setField(mfaService, "deviceTrustService", deviceTrust);
 
         AdminUserController controller = new AdminUserController(users, mock(TenantProfileRepository.class),
+                mock(com.innbucks.userservice.repository.StaffProfileRepository.class),
                 mock(UserAdminService.class), mfaService);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())

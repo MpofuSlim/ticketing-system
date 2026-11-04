@@ -93,10 +93,13 @@ public class DataInitializer implements CommandLineRunner {
                     .lastName("Admin")
                     .email(adminEmail)
                     .password(passwordEncoder.encode(password))
-                    .phoneNumber("0000000000")
-                    // home_country = the deployment country. The seed phone is
-                    // a placeholder, not an MSISDN, so we can't derive — use
-                    // the cell pin instead.
+                    // No phone: the owner signs in by email, and a phone on a
+                    // platform account is a takeover path (phone-based reset and
+                    // OTP sign-in key on it). It used to be "0000000000", which
+                    // the console printed as if it were a number and which also
+                    // worked as a second sign-in name; V54 clears it on cells
+                    // seeded before this. home_country = the deployment country
+                    // (nothing to derive it from without a phone).
                     .homeCountry(deploymentCountry)
                     .roles(new LinkedHashSet<>(Set.of(User.Role.SUPER_ADMIN.name())))
                     .defaultServices(new LinkedHashSet<>(Services.ALL_BUNDLES))
