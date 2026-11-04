@@ -1,0 +1,93 @@
+name: Mirror to innbucks/foundry-backend
+
+# Copies every branch and tag of this repo to innbucks/foundry-backend on each
+# push, so the innbucks organisation's teams can read the code there. ONE-WAY:
+# this repo is the only place anyone commits. The mirror is force-updated to
+# match, so a commit made directly in foundry-backend is overwritten by the
+# next sync.
+#
+# Setup (once):
+#   - foundry-backend: Settings > Deploy keys: the public half of an ed25519
+#     key, "Allow write access" ticked. Settings > Actions > General: disable
+#     Actions, or the mirrored CI and Release workflows run there too.
+#   - this repo: the private half as the Actions secret FOUNDRY_MIRROR_SSH_KEY.
+#
+# Every run pushes ALL refs from a fresh bare clone, so runs that finish out
+# of order still leave the mirror matching this repo. Deleted branches and
+# tags are removed by the `delete` trigger. No third-party action is used,
+# so there is nothing to pin.
+
+on:
+  push:
+    branches: [ "**" ]
+    tags: [ "**" ]
+  delete:
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-foundry-backend
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    # Never in the mirror itself, should its Actions be switched on.
+    if: github.repository == 'MpofuSlim/ticketing-system'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET: git@github.com:innbucks/foundry-backend.git
+    steps:
+      - name: Set up the deploy key
+        env:
+          SSH_KEY: ${{ secrets.FOUNDRY_MIRROR_SSH_KEY }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            # Red on master, where the mirror must keep up; a warning on other
+            # branches, so a PR opened before the secret exists is not red.
+            if [ "$GITHUB_REF" = "refs/heads/master" ]; then
+              echo "::error::FOUNDRY_MIRROR_SSH_KEY is not set; see the setup notes at the top of this workflow."
+              exit 1
+            fi
+            echo "::warning::FOUNDRY_MIRROR_SSH_KEY is not set; nothing mirrored."
+            echo "SKIP_MIRROR=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/mirror_key && chmod 600 ~/.ssh/mirror_key
+          # GitHub's published ed25519 host key, pinned rather than trusted on first use.
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > ~/.ssh/known_hosts
+
+      - name: Clone this repo (bare, every branch and tag)
+        if: env.SKIP_MIRROR != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" \
+            clone --bare "https://github.com/${{ github.repository }}.git" src.git
+
+      - name: Push to foundry-backend
+        if: env.SKIP_MIRROR != '1'
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
+        run: |
+          cd src.git
+          git push --force "$TARGET" 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
+
+      - name: Remove a deleted branch or tag
+        if: github.event_name == 'delete' && env.SKIP_MIRROR != '1'
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
+          REF_TYPE: ${{ github.event.ref_type }}
+          REF_NAME: ${{ github.event.ref }}
+        run: |
+          case "$REF_TYPE" in
+            branch) ref="refs/heads/$REF_NAME" ;;
+            tag)    ref="refs/tags/$REF_NAME" ;;
+            *) echo "Nothing to remove for ref type '$REF_TYPE'"; exit 0 ;;
+          esac
+          # Already gone is fine.
+          git -C src.git push "$TARGET" ":$ref" || echo "::notice::$ref was not in the mirror"
