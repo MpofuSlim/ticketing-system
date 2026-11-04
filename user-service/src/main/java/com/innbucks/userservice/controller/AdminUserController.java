@@ -5,6 +5,7 @@ import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.dto.UpdateActiveStatusDTO;
 import com.innbucks.userservice.dto.UpdateRolesDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
+import com.innbucks.userservice.entity.StaffProfile;
 import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.TenantProfileRepository;
@@ -42,6 +43,7 @@ public class AdminUserController {
 
     private final UserRepository userRepository;
     private final TenantProfileRepository tenantProfileRepository;
+    private final com.innbucks.userservice.repository.StaffProfileRepository staffProfileRepository;
     private final UserAdminService userAdminService;
     private final com.innbucks.userservice.service.MfaService mfaService;
 
@@ -168,6 +170,11 @@ public class AdminUserController {
                     "`firstName`, then `lastName`, ignoring case; an account with no name comes after every " +
                     "account that has one, and two accounts with the same name are ordered by `id`. Show the " +
                     "rows in the order they arrive.\n\n" +
+                    "**Phone.** `phoneNumber` is the account's SIGN-IN phone. Staff accounts have none (the " +
+                    "number moves to the staff profile when the invite is accepted), and neither does the " +
+                    "seeded platform owner. A staff row carries `contactPhone` instead, but only when the " +
+                    "caller holds `staff:read` (SUPER_ADMIN); show `phoneNumber`, else `contactPhone`, else a " +
+                    "dash.\n\n" +
                     "Requires the `users:read` permission."
     )
     @ApiResponses({
@@ -184,11 +191,22 @@ public class AdminUserController {
                                           "firstName": "Platform",
                                           "lastName": "Owner",
                                           "email": "owner@innbucks.co.zw",
-                                          "phoneNumber": "+263771000001",
                                           "roles": ["SUPER_ADMIN"],
                                           "defaultServices": [],
                                           "active": true,
                                           "createdAt": "2026-01-05T09:00:00+02:00",
+                                          "business": false
+                                        },
+                                        {
+                                          "id": 27,
+                                          "firstName": "Tendai",
+                                          "lastName": "Mhlanga",
+                                          "email": "tmhlanga@innbucks.co.zw",
+                                          "contactPhone": "+263771000027",
+                                          "roles": ["SUPER_ADMIN"],
+                                          "defaultServices": [],
+                                          "active": true,
+                                          "createdAt": "2026-03-02T08:15:00+02:00",
                                           "business": false
                                         },
                                         {
@@ -239,7 +257,8 @@ public class AdminUserController {
     })
     public ResponseEntity<ApiResult<List<UserResponseDTO>>> listUsers(
             @RequestParam(name = "active", required = false) Boolean active,
-            @RequestParam(name = "includeCustomers", required = false, defaultValue = "false") boolean includeCustomers) {
+            @RequestParam(name = "includeCustomers", required = false, defaultValue = "false") boolean includeCustomers,
+            Authentication authentication) {
 
         // Customer-ONLY accounts stay off the page; an account holding CUSTOMER
         // alongside any other role is listed (a merchant admin who also shops
@@ -276,12 +295,31 @@ public class AdminUserController {
                 .map(u -> UserResponseDTO.from(u, profilesByUserId.get(u.getId())))
                 .collect(Collectors.toList());
 
+        // A staff account has no sign-in phone (accepting the invite moves it to
+        // the staff profile as a contact number), so its row showed no phone at
+        // all. The contact number is given here only to a caller who may read
+        // the Staff tab: staff:read is wildcard-reserved (SUPER_ADMIN), while
+        // users:read can be put on a custom role, which must not get every
+        // staff member's personal number through this list.
+        if (mayReadStaff(authentication) && !visible.isEmpty()) {
+            Map<Long, String> contactByUserId = staffProfileRepository
+                    .findAllByUserIdIn(visible.stream().map(User::getId).toList()).stream()
+                    .filter(p -> p.getContactPhone() != null && !p.getContactPhone().isBlank())
+                    .collect(Collectors.toMap(StaffProfile::getUserId, StaffProfile::getContactPhone));
+            body.forEach(row -> row.setContactPhone(contactByUserId.get(row.getId())));
+        }
+
         String activeLabel = active == null ? "Users"
                 : (active ? "Active users" : "Inactive users");
         String scopeLabel = includeCustomers ? "" : " (system, no customers)";
         String msg = activeLabel + scopeLabel + " retrieved";
         log.info("{} count={}", msg, body.size());
         return ResponseEntity.ok(ApiResult.ok(msg, body));
+    }
+
+    private static boolean mayReadStaff(Authentication authentication) {
+        return authentication != null && authentication.getAuthorities().stream()
+                .anyMatch(a -> PermissionCatalog.STAFF_READ.equals(a.getAuthority()));
     }
 
     @GetMapping("/merchants")

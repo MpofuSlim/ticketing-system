@@ -20,7 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Pins V52 (the seeded platform owner) against real Postgres.
+ * Pins V52 (the seeded platform owner) and V54 (its placeholder phone
+ * cleared) against real Postgres.
  *
  * <p>Plain Flyway against its own container rather than a Spring context: each
  * case stops at V51 in a database of its own, seeds the pre-V52 world, and only
@@ -139,6 +140,35 @@ class PlatformOwnerMigrationPostgresIT {
         assertThat(jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class)).isEqualTo("51");
+    }
+
+    @Test
+    void v54_clearsTheOwnersPlaceholderPhone_andNothingElse() {
+        PGSimpleDataSource ds = database("owner_placeholder_phone");
+        JdbcTemplate jdbc = new JdbcTemplate(ds);
+        flyway(ds, "51").migrate();
+        seedAccounts(jdbc);
+
+        flyway(ds, "54").migrate();
+
+        assertThat(jdbc.queryForObject("SELECT phone_number FROM users WHERE id = 1", String.class)).isNull();
+        assertThat(jdbc.queryForObject("SELECT phone_number FROM users WHERE id = 3", String.class))
+                .isEqualTo("+263771000003");
+    }
+
+    @Test
+    void v54_leavesAnOwnerWhosePhoneWasChanged() {
+        PGSimpleDataSource ds = database("owner_real_phone");
+        JdbcTemplate jdbc = new JdbcTemplate(ds);
+        flyway(ds, "51").migrate();
+        seedAccounts(jdbc);
+        jdbc.update("UPDATE users SET phone_number = '+263771000001' WHERE id = 1");
+
+        flyway(ds, "54").migrate();
+
+        assertThat(owners(jdbc)).containsExactly(1L);
+        assertThat(jdbc.queryForObject("SELECT phone_number FROM users WHERE id = 1", String.class))
+                .isEqualTo("+263771000001");
     }
 
     @Test

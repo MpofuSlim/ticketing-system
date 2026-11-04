@@ -1859,6 +1859,17 @@ sent to the applicant verbatim) — `RegistrationRejectionService`, behind
   ties by id. One comparator, `AdminUserOrder.SYSTEM_USERS`, applied in Java after
   loading on every branch (the list is unpaged); `AdminUserOrderTest` and
   `AdminUserListOrderTest`.
+- **The System Users list's phone and roles (owner decisions, 2026-11-04):**
+  - `phoneNumber` is the SIGN-IN phone. A staff row has none and carries the
+    staff profile's `contactPhone` instead, but only for a caller holding
+    `staff:read` (wildcard-reserved). `users:read` can sit on a custom role,
+    which must not get every staff member's number. `AdminUserListContactPhoneTest`.
+  - The seeded owner has no phone: V54 cleared the `0000000000` placeholder and
+    `DataInitializer` seeds none.
+  - A SUPER_ADMIN row lists `SUPER_ADMIN` alone (plus any business built-in, which
+    carries scope the wildcard does not). Display only
+    (`UserResponseDTO.consoleRoles`): the account keeps every role, they apply
+    again on demotion, and `GET /admin/super-admins` lists them all.
 
 ## Suspending one service of a business (user-service V53)
 

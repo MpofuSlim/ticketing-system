@@ -64,6 +64,7 @@ class AdminUserListOrderTest {
         when(profiles.findByUserIdIn(any())).thenReturn(List.of());
 
         mvc = MockMvcBuilders.standaloneSetup(new AdminUserController(users, profiles,
+                        mock(com.innbucks.userservice.repository.StaffProfileRepository.class),
                         mock(UserAdminService.class), mock(MfaService.class)))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
