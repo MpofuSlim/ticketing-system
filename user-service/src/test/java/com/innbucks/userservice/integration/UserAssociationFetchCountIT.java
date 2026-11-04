@@ -97,6 +97,7 @@ class UserAssociationFetchCountIT extends SupportItSupport {
     /** An account loaded BY ID — what an eager to-one does to resolve its target. */
     private static final Predicate<String> USER_BY_ID = s -> USER_ENTITY.test(s) && s.endsWith("where u1_0.id=?");
     private static final Predicate<String> TENANT_PROFILES = s -> s.contains(" from tenant_profiles ");
+    private static final Predicate<String> STAFF_PROFILES = s -> s.contains(" from staff_profiles ");
     private static final Predicate<String> CUSTOMER_PROFILES = s -> s.contains(" from customer_profiles ");
 
     private static long count(List<String> sql, Predicate<String> p) {
@@ -154,7 +155,8 @@ class UserAssociationFetchCountIT extends SupportItSupport {
     // ---------------------------------------------------------------- listings
 
     @Test
-    @DisplayName("GET /admin/users and /merchants: one users query, one IN query per 100 accounts per collection, one profile query")
+    @DisplayName("GET /admin/users and /merchants: one users query, one IN query per 100 accounts per collection, one profile query "
+            + "(and, for a caller who may read staff, one staff-profile query)")
     void adminListings() throws Exception {
         for (int i = 0; i < 3; i++) business("EVENT_ORGANIZER");
         for (int i = 0; i < 3; i++) business("MERCHANT_ADMIN");
@@ -168,7 +170,9 @@ class UserAssociationFetchCountIT extends SupportItSupport {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data[0].roles").isArray())).size());
             assertThat(n[0]).as("the fixtures are listed").isGreaterThanOrEqualTo(includeCustomers.equals("true") ? 10 : 7);
-            assertListing(sql, n[0], "GET /admin/users?includeCustomers=" + includeCustomers);
+            // The caller is a SUPER_ADMIN (staff:read), so the staff rows' contact
+            // phones are read too: ONE batched query, never one per row.
+            assertListing(sql, n[0], "GET /admin/users?includeCustomers=" + includeCustomers, 1);
         }
 
         int[] n = new int[1];
@@ -182,7 +186,7 @@ class UserAssociationFetchCountIT extends SupportItSupport {
             assertThat(anyBusinessDetails).isTrue();
         });
         assertThat(n[0]).isGreaterThanOrEqualTo(6);
-        assertListing(sql, n[0], "GET /admin/users/merchants");
+        assertListing(sql, n[0], "GET /admin/users/merchants", 0);
     }
 
     /**
@@ -190,15 +194,19 @@ class UserAssociationFetchCountIT extends SupportItSupport {
      * reads (revocation check, token-state projection), one users query, one
      * profile query, and one batched query per collection per 100 accounts.
      * Before the change it was 2 + 2 + 2n + one account reload per business
-     * account.
+     * account. {@code GET /admin/users} adds one staff-profile query for a
+     * caller who may read staff (#774: the staff rows' contact phones).
      */
-    private static void assertListing(List<String> sql, int n, String path) {
+    private static void assertListing(List<String> sql, int n, String path, int staffProfileQueries) {
         assertThat(count(sql, USER_ENTITY)).as(path + " — users queries\n" + describe(sql)).isEqualTo(1);
         assertThat(count(sql, ROLES)).as(path + " — user_roles queries\n" + describe(sql)).isEqualTo(batches(n));
         assertThat(count(sql, SERVICES)).as(path + " — user_default_services queries\n" + describe(sql))
                 .isEqualTo(batches(n));
         assertThat(count(sql, TENANT_PROFILES)).as(path + " — tenant_profiles queries\n" + describe(sql)).isEqualTo(1);
-        assertThat((long) sql.size()).as(path + " — total\n" + describe(sql)).isEqualTo(4 + 2 * batches(n));
+        assertThat(count(sql, STAFF_PROFILES)).as(path + " — staff_profiles queries\n" + describe(sql))
+                .isEqualTo(staffProfileQueries);
+        assertThat((long) sql.size()).as(path + " — total\n" + describe(sql))
+                .isEqualTo(4 + staffProfileQueries + 2 * batches(n));
     }
 
     @Test
