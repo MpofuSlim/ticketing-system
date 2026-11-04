@@ -20,6 +20,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.innbucks.bookingservice.controller.BoxOfficeController.EXAMPLE_ALREADY_VOIDED;
 import static com.innbucks.bookingservice.controller.BoxOfficeController.EXAMPLE_EVENT_STARTED;
@@ -57,6 +58,7 @@ class BoxOfficePostgresIT extends BookingStockPostgresTestBase {
     private final UUID eventId = UUID.randomUUID();
     private final UUID vip = UUID.randomUUID();
     private final UUID organizer = UUID.randomUUID();
+    private final AtomicInteger startsInDays = new AtomicInteger(30);
 
     @BeforeEach
     void setUp() {
@@ -64,7 +66,10 @@ class BoxOfficePostgresIT extends BookingStockPostgresTestBase {
         when(eventServiceClient.salesWindow(eq(eventId), any())).thenReturn(ApiResult.ok("Sales window resolved",
                 EventSalesWindowDTO.builder().eventId(eventId).status(EventSalesWindowDTO.ON_SALE)
                         .tenantUserUuid(organizer).build()));
-        eventStartsIn(30);
+        startsInDays.set(30);
+        when(eventServiceClient.getEventInternal(eq(eventId), any())).thenAnswer(invocation -> ApiResult.ok(
+                EventLookupDTO.builder().eventId(eventId).tenantUserUuid(organizer).title("Jazz Night")
+                        .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(startsInDays.get())).build()));
         // A void hands its tickets back to event-service's availability mirror
         // first, like the admin reversal, and refuses (503) when that is not
         // acknowledged.
@@ -83,10 +88,16 @@ class BoxOfficePostgresIT extends BookingStockPostgresTestBase {
         deleteSeeded();
     }
 
+    /**
+     * Moves the event's start. Only sets a number: the stub that reads it is
+     * made once, in {@link #setUp()}, before any sale. Re-stubbing here raced
+     * the async listeners a sale starts (they call the same mock), and Mockito
+     * stubbing is not thread-safe: a call from that thread between
+     * {@code when(...)} and {@code thenReturn(...)} took the new answer, so the
+     * void still saw "starts in 30 days" and answered 200.
+     */
     private void eventStartsIn(int days) {
-        when(eventServiceClient.getEventInternal(eq(eventId), any())).thenReturn(ApiResult.ok(
-                EventLookupDTO.builder().eventId(eventId).tenantUserUuid(organizer).title("Jazz Night")
-                        .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(days)).build()));
+        startsInDays.set(days);
     }
 
     private String organizerBearer() {
