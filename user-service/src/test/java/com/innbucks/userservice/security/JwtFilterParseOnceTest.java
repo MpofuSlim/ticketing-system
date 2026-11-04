@@ -88,6 +88,9 @@ class JwtFilterParseOnceTest {
         @Bean MetricsScrapeAuthFilter metricsScrapeAuthFilter() { return new MetricsScrapeAuthFilter(""); }
         @Bean UserRepository userRepository() { return mock(UserRepository.class); }
         @Bean TenantProfileRepository tenantProfileRepository() { return mock(TenantProfileRepository.class); }
+        @Bean com.innbucks.userservice.repository.StaffProfileRepository staffProfileRepository() {
+            return mock(com.innbucks.userservice.repository.StaffProfileRepository.class);
+        }
         @Bean UserAdminService userAdminService() { return mock(UserAdminService.class); }
         @Bean MfaService mfaService() { return mock(MfaService.class); }
     }
