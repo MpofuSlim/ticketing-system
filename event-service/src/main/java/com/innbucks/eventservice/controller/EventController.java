@@ -1003,11 +1003,16 @@ public class EventController {
     @Operation(
             summary = "Create event",
             description = """
-                    Creates a new event for the authenticated **EVENT_ORGANIZER** or **SUPER_ADMIN**.
+                    Creates a new event for the authenticated **EVENT_ORGANIZER**.
 
                     The authenticated principal's `organizerUuid` JWT claim becomes the owning
                     `tenantUserUuid`, and the event's `country` is taken from the caller's JWT
                     `country` claim — neither is part of the request body.
+
+                    Every event belongs to an organizer. A **SUPER_ADMIN** passes the role check
+                    but has no `organizerUuid` to own an event, so it is answered **400** "Events
+                    belong to an organizer. Sign in with the organizer's account to create one."
+                    Create the event from the organizer's own account.
 
                     The request is `multipart/form-data` with two parts:
                     - `event` — JSON body matching `CreateEventRequest` (title, description, venue, category, location, startDateTime, endDateTime, totalCapacity).
@@ -1063,6 +1068,13 @@ public class EventController {
                                     """)
                     )
             ),
+            @ApiResponse(responseCode = "400", description = "No organizer to own the event",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Staff account (e.g. SUPER_ADMIN)",
+                                    value = EXAMPLE_STAFF_CANNOT_CREATE_EVENT),
+                            @ExampleObject(name = "Organizer session without its organizer id",
+                                    value = EXAMPLE_SESSION_MISSING_ORGANIZER)
+                    })),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER"),
             @ApiResponse(responseCode = "422", description = "Validation errors",
@@ -1080,6 +1092,15 @@ public class EventController {
         // column was deprecated in V7).
         UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller
                 .organizerUuid(authentication);
+        // A staff account (SUPER_ADMIN passes the role check) has no organizer
+        // id, and every event must belong to one. Say so, rather than the
+        // service's "sign in again", which only fits an organizer's broken session
+        // and sent staff round in circles. Same status (400) as before.
+        if (tenantUserUuid == null && !hasRole(authentication, "ROLE_EVENT_ORGANIZER")) {
+            log.info("Event create refused: staff account, no organizer to own the event title={}",
+                    request.getTitle());
+            throw new com.innbucks.eventservice.exception.BadRequestException(STAFF_CANNOT_CREATE_EVENT);
+        }
         log.info("Creating event tenantUserUuid={} country={} title={} venue={} hasBanner={}",
                 tenantUserUuid, country, request.getTitle(), request.getVenue(),
                 eventBanner != null && !eventBanner.isEmpty());
@@ -1699,6 +1720,20 @@ public class EventController {
     }
 
     static final String SUBMITTED_FOR_REVIEW_MESSAGE = "Event submitted for review";
+
+    static final String STAFF_CANNOT_CREATE_EVENT =
+            "Events belong to an organizer. Sign in with the organizer's account to create one.";
+
+    static final String EXAMPLE_STAFF_CANNOT_CREATE_EVENT = """
+            {"code":"400 BAD_REQUEST","message":"Events belong to an organizer. Sign in with the organizer's account to create one.","data":null}""";
+
+    static final String EXAMPLE_SESSION_MISSING_ORGANIZER = """
+            {"code":"400 BAD_REQUEST","message":"Your session is missing organizer information. Please sign in again.","data":null}""";
+
+    private static boolean hasRole(Authentication authentication, String authority) {
+        return authentication != null && authentication.getAuthorities().stream()
+                .anyMatch(a -> authority.equals(a.getAuthority()));
+    }
 
     static final String EXAMPLE_REJECTION_REASON_REQUIRED = """
             {"code":"400 BAD_REQUEST","message":"Please say why the event is not approved. The organizer sees your note.","data":null}""";

@@ -213,6 +213,40 @@ class EventControllerTest {
     }
 
     @Test
+    void createEvent_byStaff_isRefused_withAPlainMessage_andNothingIsSaved() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile(
+                "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
+                objectMapper.writeValueAsBytes(sampleRequest("First Mutual Marathon", EventCategory.MARATHON)));
+
+        // SUPER_ADMIN passes @PreAuthorize but its token carries no organizerUuid:
+        // there is nobody to own the event. It used to be told to sign in again.
+        mockMvc.perform(multipart("/events").file(eventPart)
+                        .with(jwtAuth("ops@innbucks.co.zw", null, "SUPER_ADMIN"))
+                        .requestAttr("jwtCountry", "Zimbabwe"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().json(EventController.EXAMPLE_STAFF_CANNOT_CREATE_EVENT,
+                        org.springframework.test.json.JsonCompareMode.STRICT));
+        assertEquals(0, eventRepository.count());
+    }
+
+    @Test
+    void createEvent_byAnOrganizerWithoutItsOrganizerId_isStillAskedToSignInAgain() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile(
+                "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
+                objectMapper.writeValueAsBytes(sampleRequest("Broken Session Concert", EventCategory.CONCERT)));
+
+        // An organizer's token always carries the claim; one without it is a broken
+        // session, and signing in again is the right advice for that.
+        mockMvc.perform(multipart("/events").file(eventPart)
+                        .with(jwtAuth("tenant-99", null, "EVENT_ORGANIZER"))
+                        .requestAttr("jwtCountry", "Zimbabwe"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().json(EventController.EXAMPLE_SESSION_MISSING_ORGANIZER,
+                        org.springframework.test.json.JsonCompareMode.STRICT));
+        assertEquals(0, eventRepository.count());
+    }
+
+    @Test
     void createEvent_withoutCountryClaim_isRejected() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
