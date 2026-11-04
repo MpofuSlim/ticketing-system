@@ -369,7 +369,7 @@ public class FederatedLoginService {
                 try {
                     userRepository.saveAndFlush(user);
                     if (existingProfile.isEmpty()) {
-                        existingProfile = Optional.ofNullable(customerProfileRepository.saveAndFlush(newProfile(user)));
+                        existingProfile = Optional.of(customerProfileRepository.saveAndFlush(newProfile(user)));
                     }
                 } catch (DataIntegrityViolationException raced) {
                     // Two first sign-ins at once: the other one added the role
