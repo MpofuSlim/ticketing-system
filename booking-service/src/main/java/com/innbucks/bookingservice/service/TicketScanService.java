@@ -1,10 +1,8 @@
 package com.innbucks.bookingservice.service;
 
 import com.innbucks.common.ticket.TicketNumbers;
-import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.config.CountryMdcConfig;
 import com.innbucks.bookingservice.dto.ApiResult;
-import com.innbucks.bookingservice.dto.ScanAccessDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
 import com.innbucks.bookingservice.dto.ScannerAccessDTO;
 import com.innbucks.bookingservice.entity.Booking;
@@ -44,8 +42,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 
 /**
- * Single-shot ticket redemption for the scanner-app flow used by an
- * EVENT_ORGANIZER or one of their TEAM_MEMBERs at the gate.
+ * Single-shot ticket redemption at the gate, for two callers: the event's
+ * organizer (EVENT_ORGANIZER, the organizer path) and gate scanners on the
+ * InnBucks super app (a CUSTOMER session whose authority is event-service's
+ * scanner membership, asked on every scan — {@link #scanForSuperApp}). No other
+ * caller scans: the organizer-created TEAM_MEMBER gate accounts are retired
+ * (owner decision, 2026-11-05), so a token carrying only that role is refused
+ * by the controller and, should one ever reach this service, by
+ * {@link #requireOrganizer} before anything is read.
  *
  * <p>Concurrency model: the claim is an atomic UPDATE WHERE redeemed_at
  * IS NULL — so two scanners pointing at the same QR can't both succeed.
@@ -54,9 +58,10 @@ import java.util.Map;
  * return the original {@code redeemedByName} + {@code redeemedAt} (the
  * "scanned by Tariro at 19:42" toast).
  *
- * <p>Authorization: the scanner's {@code organizerUuid} JWT claim must
- * equal the booking's {@code tenant_user_uuid} (which mirrors the
- * event's owning organizer).
+ * <p>Authorization on the organizer path: the caller holds EVENT_ORGANIZER
+ * and their {@code organizerUuid} JWT claim (their own {@code user_uuid}) equals
+ * the booking's {@code tenant_user_uuid} (which mirrors the event's owning
+ * organizer).
  *
  * <p><b>Transactions — no remote call is made while one is open.</b> The scan
  * runs in phases rather than under one method-level {@code @Transactional}:
@@ -64,11 +69,12 @@ import java.util.Map;
  *   <li>a short READ-ONLY transaction loads the ticket with its booking
  *       (fetch-joined, so the detached copy carries everything the gates
  *       read);</li>
- *   <li>the gates run with NO transaction: status, organizer ownership, the
- *       team member's assignment (user-service) and the event-day rule
- *       (event-service). Each used to hold the pooled connection for as long
- *       as the other service took to answer — a gate queue at a stadium is
- *       exactly the burst that turns that into pool exhaustion;</li>
+ *   <li>the gates run with NO transaction: status, organizer ownership and the
+ *       event-day rule (event-service); a super-app scanner's access
+ *       (event-service) is asked before the read. A remote question used to
+ *       hold the pooled connection for as long as the other service took to
+ *       answer — a gate queue at a stadium is exactly the burst that turns that
+ *       into pool exhaustion;</li>
  *   <li>one WRITE transaction then does the claim and its audit row together
  *       ({@link #claimAndAudit}); a refusal writes its audit row in a
  *       transaction of its own.</li>
@@ -103,7 +109,6 @@ import java.util.Map;
 public class TicketScanService {
 
     private final BookingItemRepository bookingItemRepository;
-    private final UserServiceClient userServiceClient;
     private final ScanAttemptRepository scanAttemptRepository;
     /** ObjectProvider so existing unit tests that build this service with
      *  `new` and pass null can continue to work; the audit counter is
@@ -142,14 +147,12 @@ public class TicketScanService {
     private static final long EVENT_WINDOW_TTL_MILLIS = 60_000L;
 
     public TicketScanService(BookingItemRepository bookingItemRepository,
-                             UserServiceClient userServiceClient,
                              ScanAttemptRepository scanAttemptRepository,
                              ObjectProvider<MeterRegistry> meterRegistryProvider,
                              @Value("${innbucks.country:ZW}") String deploymentCountry,
                              ObjectProvider<EventServiceClient> eventServiceClientProvider,
                              ObjectProvider<MarketTimeZone> marketTimeZoneProvider) {
         this.bookingItemRepository = bookingItemRepository;
-        this.userServiceClient = userServiceClient;
         this.scanAttemptRepository = scanAttemptRepository;
         this.meterRegistryProvider = meterRegistryProvider;
         this.deploymentCountry = deploymentCountry;
@@ -171,30 +174,10 @@ public class TicketScanService {
         this.writeTx = TransactionPhases.readWrite(transactionManager);
     }
 
-    /** Shared S2S secret for the user-service assignment-check call. */
+    /** Shared S2S secret for event-service's internal lookups (the event's
+     *  window and a super-app scanner's access). */
     @Value("${innbucks.internal-api-token:}")
     private String internalToken;
-
-    /**
-     * What to do when user-service can't be reached to resolve a team
-     * member's per-event assignment.
-     *
-     * <p><b>Fail CLOSED by default</b> (false): deny the scan
-     * (NOT_ASSIGNED_TO_EVENT) until user-service is back. A restricted team
-     * member must NEVER be silently widened to the organizer's whole event
-     * set just because the assignment system of record is down — that would
-     * lapse the deny-by-default invariant the per-event restriction exists to
-     * enforce, and it is asymmetric with the LIST path
-     * ({@code UserUuidLookupGateway.assignedEventIdsFor}), which already
-     * fails closed (empty list) on an outage.
-     *
-     * <p>true = break-glass ONLY: fall back to the organizer-wide access
-     * already verified above so the gate keeps moving during an outage. This
-     * re-opens the gap above, so it must be a deliberate, time-boxed operator
-     * decision — never the steady-state default.
-     */
-    @Value("${innbucks.scan.assignment-check.fail-open:false}")
-    private boolean assignmentCheckFailOpen;
 
     /**
      * Kill switch for the event-day rule. true (default) = a ticket only
@@ -229,9 +212,8 @@ public class TicketScanService {
     private boolean eventDayCheckFailOpen;
 
     /**
-     * Deliberately NOT {@code @Transactional}: the user-service and
-     * event-service lookups below run with no transaction open. See the class
-     * javadoc for the phases.
+     * Deliberately NOT {@code @Transactional}: the event-service lookups below
+     * run with no transaction open. See the class javadoc for the phases.
      */
     public ScanTicketResponseDTO scan(String ticketNumber, String scannerDisplayName) {
         return scan(ticketNumber, null, scannerDisplayName);
@@ -240,7 +222,7 @@ public class TicketScanService {
     /**
      * @param eventId the event the scanner is scanning for. Required from a
      *                super-app scanner ({@link #isSuperAppScanner}); optional for
-     *                the scanner app. When given, a ticket for any other event
+     *                the organizer. When given, a ticket for any other event
      *                is {@code WRONG_EVENT} and is not redeemed.
      */
     public ScanTicketResponseDTO scan(String ticketNumber, UUID eventId, String scannerDisplayName) {
@@ -264,6 +246,13 @@ public class TicketScanService {
             // identity to attribute it to).
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
         }
+        // Defence in depth, before anything is read: the controller admits only
+        // EVENT_ORGANIZER and CUSTOMER, and a CUSTOMER without the organizer
+        // role took the super-app branch above. Without this, the organizerUuid
+        // claim match below would be the only gate for any other token that
+        // reached the service — a retired TEAM_MEMBER token carries its
+        // organizer's uuid in that claim.
+        requireOrganizer(auth);
 
         // Phase 1: a short read-only transaction. The booking is fetch-joined,
         // so the detached item still answers every gate below (status,
@@ -282,8 +271,8 @@ public class TicketScanService {
             return result;
         }
 
-        // Phase 2: the gates, with no transaction open — two of them ask
-        // another service.
+        // Phase 2: the gates, with no transaction open — the event-day rule
+        // asks event-service.
         Booking booking = item.getBooking();
         if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
             log.info("Ticket scan rejected, booking not confirmed ticketNumber={} status={} scanner={}",
@@ -313,34 +302,9 @@ public class TicketScanService {
             return result;
         }
 
-        // Per-event restriction. Organizers are never restricted (they own
-        // every event); only TEAM_MEMBERs are scoped to assigned events.
-        // user-service is the assignment system of record and encodes the rule
-        // in the allowed flag — and that rule is DENY-BY-DEFAULT: a team member
-        // with no assignments may scan NOTHING, not their organizer's whole
-        // portfolio. (V21 shipped the opposite so the feature could be additive;
-        // 19ec675f "deny-by-default team-member event access" reversed it.)
-        //
-        // Note the scannerUserUuid != null conjunct below: a TEAM_MEMBER on a
-        // legacy token with no userUuid claim skips this check entirely and is
-        // treated as organizer-wide. That is a real gap, not an intended
-        // exception — it predates this comment and is called out here so it is
-        // not mistaken for the deny-by-default rule above.
-        if (!isOrganizer(auth) && scannerUserUuid != null
-                && !assignmentAllowsScan(scannerUserUuid, booking.getEventId(), ticketNumber, scannerEmail)) {
-            ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
-                    .status(ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT)
-                    .ticketNumber(ticketNumber)
-                    .bookingItemId(item.getId())
-                    .build();
-            recordRefusal(ticketNumber, item, ScanAttempt.Outcome.NOT_ASSIGNED_TO_EVENT,
-                    scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start, eventId);
-            return result;
-        }
-
         // The event the scanner said they are scanning for, when they said:
-        // after both authorization gates (so it reveals nothing to a scanner
-        // who may not act on this booking), before the claim.
+        // after the ownership gate (so it reveals nothing to a scanner who may
+        // not act on this booking), before the claim.
         if (eventId != null && !eventId.equals(booking.getEventId())) {
             log.info("Ticket scan rejected, ticket is for another event ticketNumber={} scanningFor={} by={}",
                     TicketNumbers.forLog(ticketNumber), eventId, scannerEmail);
@@ -453,10 +417,11 @@ public class TicketScanService {
     }
 
     /**
-     * True for a super-app scanner: a token holding CUSTOMER and neither
-     * EVENT_ORGANIZER nor TEAM_MEMBER. An organizer or scanner-app account
-     * stays on its own path even if it also shops; a token with no roles at all
-     * is never routed here.
+     * True for a super-app scanner: a token holding CUSTOMER and not
+     * EVENT_ORGANIZER. An organizer stays on the organizer path even if they
+     * also shop; a token with no roles at all is never routed here. No other
+     * role changes the routing: whatever else a CUSTOMER token carries, its
+     * authority to scan is event-service's membership answer and nothing else.
      */
     public static boolean isSuperAppScanner(Authentication auth) {
         if (auth == null) {
@@ -465,7 +430,7 @@ public class TicketScanService {
         boolean customer = false;
         for (GrantedAuthority authority : auth.getAuthorities()) {
             String name = authority.getAuthority();
-            if ("ROLE_EVENT_ORGANIZER".equals(name) || "ROLE_TEAM_MEMBER".equals(name)) {
+            if ("ROLE_EVENT_ORGANIZER".equals(name)) {
                 return false;
             }
             if ("ROLE_CUSTOMER".equals(name)) {
@@ -660,20 +625,23 @@ public class TicketScanService {
     }
 
     /**
-     * The scan's two authorization gates — organizer ownership, then a team
-     * member's per-event assignment — for a caller that holds a BOOKING rather
-     * than a ticket ({@link GateLookupService}). Returns the refusal, or null
-     * when the caller may act on this booking.
+     * The scan's authorization on the organizer path — the caller is an
+     * organizer, and the booking is theirs — for a caller that holds a BOOKING
+     * rather than a ticket ({@link GateLookupService}). Returns the refusal, or
+     * null when the caller may act on this booking.
      *
      * <p>Composes the same private checks {@link #scan} runs, in the same
      * order, so the gate lookup can never be looser than the scan it feeds:
      * a scanner who could not redeem a booking's tickets cannot list them
      * either. {@code reference} is only for the log lines.
+     *
+     * @throws ResponseStatusException 403 for a caller without EVENT_ORGANIZER
+     *         ({@link #requireOrganizer})
      */
     public ScanTicketResponseDTO.Status authorizationRefusal(Booking booking, String reference) {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        requireOrganizer(auth);
         UUID scannerOrganizerUuid = AuthenticatedCaller.organizerUuid(auth);
-        UUID scannerUserUuid = AuthenticatedCaller.userUuid(auth);
         String scannerEmail = auth == null ? null : auth.getName();
         if (!scannerOwnsEvent(booking, scannerOrganizerUuid)) {
             log.warn("Gate lookup rejected, organizer mismatch reference={} scannerEmail={} "
@@ -681,11 +649,23 @@ public class TicketScanService {
                     reference, scannerEmail, scannerOrganizerUuid, booking.getTenantUserUuid());
             return ScanTicketResponseDTO.Status.WRONG_ORGANIZER;
         }
-        if (!isOrganizer(auth) && scannerUserUuid != null
-                && !assignmentAllowsScan(scannerUserUuid, booking.getEventId(), reference, scannerEmail)) {
-            return ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT;
-        }
         return null;
+    }
+
+    /**
+     * The organizer path is the event's organizer's own account and nobody
+     * else's. A caller that is neither an organizer nor a super-app scanner
+     * (routed away before this is asked) is refused with a 403 before anything
+     * is read, and writes no {@code scan_attempts} row: it is not a scanner,
+     * so there is no gate traffic to record. The controllers' role check makes
+     * this unreachable over HTTP; it is here so the service never relies on it
+     * alone (the gate-staff TEAM_MEMBER accounts it used to admit are retired).
+     */
+    static void requireOrganizer(Authentication auth) {
+        if (!isOrganizer(auth)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Only the event's organizer or its gate scanners can scan tickets.");
+        }
     }
 
     /**
@@ -800,28 +780,10 @@ public class TicketScanService {
                 && bookingOrganizerUuid.equals(scannerOrganizerUuid);
     }
 
-    private boolean isOrganizer(Authentication auth) {
+    private static boolean isOrganizer(Authentication auth) {
         if (auth == null) return false;
         return auth.getAuthorities().stream()
                 .anyMatch(a -> "ROLE_EVENT_ORGANIZER".equals(a.getAuthority()));
-    }
-
-    /**
-     * Asks user-service whether this team member may scan the given event.
-     * Returns the configured {@link #assignmentCheckFailOpen} value when
-     * user-service is unreachable (Feign fallback yields null data) so the
-     * fail-open/closed policy lives in exactly one place.
-     */
-    private boolean assignmentAllowsScan(UUID scannerUserUuid, UUID eventId,
-                                         String ticketNumber, String scannerEmail) {
-        ApiResult<ScanAccessDTO> res = userServiceClient.canScanEvent(scannerUserUuid, eventId, internalToken);
-        ScanAccessDTO data = res == null ? null : res.getData();
-        if (data != null) {
-            return data.isAllowed();
-        }
-        log.warn("Assignment check unavailable, applying failOpen={} ticketNumber={} scanner={} eventId={}",
-                assignmentCheckFailOpen, TicketNumbers.forLog(ticketNumber), scannerEmail, eventId);
-        return assignmentCheckFailOpen;
     }
 
     /**
@@ -829,10 +791,8 @@ public class TicketScanService {
      *
      * <p>Never throws: any failure to resolve the window — no client bean, a
      * null body from the Feign fallback, a thrown exception — collapses to
-     * UNVERIFIABLE, and the CALLER decides what that means. Keeping the policy
-     * at the call site rather than here is the same shape
-     * {@code assignmentAllowsScan} uses, so the fail-open flag is the single
-     * place either rule's outage behaviour is decided.
+     * UNVERIFIABLE, and the CALLER decides what that means, so the fail-open
+     * flag is the single place the rule's outage behaviour is decided.
      */
     private EventDayRule.Verdict eventDayVerdict(UUID eventId) {
         MarketTimeZone market = marketTimeZoneProvider == null

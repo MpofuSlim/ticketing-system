@@ -51,13 +51,12 @@ import java.util.UUID;
  * {@code scan_attempts}: a lookup redeems nothing, and counting it there would
  * inflate every scan report. The admission itself is audited by the scan.
  *
- * <p><b>No transaction is open during the authorization check.</b> The booking
- * and its tickets are read in a short read-only transaction (one fetch-join, so
- * the detached copy carries every ticket); the team-member assignment question
- * to user-service is asked after it has closed. It used to run inside a
- * method-level read-only transaction, holding a pooled connection for as long
- * as user-service took to answer. Nothing is written here, so there is no
- * lock or idempotency property for the split to weaken.
+ * <p><b>No transaction is open during a remote call.</b> The booking and its
+ * tickets are read in a short read-only transaction (one fetch-join, so the
+ * detached copy carries every ticket). The organizer's check is local and runs
+ * on the detached copy; a super-app scanner's access is asked of event-service
+ * before the read, with no transaction open. Nothing is written here, so there
+ * is no lock or idempotency property for the split to weaken.
  */
 @Service
 @Slf4j
@@ -93,7 +92,7 @@ public class GateLookupService {
 
     /**
      * @param eventId the event the gate is scanning for. Required from a
-     *                super-app scanner, optional for the scanner app; when
+     *                super-app scanner, optional for the organizer; when
      *                given, another event's booking is {@code WRONG_EVENT} and
      *                none of its tickets are listed.
      */
@@ -106,6 +105,8 @@ public class GateLookupService {
         if (TicketScanService.isSuperAppScanner(auth)) {
             return lookupForSuperApp(confirmationNumber, eventId, auth);
         }
+        // The organizer path: anyone else is a 403 before any booking is read.
+        TicketScanService.requireOrganizer(auth);
         String scanner = auth == null ? null : auth.getName();
 
         // Items fetched with the booking: the FOUND answer lists every ticket.
@@ -121,7 +122,7 @@ public class GateLookupService {
                     confirmationNumber, booking.getStatus(), scanner);
             return refusal(GateLookupResponseDTO.Status.BOOKING_NOT_CONFIRMED, confirmationNumber);
         }
-        // May ask user-service — after the read transaction has closed.
+        // The scan's own ownership check, on the detached booking.
         ScanTicketResponseDTO.Status refused =
                 ticketScanService.authorizationRefusal(booking, confirmationNumber);
         if (refused != null) {

@@ -206,14 +206,14 @@ public class BookingItem {
     private LocalDateTime redeemedAt;
 
     /** Stable cross-service identifier of the user who scanned the ticket
-     *  (the team member's or organizer's {@code user_uuid}). Never updated
+     *  (the organizer's or the super-app scanner's {@code user_uuid}). Never updated
      *  after a successful redeem — the audit trail must not change. */
     @Column(name = "redeemed_by_user_uuid")
     private UUID redeemedByUserUuid;
 
     /**
      * Display name of the user who scanned the ticket, captured at redeem
-     * time. Denormalised on purpose — if the team member is later
+     * time. Denormalised on purpose — if the scanner is later
      * soft-disabled or renamed, the rejection-toast on a second scan still
      * shows the name they were known by ("already scanned by Tariro at
      * 19:42"). That contract must survive the user-service lifecycle of

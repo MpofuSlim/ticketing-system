@@ -40,13 +40,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code repository.save(...)} was invoked, but only this end-to-end shape
  * proves the row actually reaches the database after the transaction commits.
  *
- * <p>Why the {@code it} profile: discovery is off and the {@code UserService}
- * Feign client resolves to its fallback (data=null, "service down"). For
- * ORGANIZER scans the assignment check is bypassed entirely; for the
- * NOT_ASSIGNED_TO_EVENT case we authenticate as a TEAM_MEMBER and rely on the
- * service's fail-CLOSED default to convert the "service down" response into a
- * NOT_ASSIGNED outcome — same path as production when user-service is
- * unreachable.
+ * <p>Every scan here is the organizer's own. The sixth outcome is WRONG_EVENT:
+ * the organizer names the event they are scanning for and presents a ticket of
+ * another of their events. (A super-app scanner who is not on the event's team
+ * writes NO row, by design, so NOT_ASSIGNED_TO_EVENT is not among the outcomes
+ * this invariant covers; {@code SuperAppScanTest} pins that.)
  */
 @org.springframework.test.context.TestPropertySource(properties =
         // The six outcomes below predate the event-day rule and are about the
@@ -99,8 +97,9 @@ class TicketScanServiceAuditIT extends PostgresIntegrationTestBase {
         // (3) Booking the OTHER organizer owns — drives WRONG_ORGANIZER when
         //     our organizer scans it.
         BookingItem wrongOrgItem = seedConfirmedItem(otherOrganizer, "TKT-WRONGORG-003");
-        // (4) A separate CONFIRMED booking for the assignment-check case.
-        BookingItem teamMemberItem = seedConfirmedItem(organizerUuid, "TKT-TEAM-004");
+        // (4) A CONFIRMED booking of another of the organizer's events — drives
+        //     WRONG_EVENT when the organizer scans for a different event.
+        BookingItem otherEventItem = seedConfirmedItem(organizerUuid, "TKT-OTHEREVENT-004");
 
         // ALLOWED — organizer scans their own confirmed ticket.
         authenticateAsOrganizer("organizer@example.com", organizerUuid);
@@ -118,11 +117,10 @@ class TicketScanServiceAuditIT extends PostgresIntegrationTestBase {
         // TICKET_NOT_FOUND — bogus number.
         scanService.scan("BOGUS-999", "Rumbi Sibanda");
 
-        // NOT_ASSIGNED_TO_EVENT — TEAM_MEMBER, fail-closed default, user-service
-        // fallback yields "service down" → assignment check applies failOpen=false
-        // (the production default) → NOT_ASSIGNED.
-        authenticateAsTeamMember("tariro@harare-arena.co.zw", organizerUuid);
-        scanService.scan("TKT-TEAM-004", "Tariro Chikomo");
+        // WRONG_EVENT — the organizer scans for one event and is shown a ticket
+        // of another of their events. The row is the scanned-for event's.
+        UUID scanningFor = UUID.randomUUID();
+        scanService.scan("TKT-OTHEREVENT-004", scanningFor, "Rumbi Sibanda");
 
         List<ScanAttempt> rows = scanAttemptRepository.findAll();
         assertThat(rows).as("one row per scan, six scans pumped").hasSize(6);
@@ -135,7 +133,13 @@ class TicketScanServiceAuditIT extends PostgresIntegrationTestBase {
                 Map.entry(ScanAttempt.Outcome.BOOKING_NOT_CONFIRMED, 1L),
                 Map.entry(ScanAttempt.Outcome.WRONG_ORGANIZER, 1L),
                 Map.entry(ScanAttempt.Outcome.TICKET_NOT_FOUND, 1L),
-                Map.entry(ScanAttempt.Outcome.NOT_ASSIGNED_TO_EVENT, 1L));
+                Map.entry(ScanAttempt.Outcome.WRONG_EVENT, 1L));
+
+        ScanAttempt wrongEvent = rows.stream()
+                .filter(r -> r.getOutcome() == ScanAttempt.Outcome.WRONG_EVENT)
+                .findFirst().orElseThrow();
+        assertThat(wrongEvent.getBookingItemId()).isEqualTo(otherEventItem.getId());
+        assertThat(wrongEvent.getEventId()).isEqualTo(scanningFor);
 
         // Bonus: the ALLOWED row should carry the booking/event linkage; the
         // not-found row should not (no item resolved).
@@ -197,14 +201,6 @@ class TicketScanServiceAuditIT extends PostgresIntegrationTestBase {
         // user-service follows when minting an EVENT_ORGANIZER token).
         auth.setDetails(new JwtAuthDetails(email, null, organizerUuid, organizerUuid,
                 "Rumbi", "Sibanda"));
-        SecurityContextHolder.getContext().setAuthentication(auth);
-    }
-
-    private void authenticateAsTeamMember(String email, UUID organizerUuid) {
-        var auth = new UsernamePasswordAuthenticationToken(email, null,
-                List.of(new SimpleGrantedAuthority("ROLE_TEAM_MEMBER")));
-        auth.setDetails(new JwtAuthDetails(email, null, UUID.randomUUID(), organizerUuid,
-                "Tariro", "Chikomo"));
         SecurityContextHolder.getContext().setAuthentication(auth);
     }
 

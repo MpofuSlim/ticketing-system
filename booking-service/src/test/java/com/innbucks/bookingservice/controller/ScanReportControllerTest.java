@@ -61,12 +61,11 @@ class ScanReportControllerTest {
         return auth;
     }
 
-    private static UsernamePasswordAuthenticationToken teamMemberAuth(UUID organizerUuid, UUID userUuid) {
-        var auth = new UsernamePasswordAuthenticationToken(
-                "tariro@harare-arena.co.zw", null,
-                List.of(new SimpleGrantedAuthority("ROLE_TEAM_MEMBER")));
-        auth.setDetails(new JwtAuthDetails("tariro@harare-arena.co.zw", null,
-                userUuid, organizerUuid, "Tariro", "Chikomo"));
+    /** A super-app gate scanner: CUSTOMER only, subject = the phone, no names. */
+    private static UsernamePasswordAuthenticationToken superAppScannerAuth(UUID userUuid) {
+        var auth = new UsernamePasswordAuthenticationToken("+263771234567", null,
+                List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER")));
+        auth.setDetails(new JwtAuthDetails("+263771234567", null, userUuid, null, null, null));
         return auth;
     }
 
@@ -117,8 +116,8 @@ class ScanReportControllerTest {
     }
 
     // --------------------------------------------------------------
-    // /scans/me — happy paths for organizer + team member, security
-    // negative paths (no userUuid, bad range).
+    // /scans/me — happy paths for the organizer and a super-app scanner,
+    // security negative paths (no userUuid, bad range).
     // --------------------------------------------------------------
 
     @Test
@@ -141,8 +140,8 @@ class ScanReportControllerTest {
     }
 
     @Test
-    void myScans_returnsPagedListForTeamMember() {
-        // Same /me path must work for TEAM_MEMBER — they're the primary
+    void myScans_returnsPagedListForASuperAppScanner() {
+        // Same /me path must work for a super-app gate scanner — they're the
         // gate-staff persona.
         ScanReportService svc = mock(ScanReportService.class);
         UUID userUuid = UUID.randomUUID();
@@ -152,7 +151,7 @@ class ScanReportControllerTest {
         when(svc.listMyScans(eq(userUuid), any(), any(), anyInt(), anyInt())).thenReturn(page);
 
         ResponseEntity<ApiResult<PageResponse<ScanAttemptDTO>>> resp =
-                controller(svc, null).myScans(teamMemberAuth(UUID.randomUUID(), userUuid),
+                controller(svc, null).myScans(superAppScannerAuth(userUuid),
                         from, to, 0, 20, null);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
@@ -166,7 +165,7 @@ class ScanReportControllerTest {
     }
 
     @Test
-    void myScans_aSuperAppScanner_getsNoBookingId_theTeamKeepsIt() {
+    void myScans_aSuperAppScanner_getsNoBookingId_theOrganizerKeepsIt() {
         // A super-app scanner is anyone whose number an organizer added; a
         // booking id names every ticket of a booking, another event's included.
         ScanReportService svc = mock(ScanReportService.class);
@@ -176,20 +175,16 @@ class ScanReportControllerTest {
         ScanAttemptDTO stored = row(bookingId);
         when(svc.listMyScansAtEvent(eq(userUuid), eq(eventId), any(), any(), anyInt(), anyInt()))
                 .thenReturn(new PageResponse<>(List.of(stored), 0, 20, 1L, 1));
-        var customer = new UsernamePasswordAuthenticationToken("+263771234567", null,
-                List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER")));
-        customer.setDetails(new JwtAuthDetails("+263771234567", null, userUuid, null, null, null));
-
         PageResponse<ScanAttemptDTO> superApp = controller(svc, null)
-                .myScans(customer, null, null, 0, 20, eventId).getBody().getData();
-        PageResponse<ScanAttemptDTO> team = controller(svc, null)
-                .myScans(teamMemberAuth(UUID.randomUUID(), userUuid), null, null, 0, 20, eventId).getBody().getData();
+                .myScans(superAppScannerAuth(userUuid), null, null, 0, 20, eventId).getBody().getData();
+        PageResponse<ScanAttemptDTO> organizer = controller(svc, null)
+                .myScans(organizerAuth(UUID.randomUUID(), userUuid), null, null, 0, 20, eventId).getBody().getData();
 
         ScanAttemptDTO seen = superApp.content().get(0);
         assertThat(seen.bookingId()).isNull();
         assertThat(seen).usingRecursiveComparison().ignoringFields("bookingId").isEqualTo(stored);
         assertThat(superApp.totalElements()).isEqualTo(1L);
-        assertThat(team.content().get(0).bookingId()).isEqualTo(bookingId);
+        assertThat(organizer.content().get(0).bookingId()).isEqualTo(bookingId);
     }
 
     @Test
@@ -242,13 +237,13 @@ class ScanReportControllerTest {
         UUID userUuid = UUID.randomUUID();
         Instant from = Instant.parse("2026-06-01T00:00:00Z");
         Instant to = Instant.parse("2026-06-30T23:59:59Z");
-        ScannerStatsDTO dto = new ScannerStatsDTO(userUuid, "tariro@harare-arena.co.zw",
-                "Tariro Chikomo", zw(from), zw(to), 0L, emptyOutcomes());
-        when(svc.myStats(eq(userUuid), eq("tariro@harare-arena.co.zw"),
-                eq("Tariro Chikomo"), eq(from), eq(widened(to)))).thenReturn(dto);
+        ScannerStatsDTO dto = new ScannerStatsDTO(userUuid, "organizer@example.com",
+                "Rumbi Sibanda", zw(from), zw(to), 0L, emptyOutcomes());
+        when(svc.myStats(eq(userUuid), eq("organizer@example.com"),
+                eq("Rumbi Sibanda"), eq(from), eq(widened(to)))).thenReturn(dto);
 
         ResponseEntity<ApiResult<ScannerStatsDTO>> resp = controller(svc, null)
-                .myStats(teamMemberAuth(UUID.randomUUID(), userUuid), from, to, null);
+                .myStats(organizerAuth(UUID.randomUUID(), userUuid), from, to, null);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(resp.getBody()).isNotNull();

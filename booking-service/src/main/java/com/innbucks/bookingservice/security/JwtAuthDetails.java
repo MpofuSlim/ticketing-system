@@ -12,7 +12,7 @@ import java.util.UUID;
  * null to fall back to the legacy email-based code path.
  *
  * <p>{@code firstName} / {@code lastName} are nullable too: emitted only for
- * CUSTOMER, TEAM_MEMBER and EVENT_ORGANIZER tokens (see user-service JwtUtil).
+ * CUSTOMER and EVENT_ORGANIZER tokens (see user-service JwtUtil).
  * The scan boundary uses them to render a human display name on the rejection
  * toast; consumers fall back to {@code email} when absent.
  */

@@ -3,15 +3,14 @@ package com.innbucks.bookingservice.service;
 import com.innbucks.bookingservice.client.EmailNotificationClient;
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SmsNotificationClient;
-import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.GateLookupResponseDTO;
-import com.innbucks.bookingservice.dto.ScanAccessDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
+import com.innbucks.bookingservice.dto.ScannerAccessDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
@@ -54,7 +53,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * End to end on real Postgres: the ticket scan, the gate lookup and the
- * SUPER_ADMIN reversal make their user-service / event-service calls with no
+ * SUPER_ADMIN reversal make their event-service calls with no
  * transaction open and no pooled connection bound to the calling thread — and
  * keep exactly the guarantees they had when one was.
  *
@@ -75,7 +74,6 @@ import static org.mockito.Mockito.when;
 })
 class RemoteCallsOutsideTransactionsPostgresIT extends PostgresIntegrationTestBase {
 
-    @MockitoBean private UserServiceClient userServiceClient;
     @MockitoBean private EventServiceClient eventServiceClient;
     @MockitoBean private WhatsAppNotificationClient whatsApp;
     @MockitoBean private EmailNotificationClient email;
@@ -94,7 +92,8 @@ class RemoteCallsOutsideTransactionsPostgresIT extends PostgresIntegrationTestBa
 
     private TransactionTemplate tx;
     private final UUID organizer = UUID.randomUUID();
-    private final UUID teamMember = UUID.randomUUID();
+    /** A super-app gate scanner's account (its organizer comes from event-service). */
+    private final UUID superAppScanner = UUID.randomUUID();
     /** One line per remote call: "what|txActive|resourcesBound". */
     private final Queue<String> calls = new ConcurrentLinkedQueue<>();
     /** One entry per lock probe made from another connection during a call. */
@@ -121,26 +120,21 @@ class RemoteCallsOutsideTransactionsPostgresIT extends PostgresIntegrationTestBa
     // ---- scan ------------------------------------------------------------------
 
     @Test
-    void teamMemberScan_asksBothServicesWithNoConnectionHeld_thenClaimsAndAuditsTogether() {
+    void organizerScan_asksEventServiceWithNoConnectionHeld_thenClaimsAndAuditsTogether() {
         Seeded s = seedConfirmed();
-        when(userServiceClient.canScanEvent(eq(teamMember), eq(s.eventId), eq(internalToken))).thenAnswer(inv -> {
-            record("user-service");
-            probeItemLock(s.ticketNumber);
-            return allowed(true);
-        });
         when(eventServiceClient.getEventInternal(eq(s.eventId), eq(internalToken))).thenAnswer(inv -> {
             record("event-service");
             probeItemLock(s.ticketNumber);
             return onToday(s.eventId);
         });
-        authenticateAsTeamMember();
+        authenticateAsOrganizer();
 
         ScanTicketResponseDTO result = ticketScanService.scan(s.ticketNumber, "Tariro");
 
         assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
         assertThat(result.getHolderName()).isEqualTo("Rufaro Moyo");
-        assertAllCallsOffTransaction(2);
-        assertThat(lockedDuringCall).containsExactly(true, true);
+        assertAllCallsOffTransaction(1);
+        assertThat(lockedDuringCall).containsExactly(true);
         // The claim and its audit row committed together.
         assertThat(jdbc.queryForObject("SELECT redeemed_by_name FROM booking_items WHERE ticket_number = ?",
                 String.class, s.ticketNumber)).isEqualTo("Tariro");
@@ -155,19 +149,44 @@ class RemoteCallsOutsideTransactionsPostgresIT extends PostgresIntegrationTestBa
     }
 
     @Test
-    void scanRefusedByTheAssignmentCheck_commitsItsAuditRow_andRedeemsNothing() {
+    void superAppScan_asksEventServiceWithNoConnectionHeld_thenClaimsAndAuditsTogether() {
         Seeded s = seedConfirmed();
-        when(userServiceClient.canScanEvent(any(), any(), anyString())).thenAnswer(inv -> {
-            record("user-service");
-            return allowed(false);
+        when(eventServiceClient.scannerAccess(eq(superAppScanner), eq(s.eventId), eq(internalToken)))
+                .thenAnswer(inv -> {
+                    record("scanner-access");
+                    probeItemLock(s.ticketNumber);
+                    return onTheTeam();
+                });
+        when(eventServiceClient.getEventInternal(eq(s.eventId), eq(internalToken))).thenAnswer(inv -> {
+            record("event-service");
+            probeItemLock(s.ticketNumber);
+            return onToday(s.eventId);
         });
-        authenticateAsTeamMember();
+        authenticateAsSuperAppScanner();
+
+        ScanTicketResponseDTO result = ticketScanService.scan(s.ticketNumber, s.eventId, null);
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+        assertThat(result.getRedeemedByName()).isEqualTo("Rudo Sibanda");
+        assertAllCallsOffTransaction(2);
+        assertThat(lockedDuringCall).containsExactly(true, true);
+        assertThat(outcomes(s.ticketNumber)).containsExactly("ALLOWED");
+    }
+
+    @Test
+    void scanRefusedByTheEventDayRule_commitsItsAuditRow_andRedeemsNothing() {
+        Seeded s = seedConfirmed();
+        when(eventServiceClient.getEventInternal(any(), anyString())).thenAnswer(inv -> {
+            record("event-service");
+            return lastWeek(s.eventId);
+        });
+        authenticateAsOrganizer();
 
         ScanTicketResponseDTO result = ticketScanService.scan(s.ticketNumber, "Tariro");
 
-        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT);
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.WRONG_EVENT_DAY);
         assertAllCallsOffTransaction(1);
-        assertThat(outcomes(s.ticketNumber)).containsExactly("NOT_ASSIGNED_TO_EVENT");
+        assertThat(outcomes(s.ticketNumber)).containsExactly("WRONG_EVENT_DAY");
         assertThat(jdbc.queryForObject("SELECT redeemed_at IS NULL FROM booking_items WHERE ticket_number = ?",
                 Boolean.class, s.ticketNumber)).isTrue();
     }
@@ -175,15 +194,15 @@ class RemoteCallsOutsideTransactionsPostgresIT extends PostgresIntegrationTestBa
     // ---- gate lookup -------------------------------------------------------
 
     @Test
-    void gateLookup_asksUserServiceWithNoConnectionHeld() {
+    void superAppGateLookup_asksEventServiceWithNoConnectionHeld() {
         Seeded s = seedConfirmed();
-        when(userServiceClient.canScanEvent(eq(teamMember), eq(s.eventId), anyString())).thenAnswer(inv -> {
-            record("user-service");
-            return allowed(true);
+        when(eventServiceClient.scannerAccess(eq(superAppScanner), eq(s.eventId), anyString())).thenAnswer(inv -> {
+            record("scanner-access");
+            return onTheTeam();
         });
-        authenticateAsTeamMember();
+        authenticateAsSuperAppScanner();
 
-        GateLookupResponseDTO result = gateLookupService.lookup(s.confirmationNumber);
+        GateLookupResponseDTO result = gateLookupService.lookup(s.confirmationNumber, s.eventId);
 
         assertThat(result.getStatus()).isEqualTo(GateLookupResponseDTO.Status.FOUND);
         assertThat(result.getTickets()).singleElement()
@@ -280,17 +299,25 @@ class RemoteCallsOutsideTransactionsPostgresIT extends PostgresIntegrationTestBa
                 String.class, ticketNumber);
     }
 
-    private void authenticateAsTeamMember() {
+    private void authenticateAsOrganizer() {
         var auth = new UsernamePasswordAuthenticationToken("tariro@harare-arena.co.zw", null,
-                List.of(new SimpleGrantedAuthority("ROLE_TEAM_MEMBER")));
-        auth.setDetails(new JwtAuthDetails("tariro@harare-arena.co.zw", null, teamMember,
+                List.of(new SimpleGrantedAuthority("ROLE_EVENT_ORGANIZER")));
+        auth.setDetails(new JwtAuthDetails("tariro@harare-arena.co.zw", null, organizer,
                 organizer, "Tariro", "Chikomo"));
         SecurityContextHolder.getContext().setAuthentication(auth);
     }
 
-    private static ApiResult<ScanAccessDTO> allowed(boolean allowed) {
-        return ApiResult.<ScanAccessDTO>builder().code("200").message("ok")
-                .data(ScanAccessDTO.builder().allowed(allowed).build()).build();
+    /** The super-app session: CUSTOMER only, no organizer claim, no names. */
+    private void authenticateAsSuperAppScanner() {
+        var auth = new UsernamePasswordAuthenticationToken("+263772000111", null,
+                List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER")));
+        auth.setDetails(new JwtAuthDetails(null, "+263772000111", superAppScanner, null, null, null));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    private ApiResult<ScannerAccessDTO> onTheTeam() {
+        return ApiResult.ok("ok", ScannerAccessDTO.builder().allowed(true).scannerId(UUID.randomUUID())
+                .organizerUuid(organizer).displayName("Rudo Sibanda").build());
     }
 
     private static ApiResult<EventLookupDTO> onToday(UUID eventId) {
@@ -299,6 +326,15 @@ class RemoteCallsOutsideTransactionsPostgresIT extends PostgresIntegrationTestBa
                 .eventId(eventId)
                 .startDateTime(now.minusHours(1))
                 .endDateTime(now.plusHours(2))
+                .build());
+    }
+
+    private static ApiResult<EventLookupDTO> lastWeek(UUID eventId) {
+        LocalDateTime then = LocalDateTime.now(ZoneOffset.UTC).minusDays(7);
+        return ApiResult.ok("ok", EventLookupDTO.builder()
+                .eventId(eventId)
+                .startDateTime(then)
+                .endDateTime(then.plusHours(2))
                 .build());
     }
 
