@@ -240,10 +240,25 @@ public class StaffPolicyException extends RuntimeException {
     public static final String USE_STAFF_INVITE = "use_staff_invite";
     public static final String USE_STAFF_INVITE_MESSAGE = "Staff set passwords through an invite.";
     public static final String USE_STAFF_ENDPOINTS = "use_staff_endpoints";
+    /** {@code errorCode}: team-member creation is switched off; add the person as a scanner. */
+    public static final String USE_SCANNER_INVITE = "use_scanner_invite";
+    public static final String USE_SCANNER_INVITE_MESSAGE =
+            "Team members can no longer be created. Add the person as a scanner with their phone number: "
+            + "they accept in the InnBucks app and scan from there.";
     public static final String USE_STAFF_ENDPOINTS_MESSAGE =
             "Reactivate staff with POST /admin/staff/{id}/reactivate.";
     public static final String INVITE_RESEND_LIMITED = "invite_resend_limited";
     public static final String STAFF_CREATE_LIMITED = "staff_create_limited";
+
+    /**
+     * 410 {@code use_scanner_invite}: creating a team member is switched off
+     * ({@code app.team-members.create-enabled}). {@code data.scannerPath} names
+     * the endpoint that replaces it.
+     */
+    public static StaffPolicyException useScannerInvite() {
+        return new StaffPolicyException(HttpStatus.GONE, USE_SCANNER_INVITE, USE_SCANNER_INVITE_MESSAGE,
+                Map.of("scannerPath", "/event-organizer/scanners"));
+    }
 
     public static StaffPolicyException staffDomainsUnconfigured() {
         return new StaffPolicyException(HttpStatus.SERVICE_UNAVAILABLE, STAFF_DOMAINS_UNCONFIGURED,

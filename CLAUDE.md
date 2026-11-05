@@ -1080,10 +1080,18 @@ refused, and an account created first made `/auth/exchange` refuse the number
   gateway's `event-organizer-scanners-route` sends `/event-organizer/scanners/**`
   to event-service, ahead of user-service's `/event-organizer/**`
   (`GatewayRouteTableTest`).
-- **The shared-device login stays (owner decision, 2026-10-30).**
-  `/event-organizer/team-members` (an account plus a temporary password, for
-  the scanner app on venue phones) is unchanged. Venues that hand phones around
-  can't use a personal wallet to scan.
+- **Gate staff scan from the InnBucks app only; new team members are switched
+  off (owner decision, 2026-11-05, replacing the 2026-10-30 one that kept
+  them).** The organizer is the only person who signs in to the portal, and
+  their job there is to add scanners and assign them. `POST
+  /event-organizer/team-members` answers `410 use_scanner_invite`
+  (`data.scannerPath: /event-organizer/scanners`) before it reads anything,
+  while `app.team-members.create-enabled` (`TEAM_MEMBERS_CREATE_ENABLED`) is
+  false, the default. No team members existed when it was switched off, so
+  nothing was moved. The rest of `/event-organizer/team-members/**` and the
+  scanner-app login are untouched, and setting the key to true is the
+  rollback. Retiring them (the endpoints, `TEAM_MEMBER`, the 2FA exemption
+  below) is its own change.
 - **A number is never on two events whose times overlap, under any organizer
   (owner decision, 2026-10-30).** Organizers may run overlapping events; one
   scanner may not be at both, even two of the same organizer's.
@@ -1119,9 +1127,7 @@ refused, and an account created first made `/auth/exchange` refuse the number
   event-internal-deny). It returns allowed only for an accepted, switched-on
   scanner assigned to the event, on that event's organizer's team. It is read
   live, so a removal bites at the next scan.
-- **Still to come:** booking-service scanning with a super-app token (eventId
-  required, `WRONG_EVENT`, the organizer-typed name as the scanner's name), and
-  moving a legacy `TEAM_MEMBER` onto a scanner.
+- **Scanning with a super-app token** is booking-service V30 (below).
 
 ## Deactivation ends sessions at once; `token_version` is written atomically (user-service, V42)
 

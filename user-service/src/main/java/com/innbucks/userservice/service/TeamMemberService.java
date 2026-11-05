@@ -5,6 +5,7 @@ import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.TeamMemberEventAssignment;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.CredentialDeliveryRequested;
+import com.innbucks.userservice.exception.StaffPolicyException;
 import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthenticatedCaller;
@@ -82,10 +83,30 @@ public class TeamMemberService {
     @Value(BootstrapAdminEmail.PROPERTY)
     private String bootstrapAdminEmail = BootstrapAdminEmail.DEFAULT_ADDRESS;
 
+    /**
+     * Whether an organizer may still create a team member (a new account with
+     * an email and a temporary password, for the gate scanner app). Off by
+     * default (owner decision, 2026-11-05): gate staff scan in the InnBucks app
+     * as event-service scanners, added by phone number at
+     * {@code /event-organizer/scanners}, so the person keeps their own account
+     * and may work for several organizers. Existing team members keep working;
+     * only creation stops. {@code TEAM_MEMBERS_CREATE_ENABLED=true} turns it
+     * back on.
+     */
+    @Value("${app.team-members.create-enabled:false}")
+    private boolean createEnabled = false;
+
     @Transactional
     public UserResponseDTO createTeamMember(CreateTeamMemberDTO req) {
         UUID organizerUuid = resolveOwningOrganizer(req.getOrganizerUuid());
         User caller = currentUser();
+        if (!createEnabled) {
+            // Checked before anything about the request is read, so every
+            // refusal is the same answer whatever email or phone was sent.
+            log.info("Refused TEAM_MEMBER creation (creation is switched off) organizerUuid={} by={}",
+                    organizerUuid, caller.getEmail());
+            throw StaffPolicyException.useScannerInvite();
+        }
 
         // An InnBucks STAFF address is never a team member (V44): the temporary
         // password goes to the organizer. FIRST — before the bootstrap-admin and

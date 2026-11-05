@@ -62,7 +62,9 @@ public class TeamMemberController {
                           "user_uuid. The new user is created with a randomly-generated one-time " +
                           "temporary password, delivered to them over email/SMS — they must rotate " +
                           "it via POST /auth/change-password on first login. " +
-                          "Requires **EVENT_ORGANIZER** role."
+                          "Requires **EVENT_ORGANIZER** role. **Switched off by default** " +
+                          "(`TEAM_MEMBERS_CREATE_ENABLED`): answers 410 `use_scanner_invite`; add gate " +
+                          "staff as scanners with `POST /event-organizer/scanners` instead."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -115,6 +117,19 @@ public class TeamMemberController {
                                       "code": "403 FORBIDDEN",
                                       "message": "Only EVENT_ORGANIZER may manage team members",
                                       "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "410",
+                    description = "Creating team members is switched off (the default, "
+                            + "`TEAM_MEMBERS_CREATE_ENABLED`). Add the person as a scanner instead: "
+                            + "`POST /event-organizer/scanners` with their phone number.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "410 GONE",
+                                      "message": "Team members can no longer be created. Add the person as a scanner with their phone number: they accept in the InnBucks app and scan from there.",
+                                      "data": { "errorCode": "use_scanner_invite", "scannerPath": "/event-organizer/scanners" }
                                     }
                                     """)))
     })
