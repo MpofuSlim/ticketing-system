@@ -7,10 +7,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import java.util.Set;
-
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -18,20 +15,17 @@ import static org.mockito.Mockito.when;
  * Belonging to an organization is business authority (V39), so it requires
  * the second factor exactly as a staff role does.
  *
- * <p>Without this, two account shapes would carry an organization's authority
- * — its listings, and in step 2 its payout destination — on a session that
- * never passed 2FA: a plain CUSTOMER added to a business, and a gate operator
- * added to one. Both fail CLOSED here.
+ * <p>Without this, a plain CUSTOMER added to a business would carry its
+ * authority (its listings, and its payout destination) on a session that never
+ * passed 2FA. It fails CLOSED here.
  */
 class MfaPolicyOrganizationTest {
 
-    private final PermissionResolver permissions = mock(PermissionResolver.class);
     private final OrganizationMemberRepository members = mock(OrganizationMemberRepository.class);
-    private final MfaPolicy policy = new MfaPolicy(permissions);
+    private final MfaPolicy policy = new MfaPolicy();
 
     @BeforeEach
     void setUp() {
-        when(permissions.resolve(any())).thenReturn(Set.of());
         ReflectionTestUtils.setField(policy, "organizationMembers", members);
     }
 
@@ -56,26 +50,6 @@ class MfaPolicyOrganizationTest {
         when(members.existsByUserId(2L)).thenReturn(false);
 
         assertThat(policy.required(shopper, AuthChannel.WEB)).isFalse();
-    }
-
-    @Test
-    @DisplayName("a gate operator who joins a business loses the exemption")
-    void gateOperatorMemberLosesExemption() {
-        User gate = account(3, User.Role.TEAM_MEMBER);
-        when(members.existsByUserId(3L)).thenReturn(true);
-
-        assertThat(policy.gateOperatorExempt(gate)).isFalse();
-        assertThat(policy.required(gate, AuthChannel.WEB)).isTrue();
-    }
-
-    @Test
-    @DisplayName("a gate operator who belongs to no business keeps the exemption")
-    void gateOperatorWithoutMembershipKeepsExemption() {
-        User gate = account(4, User.Role.TEAM_MEMBER);
-        when(members.existsByUserId(4L)).thenReturn(false);
-
-        assertThat(policy.gateOperatorExempt(gate)).isTrue();
-        assertThat(policy.required(gate, AuthChannel.WEB)).isFalse();
     }
 
     @Test

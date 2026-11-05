@@ -25,7 +25,6 @@ class PermissionCatalogScopeTest {
 
     /** The split as the design fixes it. A new code must be added here deliberately. */
     private static final Set<String> TENANT = Set.of(
-            "team-members:read", "team-members:write", "team-members:manage",
             "shop-admins:write", "shop-users:write", "shop-staff:read",
             "shop-staff:merchant:read", "shop-staff:password:reset");
 

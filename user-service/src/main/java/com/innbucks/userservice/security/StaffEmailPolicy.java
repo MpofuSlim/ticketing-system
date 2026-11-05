@@ -47,7 +47,7 @@ import java.util.regex.Pattern;
  * damage.
  *
  * <p>{@link #isReserved} is a different, broader question: may this address be
- * written by a NON-staff path (registration, tier-2, shop staff, team members,
+ * written by a NON-staff path (registration, tier-2, shop staff,
  * first approval)? Anything on a staff domain or a subdomain of one is reserved,
  * so {@code POST /admin/staff} is the only path that ever writes an on-domain
  * address.

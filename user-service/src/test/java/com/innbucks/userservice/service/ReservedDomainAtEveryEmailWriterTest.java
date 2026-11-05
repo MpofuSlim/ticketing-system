@@ -2,7 +2,6 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
-import com.innbucks.userservice.dto.CreateTeamMemberDTO;
 import com.innbucks.userservice.dto.CustomerTier2RegisterDTO;
 import com.innbucks.userservice.entity.OrganizationMember;
 import com.innbucks.userservice.entity.User;
@@ -14,7 +13,6 @@ import com.innbucks.userservice.repository.OrganizationRepository;
 import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.RoleRepository;
 import com.innbucks.userservice.repository.StaffProfileRepository;
-import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthDetailsKeys;
 import com.innbucks.userservice.security.NationalIdHasher;
@@ -54,7 +52,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * A staff address is never written by any path but {@code POST /admin/staff}
- * (V44 §2.4): register, tier-2, shop-staff create, team-member create and the
+ * (V44 §2.4): register, tier-2, shop-staff create and the
  * FIRST approval of a registration all refuse it with 400
  * {@code email_domain_reserved}, and each does so BEFORE its duplicate-email
  * check, so none of them tells a caller which staff addresses exist. Register's
@@ -173,35 +171,6 @@ class ReservedDomainAtEveryEmailWriterTest {
                 com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
         dto.setEmail(com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
         assertReserved(() -> service.createShopAdmin(dto));
-        verify(users, never()).existsByEmailIgnoreCase(anyString());
-        verify(users, never()).save(any(User.class));
-    }
-
-    @Test
-    @DisplayName("team-member create: refused before the duplicate check")
-    void teamMember() {
-        TeamMemberService service = new TeamMemberService(users, mock(TeamMemberEventAssignmentRepository.class),
-                mock(PasswordEncoder.class), mock(ApplicationEventPublisher.class), mock(AccountSessionRevoker.class),
-                eligibility);
-        ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
-        ReflectionTestUtils.setField(service, "createEnabled", true);
-        ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
-                com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
-        User organizer = User.builder().id(7L).userUuid(UUID.randomUUID()).email("olive@harare-arena.co.zw")
-                .roles(User.roleNames(User.Role.EVENT_ORGANIZER)).active(true).build();
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken(organizer.getEmail(), null));
-        when(users.findByEmail(organizer.getEmail())).thenReturn(Optional.of(organizer));
-        when(users.existsByEmailIgnoreCase(anyString())).thenReturn(true);
-
-        CreateTeamMemberDTO dto = new CreateTeamMemberDTO();
-        dto.setFirstName("Tariro");
-        dto.setLastName("Moyo");
-        dto.setEmail("Tariro.Moyo@InnBucks.co.ke");
-        dto.setPhoneNumber("+263773456789");
-        assertReserved(() -> service.createTeamMember(dto));
-        dto.setEmail(com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
-        assertReserved(() -> service.createTeamMember(dto));
         verify(users, never()).existsByEmailIgnoreCase(anyString());
         verify(users, never()).save(any(User.class));
     }

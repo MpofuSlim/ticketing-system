@@ -26,9 +26,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * A business built-in never becomes a staff role (V44): registration +
- * approval, shop-staff and team-member create and the customer sign-ups hand
- * EVENT_ORGANIZER / MERCHANT_ADMIN / SHOP_ADMIN / SHOP_USER / TEAM_MEMBER /
- * CUSTOMER out with no staff-eligibility check, so a PLATFORM code on one would
+ * approval, shop-staff create and the customer sign-ups hand
+ * EVENT_ORGANIZER / MERCHANT_ADMIN / SHOP_ADMIN / SHOP_USER / CUSTOMER out with no staff-eligibility check, so a PLATFORM code on one would
  * reach every account those paths create. Refused whoever asks — SUPER_ADMIN
  * included — with 400 {@code permission_not_assignable}, reason
  * {@code business_role}. TENANT codes and removals are unaffected.
@@ -38,7 +37,7 @@ class BusinessRoleNeverStaffTest {
     private final StaffDispatchHarness h = new StaffDispatchHarness();
 
     @ParameterizedTest
-    @ValueSource(strings = {"EVENT_ORGANIZER", "MERCHANT_ADMIN", "SHOP_ADMIN", "SHOP_USER", "TEAM_MEMBER", "CUSTOMER"})
+    @ValueSource(strings = {"EVENT_ORGANIZER", "MERCHANT_ADMIN", "SHOP_ADMIN", "SHOP_USER", "CUSTOMER"})
     @DisplayName("adding a PLATFORM code to a business built-in: 400 business_role, even for SUPER_ADMIN")
     void platformCodeRefused(String role) throws Exception {
         List<String> before = List.copyOf(h.roleRows.get(role).getPermissions());
@@ -62,7 +61,7 @@ class BusinessRoleNeverStaffTest {
         List<String> before = List.copyOf(h.roleRows.get("MERCHANT_ADMIN").getPermissions());
         h.mvc.perform(put("/admin/roles/MERCHANT_ADMIN/permissions").principal(as(OWNER))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"permissions\":[\"" + String.join("\",\"", before) + "\",\"team-members:read\"]}"))
+                        .content("{\"permissions\":[\"" + String.join("\",\"", before) + "\",\"shop-users:write\"]}"))
                 .andExpect(status().isOk());
     }
 

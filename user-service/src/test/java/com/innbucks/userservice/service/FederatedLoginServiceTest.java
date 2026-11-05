@@ -236,10 +236,9 @@ class FederatedLoginServiceTest {
 
     @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
     @org.junit.jupiter.params.provider.EnumSource(value = User.Role.class,
-            names = {"TEAM_MEMBER", "SHOP_USER", "SHOP_ADMIN", "PRODUCT_MANAGER", "CALL_CENTER_AGENT"})
+            names = {"SHOP_USER", "SHOP_ADMIN", "PRODUCT_MANAGER", "CALL_CENTER_AGENT"})
     void anyOtherNonCustomerAccount_isStillRefused_andGainsNothing(User.Role role) {
-        // Gate team members (one more role would end their 2FA exemption), shop
-        // staff, and anything holding a staff role stay refused.
+        // Shop staff, and anything holding a staff role, stay refused.
         User account = User.builder().id(9L).userUuid(UUID.randomUUID()).phoneNumber(PHONE)
                 .roles(User.roleNames(User.Role.EVENT_ORGANIZER, role)).active(true).approved(true)
                 .password("x").build();

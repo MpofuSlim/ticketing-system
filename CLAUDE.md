@@ -802,11 +802,11 @@ Other load-bearing details:
   service at a time.
 - **Only user-service's own checks are migrated.** booking/event/seat still use
   `hasRole`, so a custom role grants nothing there yet. Worse and more subtle:
-  `ShopStaffService` and `TeamMemberService` keep **service-layer** built-in-role
-  guards, so a custom role holding `shop-admins:write` or `team-members:write`
-  passes `@PreAuthorize` and is then refused inside the service. Those handlers
-  derive the caller's merchant/shop scope from the role, so making them
-  role-agnostic is a design change, not a rename. Both sites carry a NOTE.
+  `ShopStaffService` keeps **service-layer** built-in-role guards, so a custom
+  role holding `shop-admins:write` passes `@PreAuthorize` and is then refused
+  inside the service. Those handlers derive the caller's merchant/shop scope
+  from the role, so making them role-agnostic is a design change, not a rename.
+  The site carries a NOTE.
 - Deleting a role any account still holds is refused (409), and built-ins can
   never be deleted or renamed — code references them by literal name, so a
   rename would stop matching silently rather than fail loudly. Their permissions
@@ -838,7 +838,7 @@ permission, where "holds everything it holds" would be vacuously true.
 - **Scope is code.** `PLATFORM` = acts across every business (`users:*`,
   `roles:*`, `service-requests:*`, `organizations:read`, `device-security:*`, and
   every future `staff:*` / `support-*`); `TENANT` = inside the caller's own
-  business (`team-members:*`, `shop-*`). **A code the catalog does not define
+  business (`shop-*`). **A code the catalog does not define
   classifies as PLATFORM** (fails closed) — a stale `role_permissions` row can
   never be what lets a role out of the staff rules. `PermissionCatalogScopeTest`.
 - **Codes reserved to the wildcard** (`PermissionCatalog.WILDCARD_RESERVED`):
@@ -1025,51 +1025,57 @@ except promote or demote.
   (`StaffMintFilterTest.deputySuperAdminExempt`). `AdminUserOrder` lists every
   SUPER_ADMIN holder first. Pinned end to end by `SuperAdminDeputiesDispatchTest`.
 
-## The gate-operator 2FA exemption, and the refresh hole it left open
+## Team members are retired: gate staff are scanners (user-service V55)
 
-`MfaPolicy.gateOperatorExempt` — gate staff scanning tickets on a shared
-handset are never challenged for a second factor. The policy itself is
-documented at length in the class javadoc; the two things worth repeating
-here are the shape of the key and the hole it opened one level up:
+**Owner's decision (2026-11-05): an organizer's "team members" are gone.** They
+were `TEAM_MEMBER` accounts (an email, a temporary password, a shared-device
+scanner app), treated as system users with their own 2FA carve-out. Gate staff
+now do exactly the same job (scan, look a booking up, read their own scans)
+as super-app scanners (next section): a phone number and a name the organizer
+adds in the portal, no account, no email, no 2FA. The organizer is the only
+person who signs in to the portal.
 
-- **The exemption is keyed on exact set equality `{TEAM_MEMBER}` AND on the
-  account resolving to ZERO permissions** — not on "holds TEAM_MEMBER". Both
-  halves are load-bearing: containment would invert `isSystemUser` into a
-  fleet-wide opt-out (reachable via a service-request approval or the
-  bootstrap-admin role merge), and the permission check is what stops a
-  runtime `PUT /admin/roles/TEAM_MEMBER/permissions` grant from silently
-  minting a privileged-and-exempt account. It fails CLOSED: give gate staff
-  real authority and they stop being exempt, automatically.
-- **It ignores `mfaEnabled` on purpose.** TEAM_MEMBER used to be a system
-  user, so existing gate staff carry a force-enrolled secret; honouring the
-  flag would have applied the carve-out only to accounts created after it
-  shipped. The secret is retained, not cleared, so it starts being honoured
-  again the moment the account holds any other role. **This is why no
-  data migration was needed** — don't add one.
-- **The refresh guard exists because the exemption is evaluated at LOGIN
-  only.** `UserAdminService.setRoles` bumps `tokenVersion`, which kills the
-  access token but does NOT revoke the refresh row — and `/auth/refresh`
-  re-reads the LIVE user, so a gate operator widened to a privileged role
-  could otherwise mint privileged access tokens for the life of the refresh
-  chain, having never passed a second factor. `AuthService.refresh` refuses
-  that shape: **403 `mfa_enrollment_required`**, audit
-  `AUTH_REFRESH_MFA_REQUIRED`, family NOT revoked (the token is genuine, not
-  stolen — the FE routes to a full login, which lands on forced enrolment).
-  The same guard closes a pre-existing dodge of `MfaService.adminReset`'s
-  documented "must re-enrol on next login": a live session could previously
-  ride refresh straight past it.
-  (The class javadoc's aside that "role mutation does not bump
-  `tokenVersion`" is inaccurate — it does, in `UserAdminService.setRoles`. The
-  hole it describes is real regardless, because the refresh ROW survives.)
+- **Deleted:** `/event-organizer/team-members/**` (now a tombstone,
+  `RetiredTeamMembersController`, answering `410 use_scanner_invite` with
+  `data.scannerPath` for any signed-in caller and any method), the internal
+  `/users/internal/team-members/**` (booking's can-scan and event's
+  assigned-events lookups, removed in those services in the same change),
+  `TeamMemberService`, the `User.Role.TEAM_MEMBER` constant, the
+  `MfaPolicy.gateOperatorExempt` carve-out, the `organizerUuid` claim for team
+  members, `team-members:*` from `PermissionCatalog`, and every `TEAM_MEMBER`
+  branch in booking-service and event-service.
+- **V55** refuses to run while any account holds `TEAM_MEMBER` (none did), then
+  deletes the three `team-members:*` permissions (the FK cascade takes every
+  grant: they were `EVENT_ORGANIZER`'s only codes, so organizers now mint
+  `permissions: []`) and the `TEAM_MEMBER` roles row. A code removed from the
+  catalog MUST leave `role_permissions` in a migration: an undefined code
+  classifies as PLATFORM and would make `EVENT_ORGANIZER` a staff role.
+- **Kept as history:** `team_member_event_assignment`,
+  `users.created_by_organizer_uuid` (an `ON DELETE RESTRICT` FK, which is why
+  registration rejection still answers `team_members`), and audit rows of type
+  `TEAM_MEMBER_DISABLED` (the type is text).
+- **`TEAM_MEMBER` is now an unknown role.** `setRoles` refuses it like any
+  name not in `roles`; a stray string on a restored row is an ordinary system
+  role for `MfaPolicy` (no exemption for anyone). Don't bring the role or a
+  role-name 2FA carve-out back.
+- **The refresh MFA guard stays.** `UserAdminService.setRoles` bumps
+  `tokenVersion` but does not revoke the refresh row, and `/auth/refresh`
+  re-reads the LIVE user, so an account with no second factor (a CUSTOMER)
+  widened to a role that mandates one would otherwise mint privileged access
+  tokens for the life of the refresh chain. `AuthService.refresh` refuses that
+  shape: **403 `mfa_enrollment_required`**, audit `AUTH_REFRESH_MFA_REQUIRED`,
+  family NOT revoked (the FE routes to a full login, which lands on forced
+  enrolment). It also closes the dodge of `MfaService.adminReset`'s "must
+  re-enrol on next login" by refreshing instead.
 
 ## Super-app gate scanners are phone numbers, not accounts (event-service V14)
 
 **An organizer adds a scanner by phone number and name
 (`POST /event-organizer/scanners`). The person behind the number accepts in the
 super app (`POST /events/gate/invites/{id}/accept`), which binds the row to the
-account that accepted, and only that account then scans.** The scanner-app
-`TEAM_MEMBER` (user-service) could not serve the super app: it creates an
-account on the number, one per number, with one organizer per account. A
+account that accepted, and only that account then scans.** The retired
+scanner-app `TEAM_MEMBER` (user-service) could not serve the super app: it
+created an account on the number, one per number, with one organizer per account. A
 super-app user already has an account on their number, so creating one was
 refused, and an account created first made `/auth/exchange` refuse the number
 (`not_a_customer`).
@@ -1080,18 +1086,10 @@ refused, and an account created first made `/auth/exchange` refuse the number
   gateway's `event-organizer-scanners-route` sends `/event-organizer/scanners/**`
   to event-service, ahead of user-service's `/event-organizer/**`
   (`GatewayRouteTableTest`).
-- **Gate staff scan from the InnBucks app only; new team members are switched
-  off (owner decision, 2026-11-05, replacing the 2026-10-30 one that kept
-  them).** The organizer is the only person who signs in to the portal, and
-  their job there is to add scanners and assign them. `POST
-  /event-organizer/team-members` answers `410 use_scanner_invite`
-  (`data.scannerPath: /event-organizer/scanners`) before it reads anything,
-  while `app.team-members.create-enabled` (`TEAM_MEMBERS_CREATE_ENABLED`) is
-  false, the default. No team members existed when it was switched off, so
-  nothing was moved. The rest of `/event-organizer/team-members/**` and the
-  scanner-app login are untouched, and setting the key to true is the
-  rollback. Retiring them (the endpoints, `TEAM_MEMBER`, the 2FA exemption
-  below) is its own change.
+- **Gate staff are scanners only (owner decision, 2026-11-05, replacing the
+  2026-10-30 one that kept the shared-device login).** Team members were
+  retired by V55 (section above). A scanner does what a team member did, in
+  the InnBucks app, with no account, email or 2FA of its own.
 - **A number is never on two events whose times overlap, under any organizer
   (owner decision, 2026-10-30).** Organizers may run overlapping events; one
   scanner may not be at both, even two of the same organizer's.
@@ -1131,8 +1129,7 @@ refused, and an account created first made `/auth/exchange` refuse the number
 
 ## Deactivation ends sessions at once; `token_version` is written atomically (user-service, V42)
 
-**`PUT /admin/users/{id}/active` with `false` (and the organizer's team-member
-disable) signs the person out everywhere, immediately, through
+**`PUT /admin/users/{id}/active` with `false` signs the person out everywhere, immediately, through
 `AccountSessionRevoker.revokeAll`.** Before it, deactivation flipped `active`
 and nothing else: no version bump, no Redis publish, no refresh revocation, and
 `/auth/refresh` never read `active`, so a deactivated person kept every session
@@ -1144,8 +1141,7 @@ the deactivation cannot set a password for after a reactivation; one cannot be
 requested DURING it — `PasswordResetService` treats `approved && !active` like
 an unknown account, and `resetPassword` answers it "Invalid or expired code").
 **Reactivation sweeps the same way** (`sweepOnReactivation`: bump, revoke,
-clear — both `PUT active true` on an approved account and the organizer's
-team-member re-enable), because an account deactivated before this release
+clear — `PUT active true` on an approved account), because an account deactivated before this release
 still holds live families that switching it back on would return.
 
 **Scope limit — loyalty is NOT reached.** A customer deactivated here keeps any
@@ -1238,9 +1234,9 @@ staff address.
   never refused on these grounds. Every refusal is audited
   `STAFF_GRANT_REFUSED`. SUPER_ADMIN is exempt from all of it.
 - **A business built-in never becomes a staff role**: a PLATFORM code (or `*`)
-  on EVENT_ORGANIZER, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, TEAM_MEMBER or
-  CUSTOMER is 400 `permission_not_assignable` (`business_role`), whoever asks.
-  Registration + approval, shop-staff and team-member create and the OTP /
+  on EVENT_ORGANIZER, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER or CUSTOMER is 400
+  `permission_not_assignable` (`business_role`), whoever asks.
+  Registration + approval, shop-staff create and the OTP /
   federation creators hand those roles out with NO eligibility check, so the
   staff rules only hold while they grant nothing platform-wide.
 - **Both halves of a grant lock the `roles` rows first** (`RoleRepository
@@ -1307,7 +1303,7 @@ staff address.
   holds (`ProfiledAccountNeverGetsOrgClaimsIT`). Service-request approval that
   adds a role now records `USER_ROLES_CHANGED`.
 - **A staff address is reserved** at every other `User.email` writer —
-  register, tier-2, shop-staff and team-member create, and the FIRST approval of
+  register, tier-2, shop-staff create, and the FIRST approval of
   a registration — 400 `email_domain_reserved`, checked FIRST (before the
   bootstrap-admin and duplicate checks) so none of them is an oracle for which
   staff addresses exist, the platform admin's among them. Reserved
@@ -2001,8 +1997,7 @@ the marketplace onto it.
   `merchantId`: a phone proof is not a staff login.
 - **Belonging to an organization requires 2FA** (`MfaPolicy.isSystemUser`),
   whatever the roles say: a plain CUSTOMER added as STAFF now works for a
-  business and is challenged like staff, and a gate operator added to one loses
-  the gate exemption. Fails CLOSED. The **refresh MFA guard skips phone-proof
+  business and is challenged like staff. Fails CLOSED. The **refresh MFA guard skips phone-proof
   families**: what they mint is CUSTOMER-only with no scope claims — the same
   authority the exchange login grants without a second factor — and without the
   skip a shopper added as STAFF lost their super-app session at the next
@@ -2103,7 +2098,7 @@ no further change and cannot tell how the customer proved themselves.
 - **The scope rides the REFRESH ROW (`refresh_tokens.phone_proof`, V38), not the
   access token.** `/auth/refresh` re-reads the LIVE user and re-derives claims
   from their current roles, so a login-time narrowing kept anywhere else would
-  evaporate on the first rotation — the same shape as the gate-operator hole
+  evaporate on the first rotation — the same shape as the refresh MFA guard
   above. Stamped once when the family is minted and copied onto every successor,
   exactly like `device_id_hash`. Default FALSE, which is the truth for every
   pre-V38 row rather than a guess.
@@ -2199,8 +2194,8 @@ owner's number (`not_a_customer`). Found on staging when the owner tried it.
 - **Business owner, then app** (`FederatedLoginService.mayAlsoBeCustomer`): an
   approved, active account whose every role is EVENT_ORGANIZER or MERCHANT_ADMIN
   gains CUSTOMER (and a tier-1 profile) at its first Super app sign-in. The
-  session is the scoped phone-proof mint as always. TEAM_MEMBER (one more role
-  ends the 2FA exemption), shop staff and any staff role stay `not_a_customer`.
+  session is the scoped phone-proof mint as always. Shop staff and any staff
+  role stay `not_a_customer`.
   A concurrent first sign-in's unique-index loss is retried like the create race.
 
 ## DTX device security — the phone is checked before staging's PIN login (user-service V40)
@@ -2873,8 +2868,7 @@ sibling services per request.
   happens per request in Jackson (`WireAudience`), and one DTO renders
   differently for S2S and human audiences.
 - **Only the anonymous list branch is cached.** `GET /events` and
-  `/events/active` send organizers and team members to different, uncached
-  methods; the four cached methods answer every caller identically (published
+  `/events/active` send organizers to different, uncached methods; the four cached methods answer every caller identically (published
   only, organizer id stripped). So the key carries every query input but no
   caller identity. A new cached read whose answer depends on the caller must
   either cache only the caller-independent branch or put the caller's scope in
@@ -3573,9 +3567,8 @@ V14), asked on every call** (`GET /events/internal/scanner-access`, through
 `TicketScanService.superAppAccess`). The token carries no organizer scope at
 all, so nothing about the caller's reach is ever read from it.
 
-- **Routing** is `TicketScanService.isSuperAppScanner`: CUSTOMER and neither
-  EVENT_ORGANIZER nor TEAM_MEMBER. An organizer or scanner-app account that
-  also shops stays on its own path; a token with no roles is never routed here.
+- **Routing** is `TicketScanService.isSuperAppScanner`: CUSTOMER and not
+  EVENT_ORGANIZER. An organizer who also shops stays on the organizer path; a token with no roles is never routed here.
 - **Order on the super-app path:** `eventId` required (400) → access (503 when
   it cannot be asked: never an allow, never a refusal) → ticket → another
   event's ticket OR a booking stamped for another organizer is the same

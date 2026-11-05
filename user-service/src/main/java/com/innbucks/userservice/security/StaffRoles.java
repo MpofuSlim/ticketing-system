@@ -29,8 +29,7 @@ import java.util.Set;
  * {@code users:read} reads every account on the platform whatever it is called.
  *
  * <p>With V35's grants, {@code EVENT_ORGANIZER}, {@code MERCHANT_ADMIN},
- * {@code SHOP_ADMIN}, {@code SHOP_USER}, {@code TEAM_MEMBER} and {@code CUSTOMER}
- * are NOT staff roles. {@code StaffRoleClassificationTest} pins both halves.
+ * {@code SHOP_ADMIN}, {@code SHOP_USER} and {@code CUSTOMER} are NOT staff roles. {@code StaffRoleClassificationTest} pins both halves.
  *
  * <p>What reads it: phone-based password reset is a no-op for any holder of a
  * staff role ({@code PasswordResetService}), deactivating one needs the caller
@@ -60,8 +59,8 @@ public final class StaffRoles {
     /**
      * The business built-ins (V35) — the roles non-staff writers hand out with
      * NO staff-eligibility check: registration + approval (EVENT_ORGANIZER,
-     * MERCHANT_ADMIN), shop-staff create (SHOP_ADMIN, SHOP_USER), team-member
-     * create (TEAM_MEMBER), and the OTP / federation creators (CUSTOMER). They
+     * MERCHANT_ADMIN), shop-staff create (SHOP_ADMIN, SHOP_USER), and the OTP /
+     * federation creators (CUSTOMER). (TEAM_MEMBER was one until V55 retired it.) They
      * must therefore never become staff roles: a PLATFORM code on one would be
      * handed to every account those paths create. {@code RoleGrantGuard}
      * refuses one (400 {@code permission_not_assignable}, {@code business_role}).
@@ -71,7 +70,6 @@ public final class StaffRoles {
             User.Role.MERCHANT_ADMIN.name(),
             User.Role.SHOP_ADMIN.name(),
             User.Role.SHOP_USER.name(),
-            User.Role.TEAM_MEMBER.name(),
             User.Role.CUSTOMER.name());
 
     private StaffRoles() {}

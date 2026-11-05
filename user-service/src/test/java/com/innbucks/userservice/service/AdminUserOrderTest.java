@@ -39,7 +39,7 @@ class AdminUserOrderTest {
                 user(4, null, "Nameless", User.Role.SHOP_ADMIN),
                 user(5, "Alice", "Dube", User.Role.EVENT_ORGANIZER, User.Role.CUSTOMER),
                 user(6, "Anesu", "Owner", User.Role.SUPER_ADMIN),
-                user(7, "Bob", "Banda", User.Role.TEAM_MEMBER));
+                user(7, "Bob", "Banda", User.Role.SHOP_USER));
 
         assertThat(sortedIds(users))
                 // Owners first, alphabetically among themselves...

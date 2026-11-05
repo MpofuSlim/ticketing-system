@@ -82,9 +82,6 @@ class RoleWriterInventoryTest {
                 "GUARDED — shop staff create: requireEmailNotReserved before the case-insensitive duplicate check; roles are "
                         + "SHOP_ADMIN/SHOP_USER (TENANT). The setEmail is on a CSV-row DTO, not a User.",
                 "new_user", 1, "set_email", 1);
-        writer("service/TeamMemberService.java",
-                "GUARDED — requireEmailNotReserved before the case-insensitive duplicate check; role is TEAM_MEMBER only.",
-                "new_user", 1);
         writer("service/CustomerService.java",
                 "GUARDED — tier-2: requireEmailNotReserved first, then requireNotStaffAccount on the "
                         + "phone's account, then the email must not be held by another account in any letter case.",
@@ -115,9 +112,6 @@ class RoleWriterInventoryTest {
                         + "live row), lockAllByNameIn then lockById, StaffEligibility.superAdminPromotionBlocker "
                         + "(staff-eligible, staff roles only, no business) and MFA enrolled; REQUIRED audit.",
                 "mutate_roles", 2);
-        writer("security/MfaPolicy.java",
-                "READ ONLY — the alias is read to evaluate the gate-operator exemption.",
-                "roles_alias", 1);
         writer("service/OrganizationService.java",
                 "GUARDED — createForOwner (registration/approval, business accounts only), addMember and "
                         + "changeRole (requireNotStaffAccount), removeMember (taking away is always allowed), "

@@ -21,7 +21,7 @@ import static org.mockito.Mockito.when;
 /**
  * The built-in role rows exactly as the migrations seed them (V35's grants plus
  * V43's call-center roles, V46's support-console grants and V47's marketplace/loyalty
- * support grants), for unit tests that mock {@link RoleRepository}.
+ * support grants, less what V55 retired), for unit tests that mock {@link RoleRepository}.
  * {@code BuiltInRoleSeedTest}'s Postgres half migrates a fresh database and
  * asserts its built-in {@code role_permissions} EQUAL {@link #GRANTS}, so this
  * copy cannot drift from the migrations unnoticed.
@@ -35,8 +35,9 @@ public final class BuiltInRoleRows {
         g.put("SUPER_ADMIN", Set.of("*"));
         g.put("PRODUCT_OFFICER", Set.of("users:merchants:read"));
         g.put("PRODUCT_MANAGER", Set.of("users:merchants:read"));
-        g.put("EVENT_ORGANIZER", Set.of("team-members:read", "team-members:write", "team-members:manage"));
-        g.put("TEAM_MEMBER", Set.of());
+        // V55 retired TEAM_MEMBER and the team-members:* codes, which were
+        // EVENT_ORGANIZER's only user-service grants.
+        g.put("EVENT_ORGANIZER", Set.of());
         g.put("MERCHANT_ADMIN", Set.of("shop-admins:write", "shop-staff:read", "shop-staff:merchant:read",
                 "shop-staff:password:reset"));
         g.put("SHOP_ADMIN", Set.of("shop-users:write", "shop-staff:read", "shop-staff:password:reset"));

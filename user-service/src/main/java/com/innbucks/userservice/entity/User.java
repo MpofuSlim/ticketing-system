@@ -333,17 +333,14 @@ public class User {
     private Instant mfaLockedUntil;
 
     /**
-     * For TEAM_MEMBER rows: the user_uuid of the EVENT_ORGANIZER that
-     * created this team member. Null for every other role. Drives the
-     * "list my team" query and the "can this scanner work this event"
-     * authorization check in booking-service (where the team member's
-     * organizerUuid JWT claim must equal the event's tenant_user_uuid).
+     * History only: the user_uuid of the EVENT_ORGANIZER that created this
+     * account as a team member. Team members were retired by V55 (gate staff
+     * are super-app scanners), so nothing writes it any more and it decides
+     * nothing; the column stays because rows that once held it still exist.
      *
-     * <p>FK to {@link #userUuid} with {@code ON DELETE RESTRICT} as a
-     * backstop — real soft-delete is via {@link #active}=false +
-     * {@link #tokenVersion}++, the row stays around so the audit trail
-     * (booking_items.redeemed_by_user_uuid + redeemed_by_name) never
-     * orphans.
+     * <p>FK to {@link #userUuid} with {@code ON DELETE RESTRICT}, which is why
+     * {@code RegistrationRejectionService} still refuses to delete an organizer
+     * that a row here names.
      */
     @Column(name = "created_by_organizer_uuid")
     private UUID createdByOrganizerUuid;
@@ -451,14 +448,8 @@ public class User {
         PRODUCT_OFFICER,
         PRODUCT_MANAGER,
         EVENT_ORGANIZER,
-        // Event-organizer team member (gate-staff, scanner operator). Created
-        // by an EVENT_ORGANIZER via POST /event-organizer/team-members and
-        // stamped with the organizer's user_uuid in
-        // {@link User#createdByOrganizerUuid}. Their JWT carries the parent
-        // organizer's uuid as the {@code organizerUuid} claim so booking-
-        // service can authorize them to scan tickets for any event owned by
-        // that organizer without a per-request cross-service lookup.
-        TEAM_MEMBER,
+        // TEAM_MEMBER (an organizer's gate-staff account) was retired by V55:
+        // gate staff are super-app scanners in event-service. Don't re-add it.
         MERCHANT_ADMIN,
         // Shop-level staff. SHOP_ADMINs are created by a MERCHANT_ADMIN and
         // manage staff at a specific shop. SHOP_USERs are created by a

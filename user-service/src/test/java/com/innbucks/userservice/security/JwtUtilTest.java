@@ -182,26 +182,26 @@ class JwtUtilTest {
     }
 
     @Test
-    void generateToken_emitsDisplayNameClaimsForTeamMemberToken() {
-        // Pins the staff-scanner UX behaviour: a TEAM_MEMBER token MUST carry
-        // firstName + lastName so the booking-service rejection toast can show
-        // "already scanned by Tariro Chikomo" instead of leaking the staff
-        // login email (tariro@harare-arena.co.zw). A regression that drops
-        // TEAM_MEMBER from the emit-set would re-leak the email at the gate.
+    void generateToken_aRetiredTeamMemberRole_carriesNoDisplayName() {
+        // TEAM_MEMBER was on the display-name list for the scanner app's
+        // "already scanned by" answer. V55 retired it: gate scanners are
+        // super-app CUSTOMER sessions, and booking-service records the name
+        // their organizer typed. A stray TEAM_MEMBER string is now just
+        // another staff role, which carries no name claim.
         String token = jwtUtil.generateToken("tariro@harare-arena.co.zw",
                 java.util.List.of("TEAM_MEMBER"), java.util.List.of(),
                 0, true, "+263782606983",
                 null, null, "Tariro", null, "Chikomo", 1L, "Zimbabwe",
-                java.util.UUID.randomUUID(), java.util.UUID.randomUUID());
+                java.util.UUID.randomUUID(), null);
 
-        assertEquals("Tariro", jwtUtil.extractFirstName(token));
-        assertEquals("Chikomo", jwtUtil.extractLastName(token));
+        org.junit.jupiter.api.Assertions.assertNull(jwtUtil.extractFirstName(token));
+        org.junit.jupiter.api.Assertions.assertNull(jwtUtil.extractLastName(token));
     }
 
     @Test
     void generateToken_emitsDisplayNameClaimsForEventOrganizerToken() {
-        // Organizers scan their own gates on small events — same UX
-        // requirement as TEAM_MEMBER.
+        // Organizers scan their own gates on small events: their name, not
+        // their login email, is what the "already scanned by" answer shows.
         String token = jwtUtil.generateToken("organizer@harare-arena.co.zw",
                 java.util.List.of("EVENT_ORGANIZER"), java.util.List.of(),
                 4, true, "+263782606983",

@@ -231,8 +231,8 @@ public enum AuditEventType {
     /** A single-use MFA backup recovery code was consumed at login. */
     MFA_BACKUP_CODE_USED,
 
-    /** A TEAM_MEMBER was disabled (tokens revoked, can no longer log in). */
-    TEAM_MEMBER_DISABLED,
+    // TEAM_MEMBER_DISABLED was here until V55 retired team members. Rows that
+    // carry it stay on the chain: the event type is stored as text.
     /** The first-run bootstrap SUPER_ADMIN was seeded from the env credential. */
     BOOTSTRAP_ADMIN_CREATED,
     /**

@@ -44,7 +44,7 @@ class AdminUserListOrderTest {
     /** What every query returns: owners, mixed case and a nameless account, scrambled. */
     private static List<User> scrambled() {
         return new ArrayList<>(List.of(
-                user(7, "Bob", "Banda", User.Role.TEAM_MEMBER),
+                user(7, "Bob", "Banda", User.Role.SHOP_USER),
                 user(4, " ", "Nameless", User.Role.SHOP_ADMIN),
                 user(2, "Zoe", "Zulu", User.Role.SUPER_ADMIN),
                 user(3, "alice", "Moyo", User.Role.EVENT_ORGANIZER),

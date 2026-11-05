@@ -76,7 +76,7 @@ public class AdminRegistrationController {
                     * a registration whose business is in use — 409 `registration_business_in_use`, with
                       `data.reason`: `other_members` (someone else already belongs to the business),
                       `loyalty_merchant` (InnRewards holds a loyalty merchant for it), `team_members` (the
-                      account has team members of its own), `customer_account` (the account is also an
+                      account created team members before they were retired), `customer_account` (the account is also an
                       InnBucks app customer) or `sole_owner_elsewhere` (it is the only owner of another
                       business);
                     * InnRewards could not be asked whether it holds a merchant for the business — 503

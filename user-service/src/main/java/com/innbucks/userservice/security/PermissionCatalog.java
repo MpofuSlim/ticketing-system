@@ -70,10 +70,6 @@ public final class PermissionCatalog {
     public static final String SERVICE_REQUESTS_READ = "service-requests:read";
     public static final String SERVICE_REQUESTS_APPROVE = "service-requests:approve";
 
-    public static final String TEAM_MEMBERS_READ = "team-members:read";
-    public static final String TEAM_MEMBERS_WRITE = "team-members:write";
-    public static final String TEAM_MEMBERS_MANAGE = "team-members:manage";
-
     public static final String SHOP_ADMINS_WRITE = "shop-admins:write";
     public static final String SHOP_USERS_WRITE = "shop-users:write";
     public static final String SHOP_STAFF_READ = "shop-staff:read";
@@ -176,7 +172,7 @@ public final class PermissionCatalog {
      *       one away from a role ends its holders' sessions at once
      *       ({@code RoleAdminService.setPermissions}).</li>
      *   <li>{@link #TENANT}: acts only inside the caller's own business — its
-     *       team members, its shops, its shop staff. The handlers scope every
+     *       shops and its shop staff. The handlers scope every
      *       call to the caller's own organizer, merchant or shop.</li>
      * </ul>
      *
@@ -237,9 +233,6 @@ public final class PermissionCatalog {
                 entry(ROLES_WRITE, "Create, edit and delete custom roles", Scope.PLATFORM),
                 entry(SERVICE_REQUESTS_READ, "List submitted service-bundle requests", Scope.PLATFORM),
                 entry(SERVICE_REQUESTS_APPROVE, "Approve a service-bundle request", Scope.PLATFORM),
-                entry(TEAM_MEMBERS_READ, "Read an event organizer's team members", Scope.TENANT),
-                entry(TEAM_MEMBERS_WRITE, "Create an event organizer team member", Scope.TENANT),
-                entry(TEAM_MEMBERS_MANAGE, "Enable, delete, reset or re-scope a team member", Scope.TENANT),
                 entry(SHOP_ADMINS_WRITE, "Create a shop admin under a loyalty merchant", Scope.TENANT),
                 entry(SHOP_USERS_WRITE, "Create shop POS users, individually or by CSV upload", Scope.TENANT),
                 entry(SHOP_STAFF_READ, "Read the shop staff of your own shop or merchant", Scope.TENANT),

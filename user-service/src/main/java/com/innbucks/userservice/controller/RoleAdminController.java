@@ -350,8 +350,8 @@ public class RoleAdminController {
                     current roles) and must not be reserved to SUPER_ADMIN (`roles:write`, \
                     `users:roles:write`) — otherwise `400 permission_not_assignable` naming each code. \
                     **A business built-in** (EVENT_ORGANIZER, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, \
-                    TEAM_MEMBER, CUSTOMER) **never takes a PLATFORM code**, whoever asks (reason \
-                    `business_role`): registration, shop-staff and team-member create and the customer \
+                    CUSTOMER) **never takes a PLATFORM code**, whoever asks (reason \
+                    `business_role`): registration, shop-staff create and the customer \
                     sign-ups hand those roles out with no staff check, so one could never become a staff role. \
                     **Removing codes is never refused on those grounds**, including on a role that \
                     still holds a code reserved today — but a role must keep at least one code \
@@ -596,7 +596,7 @@ public class RoleAdminController {
                                         { "code": "users:read", "description": "List and read any user account", "scope": "PLATFORM", "reservedToSuperAdmin": false },
                                         { "code": "users:roles:write", "description": "Replace the role set on a user account", "scope": "PLATFORM", "reservedToSuperAdmin": true },
                                         { "code": "roles:write", "description": "Create, edit and delete custom roles", "scope": "PLATFORM", "reservedToSuperAdmin": true },
-                                        { "code": "team-members:read", "description": "Read an event organizer's team members", "scope": "TENANT", "reservedToSuperAdmin": false },
+                                        { "code": "shop-staff:read", "description": "Read the shop staff of your own shop or merchant", "scope": "TENANT", "reservedToSuperAdmin": false },
                                         { "code": "device-security:read", "description": "Look up a customer's phones, blocks, references and sign-in history", "scope": "PLATFORM", "reservedToSuperAdmin": false }
                                       ]
                                     }

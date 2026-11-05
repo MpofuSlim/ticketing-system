@@ -447,7 +447,7 @@ public class ShopStaffService {
         User target = userRepository.findByUserUuid(userUuid)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found"));
         if (!callerMayResetTarget(caller, target)) {
-            // 404 not 403 — same disclosure rule as TeamMemberService.
+            // 404 not 403: an account outside the caller's scope is reported as missing.
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found");
         }
 
@@ -538,8 +538,7 @@ public class ShopStaffService {
         // duplicate checks — so this path cannot confirm which staff addresses
         // exist, the platform admin's among them.
         staffEligibility.requireEmailNotReserved(email, currentCallerName(), "shop_staff_create");
-        // Shop staff are never minted at the platform admin's address — see the
-        // matching guard in TeamMemberService. A row left here is one a rotated
+        // Shop staff are never minted at the platform admin's address. A row left here is one a rotated
         // BOOTSTRAP_ADMIN_EMAIL (or a deleted admin row) could hand SUPER_ADMIN
         // to, with the temporary password already in a merchant admin's hands.
         // Same message as the duplicate case so the address isn't confirmed.
