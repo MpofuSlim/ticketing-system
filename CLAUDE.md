@@ -947,8 +947,8 @@ permission, where "holds everything it holds" would be vacuously true.
   minted into `perms`, wildcard expanded) — login, 2FA step, refresh,
   organization switch, exchange, enrolment-complete. Gate console screens on it,
   not on role names. `AuthResponsePermissionsFieldTest`.
-- `ShopStaffService` / `TeamMemberService` service-layer built-in-role guards are
-  deliberately untouched by any of this.
+- `ShopStaffService`'s service-layer built-in-role guards are deliberately
+  untouched by any of this.
 
 ## More than one SUPER_ADMIN — the seeded owner promotes (user-service V52)
 
@@ -1044,7 +1044,12 @@ person who signs in to the portal.
   `MfaPolicy.gateOperatorExempt` carve-out, the `organizerUuid` claim for team
   members, `team-members:*` from `PermissionCatalog`, and every `TEAM_MEMBER`
   branch in booking-service and event-service.
-- **V55** refuses to run while any account holds `TEAM_MEMBER` (none did), then
+- **V55** refuses to run while any account holds `TEAM_MEMBER`. Staging and
+  production each had two (test or never used, none had scanned); their role
+  was removed by hand before the deploy and the accounts were kept. Those
+  accounts now hold no role and still hold their phone numbers, so
+  `/auth/exchange` refuses those numbers (`not_a_customer`) until an operator
+  clears `users.phone_number` on the old account. Then it
   deletes the three `team-members:*` permissions (the FK cascade takes every
   grant: they were `EVENT_ORGANIZER`'s only codes, so organizers now mint
   `permissions: []`) and the `TEAM_MEMBER` roles row. A code removed from the
@@ -1323,8 +1328,8 @@ staff address.
   two requests or a writer that forgot its check cannot store the second
   spelling. Every writer also checks case-insensitively first, so the caller
   gets `Email already registered` rather than a constraint error: register,
-  staff create, tier-2 (excluding the customer's own row), shop staff and team
-  members. `uk_users_email` (V1) stays and is now redundant. Sign-in still looks
+  staff create, tier-2 (excluding the customer's own row) and shop staff.
+  `uk_users_email` (V1) stays and is now redundant. Sign-in still looks
   the address up EXACTLY as typed; the index only stops two accounts sharing
   it. A new email writer checks with `existsByEmailIgnoreCase` /
   `findAllByEmailIgnoreCase`, never `existsByEmail`. V49 FAILS on a database
@@ -1833,7 +1838,8 @@ sent to the applicant verbatim) — `RegistrationRejectionService`, behind
   409 `use_staff_endpoints`; a SUPER_ADMIN — 403; and 409
   `registration_business_in_use` with `data.reason`: `other_members` (anyone else
   in the business it created), `loyalty_merchant`, `team_members` (accounts name it
-  as organizer — `ON DELETE RESTRICT`, and team members are never deleted),
+  as organizer — `ON DELETE RESTRICT`; team members were retired by V55 but
+  their accounts were never deleted, so old rows can still name an organizer),
   `customer_account` (a `customer_profiles` row: that is a super-app customer, not
   just an applicant) and `sole_owner_elsewhere` (it is the only OWNER of somebody
   else's business, which would be orphaned). A membership in somebody else's
@@ -3936,7 +3942,8 @@ entry credential: the gate admits on the ticket number alone.**
 from the Foundry portal; `POST /bookings/box-office/{bookingId}/void` voids a
 sale; `GET /event-organizer/reports/cash-up` reconciles the till.** Owner
 decisions (2026-11-03): only the organizer's OWN account sells (its login has a
-second factor; a team member's shared-handset login does not, and the cash-up
+second factor, which a team member's shared-handset login, retired since by
+V55, did not; and the cash-up
 reconciles by the account that sold); the organizer voids, with a reason, until
 the event starts and while none of the sale's tickets is scanned; cash sales
 count in the invoice commission like online ones; and the box office sells in
