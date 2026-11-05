@@ -364,9 +364,8 @@ public class JwtUtil {
         if (userUuid != null) {
             builder.claim("userUuid", userUuid.toString());
         }
-        // The "team scoping" claim. For an EVENT_ORGANIZER this is their
-        // own userUuid; for a TEAM_MEMBER it's the parent organizer's
-        // userUuid (taken from User.createdByOrganizerUuid at login).
+        // The organizer-scoping claim. For an EVENT_ORGANIZER this is their
+        // own userUuid; nobody else carries it.
         // Booking-service reads this to authorize ticket scans —
         // events.tenant_user_uuid must equal the JWT's organizerUuid for
         // the scanner to be allowed to redeem a ticket on that event.
@@ -400,7 +399,7 @@ public class JwtUtil {
         //
         // It is the account's STORED home cell when the caller supplies one.
         // That is where the account was created: a customer's from their
-        // number, while staff, shop staff and team members are stamped with
+        // number, while staff and shop staff are stamped with
         // this cell however foreign their phone is. Deriving it from the phone
         // alone turned a till operator with a South African number into a
         // "ZA" token that every loyalty call refused, though the account
@@ -429,16 +428,14 @@ public class JwtUtil {
         // Display-name claims (firstName / middleName / lastName) — emitted on:
         //   CUSTOMER       : the original use case (the FE shows the signed-in
         //                    customer's name on their own dashboard).
-        //   TEAM_MEMBER    : gate-staff scanning tickets. Their name shows up
-        //                    on the rejection toast ("already scanned by Tariro
-        //                    Chikomo at 19:42") rendered to other gate-staff —
-        //                    the scanner email is the wrong thing to display
-        //                    there, both for legibility and for not leaking
-        //                    staff login addresses across the gate-staff group.
         //   EVENT_ORGANIZER: organizers can scan their own events directly
-        //                    (small-event case) and need the same name capture
-        //                    as their team. They also see their own name in
-        //                    the FE organizer header.
+        //                    (small-event case); their name is what the
+        //                    "already scanned by" answer shows, rather than a
+        //                    login email. They also see their own name in the
+        //                    FE organizer header.
+        //   (Gate scanners are super-app CUSTOMER sessions; booking-service
+        //   records the name their organizer typed. TEAM_MEMBER, retired by
+        //   V55, used to be on this list.)
         // Other staff (MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, SUPER_ADMIN) stay
         // omitted — their tokens don't surface a display name anywhere today,
         // and we'd rather keep them slim + less PII-exposed by default.
@@ -446,7 +443,6 @@ public class JwtUtil {
         // names are placeholders like "Customer Pending"); JwtUtil enforces
         // the role check independently as a backstop.
         boolean emitDisplayName = roleList.contains("CUSTOMER")
-                || roleList.contains("TEAM_MEMBER")
                 || roleList.contains("EVENT_ORGANIZER");
         if (emitDisplayName && firstName != null && !firstName.isBlank()) {
             builder.claim("firstName", firstName);
@@ -625,7 +621,7 @@ public class JwtUtil {
         }
     }
 
-    /** Optional display-name claim. Emitted for CUSTOMER, TEAM_MEMBER and
+    /** Optional display-name claim. Emitted for CUSTOMER and
      *  EVENT_ORGANIZER tokens (see {@code generateToken} doc); {@code null}
      *  for other staff tokens or tier-1 customers with placeholder names. */
     public String extractFirstName(String token) {
@@ -717,10 +713,9 @@ public class JwtUtil {
     }
 
     /**
-     * Team-scoping identifier. Equal to {@link #extractUserUuid(String)} for
-     * an EVENT_ORGANIZER; equal to the parent organizer's user_uuid for a
-     * TEAM_MEMBER. Null on tokens minted before V20 or for roles outside
-     * the event-organizer tree (CUSTOMER, MERCHANT_ADMIN, etc.).
+     * Organizer-scoping identifier. Equal to {@link #extractUserUuid(String)}
+     * for an EVENT_ORGANIZER. Null on tokens minted before V20 and for every
+     * other role (CUSTOMER, MERCHANT_ADMIN, etc.).
      */
     public UUID extractOrganizerUuid(String token) {
         return extractUuidClaim(token, "organizerUuid");

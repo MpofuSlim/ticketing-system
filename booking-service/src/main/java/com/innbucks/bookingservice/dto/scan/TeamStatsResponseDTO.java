@@ -14,7 +14,8 @@ import java.util.List;
  * leaderboard is the legitimate response on a quiet day).
  */
 @Schema(name = "TeamStatsResponse",
-        description = "Leaderboard of scan outcomes per team member for the calling organizer's gate staff.")
+        description = "Leaderboard of scan outcomes per scanner for the calling organizer: the organizer "
+                + "and their super-app gate scanners.")
 public record TeamStatsResponseDTO(
         @Schema(example = "2026-06-19T19:00:00+02:00") OffsetDateTime from,
         @Schema(example = "2026-06-20T23:59:59.999999999+02:00") OffsetDateTime to,

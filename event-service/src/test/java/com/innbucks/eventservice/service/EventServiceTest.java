@@ -943,152 +943,91 @@ class EventServiceTest {
     }
 
     // ---------------------------------------------------------------------
-    // Team-member assigned-events scoping (deny-by-default). Mirrors the
-    // empty short-circuit + delegation contract of getMyAssignedEvents for
-    // the new active/inactive variants behind GET /events/active and
-    // GET /events/inactive. These are the service-layer half of the
-    // broken-access-control fix: a TEAM_MEMBER must only ever see the events
-    // their organizer assigned to them, never the organizer-wide or public set.
+    // Organizer-scoped active/inactive listings behind GET /events/active and
+    // GET /events/inactive for an EVENT_ORGANIZER: each routes through the
+    // tenantUserUuid-scoped query (category or not), never the fleet-wide one.
     // ---------------------------------------------------------------------
 
-    private static Event activeAssigned(UUID eventId, UUID organizerUuid) {
+    private static Event ownedBy(UUID eventId, UUID organizerUuid, boolean active) {
         return Event.builder()
-                .eventId(eventId).tenantUserUuid(organizerUuid).title("Assigned Active")
+                .eventId(eventId).tenantUserUuid(organizerUuid).title("Owned Event")
                 .venue("Arena").country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(3))
                 .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(3).plusHours(2))
-                .totalCapacity(100).availableTickets(100).deleted(false).active(true).build();
+                .totalCapacity(100).availableTickets(100).deleted(false).active(active).build();
     }
 
     @Test
-    void getMyAssignedActiveEvents_emptyAssignments_returnsEmptyPage_withoutHittingDb() {
-        EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
-                mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
-
-        // Deny-by-default: no assignments → empty page, and NO repository call
-        // (an empty IN(...) is both wrong semantically and illegal in JPA).
-        Page<EventResponseDTO> result = service.getMyAssignedActiveEvents(
-                ORGANIZER_A, java.util.List.of(), null, null, null, null, null, 0, 10, "startDateTime");
-
-        assertTrue(result.isEmpty());
-        verify(repo, never()).findByTenantUserUuidActiveOnlyAndEventIdIn(
-                any(), any(), any(), any(), any(), any(), any(), any());
-        verify(repo, never()).findByTenantUserUuidActiveOnlyByCategoryAndEventIdIn(
-                any(), any(), any(), any(), any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void getMyAssignedActiveEvents_nullAssignments_returnsEmptyPage() {
-        EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
-                mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
-
-        Page<EventResponseDTO> result = service.getMyAssignedActiveEvents(
-                ORGANIZER_A, null, null, null, null, null, null, 0, 10, "startDateTime");
-
-        assertTrue(result.isEmpty());
-        verifyNoInteractions(repo);
-    }
-
-    @Test
-    void getMyAssignedActiveEvents_noCategory_delegatesToEventIdInQuery_scopedToOrganizerAndAssignedIds() {
+    void getMyActiveEvents_noCategory_delegatesToTheOrganizerScopedQuery() {
         EventRepository repo = mock(EventRepository.class);
         BookingGateway bookings = mock(BookingGateway.class);
         OrganizerGateway organizers = mock(OrganizerGateway.class);
         EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
                 bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
-        UUID assignedId = UUID.randomUUID();
-        java.util.List<UUID> assigned = java.util.List.of(assignedId);
+        UUID eventId = UUID.randomUUID();
         when(bookings.activeCountsByEventIds(any())).thenReturn(Collections.emptyMap());
         when(organizers.organizersByUserUuids(any())).thenReturn(Collections.emptyMap());
-        when(repo.findByTenantUserUuidActiveOnlyAndEventIdIn(
-                eq(ORGANIZER_A), eq(assigned), any(), any(), any(), any(), any(), any()))
+        when(repo.findByTenantUserUuidActiveOnly(eq(ORGANIZER_A), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new org.springframework.data.domain.PageImpl<>(
-                        java.util.List.of(activeAssigned(assignedId, ORGANIZER_A))));
+                        java.util.List.of(ownedBy(eventId, ORGANIZER_A, true))));
 
-        Page<EventResponseDTO> result = service.getMyAssignedActiveEvents(
-                ORGANIZER_A, assigned, null, null, null, null, null, 0, 10, "startDateTime");
+        Page<EventResponseDTO> result = service.getMyActiveEvents(
+                ORGANIZER_A, null, null, null, null, null, 0, 10, "startDateTime");
 
-        // Only the assigned event comes back, and it routed through the
-        // organizer+eventId-scoped query (not the unfiltered active query).
         assertEquals(1, result.getNumberOfElements());
-        assertEquals(assignedId, result.getContent().get(0).getEventId());
-        verify(repo).findByTenantUserUuidActiveOnlyAndEventIdIn(
-                eq(ORGANIZER_A), eq(assigned), any(), any(), any(), any(), any(), any());
+        assertEquals(eventId, result.getContent().get(0).getEventId());
+        verify(repo).findByTenantUserUuidActiveOnly(eq(ORGANIZER_A), any(), any(), any(), any(), any(), any());
+        verify(repo, never()).findAllActiveOnly(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void getMyActiveEvents_withCategory_delegatesToTheOrganizerScopedCategoryQuery() {
+        EventRepository repo = mock(EventRepository.class);
+        BookingGateway bookings = mock(BookingGateway.class);
+        OrganizerGateway organizers = mock(OrganizerGateway.class);
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
+                bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+
+        UUID eventId = UUID.randomUUID();
+        when(bookings.activeCountsByEventIds(any())).thenReturn(Collections.emptyMap());
+        when(organizers.organizersByUserUuids(any())).thenReturn(Collections.emptyMap());
+        when(repo.findByTenantUserUuidActiveOnlyByCategory(
+                eq(ORGANIZER_A), any(), any(), any(), any(), eq(EventCategory.CONCERT), any(), any()))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(
+                        java.util.List.of(ownedBy(eventId, ORGANIZER_A, true))));
+
+        Page<EventResponseDTO> result = service.getMyActiveEvents(
+                ORGANIZER_A, null, null, null, null, EventCategory.CONCERT, 0, 10, "startDateTime");
+
+        assertEquals(1, result.getNumberOfElements());
+        verify(repo).findByTenantUserUuidActiveOnlyByCategory(
+                eq(ORGANIZER_A), any(), any(), any(), any(), eq(EventCategory.CONCERT), any(), any());
         verify(repo, never()).findByTenantUserUuidActiveOnly(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
-    void getMyAssignedActiveEvents_withCategory_delegatesToCategoryEventIdInQuery() {
+    void getMyInactiveEvents_noCategory_delegatesToTheOrganizerScopedQuery() {
         EventRepository repo = mock(EventRepository.class);
         BookingGateway bookings = mock(BookingGateway.class);
         OrganizerGateway organizers = mock(OrganizerGateway.class);
         EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
                 bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
-        UUID assignedId = UUID.randomUUID();
-        java.util.List<UUID> assigned = java.util.List.of(assignedId);
+        UUID eventId = UUID.randomUUID();
         when(bookings.activeCountsByEventIds(any())).thenReturn(Collections.emptyMap());
         when(organizers.organizersByUserUuids(any())).thenReturn(Collections.emptyMap());
-        when(repo.findByTenantUserUuidActiveOnlyByCategoryAndEventIdIn(
-                eq(ORGANIZER_A), eq(assigned), any(), any(), any(), any(), eq(EventCategory.CONCERT), any(), any()))
+        when(repo.findByTenantUserUuidInactiveOnly(eq(ORGANIZER_A), any(), any(), any(), any(), any()))
                 .thenReturn(new org.springframework.data.domain.PageImpl<>(
-                        java.util.List.of(activeAssigned(assignedId, ORGANIZER_A))));
+                        java.util.List.of(ownedBy(eventId, ORGANIZER_A, false))));
 
-        Page<EventResponseDTO> result = service.getMyAssignedActiveEvents(
-                ORGANIZER_A, assigned, null, null, null, null, EventCategory.CONCERT, 0, 10, "startDateTime");
-
-        assertEquals(1, result.getNumberOfElements());
-        verify(repo).findByTenantUserUuidActiveOnlyByCategoryAndEventIdIn(
-                eq(ORGANIZER_A), eq(assigned), any(), any(), any(), any(), eq(EventCategory.CONCERT), any(), any());
-        verify(repo, never()).findByTenantUserUuidActiveOnlyAndEventIdIn(
-                any(), any(), any(), any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void getMyAssignedInactiveEvents_emptyAssignments_returnsEmptyPage_withoutHittingDb() {
-        EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
-                mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
-
-        Page<EventResponseDTO> result = service.getMyAssignedInactiveEvents(
-                ORGANIZER_A, java.util.List.of(), null, null, null, null, null, 0, 10, "startDateTime");
-
-        assertTrue(result.isEmpty());
-        verify(repo, never()).findByTenantUserUuidInactiveOnlyAndEventIdIn(
-                any(), any(), any(), any(), any(), any(), any());
-        verify(repo, never()).findByTenantUserUuidInactiveOnlyByCategoryAndEventIdIn(
-                any(), any(), any(), any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void getMyAssignedInactiveEvents_noCategory_delegatesToInactiveEventIdInQuery() {
-        EventRepository repo = mock(EventRepository.class);
-        BookingGateway bookings = mock(BookingGateway.class);
-        OrganizerGateway organizers = mock(OrganizerGateway.class);
-        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
-                bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
-
-        UUID assignedId = UUID.randomUUID();
-        java.util.List<UUID> assigned = java.util.List.of(assignedId);
-        Event inactive = activeAssigned(assignedId, ORGANIZER_A);
-        inactive.setActive(false);
-        when(bookings.activeCountsByEventIds(any())).thenReturn(Collections.emptyMap());
-        when(organizers.organizersByUserUuids(any())).thenReturn(Collections.emptyMap());
-        when(repo.findByTenantUserUuidInactiveOnlyAndEventIdIn(
-                eq(ORGANIZER_A), eq(assigned), any(), any(), any(), any(), any()))
-                .thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of(inactive)));
-
-        Page<EventResponseDTO> result = service.getMyAssignedInactiveEvents(
-                ORGANIZER_A, assigned, null, null, null, null, null, 0, 10, "startDateTime");
+        Page<EventResponseDTO> result = service.getMyInactiveEvents(
+                ORGANIZER_A, null, null, null, null, null, 0, 10, "startDateTime");
 
         assertEquals(1, result.getNumberOfElements());
-        assertEquals(assignedId, result.getContent().get(0).getEventId());
-        verify(repo).findByTenantUserUuidInactiveOnlyAndEventIdIn(
-                eq(ORGANIZER_A), eq(assigned), any(), any(), any(), any(), any());
-        verify(repo, never()).findByTenantUserUuidInactiveOnly(any(), any(), any(), any(), any(), any());
+        assertEquals(eventId, result.getContent().get(0).getEventId());
+        verify(repo).findByTenantUserUuidInactiveOnly(eq(ORGANIZER_A), any(), any(), any(), any(), any());
+        verify(repo, never()).findAllInactiveOnly(any(), any(), any(), any(), any());
     }
 
     @org.junit.jupiter.api.AfterEach

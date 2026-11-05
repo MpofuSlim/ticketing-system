@@ -38,7 +38,7 @@ import java.util.stream.Collectors;
  *       organizer) over a time window — the listings the FE renders.</li>
  *   <li>Aggregate per-outcome counts and zero-fill missing keys, so the FE
  *       can render every Outcome enum value without conditional logic.</li>
- *   <li>Collapse per-team-member rows (one per {@code scannerUserUuid +
+ *   <li>Collapse per-scanner rows (one per {@code scannerUserUuid +
  *       outcome}) into a leaderboard ordered by total scans DESC.</li>
  * </ul>
  *
@@ -167,13 +167,13 @@ public class ScanReportService {
 
     @Transactional(readOnly = true)
     // organizerUuid == null means fleet-wide (SUPER_ADMIN caller) — the
-    // repository treats a null organizer as "all organizers' gate staff".
+    // repository treats a null organizer as "all organizers' scanners".
     public TeamStatsResponseDTO teamStats(@org.springframework.lang.Nullable UUID organizerUuid, Instant from, Instant to) {
         List<TeamMemberOutcomeCount> rows =
                 repository.countOutcomesPerTeamMember(organizerUuid, from, to);
 
         // Collapse rows keyed on scannerUserUuid. Multiple rows for the same
-        // user_uuid happen when the staff member's email or display name
+        // user_uuid happen when the scanner's email or display name
         // changed mid-window — we keep the freshest non-null identity per uuid.
         Map<UUID, TeamAccumulator> byUser = new LinkedHashMap<>();
         for (TeamMemberOutcomeCount r : rows) {

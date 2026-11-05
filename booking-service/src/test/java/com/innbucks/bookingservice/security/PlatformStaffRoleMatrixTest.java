@@ -66,7 +66,6 @@ class PlatformStaffRoleMatrixTest {
         // An organizer is scoped to their OWN events — widening this would let
         // one organizer read every other organizer's bookings and revenue.
         assertThat(AuthenticatedCaller.isPlatformStaff(authWith("EVENT_ORGANIZER"))).isFalse();
-        assertThat(AuthenticatedCaller.isPlatformStaff(authWith("TEAM_MEMBER"))).isFalse();
         assertThat(AuthenticatedCaller.isPlatformStaff(authWith("CUSTOMER"))).isFalse();
     }
 

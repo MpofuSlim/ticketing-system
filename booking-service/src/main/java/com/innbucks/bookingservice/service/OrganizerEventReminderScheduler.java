@@ -179,7 +179,7 @@ public class OrganizerEventReminderScheduler {
                 + "  Tickets sold: " + tickets + "\n\n"
                 + "Pre-event checklist:\n"
                 + "  - Is your scanning team set up and their devices charged?\n"
-                + "  - Team members can scan tickets from their dashboard.\n"
+                + "  - Your gate scanners scan tickets in the InnBucks app once they accept your invite.\n"
                 + "  - Live sales and scan reports are in your organizer dashboard.\n\n"
                 + "Have a great event!";
     }

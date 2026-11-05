@@ -488,11 +488,6 @@ app:
     # Must be an SES-verified identity for the region or SES rejects the send.
     from: ${MAIL_FROM:banking@innbucks.co.zw}
     sender-name: ${MAIL_SENDER_NAME:Foundry}
-  team-members:
-    # Off (owner decision, 2026-11-05): gate staff are event-service scanners,
-    # added by phone number and scanning in the InnBucks app. A create answers
-    # 410 use_scanner_invite; existing team members keep working.
-    create-enabled: ${TEAM_MEMBERS_CREATE_ENABLED:false}
 
 ---
 # Service discovery: Kubernetes Service DNS. Eureka is retired.

@@ -450,9 +450,8 @@ public class UserAdminService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, SUPER_ADMIN_GRANT_MESSAGE);
         }
 
-        // Scope guards. SHOP_ADMIN / SHOP_USER authorize off the loyaltyShopId
-        // baked into their JWT, and TEAM_MEMBER off its parent organizer's uuid.
-        // Granting one of those roles to an account that was never stamped with
+        // Scope guard. SHOP_ADMIN / SHOP_USER authorize off the loyaltyShopId
+        // baked into their JWT. Granting one of those roles to an account that was never stamped with
         // the matching scope mints a login that passes @PreAuthorize and then
         // fails inside every handler ("caller's JWT has no shopId") — a broken
         // account that looks correctly provisioned. Refuse up front and name the
@@ -464,11 +463,8 @@ public class UserAdminService {
                             + "merchant and shop; create shop staff via POST /admin/shop-staff/admins "
                             + "or POST /admin/shop-staff/users instead.");
         }
-        if (requested.contains(User.Role.TEAM_MEMBER.name()) && user.getCreatedByOrganizerUuid() == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "TEAM_MEMBER requires the account to be stamped with its parent EVENT_ORGANIZER; "
-                            + "create team members via POST /event-organizer/team-members instead.");
-        }
+        // (TEAM_MEMBER had a guard here until V55 retired the role. Its roles
+        // row is gone, so the name check above refuses it like any unknown role.)
 
         // No null-guard on getRoles(): the field is initialised at its
         // declaration (@Builder.Default LinkedHashSet) and Hibernate always

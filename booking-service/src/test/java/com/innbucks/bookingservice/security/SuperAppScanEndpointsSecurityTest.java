@@ -55,9 +55,9 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppC
  * A super-app session (CUSTOMER only, the {@code /auth/exchange} token shape)
  * reaches the scan, the gate lookup and the scanner's own reports, through the
  * REAL security chain with a REAL signed token: an injected Authentication
- * would hide a role the method security does not admit. A role outside the
- * three is still refused, and the scan hands the request's {@code eventId} to
- * the service.
+ * would hide a role the method security does not admit. A role other than
+ * EVENT_ORGANIZER and CUSTOMER is refused (the retired TEAM_MEMBER included),
+ * and the scan hands the request's {@code eventId} to the service.
  */
 @SpringJUnitWebConfig(SuperAppScanEndpointsSecurityTest.Ctx.class)
 @TestPropertySource(properties = {
@@ -182,7 +182,48 @@ class SuperAppScanEndpointsSecurityTest {
     }
 
     @Test
-    void aRoleOutsideTheThree_isStillRefused() throws Exception {
+    void aRetiredTeamMemberToken_isRefusedOnEveryScannerEndpoint() throws Exception {
+        // The organizer-created gate-staff accounts are retired: their token
+        // shape (TEAM_MEMBER alone) reaches neither the scan, the lookup nor
+        // the scanner's own reports.
+        String teamMember = token("TEAM_MEMBER");
+        mvc.perform(post("/tickets/scan")
+                        .header("Authorization", "Bearer " + teamMember)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ticketNumber\":\"20261030-7KQ4M-9XZ2B\",\"eventId\":\"" + eventId + "\"}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/tickets/lookup")
+                        .header("Authorization", "Bearer " + teamMember)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"confirmationNumber\":\"INN-20261030-3C8849\",\"eventId\":\"" + eventId + "\"}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/scans/me").param("eventId", eventId.toString())
+                        .header("Authorization", "Bearer " + teamMember))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/scans/me/stats").param("eventId", eventId.toString())
+                        .header("Authorization", "Bearer " + teamMember))
+                .andExpect(status().isForbidden());
+        verify(scanService, never()).scan(anyString(), any(), any());
+        verify(lookupService, never()).lookup(anyString(), any());
+        verify(reportService, never()).listMyScansAtEvent(any(), any(), any(), any(), any(Integer.class), any(Integer.class));
+        verify(reportService, never()).myStatsAtEvent(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void anOrganizerToken_stillReachesTheScan() throws Exception {
+        when(scanService.scan(eq("20261030-7KQ4M-9XZ2B"), eq(eventId), any()))
+                .thenReturn(ScanTicketResponseDTO.builder().status(ScanTicketResponseDTO.Status.ALLOWED).build());
+
+        mvc.perform(post("/tickets/scan")
+                        .header("Authorization", "Bearer " + token("EVENT_ORGANIZER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ticketNumber\":\"20261030-7KQ4M-9XZ2B\",\"eventId\":\"" + eventId + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("ALLOWED"));
+    }
+
+    @Test
+    void aRoleOtherThanOrganizerOrCustomer_isStillRefused() throws Exception {
         mvc.perform(post("/tickets/scan")
                         .header("Authorization", "Bearer " + token("SHOP_USER"))
                         .contentType(MediaType.APPLICATION_JSON)

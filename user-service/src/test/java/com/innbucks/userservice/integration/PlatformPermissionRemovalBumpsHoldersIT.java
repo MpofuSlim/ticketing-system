@@ -98,7 +98,7 @@ class PlatformPermissionRemovalBumpsHoldersIT extends SessionRevocationItSupport
                         .content(objectMapper.writeValueAsString(java.util.Map.of(
                                 "name", role, "description", "Phone support",
                                 "permissions", List.of("device-security:read", "device-security:manage",
-                                        "team-members:read")))))
+                                        "shop-staff:read")))))
                 .andExpect(status().isCreated());
 
         User signedIn = holder(role, true);

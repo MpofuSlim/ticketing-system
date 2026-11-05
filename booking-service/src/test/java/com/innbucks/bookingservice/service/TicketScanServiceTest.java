@@ -1,6 +1,5 @@
 package com.innbucks.bookingservice.service;
 
-import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.config.MarketTimeZone;
 import org.springframework.web.server.ResponseStatusException;
@@ -9,7 +8,6 @@ import java.time.ZoneOffset;
 import java.time.ZoneId;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.ApiResult;
-import com.innbucks.bookingservice.dto.ScanAccessDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
@@ -39,6 +37,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -46,25 +45,20 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Pins the ticket-scan contracts. Inherits the #244 cases (single-shot
- * redemption, organizer authorization, status gate, unknown ticket) and
- * adds the per-event-assignment behaviour:
+ * Pins the ticket-scan contracts on the organizer path: single-shot
+ * redemption, organizer authorization, status gate, unknown ticket and the
+ * event-day rule. The super-app scanner path is {@link SuperAppScanTest}'s.
  *
- * <ul>
- *   <li>A TEAM_MEMBER not assigned to the event gets NOT_ASSIGNED_TO_EVENT.</li>
- *   <li>An EVENT_ORGANIZER bypasses the assignment check entirely.</li>
- *   <li>When user-service is unreachable, the configured fail-open / fail-closed
- *       policy decides.</li>
- * </ul>
+ * <p>The organizer-created TEAM_MEMBER gate accounts are retired: a caller
+ * without EVENT_ORGANIZER that is not a super-app scanner is refused before
+ * anything is read ({@link #scan_aCallerWithoutTheOrganizerRole_isRefusedBeforeAnythingIsRead}).
  *
- * Pure Mockito. The atomic UPDATE is modelled by the repo returning 1 then 0;
- * the assignment check is modelled by the UserServiceClient mock.
+ * Pure Mockito. The atomic UPDATE is modelled by the repo returning 1 then 0.
  */
 @ExtendWith(MockitoExtension.class)
 class TicketScanServiceTest {
 
     @Mock private BookingItemRepository bookingItemRepository;
-    @Mock private UserServiceClient userServiceClient;
     @Mock private ScanAttemptRepository scanAttemptRepository;
     @Mock private ObjectProvider<MeterRegistry> meterRegistryProvider;
     @Mock private ObjectProvider<EventServiceClient> eventServiceClientProvider;
@@ -77,13 +71,10 @@ class TicketScanServiceTest {
     void setUp() {
         // Constructor injection so the new audit / meter dependencies land on
         // real fields rather than null-via-@InjectMocks fallback.
-        service = new TicketScanService(bookingItemRepository, userServiceClient,
+        service = new TicketScanService(bookingItemRepository,
                 scanAttemptRepository, meterRegistryProvider, "ZW",
                 eventServiceClientProvider, marketTimeZoneProvider);
         ReflectionTestUtils.setField(service, "internalToken", "test-internal-token");
-        // Baseline mirrors the production default: fail CLOSED. The two
-        // assignment-service-down cases set this field explicitly per-test.
-        ReflectionTestUtils.setField(service, "assignmentCheckFailOpen", false);
         // The event-day rule is OFF for the inherited cases. @Value defaults are
         // a Spring concern, so a `new`-built service gets Java's boolean false
         // here anyway — setting it explicitly says that is intended rather than
@@ -92,11 +83,6 @@ class TicketScanServiceTest {
         // block below covers the guard's wiring with the flag switched on.
         ReflectionTestUtils.setField(service, "eventDayCheckEnabled", false);
         ReflectionTestUtils.setField(service, "eventDayCheckFailOpen", false);
-        // Default: assignment check says "allowed" so the inherited cases that
-        // authenticate as a bare team member still reach their intended status.
-        // lenient() because the early-return cases (not-found, etc.) never call it.
-        lenient().when(userServiceClient.canScanEvent(any(), any(), any()))
-                .thenReturn(allowed(true));
     }
 
     @AfterEach
@@ -104,24 +90,8 @@ class TicketScanServiceTest {
         SecurityContextHolder.clearContext();
     }
 
-    private ApiResult<ScanAccessDTO> allowed(boolean allowed) {
-        return ApiResult.<ScanAccessDTO>builder()
-                .code("200").message("ok")
-                .data(ScanAccessDTO.builder().allowed(allowed).build())
-                .build();
-    }
-
-    private ApiResult<ScanAccessDTO> serviceDown() {
-        return ApiResult.<ScanAccessDTO>builder().code("503").message("down").data(null).build();
-    }
-
+    /** An EVENT_ORGANIZER session: the only caller on this path. */
     private void authenticateAs(String email, UUID userUuid, UUID organizerUuid) {
-        var auth = new UsernamePasswordAuthenticationToken(email, null);
-        auth.setDetails(new JwtAuthDetails(email, null, userUuid, organizerUuid, null, null));
-        SecurityContextHolder.getContext().setAuthentication(auth);
-    }
-
-    private void authenticateAsOrganizer(String email, UUID userUuid, UUID organizerUuid) {
         var auth = new UsernamePasswordAuthenticationToken(email, null,
                 List.of(new SimpleGrantedAuthority("ROLE_EVENT_ORGANIZER")));
         auth.setDetails(new JwtAuthDetails(email, null, userUuid, organizerUuid, null, null));
@@ -259,56 +229,25 @@ class TicketScanServiceTest {
     }
 
     @Test
-    void scan_teamMemberNotAssignedToEvent_returnsNotAssigned() {
+    void scan_aCallerWithoutTheOrganizerRole_isRefusedBeforeAnythingIsRead() {
+        // The retired gate-staff role: its token carries its organizer's uuid
+        // in the organizerUuid claim, so without the role check the ownership
+        // match alone would admit it. The controller already refuses it (403);
+        // the service must not rely on that alone.
         UUID organizerUuid = UUID.randomUUID();
-        UUID scannerUuid = UUID.randomUUID();
-        BookingItem item = confirmedItem(organizerUuid);
-        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
-        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
-                .thenReturn(Optional.of(item));
-        // user-service says this member is restricted and NOT assigned here.
-        when(userServiceClient.canScanEvent(eq(scannerUuid), eq(item.getBooking().getEventId()), any()))
-                .thenReturn(allowed(false));
+        var auth = new UsernamePasswordAuthenticationToken("tariro@harare-arena.co.zw", null,
+                List.of(new SimpleGrantedAuthority("ROLE_TEAM_MEMBER")));
+        auth.setDetails(new JwtAuthDetails("tariro@harare-arena.co.zw", null, UUID.randomUUID(),
+                organizerUuid, "Tariro", "Chikomo"));
+        SecurityContextHolder.getContext().setAuthentication(auth);
 
-        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
-
-        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT);
-        assertThat(result.getBookingItemId()).isEqualTo(item.getId());
+        assertThatThrownBy(() -> service.scan("20260619-48291X", "Tariro Chikomo"))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verify(bookingItemRepository, never()).findByTicketNumberWithBooking(anyString());
         verify(bookingItemRepository, never()).claimRedemption(any(), any(), any(), any());
-    }
-
-    @Test
-    void scan_organizer_bypassesAssignmentCheckEntirely() {
-        UUID organizerUuid = UUID.randomUUID();
-        BookingItem item = confirmedItem(organizerUuid);
-        // Organizer's own userUuid == organizerUuid; carries ROLE_EVENT_ORGANIZER.
-        authenticateAsOrganizer("organizer@example.com", organizerUuid, organizerUuid);
-        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
-                .thenReturn(Optional.of(item));
-        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(1);
-
-        ScanTicketResponseDTO result = service.scan("20260619-48291X", "organizer@example.com");
-
-        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
-        // The assignment check must never be consulted for an organizer.
-        verify(userServiceClient, never()).canScanEvent(any(), any(), any());
-    }
-
-    @Test
-    void scan_assignmentServiceDown_failOpenAllowsWithinOrganizer() {
-        UUID organizerUuid = UUID.randomUUID();
-        UUID scannerUuid = UUID.randomUUID();
-        BookingItem item = confirmedItem(organizerUuid);
-        ReflectionTestUtils.setField(service, "assignmentCheckFailOpen", true);
-        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
-        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
-                .thenReturn(Optional.of(item));
-        when(userServiceClient.canScanEvent(any(), any(), any())).thenReturn(serviceDown());
-        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(1);
-
-        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
-
-        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+        verify(scanAttemptRepository, never()).save(any());
     }
 
     // -- V22: who the ticket was issued to -----------------------------------
@@ -364,31 +303,6 @@ class TicketScanServiceTest {
 
         assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALREADY_REDEEMED);
         assertThat(result.getHolderName()).isEqualTo("Tendai Ncube");
-    }
-
-    @Test
-    void scan_assignmentServiceDown_failClosedDenies() {
-        UUID organizerUuid = UUID.randomUUID();
-        UUID scannerUuid = UUID.randomUUID();
-        BookingItem item = confirmedItem(organizerUuid);
-        ReflectionTestUtils.setField(service, "assignmentCheckFailOpen", false);
-        // The event-day rule is OFF for the inherited cases. @Value defaults are
-        // a Spring concern, so a `new`-built service gets Java's boolean false
-        // here anyway — setting it explicitly says that is intended rather than
-        // incidental, and keeps these cases about the behaviour they were
-        // written for. EventDayRuleTest covers the window arithmetic; the
-        // block below covers the guard's wiring with the flag switched on.
-        ReflectionTestUtils.setField(service, "eventDayCheckEnabled", false);
-        ReflectionTestUtils.setField(service, "eventDayCheckFailOpen", false);
-        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
-        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
-                .thenReturn(Optional.of(item));
-        when(userServiceClient.canScanEvent(any(), any(), any())).thenReturn(serviceDown());
-
-        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
-
-        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT);
-        verify(bookingItemRepository, never()).claimRedemption(any(), any(), any(), any());
     }
 
     // ---- the event-day rule -------------------------------------------------

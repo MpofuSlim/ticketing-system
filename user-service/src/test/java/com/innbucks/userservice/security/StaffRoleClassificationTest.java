@@ -26,7 +26,7 @@ class StaffRoleClassificationTest {
     @DisplayName("the V35 business built-ins are not staff roles")
     void tenantBuiltInsAreNotStaff() {
         for (String name : List.of("EVENT_ORGANIZER", "MERCHANT_ADMIN", "SHOP_ADMIN", "SHOP_USER",
-                "TEAM_MEMBER", "CUSTOMER")) {
+                "CUSTOMER")) {
             assertThat(StaffRoles.isStaffRole(BuiltInRoleRows.builtin(name))).as(name).isFalse();
         }
     }

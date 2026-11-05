@@ -51,17 +51,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByUserUuid(UUID userUuid);
 
     /**
-     * Every team member created by a given organizer. Used by the
-     * organizer's team-management endpoints
-     * ({@code GET /event-organizer/team-members}); the FK column is
-     * populated only on rows whose role is TEAM_MEMBER, so this never
-     * returns non-team-member users.
-     */
-    List<User> findByCreatedByOrganizerUuid(UUID organizerUuid);
-
-    /**
-     * Whether any account names this one as its organizer — its team members.
-     * {@code created_by_organizer_uuid} is {@code ON DELETE RESTRICT} (V20), so
+     * Whether any account names this one as its organizer — a team member it
+     * created before V55 retired them. {@code created_by_organizer_uuid} is
+     * {@code ON DELETE RESTRICT} (V20), so
      * such an account can never be deleted, and rejecting its registration is
      * refused up front instead of failing on the constraint.
      */

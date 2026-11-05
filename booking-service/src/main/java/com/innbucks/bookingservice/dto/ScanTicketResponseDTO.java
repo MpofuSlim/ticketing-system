@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * Result of a ticket-scan attempt. Status drives the scanner-app UI:
+ * Result of a ticket-scan attempt. Status drives the scanner's UI:
  * <ul>
  *   <li>{@code ALLOWED} — green tick, customer walks in.</li>
  *   <li>{@code ALREADY_REDEEMED} — red toast with {@code redeemedAt} +
@@ -20,13 +20,15 @@ import java.util.UUID;
  *   <li>{@code TICKET_NOT_FOUND} — bogus QR / typo in the ticket number.</li>
  *   <li>{@code BOOKING_NOT_CONFIRMED} — booking exists but is PENDING or
  *       CANCELLED, so the ticket isn't actually paid for yet.</li>
- *   <li>{@code WRONG_ORGANIZER} — the scanner doesn't work for this event's
- *       organizer (e.g. a TEAM_MEMBER scanned a ticket for someone else's
- *       event). Returned with no audit fields.</li>
- *   <li>{@code NOT_ASSIGNED_TO_EVENT} — the scanner belongs to the right
- *       organizer but has been restricted to specific events and this isn't
- *       one of them. Distinct from WRONG_ORGANIZER so the scanner app can
- *       say "you're not on the roster for this event" vs "wrong organizer".</li>
+ *   <li>{@code WRONG_ORGANIZER} — an organizer scanned a ticket for another
+ *       organizer's event. Returned with no audit fields.</li>
+ *   <li>{@code NOT_ASSIGNED_TO_EVENT} — a super-app scanner whose number is
+ *       not on the named event's team (or whose invite is not accepted, or is
+ *       switched off). Distinct from WRONG_ORGANIZER so the scanner can say
+ *       "you're not on the roster for this event" vs "wrong organizer".</li>
+ *   <li>{@code WRONG_EVENT} — a ticket for another event than the one the
+ *       scanner is scanning for.</li>
+ *   <li>{@code WRONG_EVENT_DAY} — today is not one of the event's days.</li>
  * </ul>
  */
 @Data
@@ -53,7 +55,8 @@ public class ScanTicketResponseDTO {
     private LocalDateTime redeemedAt;
 
     @Schema(example = "Tariro Chikomo", nullable = true,
-            description = "Display name of the team member / organizer who scanned. Same value " +
+            description = "Display name of whoever scanned: the organizer, or the name the organizer " +
+                          "gave a super-app gate scanner. Same value " +
                           "regardless of whether the scanning user has since been disabled or " +
                           "renamed — denormalised at scan time so the audit trail is stable.")
     private String redeemedByName;

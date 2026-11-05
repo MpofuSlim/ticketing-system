@@ -330,7 +330,7 @@ public class AuthController {
                                                 "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZUBpbm5idWNrcy5jby56dyIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNzE1NjY1NjAwLCJleHAiOjE3MTYyNzA0MDB9.refresh-signature",
                                                 "email": "alice@innbucks.co.zw",
                                                 "roles": ["EVENT_ORGANIZER"],
-                                                "permissions": ["team-members:read", "team-members:write", "team-members:manage"],
+                                                "permissions": [],
                                                 "defaultServices": ["ticketing"],
                                                 "mfaRequired": false,
                                                 "tier": 4,

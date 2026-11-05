@@ -5,12 +5,14 @@ import com.innbucks.bookingservice.entity.ScanAttempt;
 import java.util.UUID;
 
 /**
- * JPA constructor-expression target for the per-team-member
- * {@code GROUP BY scannerUserUuid, outcome} query. Same FQ-name contract
- * as {@link OutcomeCount}.
+ * JPA constructor-expression target for the per-scanner
+ * {@code GROUP BY scannerUserUuid, outcome} query behind the team-stats
+ * leaderboard (a "member" is anyone on the organizer's gate team: the
+ * organizer or a super-app scanner). Same FQ-name contract as
+ * {@link OutcomeCount}.
  *
  * <p>scannerEmail / scannerDisplayName may differ across rows for the
- * same scannerUserUuid if the staff member's email / display name was
+ * same scannerUserUuid if the scanner's email / display name was
  * updated between scans — the aggregation in the service collapses
  * outcomes per user_uuid and picks the freshest non-null identity to
  * present, so the leaderboard shows one row per person.

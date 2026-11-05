@@ -96,7 +96,7 @@ public class AccountSessionRevoker {
      * updated in memory ({@code active = false}, the new {@code tokenVersion}).
      *
      * @param reason a short machine-readable tag for the log line
-     *               (e.g. {@code admin_deactivation}, {@code team_member_disabled})
+     *               (e.g. {@code admin_deactivation})
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public Revocation revokeAll(User user, String reason) {

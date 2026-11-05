@@ -153,7 +153,7 @@ public class StaffPolicyException extends RuntimeException {
     public static final String REASON_RESERVED_TO_SUPER_ADMIN = "reserved_to_super_admin";
     /**
      * {@code reason}: a PLATFORM code on a business built-in (EVENT_ORGANIZER,
-     * MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, TEAM_MEMBER, CUSTOMER) — roles
+     * MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, CUSTOMER) — roles
      * handed out by paths that never check staff eligibility.
      */
     public static final String REASON_BUSINESS_ROLE = "business_role";
@@ -240,7 +240,7 @@ public class StaffPolicyException extends RuntimeException {
     public static final String USE_STAFF_INVITE = "use_staff_invite";
     public static final String USE_STAFF_INVITE_MESSAGE = "Staff set passwords through an invite.";
     public static final String USE_STAFF_ENDPOINTS = "use_staff_endpoints";
-    /** {@code errorCode}: team-member creation is switched off; add the person as a scanner. */
+    /** {@code errorCode}: team members were retired; add the person as a scanner. */
     public static final String USE_SCANNER_INVITE = "use_scanner_invite";
     public static final String USE_SCANNER_INVITE_MESSAGE =
             "Team members can no longer be created. Add the person as a scanner with their phone number: "
@@ -251,9 +251,9 @@ public class StaffPolicyException extends RuntimeException {
     public static final String STAFF_CREATE_LIMITED = "staff_create_limited";
 
     /**
-     * 410 {@code use_scanner_invite}: creating a team member is switched off
-     * ({@code app.team-members.create-enabled}). {@code data.scannerPath} names
-     * the endpoint that replaces it.
+     * 410 {@code use_scanner_invite}: team members were retired (V55), and every
+     * path under {@code /event-organizer/team-members} answers this.
+     * {@code data.scannerPath} names the endpoint that replaces it.
      */
     public static StaffPolicyException useScannerInvite() {
         return new StaffPolicyException(HttpStatus.GONE, USE_SCANNER_INVITE, USE_SCANNER_INVITE_MESSAGE,

@@ -8,10 +8,13 @@ import java.util.UUID;
 /**
  * One leaderboard row in {@link TeamStatsResponseDTO} — collapsed per
  * scanner_user_uuid. Zero-fill semantics on {@code byOutcome} match the
- * other stats DTOs.
+ * other stats DTOs. The class and schema names predate the super-app
+ * scanners and are kept so the published contract does not move.
  */
 @Schema(name = "TeamMemberStats",
-        description = "Outcome breakdown for one team member, an entry in the team-stats leaderboard.")
+        description = "Outcome breakdown for one scanner (the organizer or a super-app gate scanner), "
+                + "an entry in the team-stats leaderboard. A super-app scanner's row carries no "
+                + "scannerEmail.")
 public record TeamMemberStatsDTO(
         @Schema(example = "7e9a1c2b-4d5f-46a7-89b0-1c2d3e4f5a6b")
         UUID scannerUserUuid,

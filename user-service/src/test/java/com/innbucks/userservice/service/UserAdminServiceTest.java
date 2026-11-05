@@ -839,16 +839,19 @@ class UserAdminServiceTest {
     }
 
     @Test
-    void setRoles_refusesTeamMember_whenTheAccountHasNoParentOrganizer() {
+    void setRoles_refusesTeamMember_aRetiredRole() {
+        // V55 deleted TEAM_MEMBER's roles row, so it is refused like any unknown
+        // name: gate staff are super-app scanners, never an account role.
         Fixture f = new Fixture();
         User user = userWithRoles(57L, User.Role.CUSTOMER);
         when(f.userRepo.findById(57L)).thenReturn(Optional.of(user));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> f.service.setRoles(57L, User.roleNames(User.Role.TEAM_MEMBER),
+                () -> f.service.setRoles(57L, Set.of("TEAM_MEMBER"),
                         "admin@innbucks.co.zw", AuditContext.none()));
 
         assertEquals(400, ex.getStatusCode().value());
+        assertThat(ex.getReason()).contains("Unknown role(s): TEAM_MEMBER");
         verify(f.userRepo, never()).save(any(User.class));
     }
 

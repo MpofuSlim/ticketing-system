@@ -42,14 +42,14 @@ import static org.mockito.Mockito.when;
  * The mint-time eligibility filter on JwtFilter's perms-less (pre-{@code perms})
  * token path (V44): the account is read ONLY for a token carrying staff
  * authority (a NAMED role name or a PLATFORM code) — never for a CUSTOMER or
- * TEAM_MEMBER — and in {@code enforce} an ineligible holder loses the PLATFORM
+ * shop-staff token — and in {@code enforce} an ineligible holder loses the PLATFORM
  * codes AND the NAMED role name on the very next request.
  */
 class JwtFilterStaffMintFilterTest {
 
     private static final Map<String, Set<String>> GRANTS = Map.of(
             "PRODUCT_OFFICER", Set.of(PermissionCatalog.USERS_MERCHANTS_READ),
-            "TEAM_MEMBER", Set.of(),
+            "SHOP_USER", Set.of(),
             "CUSTOMER", Set.of());
 
     private JwtUtil jwtUtil;
@@ -104,13 +104,13 @@ class JwtFilterStaffMintFilterTest {
     }
 
     @Test
-    @DisplayName("a perms-less CUSTOMER or TEAM_MEMBER token costs no account read and never touches the metric")
+    @DisplayName("a perms-less CUSTOMER or SHOP_USER token costs no account read and never touches the metric")
     void businessTokens_noAccountRead() throws Exception {
         properties.setEligibilityEnforcement(StaffAccountProperties.Enforcement.ENFORCE);
         Authentication customer = authenticate(jwtUtil.generateToken("rudo@example.com", "CUSTOMER", 2, true));
-        Authentication gate = authenticate(jwtUtil.generateToken("gate@harare-arena.co.zw", "TEAM_MEMBER", 1, true));
+        Authentication till = authenticate(jwtUtil.generateToken("till@harare-arena.co.zw", "SHOP_USER", 1, true));
         assertThat(customer.getAuthorities()).extracting("authority").contains("ROLE_CUSTOMER");
-        assertThat(gate.getAuthorities()).extracting("authority").contains("ROLE_TEAM_MEMBER");
+        assertThat(till.getAuthorities()).extracting("authority").contains("ROLE_SHOP_USER");
         verifyNoInteractions(users, eligibility);
         assertThat(ineligibleCount()).isZero();
     }

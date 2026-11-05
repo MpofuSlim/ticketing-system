@@ -29,7 +29,7 @@ import java.util.UUID;
  * never touches payment-service.
  *
  * <p>Owner decisions (2026-11-03): only the organizer's own account sells (its
- * login has a second factor; a team member's does not); the organizer may void
+ * login has a second factor; a gate scanner's session does not); the organizer may void
  * a sale, with a reason, until the event starts and while none of its tickets
  * is scanned; cash sales count in the commission like online ones; and the
  * box office sells in the same window as online.

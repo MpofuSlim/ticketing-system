@@ -270,9 +270,8 @@ public class AuthService implements ApplicationEventPublisherAware {
      * two drift apart while a session is live, which happens two ways:
      *
      * <ul>
-     *   <li>An account the policy exempts — a CUSTOMER, or a gate operator per
-     *       {@code MfaPolicy.gateOperatorExempt} — is granted a role that
-     *       mandates MFA. {@code UserAdminService.setRoles} bumps
+     *   <li>An account the policy does not challenge — a CUSTOMER — is granted
+     *       a role that mandates MFA. {@code UserAdminService.setRoles} bumps
      *       {@code tokenVersion}, so the old ACCESS token dies — but it does
      *       not revoke the refresh-token row, and {@link #refresh} re-reads the
      *       live user and mints a fresh access token carrying the new
@@ -282,8 +281,7 @@ public class AuthService implements ApplicationEventPublisherAware {
      *   <li>A SUPER_ADMIN calls {@code /admin/users/{id}/mfa/reset}, which
      *       wipes the secret so the user "must re-enrol on next login" — but
      *       leaves their refresh token live, so refreshing instead of logging
-     *       in dodged the re-enrolment entirely. This predates the TEAM_MEMBER
-     *       exemption; the same guard closes it.</li>
+     *       in dodged the re-enrolment entirely. The same guard closes it.</li>
      * </ul>
      *
      * <p>403 rather than 400 for the same reason as
@@ -560,8 +558,7 @@ public class AuthService implements ApplicationEventPublisherAware {
         // waiting on a SUPER_ADMIN to approve them. Surface the real reason up
         // front instead. This MUST run before the password check because a pending
         // account has no real password to match. Every other account type is
-        // created already-approved (OtpService / TeamMemberService /
-        // ShopStaffService) and pre-existing rows are back-filled by V26, so
+        // created already-approved (OtpService / ShopStaffService) and pre-existing rows are back-filled by V26, so
         // "inactive AND unapproved" is uniquely a still-pending registration — a
         // deactivated (previously-approved) account keeps approved=true and falls
         // through to the not-active check further down.
@@ -761,24 +758,6 @@ public class AuthService implements ApplicationEventPublisherAware {
                     .mfaRequired(true)
                     .mfaToken(loginToken)
                     .build();
-        }
-
-        // Gate-operator exemption took effect: this is a pure TEAM_MEMBER
-        // (scanner account) on a channel where 2FA WOULD otherwise apply, and
-        // they haven't opted in. Recorded explicitly — without it a factorless
-        // staff session is indistinguishable in the audit trail from a customer
-        // login, which is the one thing that makes the exemption unreviewable.
-        // Mirrors the mfaSkippedViaTrustedDevice marker above.
-        if (mfaPolicy != null
-                && mfaPolicy.applicable(channel)
-                && mfaPolicy.gateOperatorExempt(user)) {
-            log.info("MFA not required for gate operator userId={}", user.getId());
-            auditService.recordSuccess(
-                    AuditEventType.AUTH_LOGIN_SUCCESS,
-                    String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
-                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
-                    java.util.Map.of("mfaSkippedViaGateOperatorRole", true),
-                    auditContext);
         }
 
         return issueToken(user, deviceId);
@@ -1548,11 +1527,13 @@ public class AuthService implements ApplicationEventPublisherAware {
             country = DEFAULT_SUPER_ADMIN_COUNTRY;
         }
 
-        // Stable cross-service caller identifier + team-scoping claim.
+        // Stable cross-service caller identifier + organizer-scoping claim.
         // organizerUuid resolves to:
-        //   - EVENT_ORGANIZER : their own user_uuid (they're the root of their team)
-        //   - TEAM_MEMBER     : the parent organizer's user_uuid (stamped at creation)
-        //   - everyone else   : null (no team scoping applies)
+        //   - EVENT_ORGANIZER : their own user_uuid
+        //   - everyone else   : null (no organizer scoping applies)
+        // (Team members, which carried their parent organizer's uuid here, were
+        // retired by V55: gate staff are super-app scanners, authorized live by
+        // event-service, never by a claim.)
         // Booking-service uses this to authorize ticket scans without a
         // per-request lookup back into user-service.
         // Also a scope claim, so also withheld on a phone proof: it authorizes
@@ -1564,8 +1545,6 @@ public class AuthService implements ApplicationEventPublisherAware {
         } else if (roleNames.contains(User.Role.EVENT_ORGANIZER.name())) {
             // The minted role (V53): withheld while the owner's ticketing is suspended.
             organizerUuid = user.getUserUuid();
-        } else if (user.hasRole(User.Role.TEAM_MEMBER)) {
-            organizerUuid = user.getCreatedByOrganizerUuid();
         } else {
             organizerUuid = null;
         }

@@ -85,10 +85,6 @@ public class UserResponseDTO {
             description = "Loyalty shop the user operates at. Populated for SHOP_ADMIN and SHOP_USER.")
     private UUID loyaltyShopId;
 
-    @Schema(example = "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e", nullable = true,
-            description = "For TEAM_MEMBER rows, the user_uuid of the EVENT_ORGANIZER that created " +
-                          "this team member. Null for every other role.")
-    private UUID createdByOrganizerUuid;
 
     @Schema(example = "true", description = "Whether this is a business account (set at registration). " +
             "Business accounts carry a tenant profile exposed via businessDetails.")
@@ -155,7 +151,6 @@ public class UserResponseDTO {
                 .credentialDeliveredAt(user.getCredentialDeliveredAt())
                 .loyaltyMerchantId(user.getLoyaltyMerchantId())
                 .loyaltyShopId(user.getLoyaltyShopId())
-                .createdByOrganizerUuid(user.getCreatedByOrganizerUuid())
                 .business(user.isBusiness())
                 .businessDetails(profile == null ? null : BusinessDetails.from(profile))
                 .build();

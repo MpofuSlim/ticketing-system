@@ -604,8 +604,7 @@ public class AdminUserController {
                     | `CALL_CENTER_AGENT` | Customer support: looks customers up and performs routine support actions (`device-security:read`, `device-security:manage`, `marketplace-support:read`, `marketplace-support:manage`, `loyalty-support:read`, `loyalty-support:manage`, `customer-messages:send`). | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
                     | `CALL_CENTER_SUPERVISOR` | Customer-support supervisor: the agent's grants plus `marketplace-support:supervise` and `loyalty-support:supervise`. | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
                     | `FRAUD_DESK` | Add-on held with an agent or supervisor role: bans, fraud holds and lifting them (`device-security:read`, `device-security:fraud`). | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
-                    | `EVENT_ORGANIZER` | Runs ticketed events — owns events, invoices, settlements and team members. | Self-registration as a business account, then `PUT /admin/users/{id}/active` to approve. |
-                    | `TEAM_MEMBER` | Gate staff / scanner operator working for one EVENT_ORGANIZER. Their JWT carries the parent organizer's uuid so booking-service can authorize ticket scans. | `POST /event-organizer/team-members` |
+                    | `EVENT_ORGANIZER` | Runs ticketed events — owns events, invoices, settlements and gate scanners. | Self-registration as a business account, then `PUT /admin/users/{id}/active` to approve. |
                     | `MERCHANT_ADMIN` | Runs a loyalty merchant — manages that merchant's shops, staff and rules. | `POST /loyalty/merchants` plus the merchant-admin account. |
                     | `SHOP_ADMIN` | Manages staff at one loyalty shop. | `POST /admin/shop-staff/admins` |
                     | `SHOP_USER` | Operates the POS at one loyalty shop — records purchases and redemptions. | `POST /admin/shop-staff/users` |
@@ -645,9 +644,8 @@ public class AdminUserController {
                     * The target already being a `SUPER_ADMIN` (the seeded owner or a deputy), or
                       `SUPER_ADMIN` appearing in the submitted set — **403** either way. Promotion and
                       demotion are `POST` / `DELETE /admin/super-admins/{userId}`, platform owner only.
-                    * `SHOP_ADMIN` / `SHOP_USER` on an account with no loyalty merchant + shop, or
-                      `TEAM_MEMBER` on an account with no parent organizer — **400**. Those roles
-                      authorize off scope baked in at creation time; granting one without it produces
+                    * `SHOP_ADMIN` / `SHOP_USER` on an account with no loyalty merchant + shop — **400**.
+                      Those roles authorize off scope baked in at creation time; granting one without it produces
                       an account that logs in and then fails inside every handler.
                     * The `USER_ROLES_CHANGED` audit row cannot be written — **503
                       `audit_unavailable`**, and nothing changes.
@@ -764,13 +762,6 @@ public class AdminUserController {
                                             {
                                               "code": "400 BAD_REQUEST",
                                               "message": "SHOP_ADMIN and SHOP_USER require the account to be scoped to a loyalty merchant and shop; create shop staff via POST /admin/shop-staff/admins or POST /admin/shop-staff/users instead.",
-                                              "data": null
-                                            }
-                                            """),
-                                    @ExampleObject(name = "Team member without an organizer", value = """
-                                            {
-                                              "code": "400 BAD_REQUEST",
-                                              "message": "TEAM_MEMBER requires the account to be stamped with its parent EVENT_ORGANIZER; create team members via POST /event-organizer/team-members instead.",
                                               "data": null
                                             }
                                             """)

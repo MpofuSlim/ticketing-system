@@ -3,8 +3,6 @@ package com.innbucks.userservice.security;
 import com.innbucks.userservice.entity.User;
 import org.springframework.stereotype.Component;
 
-import java.util.Set;
-
 /**
  * Decides — for a given (user roles, login channel) pair — whether 2FA is
  * applicable at all, and if so whether it's REQUIRED (the user must enrol if
@@ -16,100 +14,28 @@ import java.util.Set;
  *   USSD or WHATSAPP             →  not applicable  (no second-factor surface)
  *   WEB or MOBILE, system user   →  required        (forced enrolment on first login)
  *   WEB or MOBILE, CUSTOMER      →  opt-in          (mfaEnabled honoured if set)
- *   WEB or MOBILE, TEAM_MEMBER   →  never           (gate-operator exemption, below)
  * </pre>
  *
- * <p>System users = every Role except CUSTOMER, minus the gate-operator
- * exemption. The roles list is taken straight off the User entity, so a user
- * with multiple roles (e.g. a SUPER_ADMIN who is also an EVENT_ORGANIZER) is
- * treated as a system user the moment ANY of their roles is non-CUSTOMER.
+ * <p>System users = every Role except CUSTOMER. The roles list is taken
+ * straight off the User entity, so a user with multiple roles (e.g. a
+ * SUPER_ADMIN who is also an EVENT_ORGANIZER) is treated as a system user the
+ * moment ANY of their roles is non-CUSTOMER.
  *
- * <h2>The gate-operator exemption</h2>
- *
- * <p>A TEAM_MEMBER is event gate staff: they stand at a turnstile scanning
- * tickets, often on a shared handset passed between shifts, and a TOTP prompt
- * per sign-in is the wrong ergonomics for that job. So an account whose role
- * set is <em>exactly</em> {@code {TEAM_MEMBER}} is never challenged at all —
- * not forced to enrol, and not challenged even if it already holds a TOTP
- * secret.
- *
- * <p>That last clause is load-bearing rather than incidental. TEAM_MEMBER used
- * to be a system user, so every team member was force-enrolled on first login
- * and still carries {@code mfaEnabled=true}. A version of this exemption that
- * honoured that flag would apply only to accounts created after it shipped and
- * would keep challenging every existing gate staffer indefinitely — observed
- * on staging, where a genuine single-role TEAM_MEMBER kept getting
- * {@code mfaRequired} because they had enrolled under the old rule. Clearing
- * the flag per account through the admin MFA reset works, but an exemption
- * that needs a manual data fix for each holder is not much of an exemption.
- *
- * <p><strong>The exemption is keyed on exact set equality, NOT on "holds
- * TEAM_MEMBER", and that distinction is the whole safety of it.</strong>
- * {@link #isSystemUser} deliberately reads "holds ANY role that isn't
- * CUSTOMER" — so a contains-style exemption would invert it into "holds ANY
- * role that isn't TEAM_MEMBER", and every multi-role account containing
- * TEAM_MEMBER would stop being challenged. That is reachable in practice, by
- * at least two routes that do not require compromising anything:
- *
- * <ul>
- *   <li>{@code ServiceRequestService.approve} adds a bundle's role straight
- *       into {@code user.getRoles()}, and {@code POST /users/me/service-requests}
- *       carries no {@code @PreAuthorize} — so a team member plus one admin
- *       approval is {@code {TEAM_MEMBER, MERCHANT_ADMIN}}.</li>
- *   <li>{@code DataInitializer} MERGES {@code SUPER_ADMIN} into whatever role
- *       set already sits on the bootstrap-admin email rather than replacing it,
- *       and team-member creation accepts any unclaimed address — so
- *       {@code {SUPER_ADMIN, TEAM_MEMBER}} is reachable too.</li>
- * </ul>
- *
- * <p>Under set equality both of those keep facing a challenge, because their
- * role set is no longer exactly {@code {TEAM_MEMBER}}. The check therefore
- * fails CLOSED: any role composition we did not explicitly exempt is treated
- * as staff. Keep it that way — widening this to {@code contains(TEAM_MEMBER)}
- * turns a scanner carve-out into a fleet-wide MFA opt-out.
- *
- * <p><strong>Set equality alone is still not enough, because a role name is
- * not a fixed statement of privilege.</strong> {@code PUT /admin/roles/{name}/permissions}
- * is deliberately allowed on built-in roles, so an operator holding
- * {@code roles:write} can grant TEAM_MEMBER any concrete permission in the
- * catalog (the wildcard is refused, but {@code users:roles:write} is not). The
- * exemption therefore ALSO requires that the account resolve to no permissions
- * at all — it is keyed on being genuinely unprivileged, not on being called
- * TEAM_MEMBER. Grant gate staff real authority and they stop being exempt,
- * automatically.
- *
- * <p>Note also what the exemption is NOT: it is evaluated at login only (the
- * single call site is {@code AuthService.login}), so a session minted
- * factorless stays valid for its whole refresh chain even if the account later
- * gains a privileged second role — role mutation does not bump
- * {@code tokenVersion}. That is pre-existing behaviour for every policy
- * decision here, not something this exemption introduces, but it is the reason
- * the login-time check is strict.
+ * <p><strong>There is no exemption, for anyone.</strong> Until 2026-11-05 a
+ * "gate operator" (an account holding exactly {@code TEAM_MEMBER} and no
+ * permission) was never challenged. Team members were retired that day (V55):
+ * gate staff are super-app scanners now, signing in to the InnBucks app as
+ * customers, with no account here to challenge. Do not bring back a carve-out
+ * keyed on a role name: a role's grants are editable at runtime, so a name is
+ * never a statement of privilege.
  */
 @Component
 public class MfaPolicy {
 
     /**
-     * Resolves an account's roles to the permissions they actually grant. The
-     * gate-operator exemption consults it because a role NAME is not a stable
-     * statement of privilege — see {@link #gateOperatorExempt}.
-     *
-     * <p>Constructor-injected rather than optional-field-injected on purpose:
-     * there is no sensible null behaviour here. An exemption that could not
-     * check privilege would have to refuse to exempt, and a policy object that
-     * silently stops exempting is worse than one that cannot be built.
-     */
-    private final PermissionResolver permissionResolver;
-
-    public MfaPolicy(PermissionResolver permissionResolver) {
-        this.permissionResolver = permissionResolver;
-    }
-
-    /**
-     * Organization memberships (V39). Field-injected, not a constructor
-     * argument, so {@code MfaPolicyTest}'s construction sites don't widen; null
-     * there means "no memberships", which is exactly the pre-V39 behaviour
-     * those tests pin.
+     * Organization memberships (V39). Field-injected and optional, so
+     * {@code MfaPolicyTest}'s construction sites don't widen; null there means
+     * "no memberships", which is exactly the pre-V39 behaviour those tests pin.
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.innbucks.userservice.repository.OrganizationMemberRepository organizationMembers;
@@ -120,17 +46,12 @@ public class MfaPolicy {
      * <p>Membership is business authority: a member speaks for that business on
      * every product that trusts the {@code orgId} claim, which is where a
      * seller's listings and payout destination live. That authority must never
-     * ride a session that skipped the second factor. Two account shapes would
-     * otherwise do exactly that, because {@link #isSystemUser} reads only the
-     * GLOBAL role set:
-     * <ul>
-     *   <li>a plain CUSTOMER added to an organization — CUSTOMER is not a
-     *       system role, so no challenge;</li>
-     *   <li>a gate operator added to an organization — exempt by
-     *       {@link #gateOperatorExempt}.</li>
-     * </ul>
-     * Counting ANY membership, STAFF included, is the conservative line and
-     * matches how shop staff are already treated (SHOP_USER is a system role).
+     * ride a session that skipped the second factor. A plain CUSTOMER added to
+     * an organization would otherwise do exactly that, because
+     * {@link #isSystemUser} reads only the GLOBAL role set and CUSTOMER is not a
+     * system role. Counting ANY membership, STAFF included, is the conservative
+     * line and matches how shop staff are already treated (SHOP_USER is a
+     * system role).
      */
     private boolean belongsToAnOrganization(User user) {
         return organizationMembers != null
@@ -149,11 +70,11 @@ public class MfaPolicy {
 
     /**
      * True iff this user MUST satisfy 2FA on this channel — i.e. the channel
-     * supports it AND they hold a non-CUSTOMER role. The caller's job is to
-     * branch on whether the user is already enrolled (and trigger enrolment if
-     * not). For an opt-in CUSTOMER, this returns false even when
-     * {@code mfaEnabled=true}; use {@link #shouldChallenge} instead at the
-     * login site.
+     * supports it AND they hold a non-CUSTOMER role (or belong to an
+     * organization). The caller's job is to branch on whether the user is
+     * already enrolled (and trigger enrolment if not). For an opt-in CUSTOMER,
+     * this returns false even when {@code mfaEnabled=true}; use
+     * {@link #shouldChallenge} instead at the login site.
      */
     public boolean required(User user, AuthChannel channel) {
         return applicable(channel) && isSystemUser(user);
@@ -163,94 +84,18 @@ public class MfaPolicy {
      * True iff the login site should challenge the user for a TOTP/backup
      * code: either the policy requires it for this role on this channel, OR
      * the user opted in by enabling MFA themselves. False on USSD/WhatsApp
-     * regardless, and false for a gate operator whatever their enrolment
-     * state — see below.
+     * regardless.
      */
     public boolean shouldChallenge(User user, AuthChannel channel) {
         if (!applicable(channel)) {
             return false;
         }
-        // Gate operators are never challenged, INCLUDING one who already holds
-        // a TOTP secret. This short-circuits before the mfaEnabled check below
-        // rather than falling through it.
-        //
-        // Why it has to work this way: before the exemption existed, TEAM_MEMBER
-        // was a system user, so every team member was FORCE-ENROLLED on first
-        // login and carries mfaEnabled=true to this day. Honouring that flag
-        // would mean the exemption only ever applied to accounts created after
-        // it shipped, and every existing gate staffer kept being challenged
-        // forever — which is exactly what was observed on staging. An operator
-        // could clear each one by hand via the admin MFA reset, but a carve-out
-        // that needs a manual data fix per account is not a carve-out.
-        //
-        // The trade this makes, deliberately: a team member who enrolled
-        // VOLUNTARILY also stops being challenged, and nothing tells them their
-        // second factor is no longer consulted. Their secret is retained rather
-        // than cleared, so it starts being honoured again the moment they hold
-        // any other role — see the note on required().
-        if (gateOperatorExempt(user)) {
-            return false;
-        }
         return isSystemUser(user) || user.isMfaEnabled();
-    }
-
-    /**
-     * True iff this account is a gate operator and <em>nothing else</em> — its
-     * role set is exactly {@code {TEAM_MEMBER}}. Such an account is exempt from
-     * forced 2FA (see the class javadoc); every other role composition,
-     * including any that merely contains TEAM_MEMBER, is not.
-     *
-     * <p>Public so the login site can record in the audit trail that the
-     * exemption is <em>why</em> no challenge was raised — a factorless staff
-     * session should not be indistinguishable from a customer login after the
-     * fact.
-     */
-    public boolean gateOperatorExempt(User user) {
-        Set<String> roles = user.getRoles();
-        // size()==1 is what makes this set equality rather than containment.
-        // Roles are free-text since V35, so an operator-created role sitting
-        // alongside TEAM_MEMBER also fails this and stays challenged.
-        if (roles == null || roles.size() != 1 || !roles.contains(User.Role.TEAM_MEMBER.name())) {
-            return false;
-        }
-        // AND the account must actually be unprivileged. The role set alone is
-        // NOT sufficient: PUT /admin/roles/{name}/permissions is deliberately
-        // allowed on built-in roles ("adjusting what MERCHANT_ADMIN can do is a
-        // normal operation"), so TEAM_MEMBER's grants are mutable at runtime.
-        // Without this check, granting TEAM_MEMBER a permission — users:roles:write,
-        // say — would silently produce a privileged account that is ALSO exempt
-        // from 2FA, and the set-equality test above would still pass because the
-        // role set never changed.
-        //
-        // V35 seeds TEAM_MEMBER with no permissions and says so explicitly
-        // ("TEAM_MEMBER, SHOP_USER and CUSTOMER intentionally get NOTHING here"),
-        // so this holds today and self-heals if that ever stops being true: the
-        // moment gate staff are given real authority they stop being exempt,
-        // which is the correct direction to fail. It also covers grants made
-        // outside the API (a direct SQL grant, a restore), which a guard on the
-        // grant endpoint could not see.
-        //
-        // Cost note: this resolve() only runs for accounts that already passed
-        // the single-role test, i.e. gate staff. No other login pays for it.
-        //
-        // Organization membership fails it CLOSED in the same way (V39): a gate
-        // operator who joins a business holds that business's authority and
-        // stops being exempt automatically.
-        if (belongsToAnOrganization(user)) {
-            return false;
-        }
-        return permissionResolver.resolve(roles).isEmpty();
     }
 
     private boolean isSystemUser(User user) {
         if (user.getRoles() == null || user.getRoles().isEmpty()) {
             // A roleless account can't be a system user — treat as customer.
-            return false;
-        }
-        if (gateOperatorExempt(user)) {
-            // Pure gate staff take the CUSTOMER opt-in path. Checked BEFORE the
-            // any-non-CUSTOMER test below, which would otherwise classify them
-            // as staff and force enrolment.
             return false;
         }
         // "System user" = holds any role other than CUSTOMER. Since V35 that

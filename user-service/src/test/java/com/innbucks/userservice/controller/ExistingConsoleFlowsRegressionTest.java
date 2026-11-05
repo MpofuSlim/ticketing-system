@@ -51,18 +51,16 @@ class ExistingConsoleFlowsRegressionTest {
     }
 
     @Test
-    @DisplayName("TEAM_MEMBER on an account with no parent organizer: the same 400 as before")
-    void teamMemberScope() throws Exception {
+    @DisplayName("TEAM_MEMBER was retired (V55): refused like any unknown role, stamped or not")
+    void teamMemberRetired() throws Exception {
         User orphan = h.account("gate@harare-arena.co.zw", "CUSTOMER");
         setRoles(orphan, "[\"TEAM_MEMBER\"]")
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("TEAM_MEMBER requires the account to be stamped with its "
-                        + "parent EVENT_ORGANIZER; create team members via POST /event-organizer/team-members "
-                        + "instead."));
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Unknown role(s): TEAM_MEMBER")));
 
         User stamped = h.account("scanner@harare-arena.co.zw", "CUSTOMER");
         stamped.setCreatedByOrganizerUuid(UUID.randomUUID());
-        setRoles(stamped, "[\"TEAM_MEMBER\"]").andExpect(status().isOk());
+        setRoles(stamped, "[\"TEAM_MEMBER\"]").andExpect(status().isBadRequest());
     }
 
     @Test

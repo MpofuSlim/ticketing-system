@@ -30,9 +30,9 @@ import java.util.UUID;
  * number and a name on the organizer's team; no account is created and no
  * password is sent. The person accepts in the super app, then scans there.
  *
- * <p>The shared-device login ({@code /event-organizer/team-members}, an account
- * with a temporary password, for the scanner app on venue phones) is a
- * different thing in user-service and is unchanged.
+ * <p>Gate staff are super-app scanners only. The scanner-app team members
+ * (user-service accounts with a temporary password, for shared venue phones)
+ * were retired on 2026-11-05; nothing in event-service reads them any more.
  *
  * <p>Writes are the owning organizer's only; platform staff read every
  * organizer's scanners and change none.
@@ -277,9 +277,8 @@ public class ScannerController {
 
     /**
      * The organizer the caller acts for: their {@code organizerUuid} claim,
-     * which on an organizer's token is their own user uuid. A team member's
-     * token carries the claim too, which is why every write also requires the
-     * EVENT_ORGANIZER role.
+     * which on an organizer's token is their own user uuid. The claim alone
+     * grants nothing: every write also requires the EVENT_ORGANIZER role.
      */
     private static UUID organizer(Authentication authentication) {
         UUID organizer = AuthenticatedCaller.organizerUuid(authentication);

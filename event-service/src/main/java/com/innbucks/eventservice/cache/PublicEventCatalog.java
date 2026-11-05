@@ -19,8 +19,8 @@ import java.util.function.Supplier;
 
 /**
  * The cache behind the ANONYMOUS-BRANCH event listings — {@code GET /events}
- * and {@code /events/active} for a caller who is neither an organizer nor a
- * team member, {@code /events/search} and {@code /events/by-country}. What it
+ * and {@code /events/active} for any caller who is not an organizer,
+ * {@code /events/search} and {@code /events/by-country}. What it
  * holds is the database's answer (which events, in which order, how many in
  * total) as immutable {@link EventSnapshot}s; availability and organizer
  * details are attached per request by the caller, from live / separately
@@ -29,7 +29,7 @@ import java.util.function.Supplier;
  * <p><b>Why caching these is safe for every caller.</b> Each of the four
  * service methods that reach this answers the same thing whoever asks —
  * published events only, the organizer id stripped — and the controller sends
- * organizers and team members to DIFFERENT, uncached methods. So the key needs
+ * organizers to DIFFERENT, uncached methods. So the key needs
  * no caller identity, only every query input: the query kind, the date window,
  * venue, country, category, search text, page, size and sort. The cell is
  * implicit (a local cache never leaves its pod, and a pod serves one cell).

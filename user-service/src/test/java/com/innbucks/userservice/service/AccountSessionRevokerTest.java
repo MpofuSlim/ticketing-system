@@ -123,7 +123,7 @@ class AccountSessionRevokerTest {
         user.setEmail(null);
         when(users.deactivateAndIncrementTokenVersion(4812L)).thenReturn(12L);
 
-        revoker.revokeAll(user, "team_member_disabled");
+        revoker.revokeAll(user, "admin_deactivation");
 
         verify(otps).deleteByPhoneNumber("+263771234567");
         verify(otps, org.mockito.Mockito.times(1)).deleteByPhoneNumber(anyString());

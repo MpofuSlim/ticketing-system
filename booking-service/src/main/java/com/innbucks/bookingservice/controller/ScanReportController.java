@@ -39,7 +39,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Per-team-member ticket-scan reporting for the gate-staff dashboard.
+ * Per-scanner ticket-scan reporting for the organizer's gate dashboard. A
+ * scanner is the organizer themselves or a gate scanner on the InnBucks super
+ * app (the organizer-created TEAM_MEMBER accounts are retired; rows they wrote
+ * before that stay and are reported like any other scanner's).
  *
  * <p>Backs every endpoint on top of the {@code scan_attempts} audit log
  * (one row per scan attempt regardless of outcome — see
@@ -49,7 +52,8 @@ import java.util.UUID;
  *
  * <ul>
  *   <li>{@code /scans/me*} — the calling user's own scan history and
- *       outcome stats. EVENT_ORGANIZER or TEAM_MEMBER may call.</li>
+ *       outcome stats. EVENT_ORGANIZER or a super-app scanner (CUSTOMER)
+ *       may call.</li>
  *   <li>{@code /scans/events/{eventId}*} and {@code /scans/team-stats} —
  *       organizer views. Per-event endpoints verify the caller owns
  *       the event (organizerUuid == event.tenantUserUuid) before reading;
@@ -121,7 +125,7 @@ public class ScanReportController {
     private String eventInternalToken;
 
     @GetMapping("/me")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','CUSTOMER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER')")
     @Operation(summary = "List my scan attempts",
             description = "Returns the calling user's own scan attempts in the [from, to] window, " +
                           "newest first. Page size capped at " + MAX_PAGE_SIZE + ". `to` is optional — omit it for "
@@ -174,7 +178,8 @@ public class ScanReportController {
                                     { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller is not EVENT_ORGANIZER, TEAM_MEMBER or CUSTOMER",
+                    description = "Caller is neither EVENT_ORGANIZER nor CUSTOMER (a token carrying only "
+                            + "the retired TEAM_MEMBER role included)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
@@ -212,7 +217,7 @@ public class ScanReportController {
      * A super-app scanner's rows carry no {@code bookingId}. Such a scanner is
      * anyone whose number an organizer added, and a booking id names every
      * ticket of a booking, including other events' tickets they scanned and
-     * were refused. The organizer's own team keeps it.
+     * were refused. The organizer keeps it.
      */
     private static PageResponse<ScanAttemptDTO> forCaller(Authentication authentication,
                                                          PageResponse<ScanAttemptDTO> rows) {
@@ -227,7 +232,7 @@ public class ScanReportController {
     }
 
     @GetMapping("/me/stats")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','CUSTOMER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER')")
     @Operation(summary = "My scan-outcome stats",
             description = "Outcome breakdown (ALLOWED, ALREADY_REDEEMED, etc.) for the calling user " +
                           "over the [from, to] window. Every Outcome enum value is present in the response " +
@@ -303,7 +308,8 @@ public class ScanReportController {
                                     { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller is not EVENT_ORGANIZER, TEAM_MEMBER or CUSTOMER",
+                    description = "Caller is neither EVENT_ORGANIZER nor CUSTOMER (a token carrying only "
+                            + "the retired TEAM_MEMBER role included)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
@@ -481,8 +487,9 @@ public class ScanReportController {
     @GetMapping("/team-stats")
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')")
     @Operation(summary = "Team scan-outcome leaderboard",
-            description = "Per-team-member outcome breakdown for the calling organizer's gate staff " +
-                          "over the [from, to] window. Members are ordered by total scans DESC.")
+            description = "Per-scanner outcome breakdown for everyone who scanned for the calling " +
+                          "organizer over the [from, to] window: the organizer themselves and their " +
+                          "super-app gate scanners. `members` are ordered by total scans DESC.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Leaderboard computed",
@@ -544,7 +551,7 @@ public class ScanReportController {
             Authentication authentication,
             @RequestParam Instant from,
             @RequestParam(required = false) Instant to) {
-        // SUPER_ADMIN: null scope = every organizer's gate staff fleet-wide.
+        // SUPER_ADMIN: null scope = every organizer's scanners fleet-wide.
         UUID organizerUuid = isPlatformStaff(authentication) ? null : requireOrganizer(authentication);
         to = resolveTo(from, to);
         log.debug("GET /scans/team-stats organizer={} from={} to={}", organizerUuid, from, to);
@@ -611,7 +618,7 @@ public class ScanReportController {
         }
     }
 
-    /** Every EVENT_ORGANIZER / TEAM_MEMBER token minted post-V20 carries the
+    /** Every EVENT_ORGANIZER and CUSTOMER token minted post-V20 carries the
      *  userUuid claim. A legacy token without it can't be scoped to a specific
      *  scanner — fail closed with a clear 400 so the FE re-prompts a login. */
     private static UUID requireScannerUserUuid(Authentication authentication) {

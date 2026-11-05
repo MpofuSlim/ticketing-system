@@ -2,15 +2,14 @@ package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
-import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.config.MarketTimeZone;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryLookupDTO;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.GateLookupResponseDTO;
-import com.innbucks.bookingservice.dto.ScanAccessDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
+import com.innbucks.bookingservice.dto.ScannerAccessDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.entity.ScanAttempt;
@@ -63,7 +62,7 @@ import static org.mockito.Mockito.when;
  * at the moment it is called, and each local write records it too, so a
  * regression that puts a method-level {@code @Transactional} back (or moves a
  * call into a phase) fails here rather than as a pool held hostage by a slow
- * user-service, event-service or seat-service.
+ * event-service or seat-service.
  *
  * <p>Real Postgres behaviour — committed rows, a lockable row during the call —
  * is pinned by {@code RemoteCallsOutsideTransactionsPostgresIT}.
@@ -76,13 +75,13 @@ class RemoteCallsOutsideTransactionTest {
     private final BookingItemRepository itemRepo = mock(BookingItemRepository.class);
     private final BookingRepository bookingRepo = mock(BookingRepository.class);
     private final ScanAttemptRepository scanAttempts = mock(ScanAttemptRepository.class);
-    private final UserServiceClient userServiceClient = mock(UserServiceClient.class);
     private final EventServiceClient eventServiceClient = mock(EventServiceClient.class);
     private final SeatServiceClient seatServiceClient = mock(SeatServiceClient.class);
     private final CategoryInventoryRepository inventory = mock(CategoryInventoryRepository.class);
 
     private final UUID organizer = UUID.randomUUID();
-    private final UUID teamMember = UUID.randomUUID();
+    /** A super-app gate scanner's account (its organizer comes from event-service). */
+    private final UUID superAppScanner = UUID.randomUUID();
 
     @AfterEach
     void clearContext() {
@@ -92,23 +91,18 @@ class RemoteCallsOutsideTransactionTest {
     // ---- scan ------------------------------------------------------------------
 
     @Test
-    void scan_asksUserServiceAndEventServiceWithNoTransaction_thenClaimsAndAuditsInOne() {
+    void scan_asksEventServiceWithNoTransaction_thenClaimsAndAuditsInOne() {
         TicketScanService scan = scanService(true);
         BookingItem item = confirmedItem();
         when(itemRepo.findByTicketNumberWithBooking("T-1")).thenAnswer(inv -> {
             record("read");
             return Optional.of(item);
         });
-        when(userServiceClient.canScanEvent(eq(teamMember), eq(item.getBooking().getEventId()), any()))
-                .thenAnswer(inv -> {
-                    record("user-service");
-                    return allowed(true);
-                });
         when(eventServiceClient.getEventInternal(eq(item.getBooking().getEventId()), any())).thenAnswer(inv -> {
             record("event-service");
             return onToday();
         });
-        when(itemRepo.claimRedemption(eq(item.getId()), any(), eq(teamMember), eq("Tariro")))
+        when(itemRepo.claimRedemption(eq(item.getId()), any(), eq(organizer), eq("Tariro")))
                 .thenAnswer(inv -> {
                     record("claim");
                     return 1;
@@ -117,13 +111,13 @@ class RemoteCallsOutsideTransactionTest {
             record("audit:" + ((ScanAttempt) inv.getArgument(0)).getOutcome());
             return inv.getArgument(0);
         });
-        authenticateAsTeamMember();
+        authenticateAsOrganizer();
 
         ScanTicketResponseDTO result = scan.scan("T-1", "Tariro");
 
         assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
         assertThat(calls).containsExactly(
-                "read|true", "user-service|false", "event-service|false", "claim|true", "audit:ALLOWED|true");
+                "read|true", "event-service|false", "claim|true", "audit:ALLOWED|true");
         // A read-only read, then ONE write transaction holding the claim AND its
         // audit row — they still commit or roll back together.
         assertThat(txManager.readOnlyFlags()).containsExactly(true, false);
@@ -131,24 +125,62 @@ class RemoteCallsOutsideTransactionTest {
     }
 
     @Test
-    void scan_refusedAfterTheAssignmentCheck_auditsInATransactionOfItsOwn() {
-        TicketScanService scan = scanService(false);
+    void scan_superApp_asksForTheScannersAccessWithNoTransaction_beforeTheRead() {
+        TicketScanService scan = scanService(true);
+        BookingItem item = confirmedItem();
+        UUID eventId = item.getBooking().getEventId();
+        when(eventServiceClient.scannerAccess(eq(superAppScanner), eq(eventId), any())).thenAnswer(inv -> {
+            record("scanner-access");
+            return ApiResult.ok("ok", ScannerAccessDTO.builder().allowed(true)
+                    .organizerUuid(organizer).displayName("Rudo Sibanda").build());
+        });
+        when(itemRepo.findByTicketNumberWithBooking("T-1")).thenAnswer(inv -> {
+            record("read");
+            return Optional.of(item);
+        });
+        when(eventServiceClient.getEventInternal(eq(eventId), any())).thenAnswer(inv -> {
+            record("event-service");
+            return onToday();
+        });
+        when(itemRepo.claimRedemption(eq(item.getId()), any(), eq(superAppScanner), eq("Rudo Sibanda")))
+                .thenAnswer(inv -> {
+                    record("claim");
+                    return 1;
+                });
+        when(scanAttempts.save(any())).thenAnswer(inv -> {
+            record("audit:" + ((ScanAttempt) inv.getArgument(0)).getOutcome());
+            return inv.getArgument(0);
+        });
+        authenticateAsSuperAppScanner();
+
+        ScanTicketResponseDTO result = scan.scan("T-1", eventId, null);
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+        assertThat(calls).containsExactly("scanner-access|false", "read|true", "event-service|false",
+                "claim|true", "audit:ALLOWED|true");
+        assertThat(txManager.readOnlyFlags()).containsExactly(true, false);
+        assertThat(txManager.outcomes()).containsExactly(COMMITTED, COMMITTED);
+    }
+
+    @Test
+    void scan_refusedAfterTheEventServiceCheck_auditsInATransactionOfItsOwn() {
+        TicketScanService scan = scanService(true);
         BookingItem item = confirmedItem();
         when(itemRepo.findByTicketNumberWithBooking("T-1")).thenReturn(Optional.of(item));
-        when(userServiceClient.canScanEvent(any(), any(), any())).thenAnswer(inv -> {
-            record("user-service");
-            return allowed(false);
+        when(eventServiceClient.getEventInternal(any(), any())).thenAnswer(inv -> {
+            record("event-service");
+            return lastWeek();
         });
         when(scanAttempts.save(any())).thenAnswer(inv -> {
             record("audit:" + ((ScanAttempt) inv.getArgument(0)).getOutcome());
             return inv.getArgument(0);
         });
-        authenticateAsTeamMember();
+        authenticateAsOrganizer();
 
         ScanTicketResponseDTO result = scan.scan("T-1", "Tariro");
 
-        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT);
-        assertThat(calls).containsExactly("user-service|false", "audit:NOT_ASSIGNED_TO_EVENT|true");
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.WRONG_EVENT_DAY);
+        assertThat(calls).containsExactly("event-service|false", "audit:WRONG_EVENT_DAY|true");
         verify(itemRepo, never()).claimRedemption(any(), any(), any(), any());
         assertThat(txManager.readOnlyFlags()).containsExactly(true, false);
     }
@@ -158,12 +190,11 @@ class RemoteCallsOutsideTransactionTest {
         TicketScanService scan = scanService(true);
         BookingItem item = confirmedItem();
         when(itemRepo.findByTicketNumberWithBooking("T-1")).thenReturn(Optional.of(item));
-        when(userServiceClient.canScanEvent(any(), any(), any())).thenReturn(allowed(true));
         when(eventServiceClient.getEventInternal(any(), any())).thenAnswer(inv -> {
             record("event-service");
             throw new IllegalStateException("event-service unreachable");
         });
-        authenticateAsTeamMember();
+        authenticateAsOrganizer();
 
         assertThatThrownBy(() -> scan.scan("T-1", "Tariro"))
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
@@ -184,9 +215,8 @@ class RemoteCallsOutsideTransactionTest {
             record("read");
             return Optional.of(item);
         });
-        when(userServiceClient.canScanEvent(any(), any(), any())).thenReturn(allowed(true));
         when(itemRepo.claimRedemption(any(), any(), any(), any())).thenReturn(0);
-        authenticateAsTeamMember();
+        authenticateAsOrganizer();
 
         ScanTicketResponseDTO result = scan.scan("T-1", "Tariro");
 
@@ -199,7 +229,33 @@ class RemoteCallsOutsideTransactionTest {
     // ---- gate lookup -------------------------------------------------------
 
     @Test
-    void gateLookup_readsInAReadOnlyTransaction_thenAsksUserServiceWithNone() {
+    void gateLookup_superApp_asksEventServiceWithNoTransaction_thenReadsInAReadOnlyOne() {
+        TicketScanService scan = scanService(false);
+        GateLookupService lookup = new GateLookupService(bookingRepo, scan, noMeters());
+        lookup.setTransactionManager(txManager);
+        Booking booking = confirmedItem().getBooking();
+        when(eventServiceClient.scannerAccess(eq(superAppScanner), eq(booking.getEventId()), any()))
+                .thenAnswer(inv -> {
+                    record("scanner-access");
+                    return ApiResult.ok("ok", ScannerAccessDTO.builder().allowed(true)
+                            .organizerUuid(organizer).displayName("Rudo Sibanda").build());
+                });
+        when(bookingRepo.findByConfirmationNumberWithItems("INN-1")).thenAnswer(inv -> {
+            record("read");
+            return Optional.of(booking);
+        });
+        authenticateAsSuperAppScanner();
+
+        GateLookupResponseDTO result = lookup.lookup("inn-1", booking.getEventId());
+
+        assertThat(result.getStatus()).isEqualTo(GateLookupResponseDTO.Status.FOUND);
+        assertThat(result.getTickets()).hasSize(1);
+        assertThat(calls).containsExactly("scanner-access|false", "read|true");
+        assertThat(txManager.readOnlyFlags()).containsExactly(true);
+    }
+
+    @Test
+    void gateLookup_organizer_readsInAReadOnlyTransaction_andAsksNobody() {
         TicketScanService scan = scanService(false);
         GateLookupService lookup = new GateLookupService(bookingRepo, scan, noMeters());
         lookup.setTransactionManager(txManager);
@@ -208,18 +264,14 @@ class RemoteCallsOutsideTransactionTest {
             record("read");
             return Optional.of(booking);
         });
-        when(userServiceClient.canScanEvent(any(), any(), any())).thenAnswer(inv -> {
-            record("user-service");
-            return allowed(true);
-        });
-        authenticateAsTeamMember();
+        authenticateAsOrganizer();
 
         GateLookupResponseDTO result = lookup.lookup("inn-1");
 
         assertThat(result.getStatus()).isEqualTo(GateLookupResponseDTO.Status.FOUND);
-        assertThat(result.getTickets()).hasSize(1);
-        assertThat(calls).containsExactly("read|true", "user-service|false");
+        assertThat(calls).containsExactly("read|true");
         assertThat(txManager.readOnlyFlags()).containsExactly(true);
+        org.mockito.Mockito.verifyNoInteractions(eventServiceClient);
     }
 
     // ---- reversal ------------------------------------------------------------
@@ -373,11 +425,10 @@ class RemoteCallsOutsideTransactionTest {
         when(events.getIfAvailable()).thenReturn(eventServiceClient);
         ObjectProvider<MarketTimeZone> market = mock(ObjectProvider.class);
         when(market.getIfAvailable()).thenReturn(new MarketTimeZone("ZW"));
-        TicketScanService scan = new TicketScanService(itemRepo, userServiceClient, scanAttempts,
+        TicketScanService scan = new TicketScanService(itemRepo, scanAttempts,
                 noMeters(), "ZW", events, market);
         scan.setTransactionManager(txManager);
         ReflectionTestUtils.setField(scan, "internalToken", "internal");
-        ReflectionTestUtils.setField(scan, "assignmentCheckFailOpen", false);
         ReflectionTestUtils.setField(scan, "eventDayCheckEnabled", eventDayRule);
         ReflectionTestUtils.setField(scan, "eventDayCheckFailOpen", false);
         return scan;
@@ -431,17 +482,20 @@ class RemoteCallsOutsideTransactionTest {
         return booking;
     }
 
-    private void authenticateAsTeamMember() {
+    private void authenticateAsOrganizer() {
         var auth = new UsernamePasswordAuthenticationToken("tariro@harare-arena.co.zw", null,
-                List.of(new SimpleGrantedAuthority("ROLE_TEAM_MEMBER")));
-        auth.setDetails(new JwtAuthDetails("tariro@harare-arena.co.zw", null, teamMember,
+                List.of(new SimpleGrantedAuthority("ROLE_EVENT_ORGANIZER")));
+        auth.setDetails(new JwtAuthDetails("tariro@harare-arena.co.zw", null, organizer,
                 organizer, "Tariro", "Chikomo"));
         SecurityContextHolder.getContext().setAuthentication(auth);
     }
 
-    private static ApiResult<ScanAccessDTO> allowed(boolean allowed) {
-        return ApiResult.<ScanAccessDTO>builder().code("200").message("ok")
-                .data(ScanAccessDTO.builder().allowed(allowed).build()).build();
+    /** The super-app session: CUSTOMER only, no organizer claim, no names. */
+    private void authenticateAsSuperAppScanner() {
+        var auth = new UsernamePasswordAuthenticationToken("+263772000111", null,
+                List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER")));
+        auth.setDetails(new JwtAuthDetails(null, "+263772000111", superAppScanner, null, null, null));
+        SecurityContextHolder.getContext().setAuthentication(auth);
     }
 
     private static ApiResult<EventLookupDTO> onToday() {
@@ -449,6 +503,14 @@ class RemoteCallsOutsideTransactionTest {
         return ApiResult.ok("ok", EventLookupDTO.builder()
                 .startDateTime(now.minusHours(1))
                 .endDateTime(now.plusHours(2))
+                .build());
+    }
+
+    private static ApiResult<EventLookupDTO> lastWeek() {
+        LocalDateTime then = LocalDateTime.now(ZoneOffset.UTC).minusDays(7);
+        return ApiResult.ok("ok", EventLookupDTO.builder()
+                .startDateTime(then)
+                .endDateTime(then.plusHours(2))
                 .build());
     }
 

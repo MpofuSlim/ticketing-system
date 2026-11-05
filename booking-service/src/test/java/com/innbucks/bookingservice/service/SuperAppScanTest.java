@@ -1,11 +1,9 @@
 package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.client.EventServiceClient;
-import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.config.MarketTimeZone;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.GateLookupResponseDTO;
-import com.innbucks.bookingservice.dto.ScanAccessDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
 import com.innbucks.bookingservice.dto.ScannerAccessDTO;
 import com.innbucks.bookingservice.entity.Booking;
@@ -52,7 +50,7 @@ import static org.mockito.Mockito.when;
  * comes from event-service's scanner memberships, asked per call. Pins the
  * order the scan and the gate lookup check things in, that a phone not on the
  * team learns nothing and writes no scan row, that an outage is a 503 and never
- * an allow, and that the scanner app's own path is untouched apart from the
+ * an allow, and that the organizer's own path is untouched apart from the
  * optional {@code eventId}.
  */
 @ExtendWith(MockitoExtension.class)
@@ -63,7 +61,6 @@ class SuperAppScanTest {
 
     @Mock private BookingItemRepository bookingItemRepository;
     @Mock private BookingRepository bookingRepository;
-    @Mock private UserServiceClient userServiceClient;
     @Mock private ScanAttemptRepository scanAttemptRepository;
     @Mock private ObjectProvider<MeterRegistry> meterRegistryProvider;
     @Mock private ObjectProvider<EventServiceClient> eventServiceClientProvider;
@@ -80,7 +77,7 @@ class SuperAppScanTest {
 
     @BeforeEach
     void setUp() {
-        scan = new TicketScanService(bookingItemRepository, userServiceClient,
+        scan = new TicketScanService(bookingItemRepository,
                 scanAttemptRepository, meterRegistryProvider, "ZW",
                 eventServiceClientProvider, marketTimeZoneProvider);
         ReflectionTestUtils.setField(scan, "internalToken", "test-internal-token");
@@ -143,12 +140,21 @@ class SuperAppScanTest {
     // ------------------------------------------------------------------ routing
 
     @Test
-    void routing_customerOnlyIsSuperApp_anOrganizerOrTeamRoleNeverIs_andNoRolesNeverIs() {
+    void routing_customerOnlyIsSuperApp_anOrganizerNeverIs_andNoRolesNeverIs() {
         assertThat(TicketScanService.isSuperAppScanner(auth("ROLE_CUSTOMER"))).isTrue();
         assertThat(TicketScanService.isSuperAppScanner(auth("ROLE_CUSTOMER", "ROLE_EVENT_ORGANIZER"))).isFalse();
-        assertThat(TicketScanService.isSuperAppScanner(auth("ROLE_CUSTOMER", "ROLE_TEAM_MEMBER"))).isFalse();
         assertThat(TicketScanService.isSuperAppScanner(auth())).isFalse();
         assertThat(TicketScanService.isSuperAppScanner(null)).isFalse();
+    }
+
+    @Test
+    void routing_theRetiredTeamMemberRole_grantsNothing() {
+        // Alone it is not a super-app scanner (and the organizer path refuses
+        // it, TicketScanServiceTest). Beside CUSTOMER it no longer keeps the
+        // caller OFF the super-app path: that caller's authority to scan is
+        // event-service's membership answer, like any other customer's.
+        assertThat(TicketScanService.isSuperAppScanner(auth("ROLE_TEAM_MEMBER"))).isFalse();
+        assertThat(TicketScanService.isSuperAppScanner(auth("ROLE_CUSTOMER", "ROLE_TEAM_MEMBER"))).isTrue();
     }
 
     private static UsernamePasswordAuthenticationToken auth(String... roles) {
@@ -298,32 +304,17 @@ class SuperAppScanTest {
         assertThat(result.getCategoryName()).isEqualTo("VIP");
     }
 
-    @Test
-    void scan_neverAsksUserServiceForAnAssignment() {
-        signInOnTheSuperApp();
-        onTheTeam();
-        BookingItem item = ticket(eventId, organizerUuid, Booking.BookingStatus.CONFIRMED);
-        when(bookingItemRepository.findByTicketNumberWithBooking(TICKET)).thenReturn(Optional.of(item));
-        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(1);
-
-        scan.scan(TICKET, eventId, null);
-
-        verify(userServiceClient, never()).canScanEvent(any(), any(), any());
-    }
-
-    // ------------------------------------------------------------------ scanner app, eventId given
+    // ------------------------------------------------------------------ organizer, eventId given
 
     @Test
-    void scannerApp_eventIdForAnotherEvent_isWrongEvent_afterTheTeamChecks_andNotRedeemed() {
+    void organizer_eventIdForAnotherEvent_isWrongEvent_afterTheOwnershipCheck_andNotRedeemed() {
         var auth = new UsernamePasswordAuthenticationToken("tariro@harare-arena.co.zw", null,
-                List.of(new SimpleGrantedAuthority("ROLE_TEAM_MEMBER")));
-        UUID teamMember = UUID.randomUUID();
-        auth.setDetails(new JwtAuthDetails("tariro@harare-arena.co.zw", null, teamMember, organizerUuid, null, null));
+                List.of(new SimpleGrantedAuthority("ROLE_EVENT_ORGANIZER")));
+        auth.setDetails(new JwtAuthDetails("tariro@harare-arena.co.zw", null, organizerUuid, organizerUuid,
+                null, null));
         SecurityContextHolder.getContext().setAuthentication(auth);
         BookingItem item = ticket(UUID.randomUUID(), organizerUuid, Booking.BookingStatus.CONFIRMED);
         when(bookingItemRepository.findByTicketNumberWithBooking(TICKET)).thenReturn(Optional.of(item));
-        when(userServiceClient.canScanEvent(any(), any(), any())).thenReturn(ApiResult.<ScanAccessDTO>builder()
-                .code("200").message("ok").data(ScanAccessDTO.builder().allowed(true).build()).build());
 
         ScanTicketResponseDTO result = scan.scan(TICKET, eventId, "Tariro Chikomo");
 
@@ -413,7 +404,7 @@ class SuperAppScanTest {
     }
 
     @Test
-    void lookup_scannerApp_eventIdForAnotherEvent_isWrongEvent() {
+    void lookup_organizer_eventIdForAnotherEvent_isWrongEvent() {
         var auth = new UsernamePasswordAuthenticationToken("org@harare-arena.co.zw", null,
                 List.of(new SimpleGrantedAuthority("ROLE_EVENT_ORGANIZER")));
         auth.setDetails(new JwtAuthDetails("org@harare-arena.co.zw", null, organizerUuid, organizerUuid, null, null));

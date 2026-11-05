@@ -148,8 +148,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     // Paginated list of an organizer's own (non-deleted) events. Keyed on the
     // stable cross-service organizerUuid (was email-as-tenantId until the V6/V7
     // refactor; the tenant_id column was dropped in V8). Used by GET /events/my
-    // so an EVENT_ORGANIZER only sees the events they created, and by
-    // TEAM_MEMBERs to enumerate their parent organizer's events.
+    // so an EVENT_ORGANIZER only sees the events they created.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
@@ -160,33 +159,6 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     """)
     Page<Event> findByTenantUserUuid(
             @Param("tenantUserUuid") UUID tenantUserUuid,
-            @Param("from") LocalDateTime from,
-            @Param("to") LocalDateTime to,
-            @Param("venue") String venue,
-            Pageable pageable
-    );
-
-    // Like findByTenantUserUuid but additionally restricts the result to a
-    // specific allow-list of event IDs. Backs the team-member view of
-    // GET /events/my: the team member sees only the events their organizer
-    // has explicitly assigned to them (deny-by-default). The organizer
-    // filter is kept as defence-in-depth — even if the assignment table
-    // somehow held a stale eventId from a different organizer, the
-    // tenantUserUuid clause blocks it from leaking through. Callers that
-    // have an empty eventIds list MUST short-circuit before calling this
-    // (Spring JPA forbids an empty `IN (...)` in some dialects).
-    @Query("""
-        SELECT e FROM Event e
-        WHERE e.deleted = false
-        AND e.tenantUserUuid = :tenantUserUuid
-        AND e.eventId IN :eventIds
-        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
-        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
-        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
-    """)
-    Page<Event> findByTenantUserUuidAndEventIdIn(
-            @Param("tenantUserUuid") UUID tenantUserUuid,
-            @Param("eventIds") java.util.Collection<UUID> eventIds,
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,
@@ -212,38 +184,6 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     """)
     Page<Event> findByTenantUserUuidActiveOnly(
             @Param("tenantUserUuid") UUID tenantUserUuid,
-            @Param("from") LocalDateTime from,
-            @Param("to") LocalDateTime to,
-            @Param("venue") String venue,
-            @Param("country") String country,
-            @Param("now") LocalDateTime now,
-            Pageable pageable
-    );
-
-    // Like findByTenantUserUuidActiveOnly but additionally restricts the result
-    // to a specific allow-list of event IDs. Backs the team-member view of
-    // GET /events/active: the team member sees only the active events their
-    // organizer has explicitly assigned to them (deny-by-default). The
-    // tenantUserUuid clause is kept as defence-in-depth so a stale assignment
-    // pointing at a foreign organizer's event can never leak through. Callers
-    // that have an empty eventIds list MUST short-circuit before calling this
-    // (Spring JPA forbids an empty `IN (...)` in some dialects).
-    @Query("""
-        SELECT e FROM Event e
-        WHERE e.deleted = false
-        AND e.active = true
-        AND e.rejected = false
-        AND e.endDateTime > :now
-        AND e.tenantUserUuid = :tenantUserUuid
-        AND e.eventId IN :eventIds
-        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
-        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
-        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
-        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
-    """)
-    Page<Event> findByTenantUserUuidActiveOnlyAndEventIdIn(
-            @Param("tenantUserUuid") UUID tenantUserUuid,
-            @Param("eventIds") java.util.Collection<UUID> eventIds,
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,
@@ -278,36 +218,6 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    // Category-filtered counterpart of findByTenantUserUuidActiveOnlyAndEventIdIn
-    // (the team-member view of GET /events/active). Separate method so the enum
-    // bind is always non-null (see findAllActiveOnlyByCategory). Same empty-IN
-    // short-circuit obligation as findByTenantUserUuidActiveOnlyAndEventIdIn.
-    @Query("""
-        SELECT e FROM Event e
-        WHERE e.deleted = false
-        AND e.active = true
-        AND e.rejected = false
-        AND e.endDateTime > :now
-        AND e.tenantUserUuid = :tenantUserUuid
-        AND e.eventId IN :eventIds
-        AND e.category = :category
-        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
-        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
-        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
-        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
-    """)
-    Page<Event> findByTenantUserUuidActiveOnlyByCategoryAndEventIdIn(
-            @Param("tenantUserUuid") UUID tenantUserUuid,
-            @Param("eventIds") java.util.Collection<UUID> eventIds,
-            @Param("from") LocalDateTime from,
-            @Param("to") LocalDateTime to,
-            @Param("venue") String venue,
-            @Param("country") String country,
-            @Param("category") EventCategory category,
-            @Param("now") LocalDateTime now,
-            Pageable pageable
-    );
-
     // An organizer's own inactive (active=false) events. Counterpart of
     // findAllInactiveOnly scoped to a single organizer, used so an
     // EVENT_ORGANIZER hitting /events/inactive only sees their own. No
@@ -331,34 +241,6 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    // Like findByTenantUserUuidInactiveOnly but additionally restricts the
-    // result to a specific allow-list of event IDs. Backs the team-member view
-    // of GET /events/inactive (deny-by-default — only the assigned events). No
-    // endDateTime/rejected filter, same rationale as findAllInactiveOnly. The
-    // tenantUserUuid clause stays as defence-in-depth. Callers that have an
-    // empty eventIds list MUST short-circuit before calling this (Spring JPA
-    // forbids an empty `IN (...)` in some dialects).
-    @Query("""
-        SELECT e FROM Event e
-        WHERE e.deleted = false
-        AND e.active = false
-        AND e.tenantUserUuid = :tenantUserUuid
-        AND e.eventId IN :eventIds
-        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
-        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
-        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
-        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
-    """)
-    Page<Event> findByTenantUserUuidInactiveOnlyAndEventIdIn(
-            @Param("tenantUserUuid") UUID tenantUserUuid,
-            @Param("eventIds") java.util.Collection<UUID> eventIds,
-            @Param("from") LocalDateTime from,
-            @Param("to") LocalDateTime to,
-            @Param("venue") String venue,
-            @Param("country") String country,
-            Pageable pageable
-    );
-
     // Category-filtered counterpart of findByTenantUserUuidInactiveOnly.
     @Query("""
         SELECT e FROM Event e
@@ -373,33 +255,6 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     """)
     Page<Event> findByTenantUserUuidInactiveOnlyByCategory(
             @Param("tenantUserUuid") UUID tenantUserUuid,
-            @Param("from") LocalDateTime from,
-            @Param("to") LocalDateTime to,
-            @Param("venue") String venue,
-            @Param("country") String country,
-            @Param("category") EventCategory category,
-            Pageable pageable
-    );
-
-    // Category-filtered counterpart of findByTenantUserUuidInactiveOnlyAndEventIdIn
-    // (the team-member view of GET /events/inactive). Separate method so the enum
-    // bind is always non-null (see findAllActiveOnlyByCategory). Same empty-IN
-    // short-circuit obligation as findByTenantUserUuidInactiveOnlyAndEventIdIn.
-    @Query("""
-        SELECT e FROM Event e
-        WHERE e.deleted = false
-        AND e.active = false
-        AND e.tenantUserUuid = :tenantUserUuid
-        AND e.eventId IN :eventIds
-        AND e.category = :category
-        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
-        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
-        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
-        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
-    """)
-    Page<Event> findByTenantUserUuidInactiveOnlyByCategoryAndEventIdIn(
-            @Param("tenantUserUuid") UUID tenantUserUuid,
-            @Param("eventIds") java.util.Collection<UUID> eventIds,
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,

@@ -88,8 +88,9 @@ public class Booking {
 
     // Stable cross-service identifier of the owning organizer, mirrored
     // from events.tenant_user_uuid via EventLookupDTO at create time.
-    // Powers the team-member scan authorization: the scanner's
-    // organizerUuid JWT claim must equal this column for the ticket to
+    // Powers the scan authorization: the organizer's organizerUuid JWT
+    // claim (or, for a super-app scanner, the organizer event-service names
+    // as the scanner's team) must equal this column for the ticket to
     // redeem. Null only when event-service was unreachable at create —
     // such a ticket refuses with WRONG_ORGANIZER at the gate.
     @Column(name = "tenant_user_uuid")

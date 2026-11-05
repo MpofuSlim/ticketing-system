@@ -6,10 +6,11 @@ import lombok.Data;
 
 @Data
 @Schema(name = "ScanTicketRequest",
-        description = "Body for an EVENT_ORGANIZER or TEAM_MEMBER to redeem a ticket at the gate. " +
-                      "The ticketNumber is the value embedded in the QR — the scanner app reads it " +
-                      "off the customer's phone and POSTs it here. The scanner's identity (and " +
-                      "their owning organizer) comes from the JWT; the body carries only the ticket.")
+        description = "Body for an EVENT_ORGANIZER, or a gate scanner on the InnBucks super app, to " +
+                      "redeem a ticket at the gate. The ticketNumber is the value embedded in the QR — " +
+                      "the scanner reads it off the customer's phone and POSTs it here. The scanner's " +
+                      "identity comes from the JWT; the body carries the ticket and the event being " +
+                      "scanned for.")
 public class ScanTicketRequestDTO {
 
     @NotBlank(message = "ticketNumber is required")
@@ -24,7 +25,7 @@ public class ScanTicketRequestDTO {
 
     @Schema(example = "5772554b-9c1d-4e2f-a3b4-c5d6e7f8a9b0", nullable = true,
             description = "The event the scanner is scanning for. REQUIRED from a super-app scanner (a "
-                    + "CUSTOMER session); optional for the scanner app. When sent, a ticket for any other "
+                    + "CUSTOMER session); optional for the organizer. When sent, a ticket for any other "
                     + "event is WRONG_EVENT and is not redeemed.")
     private java.util.UUID eventId;
 }

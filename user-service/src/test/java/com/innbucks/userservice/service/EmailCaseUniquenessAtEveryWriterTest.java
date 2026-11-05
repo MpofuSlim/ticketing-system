@@ -2,7 +2,6 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
-import com.innbucks.userservice.dto.CreateTeamMemberDTO;
 import com.innbucks.userservice.dto.CustomerTier2RegisterDTO;
 import com.innbucks.userservice.entity.OrganizationMember;
 import com.innbucks.userservice.entity.User;
@@ -13,7 +12,6 @@ import com.innbucks.userservice.repository.OrganizationRepository;
 import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.RoleRepository;
 import com.innbucks.userservice.repository.StaffProfileRepository;
-import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthDetailsKeys;
 import com.innbucks.userservice.security.NationalIdHasher;
@@ -52,7 +50,7 @@ import static org.mockito.Mockito.when;
  * V49's unique index on {@code UPPER(email)} enforces it in the database; every
  * writer also checks case-insensitively first, so the caller gets the ordinary
  * 400 "Email already registered" rather than a constraint error. Registration and
- * staff create already did; tier-2, shop-staff and team-member create are the
+ * staff create already did; tier-2 and shop-staff create are the
  * writers this pins. Register's dispatch is pinned in {@code RegisterRolesFieldTest}.
  *
  * <p>The addresses are ordinary business ones: an InnBucks address is still
@@ -200,32 +198,4 @@ class EmailCaseUniquenessAtEveryWriterTest {
         verify(users, never()).save(any(User.class));
     }
 
-    @Test
-    @DisplayName("team-member create: a letter-case variant of an existing address is a duplicate")
-    void teamMember_caseVariant_isADuplicate() {
-        TeamMemberService service = new TeamMemberService(users, mock(TeamMemberEventAssignmentRepository.class),
-                mock(PasswordEncoder.class), mock(ApplicationEventPublisher.class), mock(AccountSessionRevoker.class),
-                eligibility);
-        ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
-        ReflectionTestUtils.setField(service, "createEnabled", true);
-        ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
-                com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
-        User organizer = User.builder().id(7L).userUuid(UUID.randomUUID()).email("olive@harare-arena.co.zw")
-                .roles(User.roleNames(User.Role.EVENT_ORGANIZER)).active(true).build();
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken(organizer.getEmail(), null));
-        when(users.findByEmail(organizer.getEmail())).thenReturn(Optional.of(organizer));
-        when(users.existsByEmailIgnoreCase(VARIANT)).thenReturn(true);
-
-        CreateTeamMemberDTO dto = new CreateTeamMemberDTO();
-        dto.setFirstName("Grace");
-        dto.setLastName("Clerkson");
-        dto.setEmail(VARIANT);
-        dto.setPhoneNumber("+263773456789");
-        assertThatThrownBy(() -> service.createTeamMember(dto))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Email already registered");
-        verify(users, never()).existsByEmail(anyString());
-        verify(users, never()).save(any(User.class));
-    }
 }

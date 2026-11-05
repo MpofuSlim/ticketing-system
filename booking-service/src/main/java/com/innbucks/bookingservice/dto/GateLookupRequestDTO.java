@@ -20,6 +20,6 @@ public class GateLookupRequestDTO {
 
     @Schema(example = "5772554b-9c1d-4e2f-a3b4-c5d6e7f8a9b0", nullable = true,
             description = "The event the scanner is scanning for. REQUIRED from a super-app scanner; "
-                    + "optional for the scanner app. A booking for any other event is WRONG_EVENT.")
+                    + "optional for the organizer. A booking for any other event is WRONG_EVENT.")
     private java.util.UUID eventId;
 }

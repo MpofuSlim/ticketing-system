@@ -66,14 +66,14 @@ class DataInitializerTest {
     @Test
     void refusesToAdoptATeamMemberRowParkedAtTheAdminAddress() {
         User teamMember = rowAt(ADMIN_EMAIL);
-        teamMember.setRoles(new LinkedHashSet<>(Set.of(User.Role.TEAM_MEMBER.name())));
+        teamMember.setRoles(new LinkedHashSet<>(Set.of("TEAM_MEMBER")));
         teamMember.setCreatedByOrganizerUuid(UUID.randomUUID());
         when(userRepository.findByEmail(ADMIN_EMAIL)).thenReturn(Optional.of(teamMember));
 
         initializer.run();
 
         // The whole point: no SUPER_ADMIN, and the row is not written at all.
-        assertThat(teamMember.getRoles()).containsExactly(User.Role.TEAM_MEMBER.name());
+        assertThat(teamMember.getRoles()).containsExactly("TEAM_MEMBER");
         assertThat(teamMember.hasRole(User.Role.SUPER_ADMIN)).isFalse();
         verify(userRepository, never()).save(any());
     }
@@ -84,7 +84,7 @@ class DataInitializerTest {
         // unapproved account at this address came back to life as well as
         // gaining the role.
         User teamMember = rowAt(ADMIN_EMAIL);
-        teamMember.setRoles(new LinkedHashSet<>(Set.of(User.Role.TEAM_MEMBER.name())));
+        teamMember.setRoles(new LinkedHashSet<>(Set.of("TEAM_MEMBER")));
         teamMember.setActive(false);
         teamMember.setApproved(false);
         when(userRepository.findByEmail(ADMIN_EMAIL)).thenReturn(Optional.of(teamMember));

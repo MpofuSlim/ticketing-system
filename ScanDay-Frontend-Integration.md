@@ -147,5 +147,5 @@ Neither is client-visible. The app should not try to detect or work around them.
 - Every other scan verdict, its meaning and its payload.
 - Authorization: `WRONG_ORGANIZER` and `NOT_ASSIGNED_TO_EVENT` still run **before** the day
   check, so an unauthorised scanner learns nothing about an event's schedule.
-- The request shape, required headers, and the `EVENT_ORGANIZER` / `TEAM_MEMBER` role gate.
-- Gate-staff login (see `GateStaff-Login-Frontend-Integration.md`).
+- The request shape and required headers. (Since 2026-11-05 the role gate is `EVENT_ORGANIZER`
+  or a super-app scanner's `CUSTOMER` session: team members, and their login, were retired.)

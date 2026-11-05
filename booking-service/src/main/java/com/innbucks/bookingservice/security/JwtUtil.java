@@ -264,8 +264,8 @@ public class JwtUtil {
         }
     }
 
-    /** Display-name claims (emitted on CUSTOMER, TEAM_MEMBER and
-     *  EVENT_ORGANIZER tokens by user-service). The scan boundary uses
+    /** Display-name claims (emitted on CUSTOMER and EVENT_ORGANIZER tokens
+     *  by user-service). The scan boundary uses
      *  these to render a human display name on the rejection toast;
      *  callers fall back to the JWT subject (email) when absent. */
     public String extractFirstName(String token) {
@@ -302,10 +302,10 @@ public class JwtUtil {
     }
 
     /**
-     * Team-scoping identifier. EVENT_ORGANIZER: their own user_uuid;
-     * TEAM_MEMBER: the parent organizer's user_uuid. Drives the
-     * ticket-scan authorization check — must equal the booking's
-     * tenant_user_uuid for the scan to land.
+     * Organizer-scoping identifier: an EVENT_ORGANIZER's own user_uuid.
+     * Drives the organizer's ticket-scan authorization check — must equal
+     * the booking's tenant_user_uuid for the scan to land. (A super-app
+     * scanner's organizer comes from event-service, never from a claim.)
      */
     public UUID extractOrganizerUuid(String token) {
         return extractUuidClaim(token, "organizerUuid");

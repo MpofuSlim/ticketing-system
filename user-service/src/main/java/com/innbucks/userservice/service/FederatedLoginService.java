@@ -321,9 +321,7 @@ public class FederatedLoginService {
      * one account, the shape the owner asked for on 2026-09-22 ("a merchant admin
      * CAN be a customer on the same number"), which nothing could create before:
      * registration gives the business role only, and this sign-in refused it
-     * ({@code not_a_customer}). Not a gate team member ({@code TEAM_MEMBER}: one
-     * more role would cost them their 2FA exemption; moving them to the app is its
-     * own change), not shop staff, and never a staff role. Staff accounts have no
+     * ({@code not_a_customer}). Not shop staff, and never a staff role. Staff accounts have no
      * sign-in phone, so they never reach here at all.
      */
     static final Set<String> MAY_ALSO_BE_CUSTOMER = Set.of(

@@ -43,7 +43,7 @@ import java.util.UUID;
  *
  * <p>Routing note: this lives in booking-service (it owns the sales data), but
  * shares the {@code /event-organizer/**} prefix with user-service's
- * team-member endpoints. The api-gateway routes {@code /event-organizer/reports/**}
+ * organizer endpoints. The api-gateway routes {@code /event-organizer/reports/**}
  * to booking-service ahead of the catch-all {@code /event-organizer/**} ->
  * user-service route.
  */

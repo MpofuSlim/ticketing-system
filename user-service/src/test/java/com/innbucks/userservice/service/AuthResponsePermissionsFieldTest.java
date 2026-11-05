@@ -93,7 +93,8 @@ class AuthResponsePermissionsFieldTest {
     @Test
     @DisplayName("roles that grant nothing here give an empty list, not an absent one")
     void emptyWhenNothingIsGranted() {
-        AuthResponseDTO response = authService.issueToken(staff("TEAM_MEMBER"), "d");
+        // EVENT_ORGANIZER since V55, which retired its only codes (team-members:*).
+        AuthResponseDTO response = authService.issueToken(staff("EVENT_ORGANIZER"), "d");
         assertThat(response.getPermissions()).isEmpty();
     }
 

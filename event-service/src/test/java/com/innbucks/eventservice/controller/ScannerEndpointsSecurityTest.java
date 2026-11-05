@@ -211,13 +211,14 @@ class ScannerEndpointsSecurityTest {
     // ------------------------------------------------------------- organizer
 
     @Test
-    void addScanner_isTheOrganizersOnly_notATeamMembersOrACustomers() throws Exception {
+    void addScanner_isTheOrganizersOnly_notStaffsOrACustomers() throws Exception {
         UUID organizer = UUID.randomUUID();
         String body = "{\"firstName\":\"Tendai\",\"lastName\":\"Moyo\",\"phoneNumber\":\"0771234567\"}";
 
-        // A team member's token carries organizerUuid too: the role is the gate.
+        // The organizerUuid claim alone grants nothing: the role is the gate.
+        // Platform staff read an organizer's scanners but never change them.
         mvc.perform(post("/event-organizer/scanners").contentType(MediaType.APPLICATION_JSON).content(body)
-                        .header("Authorization", "Bearer " + staffToken("TEAM_MEMBER", UUID.randomUUID(), organizer)))
+                        .header("Authorization", "Bearer " + staffToken("PRODUCT_OFFICER", UUID.randomUUID(), organizer)))
                 .andExpect(status().isForbidden());
         mvc.perform(post("/event-organizer/scanners").contentType(MediaType.APPLICATION_JSON).content(body)
                         .header("Authorization", "Bearer " + customerToken(UUID.randomUUID(), "+263771234567")))

@@ -98,7 +98,7 @@ public class JwtFilter extends OncePerRequestFilter {
         List<String> resolved = new ArrayList<>(permissionResolver.resolve(roles));
         // Only a token carrying staff authority (a NAMED role name or a PLATFORM
         // code) can be affected by the filter — so only then is the account read.
-        // A CUSTOMER / TEAM_MEMBER / business token costs no extra query, and
+        // A CUSTOMER or business token costs no extra query, and
         // never reaches the ineligible-holder metric.
         if (staffMintFilter == null || userRepository == null || subject == null
                 || !StaffRoles.carriesStaffAuthority(roles, resolved)) {

@@ -270,11 +270,8 @@ public class JwtUtil {
     }
 
     /**
-     * Team-scoping identifier. For an EVENT_ORGANIZER this equals the
-     * caller's own user_uuid; for a TEAM_MEMBER it equals the parent
-     * organizer's user_uuid (so a team member's scan/list-my-events flows
-     * resolve to their organizer's events without a cross-service lookup).
-     * Null for non-organizer-tree roles.
+     * The owning-organizer identifier, populated on EVENT_ORGANIZER tokens,
+     * where it equals the caller's own user_uuid. Null for every other role.
      */
     public UUID extractOrganizerUuid(String token) {
         return extractUuidClaim(token, "organizerUuid");

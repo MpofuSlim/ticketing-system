@@ -31,10 +31,13 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <ul>
  *   <li>EVENT_ORGANIZER scanning a ticket for their own event;</li>
- *   <li>TEAM_MEMBER (a gate-staff user the organizer onboarded via
- *       {@code POST /event-organizer/team-members}) scanning a ticket
- *       for any event their parent organizer owns.</li>
+ *   <li>a gate scanner on the InnBucks super app (a CUSTOMER session whose
+ *       phone the organizer added to the event's team in event-service),
+ *       scanning for the event it names.</li>
  * </ul>
+ *
+ * <p>The organizer-created TEAM_MEMBER gate accounts are retired (owner
+ * decision, 2026-11-05): a token carrying only that role is refused here.
  *
  * <p>Redemption is single-shot per ticket — enforced atomically by an
  * UPDATE WHERE redeemed_at IS NULL inside the service. A second scan
@@ -47,7 +50,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @Slf4j
 @Tag(name = "Ticket Scan",
-     description = "Gate-side ticket redemption: the scanner app (EVENT_ORGANIZER, TEAM_MEMBER) and "
+     description = "Gate-side ticket redemption: the event's organizer (EVENT_ORGANIZER) and "
              + "gate scanners on the InnBucks super app (a CUSTOMER session whose phone an organizer "
              + "added to the event's team).")
 @SecurityRequirement(name = "bearerAuth")
@@ -57,13 +60,13 @@ public class TicketScanController {
     private final GateLookupService gateLookupService;
 
     @PostMapping("/scan")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','CUSTOMER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER')")
     @Operation(
             summary = "Redeem a ticket at the gate",
             description = "Single-shot per ticket. ALLOWED on the first scan; ALREADY_REDEEMED on every " +
                           "subsequent one (with the original scanner + timestamp, so the gate-staff " +
-                          "knows who first scanned it). WRONG_ORGANIZER when the scanner doesn't work " +
-                          "for the event's organizer. TICKET_NOT_FOUND on a bogus QR. " +
+                          "knows who first scanned it). WRONG_ORGANIZER when an organizer scans another " +
+                          "organizer's ticket. TICKET_NOT_FOUND on a bogus QR. " +
                           "BOOKING_NOT_CONFIRMED when the ticket exists but the booking is PENDING / " +
                           "CANCELLED (i.e. not actually paid for). WRONG_EVENT_DAY when the ticket is " +
                           "genuine and the scanner is authorised, but today is not one of the event's " +
@@ -72,14 +75,14 @@ public class TicketScanController {
                           "is. " +
                           "**200 carries verdicts about the ticket; 503 means the server could not " +
                           "decide.** The scan result always arrives as 200 with the {@code status} " +
-                          "field, so the scanner-app's verdict branch stays deterministic. The one " +
+                          "field, so the scanner's verdict branch stays deterministic. The one " +
                           "exception is 503: if the event's dates cannot be confirmed (event-service " +
                           "unreachable), the scan is refused WITHOUT redeeming and the client should " +
                           "show a retry rather than turning the customer away — an outage is not a " +
                           "verdict about the ticket. Operators can disable the day rule entirely with " +
                           "`innbucks.scan.event-day-check.enabled=false`. " +
                           "**`eventId`** is the event the gate is scanning for: a ticket for any other " +
-                          "event is WRONG_EVENT and is not redeemed. Optional for the scanner app. " +
+                          "event is WRONG_EVENT and is not redeemed. Optional for the organizer. " +
                           "**Super-app scanners** (a CUSTOMER session) must send it: their access to that " +
                           "event is checked first (NOT_ASSIGNED_TO_EVENT when their number is not on the " +
                           "event's team, 503 when it cannot be checked), and a ticket of another event or " +
@@ -88,7 +91,9 @@ public class TicketScanController {
                           "or spaces** (`202606197kq4m9xz2b` finds `20260619-7KQ4M-9XZ2B`): the fallback " +
                           "when a QR will not scan. The response and the scan record carry the number as " +
                           "issued. " +
-                          "Requires **EVENT_ORGANIZER**, **TEAM_MEMBER** or **CUSTOMER** role."
+                          "Requires **EVENT_ORGANIZER** or **CUSTOMER** role (a CUSTOMER scans only as " +
+                          "a super-app gate scanner of the named event). The retired TEAM_MEMBER role " +
+                          "is refused (403)."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -212,7 +217,8 @@ public class TicketScanController {
                                     """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Caller is not an EVENT_ORGANIZER, TEAM_MEMBER or CUSTOMER",
+                    responseCode = "403", description = "Caller is neither an EVENT_ORGANIZER nor a CUSTOMER "
+                            + "(a token carrying only the retired TEAM_MEMBER role included)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
@@ -257,7 +263,7 @@ public class TicketScanController {
     }
 
     @PostMapping("/lookup")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','CUSTOMER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER')")
     @Operation(
             summary = "Find a booking by confirmation number (no-QR fallback)",
             description = "For a customer who cannot open the WhatsApp QR but has the confirmation number "
@@ -269,15 +275,16 @@ public class TicketScanController {
                           + "**Check who you are admitting**: a confirmation number is easier to share than "
                           + "a QR, so compare the holder's name and ask for the phone number ending in "
                           + "`customerPhoneLast4`. "
-                          + "Same authorization as the scan: WRONG_ORGANIZER / NOT_ASSIGNED_TO_EVENT when this "
-                          + "scanner could not redeem the booking's tickets. Every outcome is 200 with a "
+                          + "Same authorization as the scan: WRONG_ORGANIZER when an organizer looks up "
+                          + "another organizer's booking. Every outcome is 200 with a "
                           + "`status`; anything but FOUND carries only the echoed confirmation number. "
                           + "**`eventId`** is the event the gate is scanning for: another event's booking is "
-                          + "WRONG_EVENT and none of its tickets are listed. Optional for the scanner app; "
+                          + "WRONG_EVENT and none of its tickets are listed. Optional for the organizer; "
                           + "**super-app scanners** must send it, and their access to the event is checked "
-                          + "before the booking is read (NOT_ASSIGNED_TO_EVENT, or 503 when it cannot be "
-                          + "checked). "
-                          + "Requires **EVENT_ORGANIZER**, **TEAM_MEMBER** or **CUSTOMER** role."
+                          + "before the booking is read (NOT_ASSIGNED_TO_EVENT when their number is not on "
+                          + "the event's team, or 503 when it cannot be checked). "
+                          + "Requires **EVENT_ORGANIZER** or **CUSTOMER** role; the retired TEAM_MEMBER role "
+                          + "is refused (403)."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -376,7 +383,8 @@ public class TicketScanController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Caller is not an EVENT_ORGANIZER, TEAM_MEMBER or CUSTOMER",
+                    responseCode = "403", description = "Caller is neither an EVENT_ORGANIZER nor a CUSTOMER "
+                            + "(a token carrying only the retired TEAM_MEMBER role included)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
@@ -423,16 +431,15 @@ public class TicketScanController {
      * The redeem row's denormalised display name (booking_items.redeemed_by_name)
      * surfaces on the rejection toast a second scan sees: "already scanned by
      * Tariro Chikomo at 19:42". Prefer the JWT's firstName/lastName claims for
-     * that — staff logins are emails like {@code tariro@harare-arena.co.zw}
-     * which read as system identifiers, not as a colleague's name, and leak
-     * staff addresses across the gate-staff group.
+     * that — organizer logins are emails like {@code tariro@harare-arena.co.zw}
+     * which read as system identifiers, not as a person's name, and would show
+     * the organizer's address to whoever scans the ticket next.
      *
-     * <p>The claims are emitted on TEAM_MEMBER and EVENT_ORGANIZER tokens (the
-     * scanner roles) by user-service's JwtUtil. Older tokens minted before
-     * that change carry no name claims; fall back to the email so the column
-     * is never null. Same fallback applies to tokens for staff roles that
-     * intentionally don't ship names (defence in depth — a future caller from
-     * an unexpected role is still recorded, just by email).
+     * <p>The claims are emitted on EVENT_ORGANIZER tokens by user-service's
+     * JwtUtil. Older tokens minted before that change carry no name claims;
+     * fall back to the email so the column is never null. A super-app
+     * scanner's value is not used: the service records the name the organizer
+     * typed for them in event-service instead.
      */
     private static String resolveScannerDisplayName(Authentication authentication) {
         if (authentication == null) {

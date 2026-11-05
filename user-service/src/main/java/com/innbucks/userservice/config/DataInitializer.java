@@ -125,7 +125,7 @@ public class DataInitializer implements CommandLineRunner {
         // A row already sitting at this address is only ours to adopt if it
         // looks like an admin row THIS seeder wrote. Anything else got there by
         // someone else claiming the address — a team member an organizer
-        // onboarded, shop staff a merchant admin created, a customer who set it
+        // onboarded before V55, shop staff a merchant admin created, a customer who set it
         // on tier-2 registration — and adopting it would confer SUPER_ADMIN on
         // an account whose password that someone already knows, active and
         // approved, with no forced rotation. That is a silent privileged-account

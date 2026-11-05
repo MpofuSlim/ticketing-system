@@ -28,8 +28,8 @@ import static org.mockito.Mockito.when;
  * on the rejection toast ("already scanned by Tariro Chikomo at 19:42") that
  * the FE shows to a colleague on a second scan.
  *
- * <p>Prefer the JWT firstName/lastName claims (emitted on TEAM_MEMBER /
- * EVENT_ORGANIZER tokens by user-service); fall back to the JWT subject
+ * <p>Prefer the JWT firstName/lastName claims (emitted on EVENT_ORGANIZER
+ * tokens by user-service); fall back to the JWT subject
  * (email) when the claims are absent, so legacy tokens and any future
  * claim-less staff role still produce a non-null audit row.
  */

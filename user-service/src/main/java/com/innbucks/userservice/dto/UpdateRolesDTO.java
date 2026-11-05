@@ -50,10 +50,7 @@ public class UpdateRolesDTO {
                             points adjustments, parcel refunds for buyers and oversight of every agent.
                             * `FRAUD_DESK` — add-on held with an agent or supervisor role: bans, fraud holds \
                             and lifting them.
-                            * `EVENT_ORGANIZER` — runs ticketed events; owns events, invoices and team members.
-                            * `TEAM_MEMBER` — gate staff / scanner operator working for one EVENT_ORGANIZER. \
-                            Requires the account to already be stamped with its parent organizer, which only \
-                            `POST /event-organizer/team-members` does.
+                            * `EVENT_ORGANIZER` — runs ticketed events; owns events, invoices and gate scanners.
                             * `MERCHANT_ADMIN` — runs a loyalty merchant; manages that merchant's shops and rules.
                             * `SHOP_ADMIN` — manages staff at one loyalty shop. Requires the account to already \
                             carry `loyaltyMerchantId` + `loyaltyShopId`, which only \
