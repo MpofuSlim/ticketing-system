@@ -173,9 +173,9 @@ class TicketRenderingServiceTest {
         BookingItem early2 = item("VIP", "Early bird", "100.00");
         BookingItem full = item("VIP", null, "150.00");
 
-        assertThat(TicketDeliveryService.priceBreakdown(List.of(early1, early2, full)))
-                .isEqualTo("2 x VIP (Early bird) at 100.00, 1 x VIP at 150.00");
-        assertThat(TicketDeliveryService.priceBreakdown(List.of(full))).isNull();
+        assertThat(TicketDeliveryService.priceBreakdown(List.of(early1, early2, full), "USD"))
+                .isEqualTo("2 x VIP (Early bird) at $100.00, 1 x VIP at $150.00");
+        assertThat(TicketDeliveryService.priceBreakdown(List.of(full), "USD")).isNull();
     }
 
     private static BookingItem item(String category, String tier, String price) {

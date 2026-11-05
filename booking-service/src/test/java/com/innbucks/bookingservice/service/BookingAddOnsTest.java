@@ -134,9 +134,9 @@ class BookingAddOnsTest {
                 BookingAddOnDTO.builder().name("Parking pass").price(new BigDecimal("5.00")).build(),
                 BookingAddOnDTO.builder().name("Meal voucher").price(new BigDecimal("10.00")).build())).build();
 
-        assertEquals("2 x Parking pass at 5.00, 1 x Meal voucher at 10.00",
-                TicketDeliveryService.addOnsBreakdown(List.of(one, two)));
-        assertNull(TicketDeliveryService.addOnsBreakdown(List.of(BookingItem.builder().build())));
+        assertEquals("2 x Parking pass at $5.00, 1 x Meal voucher at $10.00",
+                TicketDeliveryService.addOnsBreakdown(List.of(one, two), "USD"));
+        assertNull(TicketDeliveryService.addOnsBreakdown(List.of(BookingItem.builder().build()), "USD"));
         assertEquals("Parking pass, Meal voucher", two.addOnsLabel());
         assertNull(BookingItem.builder().build().addOnsLabel());
     }

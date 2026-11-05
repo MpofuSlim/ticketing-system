@@ -3158,8 +3158,10 @@ runs when a tier closes: every read works out the price in force at that moment.
 - **The ticket says what it was sold as.** `BookingItem.ticketTypeLabel()` is
   "VIP (Early bird)", or the category alone at the full price; the ticket page,
   both confirmation emails and the receipt's `Prices:` line ("2 x VIP (Early bird)
-  at 100.00, 1 x VIP at 150.00", only when a tier was used) print it. Plain ASCII
-  on purpose: the notification API has refused typographic characters. The
+  at $100.00, 1 x VIP at $150.00", only when a tier was used) print it. Plain ASCII
+  on purpose: the notification API has refused typographic characters. Every
+  amount we send (caption, receipt, ticket page) goes through `Money.display`:
+  `$` in a USD cell, the ISO code (`ZWG 12.50`) elsewhere; API fields stay bare. The
   WhatsApp QR caption is unchanged (template-variable length).
 - **Analytics projects revenue at the tiers.** `GET /seat-categories/analytics`
   adds `projectedRevenue` per category and in the totals: what is held or sold at
