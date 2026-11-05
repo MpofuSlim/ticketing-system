@@ -163,32 +163,34 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,scope=${{ matrix.service }},mode=max
 
-      # A08 supply-chain: install Trivy from an IMMUTABLE version tag, never the
-      # mutable `main` branch. This job holds packages:write + id-token:write +
-      # attestations:write, so remote code piped to a shell here could push
-      # malicious images and mint valid provenance attestations for them. Pin
-      # both the installer script ref AND the installed version; bump
-      # deliberately (Dependabot doesn't track this raw curl).
+      # A08 supply-chain: install Trivy from its release tarball, pinned by
+      # VERSION and by SHA-256, never by a mutable ref. This job holds
+      # packages:write + id-token:write + attestations:write, so anything it
+      # runs could push malicious images and mint valid provenance attestations
+      # for them. The hash is checked into this file, so even a re-uploaded
+      # release asset is refused. Bump deliberately (Dependabot doesn't track
+      # this): take the new hash from the release's trivy_<v>_checksums.txt and
+      # check it against the downloaded tarball.
+      #
+      # It used to pipe contrib/install.sh to a shell, which resolves the tag
+      # through the GitHub API and then downloads with its own quiet curl: on
+      # 2026-11-05 one matrix job (payment-service) failed all three attempts
+      # with no error shown while the other six passed. A direct download with
+      # curl's own retries prints why it failed, and needs no API call.
       - name: Install Trivy
         env:
           TRIVY_VERSION: "0.69.3"
+          TRIVY_SHA256: "1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75"
         run: |
-          # Retry: install.sh resolves the tag via the GitHub API, which
-          # intermittently rate-limits shared runners and fails with a
-          # misleading "unable to find v<X>" even though the tag exists
-          # (observed: 5 matrix jobs green, 2 failed, same version, same
-          # minute). Same pinned version on every attempt — the retry adds
-          # resilience, not mutability.
-          for attempt in 1 2 3; do
-            if curl -sSfL "https://raw.githubusercontent.com/aquasecurity/trivy/v${TRIVY_VERSION}/contrib/install.sh" \
-              | sudo sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"; then
-              exit 0
-            fi
-            echo "Trivy install attempt ${attempt} failed; retrying in $((attempt * 15))s..."
-            sleep $((attempt * 15))
-          done
-          echo "Trivy install failed after 3 attempts" >&2
-          exit 1
+          set -euo pipefail
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 20 \
+            -o "$tarball" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${tarball}"
+          echo "${TRIVY_SHA256}  ${tarball}" | sha256sum -c -
+          sudo tar -xzf "$tarball" -C /usr/local/bin trivy
+          trivy --version
 
       # Gate: scan the LOADED local image and fail the job on any CRITICAL/HIGH
       # (os + library) before the push step runs. Previously the push happened
