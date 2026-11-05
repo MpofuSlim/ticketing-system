@@ -89,7 +89,7 @@ public enum EventCategory {
     RUGBY_SEVENS("Rugby Sevens"),
     ATHLETICS("Athletics Meet"),
     FUN_RUN("Fun Run"),  // original-seven value — pre-V12 rows reference it
-    TRIAL_RUN("Trial Run"),
+    TRAIL_RUN("Trail Run"),
     HALF_MARATHON("Half Marathon"),  // original-seven value — pre-V12 rows reference it
     MARATHON("Marathon"),  // original-seven value — pre-V12 rows reference it
     MOTORSPORT("Motorsport & Car Show"),
