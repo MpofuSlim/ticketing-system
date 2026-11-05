@@ -1,5 +1,6 @@
 package com.innbucks.eventservice.repository;
 
+import com.innbucks.eventservice.client.ScannerInviteGateway;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.EventCategory;
 import com.innbucks.eventservice.entity.EventScanner;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -23,6 +25,9 @@ import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
 
 /**
  * The scanner schedule rule against real Postgres (V14): the overlap SQL, the
@@ -41,6 +46,10 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
     @Autowired EventTermsVersionRepository termsVersionRepository;
     @Autowired EventBookingQuestionRepository bookingQuestionRepository;
     @Autowired ScannerService scannerService;
+    @Autowired ScannerInviteGateway realInviteGateway;
+
+    /** Records the invite messages instead of calling user-service (V20); restored after each test. */
+    private ScannerInviteGateway inviteGateway;
 
     private final LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.SECONDS);
     private final UUID organizerA = UUID.randomUUID();
@@ -253,5 +262,85 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
         } catch (ApiProblemException e) {
             return ScannerService.SCHEDULE_CLASH.equals(e.getErrorCode()) ? "clash" : e.getErrorCode();
         }
+    }
+
+    @BeforeEach
+    void recordInviteMessages() {
+        inviteGateway = mock(ScannerInviteGateway.class);
+        scannerService.setScannerInviteGateway(inviteGateway);
+    }
+
+    // The bean is shared by every IT in the context: put the real one back.
+    @AfterEach
+    void restoreInviteGateway() {
+        scannerService.setScannerInviteGateway(realInviteGateway);
+    }
+
+    // ---------------------------------------------------------- invite message (V20)
+
+    @Test
+    void twoFirstAssignmentsAtOnce_sendOneMessage_afterTheCommit() throws Exception {
+        Event first = event(organizerA, now.plusDays(1).withHour(10), now.plusDays(1).withHour(12));
+        Event second = event(organizerA, now.plusDays(2).withHour(10), now.plusDays(2).withHour(12));
+        List<Boolean> sentInsideATransaction = new CopyOnWriteArrayList<>();
+        doAnswer(inv -> {
+            sentInsideATransaction.add(TransactionSynchronizationManager.isActualTransactionActive());
+            return null;
+        }).when(inviteGateway).sendInvite(any(), any(), any(), any());
+
+        for (int round = 0; round < 10; round++) {
+            assignmentRepository.deleteAll();
+            scannerRepository.deleteAll();
+            clearInvocations(inviteGateway);
+            EventScanner s = scanner(organizerA, PHONE);
+            CountDownLatch start = new CountDownLatch(1);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                List<Future<String>> results = new ArrayList<>();
+                results.add(pool.submit(() -> attempt(start, organizerA, s, first)));
+                results.add(pool.submit(() -> attempt(start, organizerA, s, second)));
+                start.countDown();
+                for (Future<String> f : results) {
+                    assertThat(f.get(30, TimeUnit.SECONDS)).as("round " + round).isEqualTo("assigned");
+                }
+            } finally {
+                pool.shutdownNow();
+            }
+            verify(inviteGateway, times(1)).sendInvite(eq(s.getScannerId()), eq(PHONE), any(), any());
+            assertThat(scannerRepository.findById(s.getScannerId()).orElseThrow().getInviteNotifiedAt())
+                    .as("round " + round).isNotNull();
+        }
+        assertThat(sentInsideATransaction).hasSize(10).containsOnly(false);
+    }
+
+    @Test
+    void laterAssignments_sendNothing_butInvitingADeclinerAgainSendsOnceMore() {
+        EventScanner s = scanner(organizerA, PHONE);
+        Event jazz = event(organizerA, now.plusDays(1).withHour(10), now.plusDays(1).withHour(12));
+        Event ball = event(organizerA, now.plusDays(2).withHour(10), now.plusDays(2).withHour(12));
+
+        scannerService.assign(organizerA, "it", s.getScannerId(), jazz.getEventId());
+        scannerService.assign(organizerA, "it", s.getScannerId(), ball.getEventId());
+        verify(inviteGateway, times(1)).sendInvite(s.getScannerId(), PHONE, null, jazz.getTitle());
+
+        scannerService.decline(null, PHONE, s.getScannerId());
+        scannerService.reinvite(organizerA, "it", s.getScannerId());
+
+        verify(inviteGateway, times(2)).sendInvite(s.getScannerId(), PHONE, null, jazz.getTitle());
+        assertThat(scannerRepository.findById(s.getScannerId()).orElseThrow().getInviteNotifiedAt()).isNotNull();
+    }
+
+    @Test
+    void anAcceptedScanner_isNeverMessaged() {
+        EventScanner s = scanner(organizerA, PHONE);
+        s.setAcceptedAt(now);
+        s.setAccountUserUuid(UUID.randomUUID());
+        scannerRepository.saveAndFlush(s);
+        Event jazz = event(organizerA, now.plusDays(1).withHour(10), now.plusDays(1).withHour(12));
+
+        scannerService.assign(organizerA, "it", s.getScannerId(), jazz.getEventId());
+
+        verifyNoInteractions(inviteGateway);
+        assertThat(scannerRepository.findById(s.getScannerId()).orElseThrow().getInviteNotifiedAt()).isNull();
     }
 }

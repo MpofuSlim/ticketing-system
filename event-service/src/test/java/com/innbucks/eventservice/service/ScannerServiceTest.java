@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.service;
 
 import com.innbucks.eventservice.client.OrganizerGateway;
+import com.innbucks.eventservice.client.ScannerInviteGateway;
 import com.innbucks.eventservice.dto.OrganizerDTO;
 import com.innbucks.eventservice.dto.scanner.*;
 import com.innbucks.eventservice.entity.Event;
@@ -15,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
@@ -40,6 +43,7 @@ class ScannerServiceTest {
     private EventScannerAssignmentRepository assignments;
     private EventRepository events;
     private OrganizerGateway organizerGateway;
+    private ScannerInviteGateway inviteGateway;
     private ScannerService service;
 
     @BeforeEach
@@ -49,6 +53,8 @@ class ScannerServiceTest {
         events = mock(EventRepository.class);
         organizerGateway = mock(OrganizerGateway.class);
         service = new ScannerService(scanners, assignments, events, organizerGateway);
+        inviteGateway = mock(ScannerInviteGateway.class);
+        service.setScannerInviteGateway(inviteGateway);
         service.setClock(Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneOffset.UTC));
         when(organizerGateway.organizersByUserUuids(any())).thenReturn(Map.of());
         when(scanners.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -268,6 +274,187 @@ class ScannerServiceTest {
         s.setDeclinedAt(NOW.minusDays(1));
         assertThat(service.reinvite(ORGANIZER, "org", s.getScannerId()).status()).isEqualTo("INVITED");
         verify(assignments).countClashesOnReturn(PHONE, s.getScannerId(), NOW);
+    }
+
+    // -------------------------------------------------------- invite message
+
+    private static OrganizerDTO organizer(String businessName) {
+        OrganizerDTO dto = new OrganizerDTO();
+        dto.setBusinessName(businessName);
+        return dto;
+    }
+
+    @Test
+    void assign_theFirstAssignmentOfAnInvitedScanner_messagesThePerson_namingTheEvent() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        Event e = event(ORGANIZER, NOW.plusDays(1), NOW.plusDays(1).plusHours(4));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+        when(events.findById(e.getEventId())).thenReturn(Optional.of(e));
+        when(scanners.claimInviteNotice(s.getScannerId(), NOW)).thenReturn(1);
+        when(organizerGateway.organizersByUserUuids(List.of(ORGANIZER)))
+                .thenReturn(Map.of(ORGANIZER, organizer("Harare Arena Events")));
+
+        service.assign(ORGANIZER, "org", s.getScannerId(), e.getEventId());
+
+        InOrder order = inOrder(assignments, scanners, inviteGateway);
+        order.verify(assignments).save(any(EventScannerAssignment.class));
+        order.verify(scanners).claimInviteNotice(s.getScannerId(), NOW);
+        order.verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, "Harare Arena Events",
+                "Peterhouse Sixth Form Ball");
+    }
+
+    @Test
+    void assign_whenTheMessageWasAlreadyClaimed_sendsNothing() {
+        // Accepted, declined, switched off, or already told since its invite:
+        // the claim's WHERE says no, and nothing is sent.
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        Event e = event(ORGANIZER, NOW.plusDays(1), NOW.plusDays(1).plusHours(4));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+        when(events.findById(e.getEventId())).thenReturn(Optional.of(e));
+        when(scanners.claimInviteNotice(s.getScannerId(), NOW)).thenReturn(0);
+
+        service.assign(ORGANIZER, "org", s.getScannerId(), e.getEventId());
+
+        verifyNoInteractions(inviteGateway);
+    }
+
+    @Test
+    void assign_anExistingAssignment_orARefusedOne_claimsAndSendsNothing() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        Event e = event(ORGANIZER, NOW.plusDays(1), NOW.plusDays(1).plusHours(4));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+        when(events.findById(e.getEventId())).thenReturn(Optional.of(e));
+        when(assignments.existsByScannerIdAndEventId(s.getScannerId(), e.getEventId())).thenReturn(true);
+        service.assign(ORGANIZER, "org", s.getScannerId(), e.getEventId());
+
+        when(assignments.existsByScannerIdAndEventId(s.getScannerId(), e.getEventId())).thenReturn(false);
+        when(assignments.countClashes(eq(PHONE), any(), any(), any(), any(), any())).thenReturn(1L);
+        catchThrowable(() -> service.assign(ORGANIZER, "org", s.getScannerId(), e.getEventId()));
+
+        verify(scanners, never()).claimInviteNotice(any(), any());
+        verifyNoInteractions(inviteGateway);
+    }
+
+    @Test
+    void assign_withoutAnOrganizerName_stillSends() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        Event e = event(ORGANIZER, NOW.plusDays(1), NOW.plusDays(1).plusHours(4));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+        when(events.findById(e.getEventId())).thenReturn(Optional.of(e));
+        when(scanners.claimInviteNotice(s.getScannerId(), NOW)).thenReturn(1);
+        when(organizerGateway.organizersByUserUuids(any())).thenThrow(new IllegalStateException("user-service down"));
+
+        service.assign(ORGANIZER, "org", s.getScannerId(), e.getEventId());
+
+        verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, null, "Peterhouse Sixth Form Ball");
+    }
+
+    @Test
+    void assign_theMessageGoesAfterTheCommit() {
+        PlatformTransactionManager tm = mock(PlatformTransactionManager.class);
+        when(tm.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+        service.setTransactionManager(tm);
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        Event e = event(ORGANIZER, NOW.plusDays(1), NOW.plusDays(1).plusHours(4));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+        when(events.findById(e.getEventId())).thenReturn(Optional.of(e));
+        when(scanners.claimInviteNotice(s.getScannerId(), NOW)).thenReturn(1);
+
+        service.assign(ORGANIZER, "org", s.getScannerId(), e.getEventId());
+
+        InOrder order = inOrder(tm, scanners, organizerGateway, inviteGateway);
+        order.verify(scanners).claimInviteNotice(s.getScannerId(), NOW);
+        order.verify(tm).commit(any());
+        order.verify(organizerGateway).organizersByUserUuids(List.of(ORGANIZER));
+        order.verify(inviteGateway).sendInvite(eq(s.getScannerId()), eq(PHONE), any(), any());
+    }
+
+    @Test
+    void assign_aRolledBackAssignment_messagesNobody() {
+        PlatformTransactionManager tm = mock(PlatformTransactionManager.class);
+        when(tm.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+        doThrow(new org.springframework.transaction.TransactionSystemException("commit failed"))
+                .when(tm).commit(any());
+        service.setTransactionManager(tm);
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        Event e = event(ORGANIZER, NOW.plusDays(1), NOW.plusDays(1).plusHours(4));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+        when(events.findById(e.getEventId())).thenReturn(Optional.of(e));
+        when(scanners.claimInviteNotice(s.getScannerId(), NOW)).thenReturn(1);
+
+        catchThrowable(() -> service.assign(ORGANIZER, "org", s.getScannerId(), e.getEventId()));
+
+        verifyNoInteractions(inviteGateway);
+    }
+
+    @Test
+    void reinvite_clearsTheEarlierMessage_andSendsANewOne_namingTheSoonestEvent() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        s.setDeclinedAt(NOW.minusDays(1));
+        s.setInviteNotifiedAt(NOW.minusDays(3));
+        Event later = event(ORGANIZER, NOW.plusDays(5), NOW.plusDays(5).plusHours(4));
+        later.setTitle("Jazz on the Lawn");
+        Event sooner = event(ORGANIZER, NOW.plusDays(1), NOW.plusDays(1).plusHours(4));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+        when(assignments.findByScannerIdIn(any())).thenReturn(List.of(
+                assignment(s, later), assignment(s, sooner)));
+        when(events.findAllById(any())).thenReturn(List.of(later, sooner));
+        when(scanners.claimInviteNotice(s.getScannerId(), NOW)).thenReturn(1);
+
+        service.reinvite(ORGANIZER, "org", s.getScannerId());
+
+        assertThat(s.getInviteNotifiedAt()).as("a new invite is a new message").isNull();
+        InOrder order = inOrder(scanners, inviteGateway);
+        order.verify(scanners).save(s);
+        order.verify(scanners).claimInviteNotice(s.getScannerId(), NOW);
+        order.verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, null, "Peterhouse Sixth Form Ball");
+    }
+
+    @Test
+    void reinvite_withNoEventToAccept_sendsNothingYet() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        s.setDeclinedAt(NOW.minusDays(1));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+
+        service.reinvite(ORGANIZER, "org", s.getScannerId());
+
+        verify(scanners, never()).claimInviteNotice(any(), any());
+        verifyNoInteractions(inviteGateway);
+    }
+
+    @Test
+    void enable_anInvitedScannerWithAnEvent_isToldIfItNeverWas() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        s.setDisabledAt(NOW.minusDays(1));
+        Event e = event(ORGANIZER, NOW.plusDays(1), NOW.plusDays(1).plusHours(4));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+        when(assignments.findByScannerIdIn(any())).thenReturn(List.of(assignment(s, e)));
+        when(events.findAllById(any())).thenReturn(List.of(e));
+        when(scanners.claimInviteNotice(s.getScannerId(), NOW)).thenReturn(1);
+
+        service.enable(ORGANIZER, "org", s.getScannerId());
+
+        verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, null, "Peterhouse Sixth Form Ball");
+    }
+
+    @Test
+    void enable_aScannerAlreadyOn_claimsNothing() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+
+        service.enable(ORGANIZER, "org", s.getScannerId());
+
+        verify(scanners, never()).claimInviteNotice(any(), any());
+        verifyNoInteractions(inviteGateway);
+    }
+
+    private static EventScannerAssignment assignment(EventScanner s, Event e) {
+        return EventScannerAssignment.builder()
+                .assignmentId(UUID.randomUUID())
+                .scannerId(s.getScannerId())
+                .eventId(e.getEventId())
+                .assignedBy("org")
+                .build();
     }
 
     // ------------------------------------------------------- accept/decline

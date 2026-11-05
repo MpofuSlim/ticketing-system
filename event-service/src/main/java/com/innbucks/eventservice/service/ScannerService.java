@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.service;
 
 import com.innbucks.eventservice.client.OrganizerGateway;
+import com.innbucks.eventservice.client.ScannerInviteGateway;
 import com.innbucks.eventservice.dto.OrganizerDTO;
 import com.innbucks.eventservice.dto.scanner.*;
 import com.innbucks.eventservice.entity.Event;
@@ -14,16 +15,20 @@ import com.innbucks.eventservice.util.HtmlSanitizer;
 import com.innbucks.eventservice.util.MsisdnValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -47,6 +52,17 @@ import java.util.stream.Collectors;
  *
  * <p>The super-app endpoints take the phone and the account from the caller's
  * session, never from a request.
+ *
+ * <p><b>The person is told (V20, owner's decision 2026-11-05).</b> When an
+ * INVITED scanner first has an event to accept (its first assignment, being
+ * invited again after declining, being switched back on), user-service sends
+ * one WhatsApp, or an SMS when WhatsApp fails, naming the organizer and the
+ * event and saying to open the InnBucks app. {@code invite_notified_at} makes
+ * it once: a conditional UPDATE claims it, so two assignments at once send one
+ * message, and inviting again clears it. The write commits first and the
+ * message goes after, with no connection held; a failed send never fails the
+ * assignment. The organizer still never learns whether the number has an
+ * account, or whether the message arrived.
  */
 @Service
 @RequiredArgsConstructor
@@ -93,6 +109,32 @@ public class ScannerService {
     void setMaxPerOrganizer(int maxPerOrganizer) {
         this.maxPerOrganizer = maxPerOrganizer;
     }
+
+    /** Sends the invite message (V20); absent in hand-built tests, which then send nothing. */
+    private ScannerInviteGateway inviteGateway;
+
+    /**
+     * The write phase of assign, invite-again and enable, so the invite message
+     * goes after it commits with no connection held. Absent in hand-built
+     * tests, which run the phase inline.
+     */
+    private TransactionTemplate transactionTemplate;
+
+    @Autowired(required = false)
+    public void setScannerInviteGateway(ScannerInviteGateway inviteGateway) {
+        this.inviteGateway = inviteGateway;
+    }
+
+    @Autowired(required = false)
+    public void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+    }
+
+    /** What a write phase hands back: the answer, and the invite message to send once it commits. */
+    private record Written(ScannerResponseDTO response, InviteNotice invite) {}
+
+    /** One invite message: whose number, which organizer's team, and the event it names. */
+    private record InviteNotice(UUID scannerId, UUID organizerUuid, String phoneNumber, String eventTitle) {}
 
     // ---------------------------------------------------------------- organizer
 
@@ -148,8 +190,11 @@ public class ScannerService {
         return toResponses(List.of(scanner)).get(0);
     }
 
-    @Transactional
     public ScannerResponseDTO assign(UUID organizerUuid, String actor, UUID scannerId, UUID eventId) {
+        return afterCommit(write(() -> assignInWrite(organizerUuid, actor, scannerId, eventId)));
+    }
+
+    private Written assignInWrite(UUID organizerUuid, String actor, UUID scannerId, UUID eventId) {
         EventScanner scanner = owned(organizerUuid, scannerId);
         Event event = eventRepository.findById(eventId)
                 .filter(e -> !e.isDeleted() && organizerUuid.equals(e.getTenantUserUuid()))
@@ -165,7 +210,7 @@ public class ScannerService {
         // once answer the second from the first's committed row.
         scannerRepository.lockAllByPhoneNumber(scanner.getPhoneNumber());
         if (assignmentRepository.existsByScannerIdAndEventId(scannerId, eventId)) {
-            return get(organizerUuid, scannerId);
+            return new Written(get(organizerUuid, scannerId), null);
         }
         long clashes = assignmentRepository.countClashes(scanner.getPhoneNumber(), scannerId, eventId,
                 event.getStartDateTime(), event.getEndDateTime(), now);
@@ -181,7 +226,7 @@ public class ScannerService {
                 .assignedBy(actor)
                 .build());
         log.info("Scanner assigned scannerId={} eventId={} by={}", scannerId, eventId, actor);
-        return get(organizerUuid, scannerId);
+        return new Written(get(organizerUuid, scannerId), claimInvite(scanner, event, now));
     }
 
     @Transactional
@@ -205,35 +250,41 @@ public class ScannerService {
         return get(organizerUuid, scannerId);
     }
 
-    @Transactional
     public ScannerResponseDTO enable(UUID organizerUuid, String actor, UUID scannerId) {
-        EventScanner scanner = owned(organizerUuid, scannerId);
-        if (scanner.getDisabledAt() != null) {
-            // Back on, its events count again: they must not overlap what the
-            // number took on elsewhere while this row was off.
-            requireNoClashOnReturn(scanner);
-            scanner.setDisabledAt(null);
-            scannerRepository.save(scanner);
-            log.info("Scanner enabled scannerId={} by={}", scannerId, actor);
-        }
-        return get(organizerUuid, scannerId);
+        return afterCommit(write(() -> {
+            EventScanner scanner = owned(organizerUuid, scannerId);
+            InviteNotice invite = null;
+            if (scanner.getDisabledAt() != null) {
+                // Back on, its events count again: they must not overlap what the
+                // number took on elsewhere while this row was off.
+                requireNoClashOnReturn(scanner);
+                scanner.setDisabledAt(null);
+                scannerRepository.save(scanner);
+                log.info("Scanner enabled scannerId={} by={}", scannerId, actor);
+                invite = claimInviteForNextEvent(scanner);
+            }
+            return new Written(get(organizerUuid, scannerId), invite);
+        }));
     }
 
     /** A DECLINED scanner (declined, or left) back to INVITED. */
-    @Transactional
     public ScannerResponseDTO reinvite(UUID organizerUuid, String actor, UUID scannerId) {
-        EventScanner scanner = owned(organizerUuid, scannerId);
-        if (scanner.getDeclinedAt() == null) {
-            throw new ApiProblemException(HttpStatus.CONFLICT, NOT_DECLINED,
-                    "Only a scanner who declined can be invited again.");
-        }
-        if (scanner.getDisabledAt() == null) {
-            requireNoClashOnReturn(scanner);
-        }
-        scanner.setDeclinedAt(null);
-        scannerRepository.save(scanner);
-        log.info("Scanner invited again scannerId={} by={}", scannerId, actor);
-        return get(organizerUuid, scannerId);
+        return afterCommit(write(() -> {
+            EventScanner scanner = owned(organizerUuid, scannerId);
+            if (scanner.getDeclinedAt() == null) {
+                throw new ApiProblemException(HttpStatus.CONFLICT, NOT_DECLINED,
+                        "Only a scanner who declined can be invited again.");
+            }
+            if (scanner.getDisabledAt() == null) {
+                requireNoClashOnReturn(scanner);
+            }
+            scanner.setDeclinedAt(null);
+            // A new invite: the person hears about it again.
+            scanner.setInviteNotifiedAt(null);
+            scannerRepository.save(scanner);
+            log.info("Scanner invited again scannerId={} by={}", scannerId, actor);
+            return new Written(get(organizerUuid, scannerId), claimInviteForNextEvent(scanner));
+        }));
     }
 
     // ----------------------------------------------------------------- super app
@@ -351,6 +402,56 @@ public class ScannerService {
             }
         }
         return ScannerAccessDTO.denied();
+    }
+
+    // ------------------------------------------------------------ invite message
+
+    private <T> T write(Supplier<T> work) {
+        return transactionTemplate == null ? work.get() : transactionTemplate.execute(status -> work.get());
+    }
+
+    /**
+     * Claims the invite message for {@code scanner}, naming {@code event}, if it
+     * is INVITED and has not had one since it was (re)invited. Null when it is
+     * not this call's to send.
+     */
+    private InviteNotice claimInvite(EventScanner scanner, Event event, LocalDateTime now) {
+        if (scannerRepository.claimInviteNotice(scanner.getScannerId(), now) != 1) {
+            return null;
+        }
+        return new InviteNotice(scanner.getScannerId(), scanner.getOrganizerUuid(), scanner.getPhoneNumber(),
+                event.getTitle());
+    }
+
+    /** As {@link #claimInvite}, naming the scanner's soonest assigned event that has not ended; none, no message. */
+    private InviteNotice claimInviteForNextEvent(EventScanner scanner) {
+        LocalDateTime now = now();
+        List<Event> upcoming = upcomingEventsByScanner(List.of(scanner), now)
+                .getOrDefault(scanner.getScannerId(), List.of());
+        return upcoming.isEmpty() ? null : claimInvite(scanner, upcoming.get(0), now);
+    }
+
+    /**
+     * After the write phase has committed: the organizer's name (a cached remote
+     * read) and the request to user-service, both best-effort and with no
+     * transaction open.
+     */
+    private ScannerResponseDTO afterCommit(Written written) {
+        InviteNotice invite = written.invite();
+        if (invite != null && inviteGateway != null) {
+            String organizerName = null;
+            try {
+                organizerName = organizerName(
+                        organizerGateway.organizersByUserUuids(List.of(invite.organizerUuid())),
+                        invite.organizerUuid());
+            } catch (RuntimeException e) {
+                log.warn("Organizer name unavailable for the invite message scannerId={} cause={}",
+                        invite.scannerId(), e.toString());
+            }
+            inviteGateway.sendInvite(invite.scannerId(), invite.phoneNumber(), organizerName, invite.eventTitle());
+            log.info("Scanner invite message requested scannerId={}", invite.scannerId());
+        }
+        return written.response();
     }
 
     // ------------------------------------------------------------------- helpers

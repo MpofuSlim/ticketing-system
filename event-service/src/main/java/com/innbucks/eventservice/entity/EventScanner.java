@@ -59,6 +59,15 @@ public class EventScanner {
     @Column(name = "disabled_at")
     private LocalDateTime disabledAt;
 
+    /**
+     * When the invite message went to the number (V20); null until the first
+     * assignment while INVITED, and again after inviting a decliner back. Set
+     * by {@code EventScannerRepository.claimInviteNotice}, so two assignments
+     * at once send one message.
+     */
+    @Column(name = "invite_notified_at")
+    private LocalDateTime inviteNotifiedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
