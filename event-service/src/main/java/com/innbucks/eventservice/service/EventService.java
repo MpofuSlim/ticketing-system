@@ -241,40 +241,6 @@ public class EventService {
     }
 
     /**
-     * Team-member view of {@code /events/my}: returns only the events the
-     * member is explicitly assigned to (deny-by-default). The
-     * {@code organizerUuid} comes from the JWT's {@code organizerUuid} claim
-     * (the parent organizer's uuid for a TEAM_MEMBER) and is enforced as a
-     * defence-in-depth ownership filter so a stale assignment row pointing
-     * at a foreign organizer's event can never leak through.
-     *
-     * <p>An empty {@code assignedEventIds} short-circuits to an empty page —
-     * Spring JPA forbids an empty {@code IN (...)} list in some dialects, and
-     * a "no events" answer is the correct semantic in deny-by-default mode.
-     */
-    public Page<EventResponseDTO> getMyAssignedEvents(
-            UUID organizerUuid,
-            java.util.Collection<UUID> assignedEventIds,
-            LocalDateTime from,
-            LocalDateTime to,
-            String venue,
-            int page,
-            int size,
-            String sortBy
-    ) {
-        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
-        if (assignedEventIds == null || assignedEventIds.isEmpty()) {
-            log.debug("Team-member has no event assignments organizerUuid={} -> empty page", organizerUuid);
-            return Page.empty(pageable);
-        }
-        log.debug("Fetching assigned events for team-member organizerUuid={} assignedCount={} page={} size={}",
-                organizerUuid, assignedEventIds.size(), page, size);
-        return enrichWithAvailability(
-                eventRepository.findByTenantUserUuidAndEventIdIn(
-                        organizerUuid, assignedEventIds, from, to, venue, pageable));
-    }
-
-    /**
      * Same as {@link #getMyEvents} but additionally filters {@code active=true}.
      * Used so an EVENT_ORGANIZER hitting the public {@code /events/active}
      * listing only sees their own bookable events.
@@ -301,46 +267,8 @@ public class EventService {
     }
 
     /**
-     * Team-member view of {@code /events/active}: the {@code active=true}
-     * counterpart of {@link #getMyAssignedEvents}. Returns only the events the
-     * member is explicitly assigned to (deny-by-default) that are also flagged
-     * active. The {@code organizerUuid} (parent organizer's uuid from the JWT)
-     * is enforced as a defence-in-depth ownership filter so a stale assignment
-     * row pointing at a foreign organizer's event can never leak through.
-     *
-     * <p>An empty {@code assignedEventIds} short-circuits to an empty page —
-     * Spring JPA forbids an empty {@code IN (...)} list in some dialects, and a
-     * "no events" answer is the correct semantic in deny-by-default mode.
-     */
-    public Page<EventResponseDTO> getMyAssignedActiveEvents(
-            UUID organizerUuid,
-            java.util.Collection<UUID> assignedEventIds,
-            LocalDateTime from,
-            LocalDateTime to,
-            String venue,
-            String country,
-            EventCategory category,
-            int page,
-            int size,
-            String sortBy
-    ) {
-        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
-        if (assignedEventIds == null || assignedEventIds.isEmpty()) {
-            log.debug("Team-member has no event assignments organizerUuid={} -> empty active page", organizerUuid);
-            return Page.empty(pageable);
-        }
-        log.debug("Fetching assigned active events for team-member organizerUuid={} assignedCount={} country={} category={} page={} size={}",
-                organizerUuid, assignedEventIds.size(), country, category, page, size);
-        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        Page<Event> events = category == null
-                ? eventRepository.findByTenantUserUuidActiveOnlyAndEventIdIn(organizerUuid, assignedEventIds, from, to, venue, country, now, pageable)
-                : eventRepository.findByTenantUserUuidActiveOnlyByCategoryAndEventIdIn(organizerUuid, assignedEventIds, from, to, venue, country, category, now, pageable);
-        return enrichWithAvailability(events);
-    }
-
-    /**
-     * Public/admin-scoped listing of events flagged {@code active=false} — the
-     * inactive listing behind {@code GET /events/inactive}. Mirrors
+     * SUPER_ADMIN's fleet-wide listing of events flagged {@code active=false} —
+     * the inactive listing behind {@code GET /events/inactive}. Mirrors
      * {@link #getActiveOnlyEvents} but intentionally includes events that have
      * already ended (no {@code endDateTime > now} cutoff) and admin-rejected
      * events (which are always {@code active=false}), so an admin can find a
@@ -396,44 +324,6 @@ public class EventService {
         Page<Event> events = category == null
                 ? eventRepository.findByTenantUserUuidInactiveOnly(tenantUserUuid, from, to, venue, country, pageable)
                 : eventRepository.findByTenantUserUuidInactiveOnlyByCategory(tenantUserUuid, from, to, venue, country, category, pageable);
-        return enrichWithAvailability(events);
-    }
-
-    /**
-     * Team-member view of {@code /events/inactive}: the {@code active=false}
-     * counterpart of {@link #getMyAssignedEvents}, mirroring
-     * {@link #getMyInactiveEvents}. Returns only the inactive events the member
-     * is explicitly assigned to (deny-by-default). The {@code organizerUuid}
-     * (parent organizer's uuid from the JWT) is enforced as a defence-in-depth
-     * ownership filter so a stale assignment row pointing at a foreign
-     * organizer's event can never leak through.
-     *
-     * <p>An empty {@code assignedEventIds} short-circuits to an empty page —
-     * Spring JPA forbids an empty {@code IN (...)} list in some dialects, and a
-     * "no events" answer is the correct semantic in deny-by-default mode.
-     */
-    public Page<EventResponseDTO> getMyAssignedInactiveEvents(
-            UUID organizerUuid,
-            java.util.Collection<UUID> assignedEventIds,
-            LocalDateTime from,
-            LocalDateTime to,
-            String venue,
-            String country,
-            EventCategory category,
-            int page,
-            int size,
-            String sortBy
-    ) {
-        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
-        if (assignedEventIds == null || assignedEventIds.isEmpty()) {
-            log.debug("Team-member has no event assignments organizerUuid={} -> empty inactive page", organizerUuid);
-            return Page.empty(pageable);
-        }
-        log.debug("Fetching assigned inactive events for team-member organizerUuid={} assignedCount={} country={} category={} page={} size={}",
-                organizerUuid, assignedEventIds.size(), country, category, page, size);
-        Page<Event> events = category == null
-                ? eventRepository.findByTenantUserUuidInactiveOnlyAndEventIdIn(organizerUuid, assignedEventIds, from, to, venue, country, pageable)
-                : eventRepository.findByTenantUserUuidInactiveOnlyByCategoryAndEventIdIn(organizerUuid, assignedEventIds, from, to, venue, country, category, pageable);
         return enrichWithAvailability(events);
     }
 

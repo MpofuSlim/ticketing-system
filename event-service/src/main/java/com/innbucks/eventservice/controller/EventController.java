@@ -46,7 +46,6 @@ import java.util.UUID;
 public class EventController {
 
     private final EventService eventService;
-    private final com.innbucks.eventservice.client.UserUuidLookupGateway userUuidLookupGateway;
 
     /**
      * Upper bound on @RequestParam {@code size} across every listing endpoint.
@@ -212,20 +211,9 @@ public class EventController {
             log.debug("Listing events (organizer scope) organizerUuid={} from={} to={} venue={} page={} size={} sortBy={}",
                     organizerUuid, from, to, venue, page, size, sortBy);
             result = eventService.getMyEvents(organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy);
-        } else if (isTeamMember(authentication)) {
-            // Deny-by-default: a TEAM_MEMBER on the broad catalog sees ONLY the
-            // events their organizer has explicitly assigned to them — never
-            // every organizer's events (that was the broken-access-control bug
-            // where a team member fell through to the public branch). Resolved
-            // the same way as GET /events/my; organizerUuid is the parent
-            // organizer's uuid, used as the defence-in-depth ownership filter.
-            UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
-                    .organizerUuid(authentication);
-            java.util.List<UUID> assignedEventIds = resolveAssignedEventIds(authentication);
-            log.debug("Listing events (team-member scope) organizerUuid={} assignedCount={} from={} to={} venue={} page={} size={} sortBy={}",
-                    organizerUuid, assignedEventIds.size(), from, to, venue, page, size, sortBy);
-            result = eventService.getMyAssignedEvents(organizerUuid, assignedEventIds, fromDateTime, toDateTime, venue, page, size, sortBy);
         } else {
+            // Everyone else, whatever their roles, gets the anonymous listing:
+            // published events only, organizer id stripped.
             log.debug("Listing events (public scope) from={} to={} venue={} page={} size={} sortBy={}",
                     from, to, venue, page, size, sortBy);
             result = eventService.getAllActiveEvents(fromDateTime, toDateTime, venue, page, size, sortBy);
@@ -235,7 +223,7 @@ public class EventController {
 
 
     @GetMapping("/my")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "List the authenticated organizer's own events",
             description = """
@@ -252,12 +240,72 @@ public class EventController {
                     `organizerUuid`), since this endpoint is scoped by the
                     principal. To see *every* organizer's events, SUPER_ADMIN
                     should call `GET /events`.
+
+                    Any other role is `403`. Gate staff are super-app scanners
+                    (`/event-organizer/scanners`, `GET /events/gate`) and have no
+                    organizer view; the scanner-app team members were retired on
+                    2026-11-05.
                     """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Paged list of the caller's events"),
-            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but lacks the required role")
+            @ApiResponse(responseCode = "200", description = "Paged list of the caller's events",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "The organizer's events", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Events retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "eventNo": null,
+                                            "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
+                                            "title": "Summer Concert",
+                                            "description": "Open-air summer concert featuring local headliners.",
+                                            "venue": "Harare Gardens",
+                                            "country": "Zimbabwe", "category": "CONCERT",
+                                            "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777734000000",
+                                            "startDateTime": "2026-06-15T19:00:00+02:00", "endDateTime": "2026-06-15T22:00:00+02:00",
+                                            "salesStartDateTime": null,
+                                            "salesStatus": "ON_SALE",
+                                            "totalCapacity": 500,
+                                            "availableTickets": 420,
+                                            "active": true,
+                                            "rejected": false,
+                                            "reviewStatus": "APPROVED",
+                                            "approvedAt": "2026-04-25T09:15:00+02:00",
+                                            "createdAt": "2026-04-25T08:00:00+02:00",
+                                            "updatedAt": "2026-05-02T15:00:00+02:00",
+                                            "seatCategories": null,
+                                            "priceFrom": { "currentPrice": 60.00, "fullPrice": 60.00, "tierName": null, "categoryName": "GA", "soldOut": false }
+                                          }
+                                        ],
+                                        "totalElements": 1,
+                                        "totalPages": 1,
+                                        "size": 10,
+                                        "number": 0,
+                                        "first": true,
+                                        "last": true,
+                                        "numberOfElements": 1,
+                                        "empty": false
+                                      }
+                                    }
+                                    """))),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "No session", value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                                    """))),
+            @ApiResponse(responseCode = "403", description = "Neither EVENT_ORGANIZER nor SUPER_ADMIN",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Not an organizer", value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "Forbidden - you do not have the required role (EVENT_ORGANIZER or SUPER_ADMIN)",
+                                      "data": null
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getMyEvents(
             Authentication authentication,
@@ -283,42 +331,21 @@ public class EventController {
     ) {
         LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
-        // Scope by the stable organizerUuid JWT claim — the right scope for
-        // both EVENT_ORGANIZERs (their own uuid) and TEAM_MEMBERs (their
-        // parent organizer's uuid). A missing claim (legacy pre-V20 token)
-        // gets an empty page — re-issuing the token via /auth/refresh fixes
-        // it, safer than the previous email fallback.
+        // Scope by the stable organizerUuid JWT claim (an EVENT_ORGANIZER's
+        // own uuid). A missing claim (legacy pre-V20 token) gets an empty
+        // page — re-issuing the token via /auth/refresh fixes it, safer than
+        // the previous email fallback.
         UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
                 .organizerUuid(authentication);
-        boolean isTeamMember = authentication.getAuthorities().stream()
-                .anyMatch(a -> "ROLE_TEAM_MEMBER".equals(a.getAuthority()));
-        log.info("GET /events/my organizerUuid={} teamMember={} from={} to={} venue={} page={} size={}",
-                organizerUuid, isTeamMember, from, to, venue, page, size);
+        log.info("GET /events/my organizerUuid={} from={} to={} venue={} page={} size={}",
+                organizerUuid, from, to, venue, page, size);
         if (organizerUuid == null) {
             return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully",
                     Page.empty(org.springframework.data.domain.PageRequest.of(page, size))));
         }
-        Page<EventResponseDTO> result;
-        if (isTeamMember) {
-            // Deny-by-default: a TEAM_MEMBER sees ONLY the events their
-            // organizer has explicitly assigned to them (keyed on the team
-            // member's OWN userUuid; organizerUuid filters as defence-in-
-            // depth). Fetched per-request so assignment changes take effect
-            // immediately (no re-login required). On user-service outage the
-            // gateway returns an empty list, which means no events — safer
-            // than leaking the organizer-wide set.
-            UUID teamMemberUuid = com.innbucks.eventservice.security
-                    .AuthenticatedCaller.userUuid(authentication);
-            java.util.List<UUID> assigned = teamMemberUuid == null
-                    ? java.util.List.of()
-                    : userUuidLookupGateway.assignedEventIdsFor(teamMemberUuid);
-            result = eventService.getMyAssignedEvents(
-                    organizerUuid, assigned, fromDateTime, toDateTime, venue, page, size, sortBy);
-        } else {
-            // EVENT_ORGANIZER (or SUPER_ADMIN-as-organizer): full organizer-wide view.
-            result = eventService.getMyEvents(
-                    organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy);
-        }
+        // EVENT_ORGANIZER (or SUPER_ADMIN-as-organizer): full organizer-wide view.
+        Page<EventResponseDTO> result = eventService.getMyEvents(
+                organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy);
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
@@ -565,16 +592,9 @@ public class EventController {
             log.debug("Listing active events (organizer scope) organizerUuid={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                     organizerUuid, from, to, venue, country, category, page, size, sortBy);
             result = eventService.getMyActiveEvents(organizerUuid, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
-        } else if (isTeamMember(authentication)) {
-            // Deny-by-default: a TEAM_MEMBER sees ONLY their assigned events
-            // (here, the active subset), never every organizer's active events.
-            UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
-                    .organizerUuid(authentication);
-            java.util.List<UUID> assignedEventIds = resolveAssignedEventIds(authentication);
-            log.debug("Listing active events (team-member scope) organizerUuid={} assignedCount={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
-                    organizerUuid, assignedEventIds.size(), from, to, venue, country, category, page, size, sortBy);
-            result = eventService.getMyAssignedActiveEvents(organizerUuid, assignedEventIds, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         } else {
+            // Everyone else, whatever their roles, gets the anonymous listing:
+            // published events only, organizer id stripped.
             log.debug("Listing active events (public scope) from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                     from, to, venue, country, category, page, size, sortBy);
             result = eventService.getActiveOnlyEvents(fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
@@ -585,9 +605,9 @@ public class EventController {
     @GetMapping("/inactive")
     // Authenticated only. The inactive listing = drafts + admin-rejected events;
     // it must never be public (it previously dumped every organizer's unpublished
-    // catalogue to anonymous callers). Organizers/team-members are self-scoped in
-    // the handler; only SUPER_ADMIN reaches the fleet-wide moderation view.
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','SUPER_ADMIN')")
+    // catalogue to anonymous callers). Organizers are self-scoped in the
+    // handler; only SUPER_ADMIN reaches the fleet-wide moderation view.
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "List events that are flagged inactive",
             description = """
@@ -604,7 +624,8 @@ public class EventController {
 
                     Scope:
                     - An authenticated **EVENT_ORGANIZER** sees only their own inactive events.
-                    - **SUPER_ADMIN** and anonymous/customer callers see every tenant's.
+                    - **SUPER_ADMIN** sees every tenant's.
+                    - Anyone else is `401` (no session) or `403` (any other role).
 
                     Filtering and sorting follow the same rules as `GET /events/active`
                     (from/to/venue/country/category).
@@ -684,7 +705,21 @@ public class EventController {
                                     }
                                     """)
                     )
-            )
+            ),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "No session", value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                                    """))),
+            @ApiResponse(responseCode = "403", description = "Neither EVENT_ORGANIZER nor SUPER_ADMIN",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Not an organizer", value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "Forbidden - you do not have the required role (EVENT_ORGANIZER or SUPER_ADMIN)",
+                                      "data": null
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getInactiveEvents(
             Authentication authentication,
@@ -723,17 +758,9 @@ public class EventController {
             log.debug("Listing inactive events (organizer scope) organizerUuid={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                     organizerUuid, from, to, venue, country, category, page, size, sortBy);
             result = eventService.getMyInactiveEvents(organizerUuid, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
-        } else if (isTeamMember(authentication)) {
-            // Deny-by-default: a TEAM_MEMBER sees ONLY their assigned events
-            // (here, the inactive subset), never every organizer's inactive events.
-            UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
-                    .organizerUuid(authentication);
-            java.util.List<UUID> assignedEventIds = resolveAssignedEventIds(authentication);
-            log.debug("Listing inactive events (team-member scope) organizerUuid={} assignedCount={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
-                    organizerUuid, assignedEventIds.size(), from, to, venue, country, category, page, size, sortBy);
-            result = eventService.getMyAssignedInactiveEvents(organizerUuid, assignedEventIds, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         } else {
-            log.debug("Listing inactive events (public scope) from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+            // Only SUPER_ADMIN reaches here (@PreAuthorize): the fleet-wide view.
+            log.debug("Listing inactive events (platform scope) from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                     from, to, venue, country, category, page, size, sortBy);
             result = eventService.getInactiveOnlyEvents(fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         }
@@ -2313,7 +2340,10 @@ public class EventController {
      * True when the caller is authenticated as an EVENT_ORGANIZER but NOT a
      * SUPER_ADMIN. Used to auto-scope the broad listing endpoints so an
      * organizer never sees other organizers' events; SUPER_ADMIN keeps the
-     * platform-wide view, and anonymous / customer callers also see all events.
+     * platform-wide view. Every other caller of {@code GET /events} and
+     * {@code /events/active} (anonymous, a customer, a super-app scanner, a
+     * leftover token of the retired TEAM_MEMBER role) gets the anonymous
+     * listing: published events only.
      */
     private boolean isOrganizerOnly(Authentication authentication) {
         if (authentication == null || !authentication.isAuthenticated()) return false;
@@ -2325,39 +2355,5 @@ public class EventController {
             else if ("ROLE_SUPER_ADMIN".equals(a)) superAdmin = true;
         }
         return organizer && !superAdmin;
-    }
-
-    /**
-     * True when the caller is authenticated as a TEAM_MEMBER. A team member is
-     * scoped to ONLY the events their organizer has explicitly assigned to them
-     * (deny-by-default), so the broad catalog endpoints route them through the
-     * assigned-events path rather than the organizer-wide or public listing.
-     * Checked AFTER {@link #isOrganizerOnly} so the branch order is
-     * organizer-only → team-member → public.
-     */
-    private boolean isTeamMember(Authentication authentication) {
-        if (authentication == null || !authentication.isAuthenticated()) return false;
-        for (var authority : authentication.getAuthorities()) {
-            if ("ROLE_TEAM_MEMBER".equals(authority.getAuthority())) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Resolves the event UUIDs a TEAM_MEMBER caller is assigned to, exactly the
-     * way {@code GET /events/my} does: keyed on the team member's OWN userUuid
-     * (the assignment is per-member, not per-organizer) and fetched per-request
-     * so an assignment change takes effect immediately. On a user-service
-     * outage the gateway returns an empty list — the team member then sees no
-     * events, which is the correct deny-by-default for a broad-access call (it
-     * must never fall through to the organizer-wide or public set). A missing
-     * userUuid claim (legacy token) likewise yields an empty list.
-     */
-    private java.util.List<UUID> resolveAssignedEventIds(Authentication authentication) {
-        UUID teamMemberUuid = com.innbucks.eventservice.security
-                .AuthenticatedCaller.userUuid(authentication);
-        return teamMemberUuid == null
-                ? java.util.List.of()
-                : userUuidLookupGateway.assignedEventIdsFor(teamMemberUuid);
     }
 }

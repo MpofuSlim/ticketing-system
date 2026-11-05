@@ -73,7 +73,7 @@ class EventCategoryVocabularyTest {
     @Test
     @DisplayName("GET /events/categories serves values() verbatim — code+displayName, declaration order")
     void categoriesEndpointServesTheEnumInDeclarationOrder() {
-        List<EventCategoryOptionDTO> options = new EventController(null, null)
+        List<EventCategoryOptionDTO> options = new EventController(null)
                 .listCategories().getBody().getData();
 
         assertThat(options).hasSize(EventCategory.values().length);

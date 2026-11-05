@@ -200,7 +200,7 @@ public class JwtUtil {
 
     /**
      * Stable owning-organizer pointer (matches {@code users.user_uuid} in
-     * user-service). Populated on EVENT_ORGANIZER and TEAM_MEMBER tokens;
+     * user-service). Populated on EVENT_ORGANIZER tokens;
      * null on customer tokens, legacy tokens, and any parse failure. The
      * seat-category ownership check compares this against each event's
      * {@code tenantUserUuid} now that email-as-tenantId is gone (event-service

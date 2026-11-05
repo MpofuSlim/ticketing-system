@@ -1,6 +1,5 @@
 package com.innbucks.eventservice.security;
 
-import com.innbucks.eventservice.client.UserUuidLookupGateway;
 import com.innbucks.eventservice.controller.EventController;
 import com.innbucks.eventservice.service.EventService;
 import io.jsonwebtoken.Jwts;
@@ -80,7 +79,6 @@ class JwtFilterParseOnceTest {
         }
         @Bean MetricsScrapeAuthFilter metricsScrapeAuthFilter() { return new MetricsScrapeAuthFilter(""); }
         @Bean EventService eventService() { return mock(EventService.class); }
-        @Bean UserUuidLookupGateway userUuidLookupGateway() { return mock(UserUuidLookupGateway.class); }
     }
 
     @Autowired WebApplicationContext context;

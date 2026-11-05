@@ -48,7 +48,7 @@ class PlatformStaffRoleMatrixTest {
         assertThat(AuthenticatedCaller.isPlatformStaff(authWith(MANAGER))).isTrue();
 
         assertThat(AuthenticatedCaller.isPlatformStaff(authWith("EVENT_ORGANIZER"))).isFalse();
-        assertThat(AuthenticatedCaller.isPlatformStaff(authWith("TEAM_MEMBER"))).isFalse();
+        assertThat(AuthenticatedCaller.isPlatformStaff(authWith("CUSTOMER"))).isFalse();
         assertThat(AuthenticatedCaller.isPlatformStaff(null)).isFalse();
 
         var anonymous = new AnonymousAuthenticationToken("key", "anonymousUser",

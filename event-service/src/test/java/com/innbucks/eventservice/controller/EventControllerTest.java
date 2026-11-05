@@ -2,7 +2,6 @@ package com.innbucks.eventservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jayway.jsonpath.JsonPath;
-import com.innbucks.eventservice.client.UserUuidLookupGateway;
 import com.innbucks.eventservice.dto.CreateEventRequestDTO;
 import com.innbucks.eventservice.dto.LocationDTO;
 import com.innbucks.eventservice.entity.Event;
@@ -11,13 +10,8 @@ import com.innbucks.eventservice.repository.EventRepository;
 import com.innbucks.eventservice.security.AuthDetailsKeys;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
@@ -47,7 +41,6 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppC
 
 @SpringBootTest
 @ActiveProfiles("test")
-@Import(EventControllerTest.MockGatewayConfig.class)
 class EventControllerTest {
 
     MockMvc mockMvc;
@@ -56,22 +49,6 @@ class EventControllerTest {
     @Autowired com.innbucks.eventservice.repository.EventTermsVersionRepository termsVersionRepository;
     @Autowired com.innbucks.eventservice.repository.EventBookingQuestionRepository bookingQuestionRepository;
     @Autowired WebApplicationContext wac;
-
-    // UserUuidLookupGateway makes a real S2S HTTP call to user-service for the
-    // team-member assigned-events lookup; in this MockMvc slice we drive it with
-    // a Mockito mock so the team-member tests can pin exactly which events the
-    // organizer "assigned". @Primary + @TestConfiguration override the real
-    // @Component bean (the Boot-4-reliable pattern; @MockitoBean is flaky here).
-    @Autowired UserUuidLookupGateway userUuidLookupGateway;
-
-    @TestConfiguration
-    static class MockGatewayConfig {
-        @Bean
-        @Primary
-        UserUuidLookupGateway mockUserUuidLookupGateway() {
-            return Mockito.mock(UserUuidLookupGateway.class);
-        }
-    }
 
     // Stable per-organizer UUIDs replacing the legacy "tenant-1"/"tenant-99"/
     // "tenant-A"/"tenant-B" strings. organizerUuid is now the JWT-stamped
@@ -89,10 +66,6 @@ class EventControllerTest {
         termsVersionRepository.deleteAll();
         bookingQuestionRepository.deleteAll();
         eventRepository.deleteAll();
-        // Reset the shared mock between tests so an assigned-events stub from
-        // one team-member case can't bleed into another; default (unstubbed)
-        // returns an empty list = no assignments.
-        Mockito.reset(userUuidLookupGateway);
     }
 
     /**
@@ -113,32 +86,6 @@ class EventControllerTest {
         Map<String, Object> details = new LinkedHashMap<>();
         if (organizerUuid != null) {
             details.put(AuthDetailsKeys.ORGANIZER_UUID, organizerUuid);
-        }
-        token.setDetails(details);
-        return authentication(token);
-    }
-
-    /**
-     * Like {@link #jwtAuth(String, UUID, String...)} but also stamps the
-     * caller's own {@code userUuid} claim — the value
-     * {@code AuthenticatedCaller.userUuid} reads for the TEAM_MEMBER
-     * assigned-events lookup. For a TEAM_MEMBER, {@code organizerUuid} is the
-     * parent organizer's uuid (the ownership filter) and {@code userUuid} is
-     * the member's own id (the assignment key), so the two differ.
-     */
-    private static RequestPostProcessor jwtAuthWithUser(
-            String principal, UUID organizerUuid, UUID userUuid, String... roles) {
-        List<SimpleGrantedAuthority> authorities = java.util.Arrays.stream(roles)
-                .map(r -> new SimpleGrantedAuthority("ROLE_" + r))
-                .toList();
-        UsernamePasswordAuthenticationToken token =
-                new UsernamePasswordAuthenticationToken(principal, null, authorities);
-        Map<String, Object> details = new LinkedHashMap<>();
-        if (organizerUuid != null) {
-            details.put(AuthDetailsKeys.ORGANIZER_UUID, organizerUuid);
-        }
-        if (userUuid != null) {
-            details.put(AuthDetailsKeys.USER_UUID, userUuid);
         }
         token.setDetails(details);
         return authentication(token);
@@ -1485,148 +1432,94 @@ class EventControllerTest {
     }
 
     // ------------------------------------------------------------------
-    // TEAM_MEMBER scoping on the broad catalog endpoints (the broken-access-
-    // control fix). Before the fix a TEAM_MEMBER matched neither the
-    // organizer-only nor the admin branch and fell through to the PUBLIC
-    // listing — seeing EVERY organizer's events. These pin that a team member
-    // now sees ONLY the events their organizer explicitly assigned to them,
-    // and that no assignments => empty page (deny-by-default).
+    // The organizer views, and what is left of the retired TEAM_MEMBER role.
+    // Gate staff are super-app scanners since 2026-11-05. A leftover token
+    // carrying TEAM_MEMBER (and its parent organizer's organizerUuid claim)
+    // gets no organizer view: 403 on the organizer-only listings, and only
+    // the anonymous, published-only listing on the public ones.
     // ------------------------------------------------------------------
 
-    // The organizer that "owns" the events and assigns a subset to its member.
-    private static final UUID TEAM_ORGANIZER = UUID.randomUUID();
-    // The team member's own userUuid (the assignment key, distinct from the
-    // organizerUuid which is the parent-organizer ownership filter).
-    private static final UUID TEAM_MEMBER_UUID = UUID.randomUUID();
-
-    private Event saveTeamEvent(String title, boolean active, java.time.LocalDateTime start) {
-        return eventRepository.save(Event.builder()
-                .tenantUserUuid(TEAM_ORGANIZER)
+    private Event saveOwnedEvent(UUID organizer, String title, boolean active) {
+        LocalDateTime start = LocalDateTime.now(ZoneOffset.UTC).plusDays(5);
+        return eventRepository.save(eventBuilder()
+                .tenantUserUuid(organizer)
                 .title(title)
-                .description("desc")
-                .venue("Venue")
-                .country("Zimbabwe")
-                .category(EventCategory.CONCERT)
                 .startDateTime(start)
                 .endDateTime(start.plusHours(2))
-                .totalCapacity(100)
-                .availableTickets(100)
-                .deleted(false)
                 .active(active)
                 .build());
     }
 
     @Test
-    void getAllEvents_asTeamMember_returnsOnlyAssignedEvents() throws Exception {
-        Event assigned = saveTeamEvent("Assigned Concert", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
-        Event other = saveTeamEvent("Unassigned Concert", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(6));
+    void getMyEvents_asOrganizer_returnsOwnEventsIncludingDrafts_neverAnotherOrganizers() throws Exception {
+        Event published = saveOwnedEvent(ORGANIZER_A, "A published", true);
+        Event draft = saveOwnedEvent(ORGANIZER_A, "A draft", false);
+        Event foreign = saveOwnedEvent(ORGANIZER_B, "B published", true);
 
-        // Organizer assigned ONLY the first event to this team member.
-        Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
-                .thenReturn(List.of(assigned.getEventId()));
-
-        mockMvc.perform(get("/events")
-                        .with(jwtAuthWithUser("member-1", TEAM_ORGANIZER, TEAM_MEMBER_UUID, "TEAM_MEMBER"))
+        mockMvc.perform(get("/events/my")
+                        .with(jwtAuth("organizer-a@example.com", ORGANIZER_A, "EVENT_ORGANIZER"))
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.content", hasSize(1)))
-                .andExpect(jsonPath("$.data.content[0].eventId", is(assigned.getEventId().toString())))
+                .andExpect(jsonPath("$.data.content", hasSize(2)))
+                .andExpect(jsonPath("$.data.content[*].eventId", containsInAnyOrder(
+                        published.getEventId().toString(), draft.getEventId().toString())))
                 .andExpect(jsonPath("$.data.content[*].eventId",
-                        not(hasItem(other.getEventId().toString()))));
+                        not(hasItem(foreign.getEventId().toString()))));
     }
 
     @Test
-    void getAllEvents_asTeamMember_withNoAssignments_returnsEmptyPage() throws Exception {
-        // Two events exist, but the member is assigned to none → deny-by-default.
-        saveTeamEvent("Concert A", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
-        saveTeamEvent("Concert B", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(6));
-        Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
-                .thenReturn(List.of());
-
-        mockMvc.perform(get("/events")
-                        .with(jwtAuthWithUser("member-1", TEAM_ORGANIZER, TEAM_MEMBER_UUID, "TEAM_MEMBER"))
-                        .accept(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.content", hasSize(0)));
-    }
-
-    @Test
-    void getActiveEvents_asTeamMember_returnsOnlyAssignedActiveEvents() throws Exception {
-        Event assigned = saveTeamEvent("Assigned Active", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
-        Event other = saveTeamEvent("Unassigned Active", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(6));
-
-        Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
-                .thenReturn(List.of(assigned.getEventId()));
-
-        mockMvc.perform(get("/events/active")
-                        .with(jwtAuthWithUser("member-1", TEAM_ORGANIZER, TEAM_MEMBER_UUID, "TEAM_MEMBER"))
-                        .accept(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.content", hasSize(1)))
-                .andExpect(jsonPath("$.data.content[0].eventId", is(assigned.getEventId().toString())))
-                .andExpect(jsonPath("$.data.content[*].eventId",
-                        not(hasItem(other.getEventId().toString()))));
-    }
-
-    @Test
-    void getActiveEvents_asTeamMember_withNoAssignments_returnsEmptyPage() throws Exception {
-        saveTeamEvent("Active A", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
-        Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
-                .thenReturn(List.of());
-
-        mockMvc.perform(get("/events/active")
-                        .with(jwtAuthWithUser("member-1", TEAM_ORGANIZER, TEAM_MEMBER_UUID, "TEAM_MEMBER"))
-                        .accept(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.content", hasSize(0)));
-    }
-
-    @Test
-    void getInactiveEvents_asTeamMember_returnsOnlyAssignedInactiveEvents() throws Exception {
-        Event assignedInactive = saveTeamEvent("Assigned Inactive", false, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
-        Event otherInactive = saveTeamEvent("Unassigned Inactive", false, LocalDateTime.now(ZoneOffset.UTC).plusDays(6));
-        // An assigned but ACTIVE event must NOT appear in the inactive listing.
-        Event assignedActive = saveTeamEvent("Assigned Active", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(7));
-
-        Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
-                .thenReturn(List.of(assignedInactive.getEventId(), assignedActive.getEventId()));
+    void getInactiveEvents_asOrganizer_returnsOwnInactiveOnly_andSuperAdminSeesEveryOrganizers() throws Exception {
+        Event ownDraft = saveOwnedEvent(ORGANIZER_A, "A draft", false);
+        saveOwnedEvent(ORGANIZER_A, "A published", true);
+        Event foreignDraft = saveOwnedEvent(ORGANIZER_B, "B draft", false);
 
         mockMvc.perform(get("/events/inactive")
-                        .with(jwtAuthWithUser("member-1", TEAM_ORGANIZER, TEAM_MEMBER_UUID, "TEAM_MEMBER"))
+                        .with(jwtAuth("organizer-a@example.com", ORGANIZER_A, "EVENT_ORGANIZER"))
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.content", hasSize(1)))
-                .andExpect(jsonPath("$.data.content[0].eventId", is(assignedInactive.getEventId().toString())))
-                .andExpect(jsonPath("$.data.content[*].eventId",
-                        not(hasItem(otherInactive.getEventId().toString()))));
-    }
-
-    @Test
-    void getInactiveEvents_asTeamMember_withNoAssignments_returnsEmptyPage() throws Exception {
-        saveTeamEvent("Inactive A", false, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
-        Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
-                .thenReturn(List.of());
+                .andExpect(jsonPath("$.data.content[0].eventId", is(ownDraft.getEventId().toString())));
 
         mockMvc.perform(get("/events/inactive")
-                        .with(jwtAuthWithUser("member-1", TEAM_ORGANIZER, TEAM_MEMBER_UUID, "TEAM_MEMBER"))
+                        .with(jwtAuth("admin@example.com", null, "SUPER_ADMIN"))
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.content", hasSize(0)));
+                .andExpect(jsonPath("$.data.content[*].eventId", containsInAnyOrder(
+                        ownDraft.getEventId().toString(), foreignDraft.getEventId().toString())));
     }
 
     @Test
-    void getAllEvents_asTeamMember_gatewayOutage_failsClosedToEmptyPage() throws Exception {
-        // user-service down → the gateway returns an empty list (fail CLOSED).
-        // The team member must see NO events, never fall through to the public
-        // catalog (which would leak every organizer's events).
-        saveTeamEvent("Concert A", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
-        Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
-                .thenReturn(List.of());
+    void retiredTeamMemberToken_isRefusedTheOrganizerListings() throws Exception {
+        saveOwnedEvent(ORGANIZER_A, "A draft", false);
 
-        mockMvc.perform(get("/events")
-                        .with(jwtAuthWithUser("member-1", TEAM_ORGANIZER, TEAM_MEMBER_UUID, "TEAM_MEMBER"))
+        mockMvc.perform(get("/events/my")
+                        .with(jwtAuth("member-1", ORGANIZER_A, "TEAM_MEMBER"))
                         .accept(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.content", hasSize(0)));
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/events/inactive")
+                        .with(jwtAuth("member-1", ORGANIZER_A, "TEAM_MEMBER"))
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void retiredTeamMemberToken_onTheCatalog_getsTheAnonymousListing_neverItsOrganizersDrafts() throws Exception {
+        Event published = saveOwnedEvent(ORGANIZER_A, "A published", true);
+        Event draft = saveOwnedEvent(ORGANIZER_A, "A draft", false);
+        Event foreign = saveOwnedEvent(ORGANIZER_B, "B published", true);
+
+        for (String path : List.of("/events", "/events/active")) {
+            mockMvc.perform(get(path)
+                            .with(jwtAuth("member-1", ORGANIZER_A, "TEAM_MEMBER"))
+                            .accept(MediaType.APPLICATION_JSON))
+                    .andExpect(status().isOk())
+                    // Exactly what an anonymous caller sees: every organizer's
+                    // published events, the organizer id stripped, no draft.
+                    .andExpect(jsonPath("$.data.content[*].eventId", containsInAnyOrder(
+                            published.getEventId().toString(), foreign.getEventId().toString())))
+                    .andExpect(jsonPath("$.data.content[*].eventId",
+                            not(hasItem(draft.getEventId().toString()))))
+                    .andExpect(jsonPath("$.data.content[0].tenantUserUuid", nullValue()));
+        }
     }
 }
