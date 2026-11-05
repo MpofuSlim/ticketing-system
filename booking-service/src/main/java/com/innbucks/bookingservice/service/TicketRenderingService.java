@@ -4,9 +4,11 @@ import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
+import com.innbucks.bookingservice.util.Money;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +49,10 @@ public class TicketRenderingService {
     private final BookingItemRepository bookingItemRepository;
 
     private volatile IdLinkPolicy idLinks = IdLinkPolicy.OPEN;
+
+    /** The cell's currency, shown with the total on the ticket pages ({@link Money}). */
+    @Value("${innbucks.currency:USD}")
+    private String currency = "USD";
 
     @Autowired(required = false)
     public void setIdLinkPolicy(IdLinkPolicy idLinks) {
@@ -205,7 +211,7 @@ public class TicketRenderingService {
             appendTicket(sb, item, qrSrc.apply(item));
         }
         if (booking.getTotalAmount() != null) {
-            sb.append("<p class=\"tot\">Total paid: ").append(esc(booking.getTotalAmount().toPlainString()))
+            sb.append("<p class=\"tot\">Total paid: ").append(esc(Money.display(booking.getTotalAmount(), currency)))
                     .append("</p>");
         }
         sb.append("</div></body></html>");
@@ -319,7 +325,7 @@ public class TicketRenderingService {
         }
         if (booking.getTotalAmount() != null) {
             sb.append("<p style=\"color:#475569\">Total paid: ")
-                    .append(esc(booking.getTotalAmount().toPlainString())).append("</p>");
+                    .append(esc(Money.display(booking.getTotalAmount(), currency))).append("</p>");
         }
         sb.append("<p><a href=\"").append(esc(base)).append(esc(bookingPagePath(booking)))
                 .append("\">View your tickets online</a></p></div>");

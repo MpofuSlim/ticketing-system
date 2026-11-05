@@ -8,6 +8,7 @@ import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
+import com.innbucks.bookingservice.util.Money;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -85,6 +86,10 @@ public class TicketDeliveryService {
      */
     @Value("${innbucks.tickets.public-base-url:}")
     private String publicBaseUrl = "";
+
+    /** The cell's currency, shown with every amount we send ({@link Money}). */
+    @Value("${innbucks.currency:USD}")
+    private String currency = "USD";
 
     public TicketDeliveryService(WhatsAppNotificationClient whatsApp,
                                  EmailNotificationClient email,
@@ -426,18 +431,18 @@ public class TicketDeliveryService {
      * <em>"Event confirmed! Here is your e-ticket entry for {eventName}. Only
      * present this ticket at the gate."</em> — so this must read as a noun
      * phrase, e.g.
-     * <pre>InnBucks Annual Gala 2025 (booking INN-..., ticket 2 of 3, total 30.00 — ticket number TN2)</pre>
+     * <pre>InnBucks Annual Gala 2025 (booking INN-..., ticket 2 of 3, total $30.00 — ticket number TN2)</pre>
      *
      * <p><b>A guest's ticket carries no booking reference</b>
      * ({@link #isGuestTicket}):
-     * <pre>InnBucks Annual Gala 2025 (ticket 2 of 3, total 30.00 — ticket number TN2 (Rudo Sibanda))</pre>
+     * <pre>InnBucks Annual Gala 2025 (ticket 2 of 3, total $30.00 — ticket number TN2 (Rudo Sibanda))</pre>
      * The buyer forwards it to that guest, and the confirmation number opens
      * every ticket of the booking at the gate lookup. The buyer's own tickets
      * and unnamed spares keep it.
      *
      * <p>A ticket bought with add-ons names them last
      * ({@link #addOnsCaption}), its own and no other ticket's:
-     * <pre>InnBucks Annual Gala 2025 (ticket 2 of 3, total 30.00 — ticket number TN2 (Rudo Sibanda), with Parking pass)</pre>
+     * <pre>InnBucks Annual Gala 2025 (ticket 2 of 3, total $30.00 — ticket number TN2 (Rudo Sibanda), with Parking pass)</pre>
      *
      * <p><b>It names this message's ticket and no other.</b> A ticket number is
      * the gate credential, and the buyer forwards these messages: a guest's QR
@@ -478,7 +483,7 @@ public class TicketDeliveryService {
         }
         BigDecimal total = booking.getTotalAmount();
         if (total != null) {
-            facts.add("total " + total.toPlainString());
+            facts.add("total " + Money.display(total, currency));
         }
         StringBuilder sb = new StringBuilder(singleLine(eventTitle))
                 .append(" (").append(String.join(", ", facts));
@@ -576,13 +581,13 @@ public class TicketDeliveryService {
         }
         BigDecimal total = booking.getTotalAmount();
         if (total != null) {
-            sb.append("Total: ").append(total.toPlainString()).append('\n');
+            sb.append("Total: ").append(Money.display(total, currency)).append('\n');
         }
-        String prices = priceBreakdown(items);
+        String prices = priceBreakdown(items, currency);
         if (prices != null) {
             sb.append("Prices: ").append(prices).append('\n');
         }
-        String addOns = addOnsBreakdown(items);
+        String addOns = addOnsBreakdown(items, currency);
         if (addOns != null) {
             sb.append("Add-ons: ").append(addOns).append('\n');
         }
@@ -692,18 +697,18 @@ public class TicketDeliveryService {
 
     /**
      * What each ticket cost, grouped by ticket type and price in the order
-     * they were booked, e.g. "2 x VIP (Early bird) at 100.00, 1 x VIP at
-     * 150.00". Null when no ticket was sold at a price tier: a booking at the
+     * they were booked, e.g. "2 x VIP (Early bird) at $100.00, 1 x VIP at
+     * $150.00". Null when no ticket was sold at a price tier: a booking at the
      * full price reads exactly as it did before tiers existed.
      */
-    static String priceBreakdown(List<BookingItem> items) {
+    static String priceBreakdown(List<BookingItem> items, String currency) {
         if (items.stream().noneMatch(i -> i.getPriceTierName() != null && !i.getPriceTierName().isBlank())) {
             return null;
         }
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (BookingItem item : items) {
             String type = item.ticketTypeLabel() == null ? "Ticket" : item.ticketTypeLabel();
-            String price = item.getPriceAtBooking() == null ? "" : " at " + item.getPriceAtBooking().toPlainString();
+            String price = item.getPriceAtBooking() == null ? "" : " at " + Money.display(item.getPriceAtBooking(), currency);
             counts.merge(type + price, 1, Integer::sum);
         }
         StringBuilder sb = new StringBuilder();
@@ -712,7 +717,7 @@ public class TicketDeliveryService {
     }
 
     /**
-     * "2 x Parking pass at 5.00, 1 x Meal voucher at 10.00" (V33), or null when
+     * "2 x Parking pass at $5.00, 1 x Meal voucher at $10.00" (V33), or null when
      * no ticket has an add-on. Plain ASCII, like the price line.
      */
     /**
@@ -727,14 +732,14 @@ public class TicketDeliveryService {
         return joined.isEmpty() ? null : joined;
     }
 
-    static String addOnsBreakdown(List<BookingItem> items) {
+    static String addOnsBreakdown(List<BookingItem> items, String currency) {
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (BookingItem item : items) {
             if (item.getAddOns() == null) {
                 continue;
             }
             for (com.innbucks.bookingservice.dto.BookingAddOnDTO a : item.getAddOns()) {
-                String price = a.getPrice() == null ? "" : " at " + a.getPrice().toPlainString();
+                String price = a.getPrice() == null ? "" : " at " + Money.display(a.getPrice(), currency);
                 counts.merge(a.getName() + price, 1, Integer::sum);
             }
         }

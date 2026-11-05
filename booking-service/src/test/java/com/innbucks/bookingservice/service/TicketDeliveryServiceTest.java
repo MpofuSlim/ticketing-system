@@ -539,7 +539,7 @@ class TicketDeliveryServiceTest {
         ArgumentCaptor<String> caption = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), caption.capture(), contains("TN-SELF"));
         assertEquals("your event (booking " + booking.getConfirmationNumber()
-                + ", 1 ticket, total 60.00 — ticket number TN-SELF (Alice Moyo))", caption.getValue());
+                + ", 1 ticket, total $60.00 — ticket number TN-SELF (Alice Moyo))", caption.getValue());
     }
 
     @Test

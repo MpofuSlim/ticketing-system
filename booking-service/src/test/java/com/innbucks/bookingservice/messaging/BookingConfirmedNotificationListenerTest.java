@@ -126,7 +126,7 @@ class BookingConfirmedNotificationListenerTest {
         ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
         verify(m.wa(), times(2)).sendEventQrCode(eq("+263771234567"), name.capture(), path.capture());
 
-        // Reads as: "InnBucks Gala 2026 (booking INN-..., ticket 1 of 2, total 50.00 — T1)".
+        // Reads as: "InnBucks Gala 2026 (booking INN-..., ticket 1 of 2, total $50.00 — T1)".
         // Each message names ITS ticket only: the buyer forwards these, and a
         // ticket number is the gate credential, so one forward must not carry
         // every guest's entry.
@@ -137,7 +137,7 @@ class BookingConfirmedNotificationListenerTest {
             assertThat(eventName)
                     .startsWith("InnBucks Gala 2026 (booking INN-20260610-A1B2C3")
                     .contains("ticket " + (own.endsWith("T1") ? 1 : 2) + " of 2")
-                    .contains("total 50.00")
+                    .contains("total $50.00")
                     .contains(own)
                     .doesNotContain(other)
                     .endsWith(")");
