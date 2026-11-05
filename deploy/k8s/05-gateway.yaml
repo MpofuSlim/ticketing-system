@@ -25,6 +25,9 @@ spec:
     spec:
       imagePullSecrets: [ { name: ghcr } ]
       automountServiceAccountToken: false
+      # preStop sleep (10s) + Spring graceful shutdown (30s) + margin. See the
+      # lifecycle note on the container and GracefulRolloutManifestTest.
+      terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -47,5 +50,8 @@ spec:
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 9090 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 9090 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          # Keep serving while the endpoint is removed from the Service, so a
+          # rollout never sends a request to a pod that has stopped listening.
+          lifecycle: { preStop: { exec: { command: ["sleep", "10"] } } }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
