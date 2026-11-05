@@ -91,8 +91,9 @@ public class ScannerController {
     @PreAuthorize("hasRole('EVENT_ORGANIZER')")
     @Operation(summary = "Add a super-app scanner",
             description = "A phone number and a name. Every new scanner is `INVITED`, whether or not the number "
-                    + "has an InnBucks account: the response never says. No message is sent; the person opens "
-                    + "InnBucks and accepts. Requires **EVENT_ORGANIZER**.")
+                    + "has an InnBucks account: the response never says. Nothing is sent yet: the person gets "
+                    + "a WhatsApp (SMS if WhatsApp fails) at the scanner's first event assignment, naming you "
+                    + "and that event. Requires **EVENT_ORGANIZER**.")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Scanner added",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value =
@@ -165,7 +166,10 @@ public class ScannerController {
             description = "Idempotent. Refused when the number is already on another event at an overlapping "
                     + "time, with any organizer: a scanner is never on two overlapping events. The refusal names "
                     + "neither the other event nor its organizer. Checked when the assignment is made only; "
-                    + "moving your event later is never blocked. A scanner can be assigned while still `INVITED`.")
+                    + "moving your event later is never blocked. A scanner can be assigned while still `INVITED`. "
+                    + "The first assignment of an `INVITED` scanner sends the person one WhatsApp (SMS if "
+                    + "WhatsApp fails) naming you and this event and saying to open InnBucks and accept; later "
+                    + "assignments send nothing. Whether it was delivered is never reported.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Assigned",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value =
@@ -253,7 +257,8 @@ public class ScannerController {
     @PreAuthorize("hasRole('EVENT_ORGANIZER')")
     @Operation(summary = "Invite a scanner again",
             description = "Turns a `DECLINED` scanner (they declined, or left) back to `INVITED`. Refused like "
-                    + "enable when an assignment now overlaps.")
+                    + "enable when an assignment now overlaps. Sends the invite message again, naming the "
+                    + "scanner's soonest assigned event; with none assigned, it goes at the next assignment.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Invited again",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value =

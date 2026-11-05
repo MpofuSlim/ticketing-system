@@ -1111,8 +1111,7 @@ refused, and an account created first made `/auth/exchange` refuse the number
   - The refusal (`409 scanner_schedule_clash`) names neither the other event
     nor its organizer.
 - **Nothing says whether a number has an InnBucks account.** Every new scanner
-  is `INVITED`. No message is sent (the organizer tells the person). The
-  organizer only ever sees the name they typed.
+  is `INVITED`. The organizer only ever sees the name they typed.
   - Status is derived from `disabled_at` > `declined_at` > `accepted_at`, never
     stored.
   - `chk_event_scanners_accept_binds_account` keeps `accepted_at` and
@@ -1120,6 +1119,30 @@ refused, and an account created first made `/auth/exchange` refuse the number
     both, so a recycled number's new owner inherits nothing.
   - At most `events.scanners.max-per-organizer` (500) per organizer: each one
     puts an invite in a stranger's app.
+- **The person is messaged once per invite (event-service V20, owner's go
+  2026-11-05).** Until then nothing was sent, and the first two scanners an
+  organizer assigned never knew they had an invite.
+  - **When:** the first assignment of an `INVITED` scanner, an invite-again of
+    a decliner, or a switch-on of an `INVITED` scanner. The message names the
+    event, and a scanner is added before any event is assigned, so adding
+    alone sends nothing.
+  - **Once:** `event_scanners.invite_notified_at` is claimed by one
+    conditional UPDATE (`claimInviteNotice`: NULL, and not accepted, declined
+    or switched off), so two assignments at once send one message
+    (`EventScannerPostgresIT`). Invite-again clears it.
+  - **After the commit:** assign, reinvite and enable run their write in a
+    `TransactionTemplate` phase, then read the organizer's name and call
+    user-service with no transaction open. A failed send never fails the
+    assignment, and a rolled-back one messages nobody.
+  - **user-service owns the words** (`POST /users/internal/scanner-invites`,
+    `ScannerInviteNotifier`): event-service sends only the number, the
+    organizer's business name, the event title and the scanner id, so the
+    shared internal token can never put a caller's own sentence or link in
+    front of a stranger. Both names are flattened to one line and capped.
+    WhatsApp first, SMS when WhatsApp fails; counted on
+    `user.scanner_invite.message{outcome=whatsapp|sms|failed}`.
+  - The organizer is never told whether the message arrived, so the add still
+    says nothing about whether the number has an account.
 - **The super-app endpoints take the phone and the account from the session,
   never from a request.** `JwtFilter` stashes the token's `phoneNumber` claim.
   - `GET /events/gate` is matched `authenticated()` BEFORE the
