@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class EventCategoryVocabularyTest {
 
     /** The migration that currently owns chk_events_category's value list. */
-    private static final String CONSTRAINT_MIGRATION = "/db/migration/V18__event_category_trial_run.sql";
+    private static final String CONSTRAINT_MIGRATION = "/db/migration/V19__event_category_trail_run.sql";
     private static final int COLUMN_WIDTH = 30;
 
     private static String migrationSql() throws IOException {
