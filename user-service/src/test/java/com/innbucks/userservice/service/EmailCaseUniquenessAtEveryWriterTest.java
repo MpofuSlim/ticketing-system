@@ -207,6 +207,7 @@ class EmailCaseUniquenessAtEveryWriterTest {
                 mock(PasswordEncoder.class), mock(ApplicationEventPublisher.class), mock(AccountSessionRevoker.class),
                 eligibility);
         ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
+        ReflectionTestUtils.setField(service, "createEnabled", true);
         ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
                 com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
         User organizer = User.builder().id(7L).userUuid(UUID.randomUUID()).email("olive@harare-arena.co.zw")

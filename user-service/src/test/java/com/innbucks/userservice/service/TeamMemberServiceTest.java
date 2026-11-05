@@ -78,6 +78,7 @@ class TeamMemberServiceTest {
         service = new TeamMemberService(userRepository, assignmentRepository, passwordEncoder,
                 eventPublisher, revoker, org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
         ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
+        ReflectionTestUtils.setField(service, "createEnabled", true);
         ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
                 com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
     }
@@ -128,6 +129,34 @@ class TeamMemberServiceTest {
         dto.setEmail("tariro@harare-arena.co.zw");
         dto.setPhoneNumber("+263773456789");
         return dto;
+    }
+
+    @Test
+    void create_whenSwitchedOff_isGone_useScannerInvite_andReadsAndWritesNothing() {
+        ReflectionTestUtils.setField(service, "createEnabled", false);
+        User organizer = organizer(UUID.randomUUID());
+        authenticateAs(organizer);
+
+        com.innbucks.userservice.exception.StaffPolicyException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                com.innbucks.userservice.exception.StaffPolicyException.class,
+                () -> service.createTeamMember(createDto()));
+
+        org.junit.jupiter.api.Assertions.assertEquals(org.springframework.http.HttpStatus.GONE, ex.getStatus());
+        org.junit.jupiter.api.Assertions.assertEquals("use_scanner_invite", ex.getErrorCode());
+        org.junit.jupiter.api.Assertions.assertEquals("/event-organizer/scanners", ex.getExtra().get("scannerPath"));
+        // The same answer whatever email or phone was sent: nothing about them is read.
+        org.mockito.Mockito.verify(userRepository, org.mockito.Mockito.never()).existsByEmailIgnoreCase(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(userRepository, org.mockito.Mockito.never()).existsByPhoneNumberAndHomeCountry(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(userRepository, org.mockito.Mockito.never()).save(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verifyNoInteractions(eventPublisher, passwordEncoder);
+    }
+
+    @Test
+    void creationIsOffUnlessTheCellSwitchesItOn() {
+        TeamMemberService fresh = new TeamMemberService(userRepository, assignmentRepository, passwordEncoder,
+                eventPublisher, null, org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
+        org.junit.jupiter.api.Assertions.assertEquals(Boolean.FALSE, ReflectionTestUtils.getField(fresh, "createEnabled"));
     }
 
     @Test
