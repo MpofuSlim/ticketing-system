@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class EventCategoryVocabularyTest {
 
     /** The migration that currently owns chk_events_category's value list. */
-    private static final String CONSTRAINT_MIGRATION = "/db/migration/V12__event_category_vocabulary.sql";
+    private static final String CONSTRAINT_MIGRATION = "/db/migration/V18__event_category_trial_run.sql";
     private static final int COLUMN_WIDTH = 30;
 
     private static String migrationSql() throws IOException {
@@ -44,7 +44,7 @@ class EventCategoryVocabularyTest {
     @DisplayName("the DB CHECK constraint lists exactly the enum's values — no drift in either direction")
     void checkConstraintMatchesTheEnumExactly() throws IOException {
         Matcher check = Pattern.compile("CHECK \\(category IN \\(([^)]+)\\)\\)").matcher(migrationSql());
-        assertThat(check.find()).as("CHECK (category IN (...)) present in V12").isTrue();
+        assertThat(check.find()).as("CHECK (category IN (...)) present in the latest category migration").isTrue();
 
         Set<String> inConstraint = Arrays.stream(check.group(1).split(","))
                 .map(s -> s.trim().replaceAll("^'|'$", ""))
