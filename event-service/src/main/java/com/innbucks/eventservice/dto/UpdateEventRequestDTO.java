@@ -52,8 +52,7 @@ public class UpdateEventRequestDTO {
 
     @Schema(
             example = "CONCERT",
-            allowableValues = {"BOOKS", "COMEDY", "FUN_RUN", "HALF_MARATHON", "MARATHON", "CONCERT", "SPORT"},
-            description = "Category of the event."
+            description = "Category of the event: a `code` from `GET /events/categories`."
     )
     private EventCategory category;
 

@@ -544,7 +544,7 @@ public class EventController {
             @Parameter(description = "Country filter (exact match, case-insensitive), e.g. Zimbabwe")
             @RequestParam(required = false) String country,
 
-            @Parameter(description = "Category filter (BOOKS, COMEDY, FUN_RUN, HALF_MARATHON, MARATHON, CONCERT, SPORT)")
+            @Parameter(description = "Category filter: a `code` from `GET /events/categories`")
             @RequestParam(required = false) EventCategory category,
 
             @Parameter(description = "Zero-based page index")
@@ -702,7 +702,7 @@ public class EventController {
             @Parameter(description = "Country filter (exact match, case-insensitive), e.g. Zimbabwe")
             @RequestParam(required = false) String country,
 
-            @Parameter(description = "Category filter (BOOKS, COMEDY, FUN_RUN, HALF_MARATHON, MARATHON, CONCERT, SPORT)")
+            @Parameter(description = "Category filter: a `code` from `GET /events/categories`")
             @RequestParam(required = false) EventCategory category,
 
             @Parameter(description = "Zero-based page index")
@@ -1020,7 +1020,7 @@ public class EventController {
 
                     Validation:
                     - `startDateTime` and `endDateTime` must be **in the future**, and `endDateTime` must be **after** `startDateTime`.
-                    - `category` is required (one of BOOKS, COMEDY, FUN_RUN, HALF_MARATHON, MARATHON, CONCERT, SPORT).
+                    - `category` is required: a `code` from `GET /events/categories`.
                     - `location.latitude` ∈ [-90, 90]; `location.longitude` ∈ [-180, 180].
                     """,
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
