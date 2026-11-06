@@ -59,8 +59,9 @@ public final class StaffRoles {
     /**
      * The business built-ins (V35) — the roles non-staff writers hand out with
      * NO staff-eligibility check: registration + approval (EVENT_ORGANIZER,
-     * MERCHANT_ADMIN), shop-staff create (SHOP_ADMIN, SHOP_USER), and the OTP /
-     * federation creators (CUSTOMER). (TEAM_MEMBER was one until V55 retired it.) They
+     * MERCHANT_ADMIN), shop-staff create (SHOP_ADMIN, SHOP_USER), the OTP /
+     * federation creators (CUSTOMER), and the sales-agent invite accept
+     * (SALES_AGENT, V56). (TEAM_MEMBER was one until V55 retired it.) They
      * must therefore never become staff roles: a PLATFORM code on one would be
      * handed to every account those paths create. {@code RoleGrantGuard}
      * refuses one (400 {@code permission_not_assignable}, {@code business_role}).
@@ -70,7 +71,8 @@ public final class StaffRoles {
             User.Role.MERCHANT_ADMIN.name(),
             User.Role.SHOP_ADMIN.name(),
             User.Role.SHOP_USER.name(),
-            User.Role.CUSTOMER.name());
+            User.Role.CUSTOMER.name(),
+            User.Role.SALES_AGENT.name());
 
     private StaffRoles() {}
 

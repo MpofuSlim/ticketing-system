@@ -59,6 +59,13 @@ public class SecurityConfig {
                         // both callers live outside the cluster (gateway route
                         // device-security-partner-route, IP-limited, fail-safe).
                         .requestMatchers("/device-security/**").permitAll()
+                        // Sales-agent portal invite (V56): the link's three public
+                        // calls, by exact path and POST only. The token in the body
+                        // IS the credential. /auth/** below covers them too; named
+                        // here so a later narrowing of that rule cannot lock the
+                        // invite page out (JwtFilter already skips /auth).
+                        .requestMatchers(HttpMethod.POST, "/auth/sales-agent-invite/inspect",
+                                "/auth/sales-agent-invite/phone-code", "/auth/sales-agent-invite/accept").permitAll()
                         // Public auth endpoints
                         .requestMatchers("/auth/**").permitAll()
                         // Public cell-lookup (step 7 — the mobile app calls

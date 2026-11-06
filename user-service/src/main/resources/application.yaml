@@ -268,6 +268,13 @@ staff:
   # who are not staff-eligible.
   eligibility-enforcement: ${STAFF_ELIGIBILITY_ENFORCEMENT:watch}
 
+# Sales-agent Foundry portal invites (V56). The link is
+# <staff.console-base-url><path>#token=SAI-... (the token rides the fragment),
+# emailed through the normal email path. Defaults here, so no cell key is needed.
+sales-agent-invite:
+  ttl: ${SALES_AGENT_INVITE_TTL:PT72H}
+  path: ${SALES_AGENT_INVITE_PATH:/sales-agent-invite}
+
 # Unified customer support (/admin/support/**, V45/V46). Keys live in
 # deploy/cells/cell.<iso>.env (k3s envFrom) — EXCEPT the assertion private key,
 # which comes only from the dedicated user-service-support-signing Secret.

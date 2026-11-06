@@ -74,14 +74,22 @@ public class BusinessRegistrationService {
     private final OtpService otpService;
     private final AuditService auditService;
 
+    private static final Set<String> CUSTOMER_ONLY_ROLES =
+            Set.of(User.Role.CUSTOMER.name(), User.Role.SALES_AGENT.name());
+
     @Value("${innbucks.country:ZW}")
     private String deploymentCountry = "ZW";
 
-    /** An account a business can be added to: exactly a customer, active, approved, never staff. */
+    /**
+     * An account a business can be added to: a customer, and at most a sales
+     * agent besides (SALES_AGENT grants no permission), active, approved,
+     * never staff.
+     */
     public boolean isCustomerOnly(User user) {
         return user != null
                 && user.getRoles() != null
-                && user.getRoles().equals(Set.of(User.Role.CUSTOMER.name()))
+                && user.getRoles().contains(User.Role.CUSTOMER.name())
+                && CUSTOMER_ONLY_ROLES.containsAll(user.getRoles())
                 && user.isActive()
                 && user.isApproved()
                 && !staffProfileRepository.existsById(user.getId());
@@ -156,6 +164,15 @@ public class BusinessRegistrationService {
         if (!otpService.verifyBusinessRegistrationCode(canonicalPhone, request.getPhoneCode())) {
             log.warn("Business registration refused: wrong or expired code phone={}", MsisdnMasking.mask(canonicalPhone));
             throw BusinessRegistrationException.phoneCodeInvalid();
+        }
+        // A sales agent's email is their Foundry portal sign-in: registering
+        // never moves it (the agent invite's own rule). After the code, so only
+        // the phone's holder learns the account has one.
+        String current = user.getEmail();
+        if (user.getRoles().contains(User.Role.SALES_AGENT.name()) && current != null && !current.isBlank()
+                && !current.strip().equalsIgnoreCase(request.getEmail() == null ? "" : request.getEmail().strip())) {
+            log.info("Business registration refused: a sales agent's portal email differs userId={}", user.getId());
+            throw BusinessRegistrationException.emailMismatch();
         }
 
         user.setEmail(request.getEmail());

@@ -198,4 +198,76 @@ class EmailCaseUniquenessAtEveryWriterTest {
         verify(users, never()).save(any(User.class));
     }
 
+    // ------------------------------------------------------------------
+    // Sales-agent invite accept (V56)
+    // ------------------------------------------------------------------
+
+    private com.innbucks.userservice.repository.SalesAgentInviteRepository invites;
+    private OtpService otp;
+
+    /** The accept, with a live invite to {@code inviteEmail} for {@code phone}. */
+    private SalesAgentInviteService salesAgentInvites(String token, String phone, String inviteEmail) {
+        invites = mock(com.innbucks.userservice.repository.SalesAgentInviteRepository.class);
+        otp = mock(OtpService.class);
+        when(otp.verifySalesAgentInviteCode(phone, "482913")).thenReturn(true);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        when(invites.findByTokenHash(com.innbucks.userservice.security.SalesAgentInviteTokens.hash(token)))
+                .thenReturn(Optional.of(com.innbucks.userservice.entity.SalesAgentInvite.builder().id(1L)
+                        .teamMemberId(UUID.randomUUID()).organizerUuid(UUID.randomUUID())
+                        .phoneNumber(phone).email(inviteEmail).createdAt(now).expiresAt(now.plusHours(1)).build()));
+        when(invites.consume(anyString(), any(), any())).thenReturn(1);
+        com.innbucks.userservice.config.StaffProvisioningCheck provisioning =
+                mock(com.innbucks.userservice.config.StaffProvisioningCheck.class);
+        com.innbucks.userservice.config.SalesAgentInviteProperties properties =
+                new com.innbucks.userservice.config.SalesAgentInviteProperties();
+        properties.afterPropertiesSet();
+        return new SalesAgentInviteService(invites, users, mock(CustomerProfileRepository.class),
+                mock(com.innbucks.userservice.repository.RefreshTokenRepository.class), eligibility, otp,
+                mock(PasswordEncoder.class), mock(TokenVersionBumper.class), mock(AuditService.class),
+                mock(ApplicationEventPublisher.class), properties, provisioning,
+                mock(com.innbucks.userservice.cells.CellAffinityChecker.class));
+    }
+
+    @Test
+    @DisplayName("sales-agent accept: an invite email another account holds in another case is email_in_use")
+    void salesAgentAccept_caseVariantOfAnotherAccount_isRefused() {
+        String token = com.innbucks.userservice.security.SalesAgentInviteTokens.generate();
+        SalesAgentInviteService service = salesAgentInvites(token, "+263770000042", VARIANT);
+        User app = User.builder().id(42L).userUuid(UUID.randomUUID()).phoneNumber("+263770000042")
+                .roles(User.roleNames(User.Role.CUSTOMER)).active(true).approved(true).password("x").build();
+        when(users.findByPhoneNumber("+263770000042")).thenReturn(Optional.of(app));
+        when(users.lockById(42L)).thenReturn(Optional.of(app));
+        when(users.findById(42L)).thenReturn(Optional.of(app));
+        when(users.findAllByEmailIgnoreCase(VARIANT)).thenReturn(List.of(User.builder().id(99L).email(HELD).build()));
+
+        assertThatThrownBy(() -> service.accept(new com.innbucks.userservice.dto.SalesAgentInviteDTOs.AcceptRequest(
+                token, "482913", "Correct-Horse-7-Battery"), AuditContext.none()))
+                .isInstanceOf(com.innbucks.userservice.exception.SalesAgentInviteException.class)
+                .extracting("errorCode").isEqualTo("email_in_use");
+        assertThat(app.getEmail()).isNull();
+        verify(users, never()).existsByEmail(anyString());
+        verify(users, never()).saveAndFlush(any(User.class));
+        // Refused after the code: only the phone's holder learns about the email.
+        verify(otp).verifySalesAgentInviteCode("+263770000042", "482913");
+    }
+
+    @Test
+    @DisplayName("sales-agent accept: an account whose OWN address differs only in case keeps it, no clash")
+    void salesAgentAccept_ownAddressInAnotherCase_isAccepted() {
+        String token = com.innbucks.userservice.security.SalesAgentInviteTokens.generate();
+        SalesAgentInviteService service = salesAgentInvites(token, "+263770000042", HELD);
+        User organizer = User.builder().id(42L).userUuid(UUID.randomUUID()).phoneNumber("+263770000042")
+                .email(VARIANT).roles(User.roleNames(User.Role.EVENT_ORGANIZER, User.Role.CUSTOMER))
+                .active(true).approved(true).password("x").build();
+        when(users.findByPhoneNumber("+263770000042")).thenReturn(Optional.of(organizer));
+        when(users.lockById(42L)).thenReturn(Optional.of(organizer));
+        when(users.findById(42L)).thenReturn(Optional.of(organizer));
+
+        service.accept(new com.innbucks.userservice.dto.SalesAgentInviteDTOs.AcceptRequest(
+                token, "482913", "Correct-Horse-7-Battery"), AuditContext.none());
+
+        assertThat(organizer.getEmail()).isEqualTo(VARIANT);
+        assertThat(organizer.getRoles()).contains("SALES_AGENT");
+        verify(users).saveAndFlush(organizer);
+    }
 }

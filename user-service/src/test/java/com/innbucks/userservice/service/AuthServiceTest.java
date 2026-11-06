@@ -1974,6 +1974,73 @@ class AuthServiceTest {
                 () -> svc.refresh("rt", null, AuditContext.none()));
     }
 
+    /**
+     * A sales agent (V56: CUSTOMER + SALES_AGENT) who has not enrolled 2FA yet
+     * keeps their InnBucks app session: a phone-proof family is exempt from the
+     * refresh MFA guard and mints CUSTOMER only, so SALES_AGENT never rides it.
+     */
+    @Test
+    void refresh_phoneProofFamilyOfAnUnenrolledSalesAgentStillMintsACustomerSession() {
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        User agent = unenrolledSalesAgent();
+        when(refreshTokenService.rotate("rt", null))
+                .thenReturn(new RefreshTokenService.Rotation(agent, "rt2", true));
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn("tok");
+
+        AuthResponseDTO resp = salesAgentRefreshService(refreshTokenService, jwt, agent.getId())
+                .refresh("rt", null, AuditContext.none());
+
+        assertEquals("tok", resp.getToken());
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<java.util.Collection<String>> roles =
+                org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(jwt).generateToken(any(), roles.capture(), any(), any(), anyInt(), anyBoolean(), any(), any(),
+                any(), any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), isNull(), any());
+        assertEquals(java.util.List.of(User.Role.CUSTOMER.name()), java.util.List.copyOf(roles.getValue()));
+    }
+
+    /** The agent's PORTAL family is refused until they enrol: SALES_AGENT makes them a system user. */
+    @Test
+    void refresh_passwordFamilyOfAnUnenrolledSalesAgentIsRefused() {
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+        User agent = unenrolledSalesAgent();
+        when(refreshTokenService.rotate("rt", null))
+                .thenReturn(new RefreshTokenService.Rotation(agent, "rt2", false));
+
+        AuthService svc = salesAgentRefreshService(refreshTokenService, mock(JwtUtil.class), agent.getId());
+
+        assertThrows(AuthService.MfaEnrollmentRequiredException.class,
+                () -> svc.refresh("rt", null, AuditContext.none()));
+    }
+
+    private static User unenrolledSalesAgent() {
+        return User.builder()
+                .id(89L)
+                .email("tendai.moyo@gmail.com")
+                .phoneNumber("+263771000089")
+                .roles(User.roleNames(User.Role.CUSTOMER, User.Role.SALES_AGENT))
+                .active(true)
+                .mfaEnabled(false)
+                .build();
+    }
+
+    private static AuthService salesAgentRefreshService(RefreshTokenService refreshTokenService, JwtUtil jwt,
+                                                        long userId) {
+        CustomerProfileRepository profiles = mock(CustomerProfileRepository.class);
+        when(profiles.findByUserId(userId)).thenReturn(java.util.Optional.of(
+                com.innbucks.userservice.entity.CustomerProfile.builder().registrationTier(1).build()));
+        AuthService svc = withLockoutConfig(new AuthService(mock(UserRepository.class),
+                mock(TenantProfileRepository.class), profiles,
+                mock(PasswordEncoder.class), jwt, mock(TokenRevocationService.class),
+                refreshTokenService, mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, realPolicy(),
+                mock(com.innbucks.userservice.security.MfaTokenService.class),
+                mock(MfaService.class), mock(DeviceTrustService.class));
+        return svc;
+    }
+
     private static User organizationStaffCustomer() {
         return User.builder()
                 .id(88L)

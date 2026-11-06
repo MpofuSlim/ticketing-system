@@ -45,7 +45,7 @@ class GatewayRouteTableTest {
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "auth-register-phone-code-route",
             "auth-otp-route", "auth-exchange-route", "auth-pos-token-route", "auth-mfa-route", "auth-password-reset-route",
-            "auth-device-security-route", "auth-staff-invite-route",
+            "auth-device-security-route", "auth-staff-invite-route", "auth-sales-agent-invite-route",
             "user-auth-route", "device-security-partner-route",
             "cells-lookup-route", "user-admin-route", "user-notifications-route",
             "user-organizations-route",
@@ -98,7 +98,8 @@ class GatewayRouteTableTest {
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "auth-register-phone-code-route",
             "auth-otp-route", "auth-exchange-route", "auth-pos-token-route", "auth-mfa-route", "auth-password-reset-route",
-            "auth-device-security-route", "auth-staff-invite-route", "device-security-partner-route",
+            "auth-device-security-route", "auth-staff-invite-route", "auth-sales-agent-invite-route",
+            "device-security-partner-route",
             "user-admin-route", "user-notifications-route", "user-organizations-route",
             "user-event-organizer-route", "booking-event-organizer-reports-route",
             "event-organizer-scanners-route",
@@ -129,6 +130,9 @@ class GatewayRouteTableTest {
             // Unauthenticated and redeems a single-use credential (V44): its
             // per-IP cap must hold during a Redis outage.
             "auth-staff-invite-route",
+            // The same for the sales-agent portal invite (V56), whose
+            // phone-code call also sends an SMS.
+            "auth-sales-agent-invite-route",
             // Unauthenticated and session-minting: the per-IP cap is the only
             // brake on hammering the replay guard and the find-or-create write.
             "auth-exchange-route",
@@ -620,7 +624,7 @@ class GatewayRouteTableTest {
         int catchAll = order.indexOf("user-auth-route");
         List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
                         "auth-register-phone-code-route", "auth-otp-route", "auth-exchange-route", "auth-pos-token-route", "auth-mfa-route", "auth-password-reset-route",
-                        "auth-device-security-route", "auth-staff-invite-route")
+                        "auth-device-security-route", "auth-staff-invite-route", "auth-sales-agent-invite-route")
                 .forEach(id -> assertThat(order.indexOf(id))
                         .as("%s must match before the /auth/** catch-all", id)
                         .isBetween(0, catchAll - 1));
@@ -669,6 +673,16 @@ class GatewayRouteTableTest {
         assertThat(predicateArgs("auth-staff-invite-route", "Path"))
                 .containsExactly("/auth/staff-invite/**");
         assertThat(predicateArgs("auth-staff-invite-route", "Method")).containsExactly("POST");
+        // Sales-agent portal invites (V56): inspect, phone-code and accept, POST
+        // only, with their own fail-safe IP bucket.
+        assertThat(predicateArgs("auth-sales-agent-invite-route", "Path"))
+                .containsExactly("/auth/sales-agent-invite/**");
+        assertThat(predicateArgs("auth-sales-agent-invite-route", "Method")).containsExactly("POST");
+        Map<String, String> limiter = route("auth-sales-agent-invite-route").getFilters().stream()
+                .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                .findFirst().orElseThrow().getArgs();
+        assertThat(limiter).containsEntry("redis-rate-limiter.replenishRate", "1")
+                .containsEntry("redis-rate-limiter.burstCapacity", "5");
     }
 
     @Test
@@ -709,7 +723,7 @@ class GatewayRouteTableTest {
         // the resolver back fails CI instead of reopening the bypass.
         List.of("auth-otp-route", "auth-mfa-route", "auth-password-reset-route",
                 "auth-register-phone-code-route",
-                "auth-device-security-route", "auth-staff-invite-route",
+                "auth-device-security-route", "auth-staff-invite-route", "auth-sales-agent-invite-route",
                 "device-security-partner-route").forEach(id -> {
             boolean usesPreAuthIpResolver = route(id).getFilters().stream()
                     .filter(f -> "RequestRateLimiter".equals(f.getName()))

@@ -28,6 +28,14 @@ public class BusinessRegistrationException extends OrganizationException {
     public static final String PENDING = "business_registration_pending";
     public static final String PENDING_MESSAGE = "Your business registration is already waiting for approval.";
 
+    /**
+     * 409: the account is a sales agent's, and signs in to the Foundry portal
+     * with another email. Registering never moves that sign-in.
+     */
+    public static final String EMAIL_MISMATCH = "email_mismatch";
+    public static final String EMAIL_MISMATCH_MESSAGE = "This account already signs in to the Foundry portal with "
+            + "another email. Register with that email, with a new code.";
+
     public BusinessRegistrationException(HttpStatus status, String errorCode, String message) {
         super(status, errorCode, message);
     }
@@ -43,6 +51,10 @@ public class BusinessRegistrationException extends OrganizationException {
     public static BusinessRegistrationException phoneCodeNotNeeded() {
         return new BusinessRegistrationException(HttpStatus.CONFLICT, PHONE_CODE_NOT_NEEDED,
                 PHONE_CODE_NOT_NEEDED_MESSAGE);
+    }
+
+    public static BusinessRegistrationException emailMismatch() {
+        return new BusinessRegistrationException(HttpStatus.CONFLICT, EMAIL_MISMATCH, EMAIL_MISMATCH_MESSAGE);
     }
 
     public static BusinessRegistrationException pending() {

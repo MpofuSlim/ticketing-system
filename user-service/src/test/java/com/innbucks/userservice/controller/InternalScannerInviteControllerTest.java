@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
+import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -36,8 +38,12 @@ class InternalScannerInviteControllerTest {
     }
 
     private static InternalScannerInviteController.ScannerInviteRequest body(String phone) {
+        return body(phone, null);
+    }
+
+    private static InternalScannerInviteController.ScannerInviteRequest body(String phone, List<String> roles) {
         return new InternalScannerInviteController.ScannerInviteRequest(phone, "Harare Arena Events",
-                "Jazz on the Lawn", SCANNER);
+                "Jazz on the Lawn", SCANNER, roles);
     }
 
     @Test
@@ -46,7 +52,20 @@ class InternalScannerInviteControllerTest {
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(((ApiResult<?>) resp.getBody()).getCode()).isEqualTo("202 ACCEPTED");
-        verify(notifier).send("+263771234567", "Harare Arena Events", "Jazz on the Lawn", SCANNER);
+        // No roles = the V20 request = the gate-staff wording.
+        verify(notifier).send("+263771234567", "Harare Arena Events", "Jazz on the Lawn", SCANNER,
+                EnumSet.of(ScannerInviteNotifier.InviteRole.SCAN));
+    }
+
+    @Test
+    void theRoles_pickTheWording() {
+        controller.send(TOKEN, body("+263771234567", List.of("SELL")), request());
+        verify(notifier).send("+263771234567", "Harare Arena Events", "Jazz on the Lawn", SCANNER,
+                EnumSet.of(ScannerInviteNotifier.InviteRole.SELL));
+
+        controller.send(TOKEN, body("+263771234567", List.of("SCAN", "SELL")), request());
+        verify(notifier).send("+263771234567", "Harare Arena Events", "Jazz on the Lawn", SCANNER,
+                EnumSet.of(ScannerInviteNotifier.InviteRole.SCAN, ScannerInviteNotifier.InviteRole.SELL));
     }
 
     @Test

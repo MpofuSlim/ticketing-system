@@ -123,6 +123,25 @@ public enum AuditEventType {
      */
     BUSINESS_ADDED_TO_EXISTING_ACCOUNT,
     /**
+     * A sales agent accepted their Foundry portal invite
+     * ({@code POST /auth/sales-agent-invite/accept}, V56;
+     * {@code SalesAgentInviteService}), after proving the invite's phone with a
+     * code: the InnBucks account on that phone (created when there was none)
+     * now holds CUSTOMER and SALES_AGENT, the invite's email (when it had none)
+     * and the password they chose. Written fail-closed ({@code recordRequired})
+     * as the transaction's last statement, because the email and password it
+     * sets are a new way into the account. Actor and target are the account's
+     * {@code userUuid}; metadata carries the invite and team-member ids, the
+     * organizer's uuid, what changed, and the email and phone MASKED.
+     */
+    SALES_AGENT_PORTAL_ACCESS_GRANTED,
+    /**
+     * A used, revoked or expired sales-agent invite token presented again
+     * (FAILURE row, fail-open). Names the invite and its team member, never the
+     * token.
+     */
+    SALES_AGENT_INVITE_REPLAYED,
+    /**
      * SUPER_ADMIN re-activated an already-approved user — admin lifted a
      * previous deactivation, no password reset involved.
      */

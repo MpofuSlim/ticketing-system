@@ -77,14 +77,17 @@ public class AuthController {
                     "empty `roles` is accepted. An address on an InnBucks staff domain is refused (400 " +
                     "`email_domain_reserved`), checked before the duplicate-email check.\n\n" +
                     "**A phone that already has an InnBucks app account.** When the number belongs to an account " +
-                    "that is only a customer (the person signed in to the InnBucks app), registering without " +
+                    "that is only a customer (the person signed in to the InnBucks app), or a customer who is " +
+                    "also a sales agent, registering without " +
                     "`phoneCode` is 409 `phone_code_required`. Ask for a code with `POST /auth/register/phone-code`, " +
                     "then send the same registration again with `phoneCode`. The business is then ADDED to that " +
                     "account: its email, name and business details are set, and each service becomes a service " +
                     "request waiting for a SUPER_ADMIN (201 with `addedToExistingAccount: true`). The account " +
                     "stays a customer until a request is approved, and the InnBucks app keeps working. A wrong or " +
                     "expired code is 400 `phone_code_invalid`; a registration already waiting is 409 " +
-                    "`business_registration_pending`. Any other account on the number, or a number that is an " +
+                    "`business_registration_pending`. A sales agent's account that already signs in to the " +
+                    "portal with another email is 409 `email_mismatch` (checked after the code, so ask for a new " +
+                    "one): register with that email. Any other account on the number, or a number that is an " +
                     "InnBucks staff member's contact phone, is 400 \"Phone number already registered\".")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -174,6 +177,13 @@ public class AuthController {
                                       "message": "Your business registration is already waiting for approval.",
                                       "data": { "errorCode": "business_registration_pending" }
                                     }
+                                    """),
+                            @ExampleObject(name = "A sales agent's portal email differs", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "This account already signs in to the Foundry portal with another email. Register with that email, with a new code.",
+                                      "data": { "errorCode": "email_mismatch" }
+                                    }
                                     """)
                     }))
     })
@@ -245,6 +255,13 @@ public class AuthController {
                                       "code": "409 CONFLICT",
                                       "message": "Your business registration is already waiting for approval.",
                                       "data": { "errorCode": "business_registration_pending" }
+                                    }
+                                    """),
+                            @ExampleObject(name = "A sales agent's portal email differs", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "This account already signs in to the Foundry portal with another email. Register with that email, with a new code.",
+                                      "data": { "errorCode": "email_mismatch" }
                                     }
                                     """)
                     })),
