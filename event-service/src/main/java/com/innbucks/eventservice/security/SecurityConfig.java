@@ -48,6 +48,9 @@ public class SecurityConfig {
                         // reachable anonymously. Same reason as the line above for
                         // sitting before the GET /events/** permitAll.
                         .requestMatchers(HttpMethod.GET, "/events/gate").authenticated()
+                        // The sales agent's own selling events (V21): read from the
+                        // caller's session, same reason, same place.
+                        .requestMatchers(HttpMethod.GET, "/events/sales").authenticated()
                         .requestMatchers(HttpMethod.GET, "/events").permitAll()
                         // Internal: full event lookup (tenantUserUuid intact) for sibling
                         // services — booking-service's ownership checks + tenant capture.

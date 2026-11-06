@@ -13,6 +13,12 @@ public record GateInviteDTO(
         @Schema(example = "Harare Arena Events", nullable = true) String organizerName,
         @Schema(example = "Tendai Moyo", description = "The name the organizer typed for this person.") String name,
         @Schema(example = "2026-10-30T14:05:12+02:00") LocalDateTime invitedAt,
-        @Schema(description = "What the organizer has assigned so far that has not ended. Can be empty.")
-        List<ScannerEventDTO> events
+        @Schema(description = "Events to SCAN the organizer has assigned so far that have not ended. Empty when "
+                + "canScan is false. Can be empty.")
+        List<ScannerEventDTO> events,
+        @Schema(example = "true", description = "The invite is to scan tickets at the gate.") boolean canScan,
+        @Schema(example = "false", description = "The invite is to sell tickets (a sales agent).") boolean canSell,
+        @Schema(description = "Events to SELL for that the organizer has assigned so far and that have not ended. "
+                + "Empty when canSell is false. Can be empty.")
+        List<ScannerEventDTO> salesEvents
 ) { }

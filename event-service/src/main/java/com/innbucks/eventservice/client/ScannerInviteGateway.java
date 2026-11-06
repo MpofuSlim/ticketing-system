@@ -10,15 +10,18 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 /**
  * Asks user-service to tell a person an organizer added them as gate staff
- * (V20): {@code POST /users/internal/scanner-invites} with the shared
- * {@code X-Internal-Token}. user-service owns the wording and the channels
- * (WhatsApp, SMS when WhatsApp fails); this side names the number, the
- * organizer and the event, nothing else.
+ * (V20), or as a sales agent (V21): {@code POST /users/internal/scanner-invites}
+ * with the shared {@code X-Internal-Token}. user-service owns the wording and
+ * the channels (WhatsApp, SMS when WhatsApp fails); this side names the number,
+ * the organizer, the event and the roles ({@code SCAN}, {@code SELL}),
+ * nothing else. user-service picks one of its fixed sentences from the roles,
+ * so no caller text reaches a stranger.
  *
  * <p>Best-effort, like {@link StaffNotificationGateway}: a failure is logged
  * and never fails the assignment it accompanies. Called after the assignment
@@ -41,7 +44,13 @@ public class ScannerInviteGateway {
         this.internalToken = internalToken;
     }
 
-    public void sendInvite(UUID scannerId, String phoneNumber, String organizerName, String eventTitle) {
+    /**
+     * @param roles what the row does at send time, {@code ["SCAN"]},
+     *              {@code ["SELL"]} or both; null or empty is left out
+     *              (user-service then reads it as {@code ["SCAN"]})
+     */
+    public void sendInvite(UUID scannerId, String phoneNumber, String organizerName, String eventTitle,
+                           List<String> roles) {
         if (phoneNumber == null || phoneNumber.isBlank()) {
             return;
         }
@@ -50,7 +59,7 @@ public class ScannerInviteGateway {
             headers.setContentType(MediaType.APPLICATION_JSON);
             headers.set("X-Internal-Token", internalToken);
 
-            Map<String, String> body = new LinkedHashMap<>();
+            Map<String, Object> body = new LinkedHashMap<>();
             body.put("phoneNumber", phoneNumber);
             if (organizerName != null && !organizerName.isBlank()) {
                 body.put("organizerName", organizerName);
@@ -60,6 +69,9 @@ public class ScannerInviteGateway {
             }
             if (scannerId != null) {
                 body.put("scannerId", scannerId.toString());
+            }
+            if (roles != null && !roles.isEmpty()) {
+                body.put("roles", List.copyOf(roles));
             }
 
             restTemplate.exchange(userServiceBaseUrl + "/users/internal/scanner-invites",
