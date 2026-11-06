@@ -1,9 +1,11 @@
 package com.innbucks.eventservice.controller;
 
 import com.innbucks.eventservice.dto.ApiResult;
+import com.innbucks.eventservice.dto.scanner.AgentSalesResponseDTO;
 import com.innbucks.eventservice.dto.scanner.GateInviteDecisionDTO;
 import com.innbucks.eventservice.dto.scanner.GateResponseDTO;
 import com.innbucks.eventservice.dto.scanner.ScannerAccessDTO;
+import com.innbucks.eventservice.dto.scanner.SellerAccessDTO;
 import com.innbucks.eventservice.security.AuthenticatedCaller;
 import com.innbucks.eventservice.service.ScannerService;
 import io.swagger.v3.oas.annotations.Hidden;
@@ -13,6 +15,7 @@ import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,9 +32,10 @@ import java.time.Duration;
 import java.util.UUID;
 
 /**
- * The super app's side of gate scanning: the signed-in person's events and
- * invites, accepting and declining, and the internal check booking-service
- * makes before every scan.
+ * The super app's side of the event team: the signed-in person's scanning
+ * events and invites, accepting and declining, the sales agent's selling
+ * events (V21), and the internal checks booking-service makes before every
+ * scan and every agent sale.
  *
  * <p><b>Nothing here takes a phone number or an account from a request.</b>
  * Both come from the caller's session (the {@code /auth/exchange} token), so
@@ -73,7 +77,39 @@ public class GateController {
                         "startDateTime": "2026-11-14T15:00:00+02:00",
                         "endDateTime": "2026-11-14T21:00:00+02:00"
                       }
+                    ],
+                    "canScan": true,
+                    "canSell": true,
+                    "salesEvents": [
+                      {
+                        "eventId": "0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+                        "title": "Jazz on the Lawn",
+                        "venue": "Harare Gardens",
+                        "startDateTime": "2026-11-14T15:00:00+02:00",
+                        "endDateTime": "2026-11-14T21:00:00+02:00"
+                      }
                     ]
+                  }
+                ]
+              }
+            }""";
+
+    private static final String SALES_EXAMPLE = """
+            {
+              "code": "200 OK",
+              "message": "Your selling events",
+              "data": {
+                "events": [
+                  {
+                    "agentId": "4b1e2c3d-5a6f-4b7c-8d9e-0f1a2b3c4d5e",
+                    "eventId": "0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+                    "title": "Jazz on the Lawn",
+                    "venue": "Harare Gardens",
+                    "startDateTime": "2026-11-14T15:00:00+02:00",
+                    "endDateTime": "2026-11-14T21:00:00+02:00",
+                    "organizerName": "Harare Arena Events",
+                    "ticketCap": 200,
+                    "commissionPercent": 5.00
                   }
                 ]
               }
@@ -101,10 +137,14 @@ public class GateController {
     @PreAuthorize("isAuthenticated()")
     @SecurityRequirement(name = "bearerAuth")
     @Operation(summary = "My scanning events and invites (super app)",
-            description = "For the signed-in person: every event of a team they accepted that has not ended, "
-                    + "soonest first (`status` UPCOMING, or LIVE between start and end), and every invite "
-                    + "waiting for them. Both empty is the normal answer: hide the \"Scan tickets\" tool. The "
-                    + "phone and account come from the session; nothing is taken from the request.")
+            description = "For the signed-in person: every event they SCAN for a team they accepted, that has "
+                    + "not ended, soonest first (`status` UPCOMING, or LIVE between start and end), and every "
+                    + "invite waiting for them. Both empty is the normal answer: hide the \"Scan tickets\" "
+                    + "tool. Each invite says what it is for (`canScan`, `canSell`: gate staff, a sales agent, "
+                    + "or both) and lists the events assigned so far of each kind (`events` to scan, "
+                    + "`salesEvents` to sell for). Accepting covers both. A sales agent's selling events are "
+                    + "`GET /events/sales`. The phone and account come from the session; nothing is taken from "
+                    + "the request.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Events and invites",
                     content = @Content(mediaType = "application/json", examples = {
@@ -173,6 +213,38 @@ public class GateController {
                 scannerId)));
     }
 
+    @GetMapping("/events/sales")
+    @PreAuthorize("isAuthenticated()")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "My selling events (sales agent: super app or Foundry portal)",
+            description = "For the signed-in sales agent: every event they sell for, on every team they accepted "
+                    + "and are still on, that is not deleted and has not ended, soonest first, with the "
+                    + "organizer's terms (`ticketCap`: null = no cap; `commissionPercent` on what the buyer "
+                    + "paid). `agentId` is the agent's team row for that organizer. Empty is the normal answer "
+                    + "for anyone else: hide the \"Sell tickets\" tool. The account comes from the session (an "
+                    + "app or a portal session, no phone needed); nothing is taken from the request. Display "
+                    + "only: every sale is checked again, live.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Selling events",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "A sales agent", value = SALES_EXAMPLE),
+                            @ExampleObject(name = "Not a sales agent", value = """
+                                    { "code": "200 OK", "message": "Your selling events", "data": { "events": [] } }""")
+                    })),
+            @ApiResponse(responseCode = "400", description = "The session carries no account",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "400 BAD_REQUEST", "message": "Sign in again to see the events you sell for.", "data": { "errorCode": "account_required" } }"""))),
+            @ApiResponse(responseCode = "401", description = "No session",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = UNAUTHORIZED_EXAMPLE)))
+    })
+    public ResponseEntity<ApiResult<AgentSalesResponseDTO>> sales(Authentication authentication) {
+        AgentSalesResponseDTO sales = scannerService.sales(AuthenticatedCaller.userUuid(authentication));
+        // Display only, as for the gate list: every sale is checked live.
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(Duration.ofSeconds(30)).cachePrivate())
+                .body(ApiResult.ok("Your selling events", sales));
+    }
+
     /**
      * booking-service, before it reads a ticket: may this account scan this
      * event? The internal trio: this token check, the {@code /events/internal/*}
@@ -190,6 +262,59 @@ public class GateController {
                     .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing or invalid X-Internal-Token"));
         }
         return ResponseEntity.ok(ApiResult.ok("Scanner access resolved", scannerService.access(userUuid, eventId)));
+    }
+
+    /**
+     * booking-service, before every agent sale (V21): may this account sell
+     * for this event, and on what terms? The internal trio: this token check,
+     * the {@code /events/internal/*} GET permitAll in SecurityConfig, and the
+     * gateway's event-internal-deny. Always 200 once the token passes: a
+     * missing or unreadable id is a denial, never a 400, so booking-service
+     * reads every non-200 as "could not ask" and fails closed.
+     */
+    @GetMapping("/events/internal/seller-access")
+    @SecurityRequirements()
+    @Operation(summary = "May this account sell for this event? (internal)",
+            description = "booking-service asks before every sales-agent sale, live, never cached. Allowed only "
+                    + "for an accepted team row of the account, not declined or switched off, with the Sell role, "
+                    + "assigned to the event, on the team of the event's organizer, for an event that is not "
+                    + "deleted. Always 200 with `allowed`; a missing or unreadable id is `allowed: false`. "
+                    + "Requires the `X-Internal-Token` shared secret; the gateway's `event-internal-deny` route "
+                    + "makes `/events/internal/**` unreachable from the public internet.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The answer",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Allowed", value = """
+                                    { "code": "200 OK", "message": "Seller access", "data": { "allowed": true, "agentId": "4b1e2c3d-5a6f-4b7c-8d9e-0f1a2b3c4d5e", "organizerUuid": "8f14e45f-ceea-467a-9b0e-1c2d3e4f5a6b", "displayName": "Tendai Moyo", "ticketCap": 200, "commissionPercent": 5.00 } }"""),
+                            @ExampleObject(name = "Denied", value = """
+                                    { "code": "200 OK", "message": "Seller access", "data": { "allowed": false, "agentId": null, "organizerUuid": null, "displayName": null, "ticketCap": null, "commissionPercent": null } }""")
+                    })),
+            @ApiResponse(responseCode = "401", description = "Missing or wrong X-Internal-Token",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "401 UNAUTHORIZED", "message": "Missing or invalid X-Internal-Token", "data": null }""")))
+    })
+    public ResponseEntity<ApiResult<SellerAccessDTO>> sellerAccess(
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken,
+            @RequestParam(required = false) String accountUserUuid,
+            @RequestParam(required = false) String eventId) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized GET /events/internal/seller-access — missing or wrong X-Internal-Token");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing or invalid X-Internal-Token"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Seller access",
+                scannerService.sellerAccess(uuidOrNull(accountUserUuid), uuidOrNull(eventId))));
+    }
+
+    private static UUID uuidOrNull(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private boolean authorizedInternal(String presented) {

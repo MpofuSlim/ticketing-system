@@ -27,7 +27,9 @@ public interface EventScannerAssignmentRepository extends JpaRepository<EventSca
      *
      * <p>"Already scans" is every other event of this scanner row, whatever its
      * status (its own events must never overlap each other), plus the events of
-     * the number's OTHER rows that count: not switched off, not declined. Ended
+     * the number's OTHER rows that count: not switched off, not declined, and
+     * scanning (V21: a sell-only row's kept scan assignments grant nothing, so
+     * they block nothing; selling has no overlap rule). Ended
      * and deleted events never clash. Windows are half-open, so an event that
      * starts as another ends is no clash. Times are the events' live UTC
      * columns, so an organizer's later edit is read as it now stands.
@@ -41,7 +43,7 @@ public interface EventScannerAssignmentRepository extends JpaRepository<EventSca
             JOIN events e ON e.event_id = a.event_id
             WHERE s.phone_number = :phone
               AND (s.scanner_id = :scannerId
-                   OR (s.disabled_at IS NULL AND s.declined_at IS NULL))
+                   OR (s.disabled_at IS NULL AND s.declined_at IS NULL AND s.can_scan))
               AND a.event_id <> :eventId
               AND e.deleted = FALSE
               AND e.end_date_time > :now
@@ -56,10 +58,10 @@ public interface EventScannerAssignmentRepository extends JpaRepository<EventSca
                       @Param("now") LocalDateTime now);
 
     /**
-     * Would {@code scannerId} start counting again (switched back on, or
-     * invited again after a decline) with one of its upcoming events
-     * overlapping an event of the number's other counting rows? Same rules and
-     * same lock as {@link #countClashes}.
+     * Would {@code scannerId} start counting again (switched back on, invited
+     * again after a decline, or given the Scan role back) with one of its
+     * upcoming events overlapping an event of the number's other counting
+     * rows? Same rules and same lock as {@link #countClashes}.
      */
     @Query(value = """
             SELECT COUNT(*) FROM event_scanner_assignments mine
@@ -68,6 +70,7 @@ public interface EventScannerAssignmentRepository extends JpaRepository<EventSca
                                   AND os.scanner_id <> :scannerId
                                   AND os.disabled_at IS NULL
                                   AND os.declined_at IS NULL
+                                  AND os.can_scan
             JOIN event_scanner_assignments other ON other.scanner_id = os.scanner_id
                                                 AND other.event_id <> mine.event_id
             JOIN events oe ON oe.event_id = other.event_id

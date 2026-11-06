@@ -1,10 +1,14 @@
 package com.innbucks.eventservice.controller;
 
+import com.innbucks.eventservice.dto.scanner.AgentSalesEventDTO;
+import com.innbucks.eventservice.dto.scanner.AgentSalesResponseDTO;
 import com.innbucks.eventservice.dto.scanner.CreateScannerRequestDTO;
+import com.innbucks.eventservice.dto.scanner.GateInviteDTO;
 import com.innbucks.eventservice.dto.scanner.GateInviteDecisionDTO;
 import com.innbucks.eventservice.dto.scanner.GateResponseDTO;
 import com.innbucks.eventservice.dto.scanner.ScannerAccessDTO;
 import com.innbucks.eventservice.dto.scanner.ScannerResponseDTO;
+import com.innbucks.eventservice.dto.scanner.SellerAccessDTO;
 import com.innbucks.eventservice.exception.ApiProblemException;
 import com.innbucks.eventservice.exception.GlobalExceptionHandler;
 import com.innbucks.eventservice.security.JwtFilter;
@@ -33,7 +37,9 @@ import org.springframework.web.context.WebApplicationContext;
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
 import javax.crypto.SecretKey;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -41,6 +47,7 @@ import java.util.UUID;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -140,7 +147,7 @@ class ScannerEndpointsSecurityTest {
 
     private static ScannerResponseDTO scanner(UUID organizer) {
         return new ScannerResponseDTO(SCANNER, organizer, "Tendai", "Moyo", "+263771234567", "INVITED",
-                List.of(), null);
+                true, false, List.of(), List.of(), null, null, null);
     }
 
     // ------------------------------------------------------------------ gate
@@ -302,5 +309,252 @@ class ScannerEndpointsSecurityTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.allowed").value(true))
                 .andExpect(jsonPath("$.data.displayName").value("Tendai Moyo"));
+    }
+
+    // ------------------------------------------------------------ sales agents (V21)
+
+    /** A Foundry portal session of a sales agent: email subject, no phone claim. */
+    private static String portalAgentToken(UUID userUuid) {
+        return Jwts.builder()
+                .subject("tendai.moyo@gmail.com")
+                .issuer(JwtUtil.TOKEN_ISSUER)
+                .audience().add(JwtUtil.TOKEN_AUDIENCE).and()
+                .claim("roles", List.of("CUSTOMER", "SALES_AGENT"))
+                .claim("userUuid", userUuid.toString())
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 60_000))
+                .signWith(KEY, Jwts.SIG.HS256)
+                .compact();
+    }
+
+    @Test
+    void sales_withNoSession_is401_notThePublicEventsPermit() throws Exception {
+        mvc.perform(get("/events/sales")).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("401 UNAUTHORIZED"));
+        verifyNoInteractions(scannerService);
+    }
+
+    @Test
+    void sales_takesTheAccountFromTheToken_inTheAppOrThePortal_andIgnoresTheQuery() throws Exception {
+        UUID appAccount = UUID.randomUUID();
+        UUID portalAccount = UUID.randomUUID();
+        AgentSalesEventDTO row = new AgentSalesEventDTO(SCANNER, EVENT, "Jazz on the Lawn", "Harare Gardens",
+                LocalDateTime.of(2026, 11, 14, 13, 0), LocalDateTime.of(2026, 11, 14, 19, 0),
+                "Harare Arena Events", 200, new BigDecimal("5.00"));
+        when(scannerService.sales(any())).thenReturn(new AgentSalesResponseDTO(List.of(row)));
+
+        mvc.perform(get("/events/sales").param("accountUserUuid", UUID.randomUUID().toString())
+                        .header("Authorization", "Bearer " + customerToken(appAccount, "+263771234567")))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "max-age=30, private"))
+                .andExpect(jsonPath("$.message").value("Your selling events"))
+                .andExpect(jsonPath("$.data.events[0].agentId").value(SCANNER.toString()))
+                .andExpect(jsonPath("$.data.events[0].ticketCap").value(200))
+                .andExpect(jsonPath("$.data.events[0].commissionPercent").value(5.00));
+        verify(scannerService).sales(appAccount);
+
+        // A portal session has no phone: none is needed.
+        mvc.perform(get("/events/sales").header("Authorization", "Bearer " + portalAgentToken(portalAccount)))
+                .andExpect(status().isOk());
+        verify(scannerService).sales(portalAccount);
+    }
+
+    @Test
+    void gate_invitesCarryTheirRoles() throws Exception {
+        UUID account = UUID.randomUUID();
+        when(scannerService.gate(account, "+263771234567")).thenReturn(new GateResponseDTO(List.of(), List.of(
+                new GateInviteDTO(SCANNER, "Harare Arena Events", "Tendai Moyo", null, List.of(), false, true,
+                        List.of()))));
+
+        mvc.perform(get("/events/gate").header("Authorization", "Bearer " + customerToken(account, "+263771234567")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.invites[0].canScan").value(false))
+                .andExpect(jsonPath("$.data.invites[0].canSell").value(true))
+                .andExpect(jsonPath("$.data.invites[0].salesEvents").isEmpty());
+    }
+
+    @Test
+    void sellerAccess_isTokenGated_alwaysAnswers200_andTakesBothIds() throws Exception {
+        UUID account = UUID.randomUUID();
+        mvc.perform(get("/events/internal/seller-access")
+                        .param("accountUserUuid", account.toString()).param("eventId", EVENT.toString()))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/events/internal/seller-access").header("X-Internal-Token", "wrong")
+                        .param("accountUserUuid", account.toString()).param("eventId", EVENT.toString()))
+                .andExpect(status().isUnauthorized());
+        verifyNoInteractions(scannerService);
+
+        UUID organizer = UUID.randomUUID();
+        when(scannerService.sellerAccess(account, EVENT)).thenReturn(new SellerAccessDTO(true, SCANNER, organizer,
+                "Tendai Moyo", 200, new BigDecimal("5.00")));
+        mvc.perform(get("/events/internal/seller-access").header("X-Internal-Token", INTERNAL_TOKEN)
+                        .param("accountUserUuid", account.toString()).param("eventId", EVENT.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("200 OK"))
+                .andExpect(jsonPath("$.message").value("Seller access"))
+                .andExpect(jsonPath("$.data.allowed").value(true))
+                .andExpect(jsonPath("$.data.agentId").value(SCANNER.toString()))
+                .andExpect(jsonPath("$.data.organizerUuid").value(organizer.toString()))
+                .andExpect(jsonPath("$.data.ticketCap").value(200))
+                .andExpect(jsonPath("$.data.commissionPercent").value(5.00));
+    }
+
+    @Test
+    void sellerAccess_aMissingOrUnreadableId_isADenial_notA400() throws Exception {
+        when(scannerService.sellerAccess(any(), any())).thenReturn(SellerAccessDTO.denied());
+
+        mvc.perform(get("/events/internal/seller-access").header("X-Internal-Token", INTERNAL_TOKEN)
+                        .param("accountUserUuid", "not-a-uuid").param("eventId", EVENT.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.allowed").value(false))
+                .andExpect(jsonPath("$.data.agentId").isEmpty())
+                .andExpect(jsonPath("$.data.commissionPercent").isEmpty());
+        verify(scannerService).sellerAccess(isNull(), eq(EVENT));
+
+        mvc.perform(get("/events/internal/seller-access").header("X-Internal-Token", INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.allowed").value(false));
+    }
+
+    @Test
+    void sellerAccess_doesNotTakeAUserSession() throws Exception {
+        mvc.perform(get("/events/internal/seller-access")
+                        .param("accountUserUuid", UUID.randomUUID().toString()).param("eventId", EVENT.toString())
+                        .header("Authorization", "Bearer " + staffToken("SUPER_ADMIN", UUID.randomUUID(), null)))
+                .andExpect(status().isUnauthorized());
+        verifyNoInteractions(scannerService);
+    }
+
+    @Test
+    void roles_isTheOrganizersOnly_andBothFieldsAreRequired() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        String body = "{\"canScan\":true,\"canSell\":true}";
+        mvc.perform(put("/event-organizer/scanners/{s}/roles", SCANNER).contentType(MediaType.APPLICATION_JSON)
+                        .content(body).header("Authorization", "Bearer " + staffToken("SUPER_ADMIN", UUID.randomUUID(), null)))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/event-organizer/scanners/{s}/roles", SCANNER).contentType(MediaType.APPLICATION_JSON)
+                        .content(body).header("Authorization", "Bearer " + portalAgentToken(UUID.randomUUID())))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/event-organizer/scanners/{s}/roles", SCANNER).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"canScan\":true}")
+                        .header("Authorization", "Bearer " + staffToken("EVENT_ORGANIZER", organizer, organizer)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.canSell").value("canSell is required"));
+        verifyNoInteractions(scannerService);
+
+        when(scannerService.setRoles(organizer, "event_organizer@example.com", SCANNER, true, true))
+                .thenReturn(scanner(organizer));
+        mvc.perform(put("/event-organizer/scanners/{s}/roles", SCANNER).contentType(MediaType.APPLICATION_JSON)
+                        .content(body)
+                        .header("Authorization", "Bearer " + staffToken("EVENT_ORGANIZER", organizer, organizer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Roles updated"))
+                .andExpect(jsonPath("$.data.canScan").value(true))
+                .andExpect(jsonPath("$.data.salesEvents").isArray());
+    }
+
+    @Test
+    void salesEvent_terms_areValidated_beforeTheService_andNoBodyMeansDefaults() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        String auth = "Bearer " + staffToken("EVENT_ORGANIZER", organizer, organizer);
+
+        mvc.perform(put("/event-organizer/scanners/{s}/sales-events/{e}", SCANNER, EVENT)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"ticketCap\":0}")
+                        .header("Authorization", auth))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.ticketCap").value("Ticket cap must be at least 1"));
+        mvc.perform(put("/event-organizer/scanners/{s}/sales-events/{e}", SCANNER, EVENT)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"commissionPercent\":5.125}")
+                        .header("Authorization", auth))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.commissionPercent").value("Commission can have at most 2 decimals"));
+        mvc.perform(put("/event-organizer/scanners/{s}/sales-events/{e}", SCANNER, EVENT)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"commissionPercent\":100.5}")
+                        .header("Authorization", auth))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.commissionPercent").value("Commission must be between 0 and 100"));
+        verifyNoInteractions(scannerService);
+
+        when(scannerService.assignSalesEvent(eq(organizer), any(), eq(SCANNER), eq(EVENT), any(), any()))
+                .thenReturn(scanner(organizer));
+        mvc.perform(put("/event-organizer/scanners/{s}/sales-events/{e}", SCANNER, EVENT)
+                        .header("Authorization", auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Sales event assigned"));
+        verify(scannerService).assignSalesEvent(organizer, "event_organizer@example.com", SCANNER, EVENT, null, null);
+
+        mvc.perform(put("/event-organizer/scanners/{s}/sales-events/{e}", SCANNER, EVENT)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"ticketCap\":200,\"commissionPercent\":5.00}")
+                        .header("Authorization", auth))
+                .andExpect(status().isOk());
+        verify(scannerService).assignSalesEvent(organizer, "event_organizer@example.com", SCANNER, EVENT, 200,
+                new BigDecimal("5.00"));
+    }
+
+    @Test
+    void salesEvent_writes_areTheOrganizersOnly_andRefusalsRenderTheirCode() throws Exception {
+        mvc.perform(put("/event-organizer/scanners/{s}/sales-events/{e}", SCANNER, EVENT)
+                        .header("Authorization", "Bearer " + staffToken("PRODUCT_MANAGER", UUID.randomUUID(), null)))
+                .andExpect(status().isForbidden());
+        mvc.perform(delete("/event-organizer/scanners/{s}/sales-events/{e}", SCANNER, EVENT)
+                        .header("Authorization", "Bearer " + customerToken(UUID.randomUUID(), "+263771234567")))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(scannerService);
+
+        UUID organizer = UUID.randomUUID();
+        when(scannerService.assignSalesEvent(eq(organizer), any(), eq(SCANNER), eq(EVENT), any(), any()))
+                .thenThrow(new ApiProblemException(HttpStatus.CONFLICT, ScannerService.NOT_A_SALES_AGENT,
+                        "This person doesn't sell tickets for you. Give them the Sell role first."));
+        mvc.perform(put("/event-organizer/scanners/{s}/sales-events/{e}", SCANNER, EVENT)
+                        .header("Authorization", "Bearer " + staffToken("EVENT_ORGANIZER", organizer, organizer)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.data.errorCode").value("not_a_sales_agent"));
+
+        when(scannerService.unassignSalesEvent(organizer, "event_organizer@example.com", SCANNER, EVENT))
+                .thenReturn(scanner(organizer));
+        mvc.perform(delete("/event-organizer/scanners/{s}/sales-events/{e}", SCANNER, EVENT)
+                        .header("Authorization", "Bearer " + staffToken("EVENT_ORGANIZER", organizer, organizer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Sales event unassigned"));
+    }
+
+    @Test
+    void portalAccess_isTheOrganizersOnly_andPassesUserServicesRefusalThrough() throws Exception {
+        String body = "{\"email\":\"tendai.moyo@gmail.com\"}";
+        mvc.perform(put("/event-organizer/scanners/{s}/portal-access", SCANNER).contentType(MediaType.APPLICATION_JSON)
+                        .content(body).header("Authorization", "Bearer " + staffToken("SUPER_ADMIN", UUID.randomUUID(), null)))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(scannerService);
+
+        UUID organizer = UUID.randomUUID();
+        String auth = "Bearer " + staffToken("EVENT_ORGANIZER", organizer, organizer);
+        when(scannerService.grantPortalAccess(organizer, "event_organizer@example.com", SCANNER,
+                "tendai.moyo@gmail.com")).thenThrow(new ApiProblemException(HttpStatus.BAD_REQUEST,
+                "email_domain_reserved",
+                "InnBucks staff addresses can't be used here. Your administrator will invite you.",
+                java.util.Map.of("field", "email")));
+        mvc.perform(put("/event-organizer/scanners/{s}/portal-access", SCANNER).contentType(MediaType.APPLICATION_JSON)
+                        .content(body).header("Authorization", auth))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.errorCode").value("email_domain_reserved"))
+                .andExpect(jsonPath("$.data.field").value("email"));
+
+        Mockito.reset(scannerService);
+        when(scannerService.grantPortalAccess(any(), any(), any(), any()))
+                .thenThrow(new ApiProblemException(HttpStatus.SERVICE_UNAVAILABLE,
+                        ScannerService.PORTAL_INVITE_UNAVAILABLE,
+                        "We couldn't send the portal invite just now. Please try again."));
+        mvc.perform(put("/event-organizer/scanners/{s}/portal-access", SCANNER).contentType(MediaType.APPLICATION_JSON)
+                        .content(body).header("Authorization", auth))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("503 SERVICE_UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.errorCode").value("portal_invite_unavailable"));
+
+        when(scannerService.revokePortalAccess(organizer, "event_organizer@example.com", SCANNER))
+                .thenReturn(scanner(organizer));
+        mvc.perform(delete("/event-organizer/scanners/{s}/portal-access", SCANNER).header("Authorization", auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Portal access removed"))
+                .andExpect(jsonPath("$.data.portalEmail").isEmpty());
     }
 }

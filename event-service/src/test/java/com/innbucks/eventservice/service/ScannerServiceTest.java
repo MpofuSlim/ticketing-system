@@ -1,14 +1,18 @@
 package com.innbucks.eventservice.service;
 
 import com.innbucks.eventservice.client.OrganizerGateway;
+import com.innbucks.eventservice.client.SalesAgentInviteGateway;
 import com.innbucks.eventservice.client.ScannerInviteGateway;
 import com.innbucks.eventservice.dto.OrganizerDTO;
 import com.innbucks.eventservice.dto.scanner.*;
 import com.innbucks.eventservice.entity.Event;
+import com.innbucks.eventservice.entity.EventSalesAssignment;
 import com.innbucks.eventservice.entity.EventScanner;
 import com.innbucks.eventservice.entity.EventScannerAssignment;
 import com.innbucks.eventservice.exception.ApiProblemException;
+import com.innbucks.eventservice.exception.FieldErrorsException;
 import com.innbucks.eventservice.repository.EventRepository;
+import com.innbucks.eventservice.repository.EventSalesAssignmentRepository;
 import com.innbucks.eventservice.repository.EventScannerAssignmentRepository;
 import com.innbucks.eventservice.repository.EventScannerRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -41,9 +46,11 @@ class ScannerServiceTest {
 
     private EventScannerRepository scanners;
     private EventScannerAssignmentRepository assignments;
+    private EventSalesAssignmentRepository sales;
     private EventRepository events;
     private OrganizerGateway organizerGateway;
     private ScannerInviteGateway inviteGateway;
+    private SalesAgentInviteGateway portalGateway;
     private ScannerService service;
 
     @BeforeEach
@@ -52,13 +59,17 @@ class ScannerServiceTest {
         assignments = mock(EventScannerAssignmentRepository.class);
         events = mock(EventRepository.class);
         organizerGateway = mock(OrganizerGateway.class);
-        service = new ScannerService(scanners, assignments, events, organizerGateway);
+        sales = mock(EventSalesAssignmentRepository.class);
+        service = new ScannerService(scanners, assignments, events, organizerGateway, sales);
         inviteGateway = mock(ScannerInviteGateway.class);
         service.setScannerInviteGateway(inviteGateway);
+        portalGateway = mock(SalesAgentInviteGateway.class);
+        service.setSalesAgentInviteGateway(portalGateway);
         service.setClock(Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneOffset.UTC));
         when(organizerGateway.organizersByUserUuids(any())).thenReturn(Map.of());
         when(scanners.save(any())).thenAnswer(i -> i.getArgument(0));
         when(scanners.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+        when(sales.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 
     private static EventScanner scanner(UUID organizer, String phone) {
@@ -300,7 +311,7 @@ class ScannerServiceTest {
         order.verify(assignments).save(any(EventScannerAssignment.class));
         order.verify(scanners).claimInviteNotice(s.getScannerId(), NOW);
         order.verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, "Harare Arena Events",
-                "Peterhouse Sixth Form Ball");
+                "Peterhouse Sixth Form Ball", List.of("SCAN"));
     }
 
     @Test
@@ -346,7 +357,7 @@ class ScannerServiceTest {
 
         service.assign(ORGANIZER, "org", s.getScannerId(), e.getEventId());
 
-        verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, null, "Peterhouse Sixth Form Ball");
+        verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, null, "Peterhouse Sixth Form Ball", List.of("SCAN"));
     }
 
     @Test
@@ -366,7 +377,7 @@ class ScannerServiceTest {
         order.verify(scanners).claimInviteNotice(s.getScannerId(), NOW);
         order.verify(tm).commit(any());
         order.verify(organizerGateway).organizersByUserUuids(List.of(ORGANIZER));
-        order.verify(inviteGateway).sendInvite(eq(s.getScannerId()), eq(PHONE), any(), any());
+        order.verify(inviteGateway).sendInvite(eq(s.getScannerId()), eq(PHONE), any(), any(), any());
     }
 
     @Test
@@ -407,7 +418,7 @@ class ScannerServiceTest {
         InOrder order = inOrder(scanners, inviteGateway);
         order.verify(scanners).save(s);
         order.verify(scanners).claimInviteNotice(s.getScannerId(), NOW);
-        order.verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, null, "Peterhouse Sixth Form Ball");
+        order.verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, null, "Peterhouse Sixth Form Ball", List.of("SCAN"));
     }
 
     @Test
@@ -434,7 +445,7 @@ class ScannerServiceTest {
 
         service.enable(ORGANIZER, "org", s.getScannerId());
 
-        verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, null, "Peterhouse Sixth Form Ball");
+        verify(inviteGateway).sendInvite(s.getScannerId(), PHONE, null, "Peterhouse Sixth Form Ball", List.of("SCAN"));
     }
 
     @Test

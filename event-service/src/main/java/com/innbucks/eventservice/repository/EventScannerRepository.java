@@ -35,10 +35,32 @@ public interface EventScannerRepository extends JpaRepository<EventScanner, UUID
     @Query("select s from EventScanner s where s.phoneNumber = :phone order by s.scannerId")
     List<EventScanner> lockAllByPhoneNumber(@Param("phone") String phoneNumber);
 
-    /** Teams this account accepted and still belongs to (the gate list, the scan check). */
+    /**
+     * One of this organizer's rows, locked FOR UPDATE (V21): the sales-event
+     * upsert reads then inserts or updates, so two at once must queue.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select s from EventScanner s where s.scannerId = :scannerId and s.organizerUuid = :organizer")
+    Optional<EventScanner> lockByScannerIdAndOrganizerUuid(@Param("scannerId") UUID scannerId,
+                                                           @Param("organizer") UUID organizerUuid);
+
+    /**
+     * Teams this account accepted and still belongs to, whatever they may do
+     * (the gate list and the scan check then keep the rows that scan).
+     */
     @Query("select s from EventScanner s where s.accountUserUuid = :account "
             + "and s.acceptedAt is not null and s.declinedAt is null and s.disabledAt is null")
     List<EventScanner> findActiveForAccount(@Param("account") UUID accountUserUuid);
+
+    /**
+     * Teams this account accepted, still belongs to, and sells for (V21): the
+     * agent's selling list and booking-service's seller check. Id order, so a
+     * caller that takes the first match is deterministic.
+     */
+    @Query("select s from EventScanner s where s.accountUserUuid = :account "
+            + "and s.acceptedAt is not null and s.declinedAt is null and s.disabledAt is null "
+            + "and s.canSell = true order by s.scannerId")
+    List<EventScanner> findActiveSellersForAccount(@Param("account") UUID accountUserUuid);
 
     /** Invites waiting on this number: not accepted, declined or switched off. */
     @Query("select s from EventScanner s where s.phoneNumber = :phone "

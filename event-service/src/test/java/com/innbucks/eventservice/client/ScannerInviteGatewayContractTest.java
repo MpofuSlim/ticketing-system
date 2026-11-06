@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.client.RestTemplate;
 
 import java.net.ServerSocket;
+import java.util.List;
 import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
@@ -61,7 +62,7 @@ class ScannerInviteGatewayContractTest {
                 .withHeader("Content-Type", "application/json")
                 .withBody("{\"code\":\"202 ACCEPTED\",\"message\":\"Invite message queued\",\"data\":null}")));
 
-        gateway.sendInvite(SCANNER, "+263771234567", "Harare Arena Events", "Jazz on the Lawn");
+        gateway.sendInvite(SCANNER, "+263771234567", "Harare Arena Events", "Jazz on the Lawn", List.of("SCAN"));
 
         wireMock.verify(1, postRequestedFor(urlEqualTo(PATH))
                 .withHeader("X-Internal-Token", equalTo("test-token"))
@@ -70,8 +71,29 @@ class ScannerInviteGatewayContractTest {
                 .withRequestBody(matchingJsonPath("$.organizerName", equalTo("Harare Arena Events")))
                 .withRequestBody(matchingJsonPath("$.eventTitle", equalTo("Jazz on the Lawn")))
                 .withRequestBody(matchingJsonPath("$.scannerId", equalTo(SCANNER.toString())))
+                .withRequestBody(matchingJsonPath("$.roles.length()", equalTo("1")))
+                .withRequestBody(matchingJsonPath("$.roles[0]", equalTo("SCAN")))
                 // The wording is user-service's, never sent from here.
                 .withRequestBody(notContaining("message")));
+    }
+
+    @Test
+    @DisplayName("V21: a sales agent's invite says SELL, and a member who does both says both, in order")
+    void roles_rideTheBody_asTheRowHasThem() {
+        wireMock.stubFor(post(urlEqualTo(PATH)).willReturn(aResponse().withStatus(202)));
+
+        gateway.sendInvite(SCANNER, "+263771234567", "Harare Arena Events", "Jazz on the Lawn", List.of("SELL"));
+        wireMock.verify(1, postRequestedFor(urlEqualTo(PATH))
+                .withRequestBody(matchingJsonPath("$.roles.length()", equalTo("1")))
+                .withRequestBody(matchingJsonPath("$.roles[0]", equalTo("SELL"))));
+
+        wireMock.resetRequests();
+        gateway.sendInvite(SCANNER, "+263771234567", "Harare Arena Events", "Jazz on the Lawn",
+                List.of("SCAN", "SELL"));
+        wireMock.verify(1, postRequestedFor(urlEqualTo(PATH))
+                .withRequestBody(matchingJsonPath("$.roles.length()", equalTo("2")))
+                .withRequestBody(matchingJsonPath("$.roles[0]", equalTo("SCAN")))
+                .withRequestBody(matchingJsonPath("$.roles[1]", equalTo("SELL"))));
     }
 
     @Test
@@ -79,18 +101,20 @@ class ScannerInviteGatewayContractTest {
     void blanks_areLeftOut() {
         wireMock.stubFor(post(urlEqualTo(PATH)).willReturn(aResponse().withStatus(202)));
 
-        gateway.sendInvite(SCANNER, "+263771234567", null, " ");
+        gateway.sendInvite(SCANNER, "+263771234567", null, " ", null);
 
         wireMock.verify(postRequestedFor(urlEqualTo(PATH))
                 .withRequestBody(notContaining("organizerName"))
-                .withRequestBody(notContaining("eventTitle")));
+                .withRequestBody(notContaining("eventTitle"))
+                // No roles = user-service's default, SCAN: today's message.
+                .withRequestBody(notContaining("roles")));
     }
 
     @Test
     @DisplayName("guard rail: no number makes no call")
     void guardRail_noNetworkCall() {
-        gateway.sendInvite(SCANNER, null, "Harare Arena Events", "Jazz on the Lawn");
-        gateway.sendInvite(SCANNER, " ", "Harare Arena Events", "Jazz on the Lawn");
+        gateway.sendInvite(SCANNER, null, "Harare Arena Events", "Jazz on the Lawn", List.of("SCAN"));
+        gateway.sendInvite(SCANNER, " ", "Harare Arena Events", "Jazz on the Lawn", List.of("SELL"));
 
         wireMock.verify(0, postRequestedFor(urlEqualTo(PATH)));
     }
@@ -100,7 +124,8 @@ class ScannerInviteGatewayContractTest {
     void refusals_swallowed() {
         for (int status : new int[] {400, 401, 503}) {
             wireMock.stubFor(post(urlEqualTo(PATH)).willReturn(aResponse().withStatus(status)));
-            assertDoesNotThrow(() -> gateway.sendInvite(SCANNER, "+263771234567", "Harare Arena Events", null));
+            assertDoesNotThrow(() -> gateway.sendInvite(SCANNER, "+263771234567", "Harare Arena Events", null,
+                    List.of("SCAN")));
         }
     }
 
@@ -114,6 +139,7 @@ class ScannerInviteGatewayContractTest {
         ScannerInviteGateway dead = new ScannerInviteGateway(
                 restTemplate(), "http://localhost:" + closedPort, "test-token");
 
-        assertDoesNotThrow(() -> dead.sendInvite(SCANNER, "+263771234567", "Harare Arena Events", null));
+        assertDoesNotThrow(() -> dead.sendInvite(SCANNER, "+263771234567", "Harare Arena Events", null,
+                List.of("SCAN")));
     }
 }

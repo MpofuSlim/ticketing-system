@@ -3,6 +3,7 @@ package com.innbucks.eventservice.repository;
 import com.innbucks.eventservice.client.ScannerInviteGateway;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.EventCategory;
+import com.innbucks.eventservice.entity.EventSalesAssignment;
 import com.innbucks.eventservice.entity.EventScanner;
 import com.innbucks.eventservice.entity.EventScannerAssignment;
 import com.innbucks.eventservice.exception.ApiProblemException;
@@ -31,7 +32,9 @@ import static org.mockito.Mockito.*;
 
 /**
  * The scanner schedule rule against real Postgres (V14): the overlap SQL, the
- * constraints, and two organizers assigning the same number at once.
+ * constraints, and two organizers assigning the same number at once. Since
+ * V21 also the sales-agent columns and table, the sellers query and the
+ * seller check booking-service makes.
  *
  * <p>Deliberately not {@code @Transactional}: the race needs two real
  * transactions, so every test cleans up after the tables it writes.
@@ -61,6 +64,8 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
     @BeforeEach
     @AfterEach
     void clean() {
+        // V21: selling assignments reference events too.
+        salesAssignmentRepository.deleteAll();
         assignmentRepository.deleteAll();
         scannerRepository.deleteAll();
         // V16's tables reference events: clear them first, or another IT's
@@ -286,7 +291,7 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
         doAnswer(inv -> {
             sentInsideATransaction.add(TransactionSynchronizationManager.isActualTransactionActive());
             return null;
-        }).when(inviteGateway).sendInvite(any(), any(), any(), any());
+        }).when(inviteGateway).sendInvite(any(), any(), any(), any(), any());
 
         for (int round = 0; round < 10; round++) {
             assignmentRepository.deleteAll();
@@ -306,7 +311,7 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
             } finally {
                 pool.shutdownNow();
             }
-            verify(inviteGateway, times(1)).sendInvite(eq(s.getScannerId()), eq(PHONE), any(), any());
+            verify(inviteGateway, times(1)).sendInvite(eq(s.getScannerId()), eq(PHONE), any(), any(), any());
             assertThat(scannerRepository.findById(s.getScannerId()).orElseThrow().getInviteNotifiedAt())
                     .as("round " + round).isNotNull();
         }
@@ -321,12 +326,12 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
 
         scannerService.assign(organizerA, "it", s.getScannerId(), jazz.getEventId());
         scannerService.assign(organizerA, "it", s.getScannerId(), ball.getEventId());
-        verify(inviteGateway, times(1)).sendInvite(s.getScannerId(), PHONE, null, jazz.getTitle());
+        verify(inviteGateway, times(1)).sendInvite(s.getScannerId(), PHONE, null, jazz.getTitle(), List.of("SCAN"));
 
         scannerService.decline(null, PHONE, s.getScannerId());
         scannerService.reinvite(organizerA, "it", s.getScannerId());
 
-        verify(inviteGateway, times(2)).sendInvite(s.getScannerId(), PHONE, null, jazz.getTitle());
+        verify(inviteGateway, times(2)).sendInvite(s.getScannerId(), PHONE, null, jazz.getTitle(), List.of("SCAN"));
         assertThat(scannerRepository.findById(s.getScannerId()).orElseThrow().getInviteNotifiedAt()).isNotNull();
     }
 
@@ -342,5 +347,213 @@ class EventScannerPostgresIT extends PostgresIntegrationTestBase {
 
         verifyNoInteractions(inviteGateway);
         assertThat(scannerRepository.findById(s.getScannerId()).orElseThrow().getInviteNotifiedAt()).isNull();
+    }
+
+    // ------------------------------------------------------------- sales agents (V21)
+
+    @Autowired EventSalesAssignmentRepository salesAssignmentRepository;
+    @Autowired jakarta.persistence.EntityManager entityManager;
+
+    private <T> T inTransaction(java.util.function.Supplier<T> work) {
+        return new org.springframework.transaction.support.TransactionTemplate(transactionManager)
+                .execute(st -> work.get());
+    }
+
+    private EventScanner agent(UUID organizer, String phone) {
+        return scannerRepository.saveAndFlush(EventScanner.builder()
+                .scannerId(UUID.randomUUID())
+                .organizerUuid(organizer)
+                .phoneNumber(phone)
+                .firstName("Tendai")
+                .lastName("Moyo")
+                .canScan(false)
+                .canSell(true)
+                .build());
+    }
+
+    private EventScanner acceptedBy(EventScanner s, UUID account) {
+        s.setAcceptedAt(now);
+        s.setAccountUserUuid(account);
+        return scannerRepository.saveAndFlush(s);
+    }
+
+    private EventSalesAssignment sell(EventScanner s, Event e, Integer cap, String commission) {
+        return salesAssignmentRepository.saveAndFlush(EventSalesAssignment.builder()
+                .assignmentId(UUID.randomUUID())
+                .scannerId(s.getScannerId())
+                .eventId(e.getEventId())
+                .ticketCap(cap)
+                .commissionPercent(new java.math.BigDecimal(commission))
+                .build());
+    }
+
+    @Test
+    void v21_aRowWrittenWithoutTheNewColumns_isAScanOnlyMember_withNoPortalAccess() {
+        // What every row that predates V21 looks like: the old INSERT names none of the new columns.
+        UUID id = UUID.randomUUID();
+        inTransaction(() -> entityManager.createNativeQuery("""
+                        INSERT INTO event_scanners (scanner_id, organizer_uuid, phone_number, first_name, last_name,
+                                                    created_at, updated_at, version)
+                        VALUES (?1, ?2, ?3, 'Tendai', 'Moyo', now(), now(), 0)""")
+                .setParameter(1, id).setParameter(2, organizerA).setParameter(3, PHONE)
+                .executeUpdate());
+
+        EventScanner old = scannerRepository.findById(id).orElseThrow();
+        assertThat(old.isCanScan()).isTrue();
+        assertThat(old.isCanSell()).isFalse();
+        assertThat(old.getPortalEmail()).isNull();
+        assertThat(old.getPortalInvitedAt()).isNull();
+    }
+
+    @Test
+    void v21_aRowWithNoRole_isRefusedByTheDatabase() {
+        EventScanner s = EventScanner.builder()
+                .scannerId(UUID.randomUUID()).organizerUuid(organizerA).phoneNumber(PHONE)
+                .firstName("Tendai").lastName("Moyo").canScan(false).canSell(false).build();
+        assertThatThrownBy(() -> scannerRepository.saveAndFlush(s))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void v21_salesAssignments_areOnePerEvent_capAtLeastOne_commission0To100_andGoWithTheirRow() {
+        EventScanner s = agent(organizerA, PHONE);
+        Event e = event(organizerA, now.plusDays(1).withHour(10), now.plusDays(1).withHour(12));
+        EventSalesAssignment terms = sell(s, e, 200, "5.00");
+        assertThat(salesAssignmentRepository.findById(terms.getAssignmentId()).orElseThrow().getCommissionPercent())
+                .isEqualByComparingTo("5.00");
+
+        assertThatThrownBy(() -> sell(s, e, null, "0")).as("one per (row, event)")
+                .isInstanceOf(DataIntegrityViolationException.class);
+        Event other = event(organizerA, now.plusDays(2).withHour(10), now.plusDays(2).withHour(12));
+        assertThatThrownBy(() -> sell(s, other, 0, "0")).as("cap 0")
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> sell(s, other, null, "100.01")).as("over 100%")
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> sell(s, other, null, "-1")).as("negative")
+                .isInstanceOf(DataIntegrityViolationException.class);
+
+        // The row goes, its selling assignments go with it.
+        scannerRepository.deleteById(s.getScannerId());
+        scannerRepository.flush();
+        assertThat(salesAssignmentRepository.count()).isZero();
+    }
+
+    @Test
+    void v21_anotherOrganizersSellOnlyRow_doesNotCountForTheScanningSchedule() {
+        EventScanner atA = scanner(organizerA, PHONE);
+        EventScanner sellerAtB = agent(organizerB, PHONE);
+        Event bEvent = event(organizerB, now.plusDays(1).withHour(18), now.plusDays(1).withHour(23));
+        // A scan assignment B made while the row still scanned, kept after Scan was taken away.
+        assign(sellerAtB, bEvent);
+        Event overlapping = event(organizerA, now.plusDays(1).withHour(20), now.plusDays(1).withHour(22));
+
+        assertThat(clashes(atA, overlapping)).as("a sell-only row's kept scan events block nothing").isZero();
+
+        sellerAtB.setCanScan(true);
+        scannerRepository.saveAndFlush(sellerAtB);
+        assertThat(clashes(atA, overlapping)).as("once it scans again, they count").isEqualTo(1);
+    }
+
+    @Test
+    void v21_givingScanBack_whenItsEventNowOverlaps_isRefused() {
+        EventScanner sellerAtA = agent(organizerA, PHONE);
+        assign(sellerAtA, event(organizerA, now.plusDays(1).withHour(18), now.plusDays(1).withHour(23)));
+        EventScanner atB = scanner(organizerB, PHONE);
+        assign(atB, event(organizerB, now.plusDays(1).withHour(20), now.plusDays(1).withHour(22)));
+
+        assertThatThrownBy(() -> scannerService.setRoles(organizerA, "it", sellerAtA.getScannerId(), true, true))
+                .isInstanceOfSatisfying(ApiProblemException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ScannerService.SCHEDULE_CLASH));
+        assertThat(scannerRepository.findById(sellerAtA.getScannerId()).orElseThrow().isCanScan()).isFalse();
+    }
+
+    @Test
+    void v21_theSellersQuery_returnsOnlyThisAccountsAcceptedSwitchedOnSellingRows() {
+        UUID account = UUID.randomUUID();
+        EventScanner selling = acceptedBy(agent(organizerA, PHONE), account);
+        acceptedBy(scanner(organizerB, PHONE), account);                      // scans only
+        EventScanner off = acceptedBy(agent(UUID.randomUUID(), PHONE), account);
+        off.setDisabledAt(now);
+        scannerRepository.saveAndFlush(off);
+        agent(UUID.randomUUID(), PHONE);                                      // invited, not accepted
+        acceptedBy(agent(UUID.randomUUID(), "+263779999999"), UUID.randomUUID()); // someone else
+
+        assertThat(scannerRepository.findActiveSellersForAccount(account))
+                .extracting(EventScanner::getScannerId).containsExactly(selling.getScannerId());
+    }
+
+    @Test
+    void v21_sellerAccess_againstPostgres_isLive_onEveryRemoval() {
+        UUID account = UUID.randomUUID();
+        EventScanner s = acceptedBy(agent(organizerA, PHONE), account);
+        Event e = event(organizerA, now.plusDays(1).withHour(10), now.plusDays(1).withHour(12));
+
+        assertThat(scannerService.sellerAccess(account, e.getEventId()).allowed()).as("not assigned yet").isFalse();
+
+        scannerService.assignSalesEvent(organizerA, "it", s.getScannerId(), e.getEventId(), 200,
+                new java.math.BigDecimal("5"));
+        var access = scannerService.sellerAccess(account, e.getEventId());
+        assertThat(access.allowed()).isTrue();
+        assertThat(access.agentId()).isEqualTo(s.getScannerId());
+        assertThat(access.organizerUuid()).isEqualTo(organizerA);
+        assertThat(access.ticketCap()).isEqualTo(200);
+        assertThat(access.commissionPercent()).isEqualByComparingTo("5.00");
+        assertThat(scannerService.sellerAccess(UUID.randomUUID(), e.getEventId()).allowed())
+                .as("another account").isFalse();
+
+        scannerService.setRoles(organizerA, "it", s.getScannerId(), true, false);
+        assertThat(scannerService.sellerAccess(account, e.getEventId()).allowed()).as("Sell taken away").isFalse();
+        scannerService.setRoles(organizerA, "it", s.getScannerId(), true, true);
+        assertThat(scannerService.sellerAccess(account, e.getEventId()).allowed()).as("Sell back").isTrue();
+
+        scannerService.disable(organizerA, "it", s.getScannerId());
+        assertThat(scannerService.sellerAccess(account, e.getEventId()).allowed()).as("switched off").isFalse();
+        scannerService.enable(organizerA, "it", s.getScannerId());
+
+        scannerService.unassignSalesEvent(organizerA, "it", s.getScannerId(), e.getEventId());
+        assertThat(scannerService.sellerAccess(account, e.getEventId()).allowed()).as("unassigned").isFalse();
+
+        scannerService.assignSalesEvent(organizerA, "it", s.getScannerId(), e.getEventId(), null, null);
+        e.setDeleted(true);
+        eventRepository.saveAndFlush(e);
+        assertThat(scannerService.sellerAccess(account, e.getEventId()).allowed()).as("event deleted").isFalse();
+    }
+
+    @Test
+    void v21_assignSalesEvent_upserts_andTheFirstAssignmentMessagesOnce_asASalesAgent() {
+        EventScanner s = agent(organizerA, PHONE);
+        Event jazz = event(organizerA, now.plusDays(1).withHour(10), now.plusDays(1).withHour(12));
+
+        scannerService.assignSalesEvent(organizerA, "it", s.getScannerId(), jazz.getEventId(), 200, null);
+        scannerService.assignSalesEvent(organizerA, "it", s.getScannerId(), jazz.getEventId(), null,
+                new java.math.BigDecimal("2.5"));
+
+        assertThat(salesAssignmentRepository.findAll()).singleElement().satisfies(t -> {
+            assertThat(t.getTicketCap()).isNull();
+            assertThat(t.getCommissionPercent()).isEqualByComparingTo("2.50");
+        });
+        verify(inviteGateway, times(1)).sendInvite(s.getScannerId(), PHONE, null, jazz.getTitle(), List.of("SELL"));
+
+        var listed = scannerService.get(organizerA, s.getScannerId());
+        assertThat(listed.events()).isEmpty();
+        assertThat(listed.salesEvents()).singleElement()
+                .satisfies(v -> assertThat(v.eventId()).isEqualTo(jazz.getEventId()));
+    }
+
+    @Test
+    void v21_theAgentsList_comesFromTheAccount_soonestFirst() {
+        UUID account = UUID.randomUUID();
+        EventScanner atA = acceptedBy(agent(organizerA, PHONE), account);
+        EventScanner atB = acceptedBy(agent(organizerB, PHONE), account);
+        Event later = event(organizerA, now.plusDays(3).withHour(10), now.plusDays(3).withHour(12));
+        Event sooner = event(organizerB, now.plusDays(1).withHour(10), now.plusDays(1).withHour(12));
+        Event ended = event(organizerA, now.minusDays(1).withHour(10), now.minusDays(1).withHour(12));
+        sell(atA, later, 50, "5");
+        sell(atB, sooner, null, "0");
+        sell(atA, ended, null, "0");
+
+        assertThat(scannerService.sales(account).events())
+                .extracting(e -> e.eventId())
+                .containsExactly(sooner.getEventId(), later.getEventId());
     }
 }
