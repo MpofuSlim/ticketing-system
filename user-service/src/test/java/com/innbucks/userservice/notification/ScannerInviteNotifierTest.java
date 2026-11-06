@@ -8,8 +8,13 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
+import static com.innbucks.userservice.notification.ScannerInviteNotifier.InviteRole.SCAN;
+import static com.innbucks.userservice.notification.ScannerInviteNotifier.InviteRole.SELL;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -56,15 +61,64 @@ class ScannerInviteNotifierTest {
     }
 
     @Test
+    void aSalesAgent_isToldToSellThere() {
+        assertThat(ScannerInviteNotifier.message("Harare Arena Events", "Jazz on the Lawn", EnumSet.of(SELL)))
+                .isEqualTo("Harare Arena Events added you as a sales agent for Jazz on the Lawn. Open the "
+                        + "InnBucks app to accept, then sell tickets there. If you don't know this organiser, "
+                        + "ignore this message.");
+    }
+
+    @Test
+    void bothRoles_namesBoth_andOnlyAsksToAccept() {
+        assertThat(ScannerInviteNotifier.message("Harare Arena Events", "Jazz on the Lawn", EnumSet.of(SCAN, SELL)))
+                .isEqualTo("Harare Arena Events added you as gate staff and a sales agent for Jazz on the Lawn. "
+                        + "Open the InnBucks app to accept. If you don't know this organiser, ignore this message.");
+    }
+
+    @Test
+    void scanOnly_orNoRoles_isTodaysMessage() {
+        String today = ScannerInviteNotifier.message("Harare Arena Events", "Jazz on the Lawn");
+        assertThat(ScannerInviteNotifier.message("Harare Arena Events", "Jazz on the Lawn", EnumSet.of(SCAN)))
+                .isEqualTo(today);
+        assertThat(ScannerInviteNotifier.message("Harare Arena Events", "Jazz on the Lawn", null)).isEqualTo(today);
+        assertThat(ScannerInviteNotifier.message("Harare Arena Events", "Jazz on the Lawn",
+                EnumSet.noneOf(ScannerInviteNotifier.InviteRole.class))).isEqualTo(today);
+    }
+
+    @Test
+    void roles_areParsedLeniently_absentOrUnknownMeansScan() {
+        assertThat(ScannerInviteNotifier.InviteRole.parse(null)).containsExactly(SCAN);
+        assertThat(ScannerInviteNotifier.InviteRole.parse(List.of())).containsExactly(SCAN);
+        assertThat(ScannerInviteNotifier.InviteRole.parse(List.of("USHER"))).containsExactly(SCAN);
+        assertThat(ScannerInviteNotifier.InviteRole.parse(List.of("SELL"))).containsExactly(SELL);
+        assertThat(ScannerInviteNotifier.InviteRole.parse(java.util.Arrays.asList(" sell ", null, "USHER")))
+                .containsExactly(SELL);
+        assertThat(ScannerInviteNotifier.InviteRole.parse(List.of("SELL", "SCAN"))).containsExactly(SCAN, SELL);
+    }
+
+    @Test
     void theFixedWords_surviveTheSmsGatewayUnchanged() {
         // The gateway refuses ! : / ? " * ; and the sanitizer rewrites them, so
         // a fixed sentence that round-trips unchanged is one the SMS carries as
-        // written.
-        for (String text : new String[] {
-                ScannerInviteNotifier.message("Harare Arena Events", "Jazz on the Lawn"),
-                ScannerInviteNotifier.message(null, null)}) {
-            assertThat(SmsTextSanitizer.toGsmSafe(text)).isEqualTo(text);
+        // written. Every role set, with and without the two names.
+        for (Set<ScannerInviteNotifier.InviteRole> roles : List.<Set<ScannerInviteNotifier.InviteRole>>of(
+                EnumSet.of(SCAN), EnumSet.of(SELL), EnumSet.of(SCAN, SELL))) {
+            for (String text : new String[] {
+                    ScannerInviteNotifier.message("Harare Arena Events", "Jazz on the Lawn", roles),
+                    ScannerInviteNotifier.message(null, null, roles)}) {
+                assertThat(SmsTextSanitizer.toGsmSafe(text)).as(text).isEqualTo(text);
+                assertThat(text).as("one line").doesNotContain("\n", "\r");
+            }
         }
+    }
+
+    @Test
+    void aSalesAgentInvite_goesByWhatsAppWithTheSellWording() {
+        notifier.send(PHONE, "Harare Arena Events", "Jazz on the Lawn", SCANNER, EnumSet.of(SELL));
+
+        verify(whatsApp).sendCustomNotification(PHONE,
+                ScannerInviteNotifier.message("Harare Arena Events", "Jazz on the Lawn", EnumSet.of(SELL)));
+        verifyNoInteractions(sms);
     }
 
     @Test

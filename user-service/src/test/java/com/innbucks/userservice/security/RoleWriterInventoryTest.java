@@ -99,6 +99,16 @@ class RoleWriterInventoryTest {
                         + "requireEmailNotReserved and the case-insensitive duplicate check (excluding this account), "
                         + "and refuses a staff contact phone. Adds no role: approval does.",
                 "set_email", 1);
+        writer("service/SalesAgentInviteService.java",
+                "GUARDED — sales-agent portal invite accept (V56), after the invite's phone is proven with a "
+                        + "code and the link proved the mailbox. Creates a CUSTOMER + SALES_AGENT account matched "
+                        + "by PHONE (a profiled account has no sign-in phone), or, on an existing account, adds "
+                        + "only CUSTOMER and SALES_AGENT (a business built-in: never a staff role) to one that is "
+                        + "active, approved, unprofiled and holds nothing but CUSTOMER, SALES_AGENT, "
+                        + "EVENT_ORGANIZER or MERCHANT_ADMIN. Sets an email only on an account with none, after "
+                        + "requireEmailNotReserved and the case-insensitive check against every other account; "
+                        + "REQUIRED audit.",
+                "new_user", 1, "set_email", 1, "mutate_roles", 1);
         writer("service/OtpService.java",
                 "UNREACHABLE — materializeOrRefreshLocalAccount creates a CUSTOMER matched by PHONE; see "
                         + "FederatedLoginService.",

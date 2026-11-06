@@ -181,6 +181,37 @@ public class OtpService {
     }
 
     /**
+     * The code that proves the invite's phone before a sales agent's Foundry
+     * sign-in is bound to the InnBucks account on it
+     * ({@code SalesAgentInviteService}, V56). Its own key, never the phone, for
+     * the business-registration reason: a customer OTP or a reset code can never
+     * accept an invite, and this code can never sign anyone in or add a business.
+     */
+    static final String SALES_AGENT_INVITE_KEY_PREFIX = "sales-agent-invite:";
+
+    static final String SALES_AGENT_INVITE_MESSAGE = "Your InnBucks code to set up your Foundry portal sign-in is %s. "
+            + "It expires in " + OTP_TTL.toMinutes() + " minutes. Do not share this code with anyone.";
+
+    /** Sends the sales-agent invite code to {@code canonicalPhone} (E.164). Same quota and delivery as {@link #sendOtp}. */
+    public void sendSalesAgentInviteCode(String canonicalPhone) {
+        issueAndDeliver(SALES_AGENT_INVITE_KEY_PREFIX + canonicalPhone,
+                code -> dispatchMessage(canonicalPhone, String.format(SALES_AGENT_INVITE_MESSAGE, code)));
+    }
+
+    /**
+     * Uses up the sales-agent invite code for {@code canonicalPhone}. Commits on
+     * its own (see {@link #requiresNew}), so a wrong guess counts toward the three
+     * that void the code even though the caller then refuses the accept.
+     */
+    public boolean verifySalesAgentInviteCode(String canonicalPhone, String code) {
+        if (code == null || code.isBlank()) return false;
+        String key = SALES_AGENT_INVITE_KEY_PREFIX + canonicalPhone;
+        boolean ok = Boolean.TRUE.equals(TransactionPhases.inTransaction(requiresNew, () -> consumeOtp(key, code)));
+        log.info("Sales-agent invite code verify phone={} ok={}", MsisdnMasking.mask(canonicalPhone), ok);
+        return ok;
+    }
+
+    /**
      * Send a password-reset OTP to a PHONE (SMS, WhatsApp fallback). The OTP is
      * keyed by the phone. The existing-user gate lives in PasswordResetService
      * (which resolves the user first), so this just mints + dispatches. Same

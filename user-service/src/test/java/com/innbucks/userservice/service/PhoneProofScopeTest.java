@@ -173,6 +173,28 @@ class PhoneProofScopeTest {
     }
 
     @Test
+    @DisplayName("a sales agent's app session is CUSTOMER only; their portal login carries SALES_AGENT")
+    void salesAgent_phoneProofIsCustomerOnly() {
+        // V56: the agent sells from the InnBucks app as a customer (event-service
+        // decides, live, whether they may sell). SALES_AGENT is the portal's,
+        // where it forces 2FA; it must never ride a phone proof.
+        User agent = User.builder()
+                .id(13L).userUuid(UUID.randomUUID()).phoneNumber(PHONE).email("tendai.moyo@gmail.com")
+                .roles(User.roleNames(User.Role.CUSTOMER, User.Role.SALES_AGENT))
+                .active(true).approved(true).password("x").tokenVersion(1L).build();
+        when(customerRepo.findByUserId(13L)).thenReturn(Optional.of(
+                CustomerProfile.builder().registrationTier(1).build()));
+
+        AuthResponseDTO app = authService.issuePhoneProofToken(agent, "device-1");
+        assertThat(roles(app.getToken())).containsExactly("CUSTOMER");
+        assertThat(app.getRoles()).containsExactly("CUSTOMER");
+        verify(refreshTokenService).issueNewFamily(agent, "device-1", true);
+
+        String portal = authService.issueToken(agent, "browser-1").getToken();
+        assertThat(roles(portal)).containsExactlyInAnyOrder("CUSTOMER", "SALES_AGENT");
+    }
+
+    @Test
     @DisplayName("a customer-only account is unaffected by the narrowing")
     void plainCustomer_isUnchanged() {
         User user = User.builder()

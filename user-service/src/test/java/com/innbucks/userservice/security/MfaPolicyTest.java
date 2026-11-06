@@ -50,6 +50,20 @@ class MfaPolicyTest {
         }
     }
 
+    /**
+     * A sales agent (V56) holds CUSTOMER + SALES_AGENT. SALES_AGENT grants no
+     * permission; it exists so the Foundry portal sign-in is a system user's and
+     * forces 2FA. The app's phone-proof session never reaches this policy (it is
+     * minted CUSTOMER-only; PhoneProofScopeTest).
+     */
+    @Test
+    void required_forASalesAgent_evenThoughTheyAreACustomerToo() {
+        User agent = user(false, User.Role.CUSTOMER, User.Role.SALES_AGENT);
+        assertThat(policy.required(agent, AuthChannel.WEB)).isTrue();
+        assertThat(policy.shouldChallenge(agent, AuthChannel.WEB)).isTrue();
+        assertThat(policy.required(agent, AuthChannel.USSD)).isFalse();
+    }
+
     @Test
     void required_falseForCustomers_evenWithMfaEnabled() {
         // Customers are opt-in — required() is the "must" gate, not the "may" gate.

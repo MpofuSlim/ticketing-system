@@ -311,6 +311,30 @@ class FederatedLoginServiceTest {
     }
 
     @Test
+    @DisplayName("a sales agent (CUSTOMER + SALES_AGENT, V56) signs in to the app through the scoped mint")
+    void salesAgent_signsInThroughTheScopedMint() {
+        // An agent sells from the InnBucks app with their ordinary customer
+        // session. SALES_AGENT is what forces 2FA on the portal; it must neither
+        // refuse the app sign-in nor ride the phone-proof session.
+        User agent = User.builder()
+                .id(12L).userUuid(UUID.randomUUID()).phoneNumber(PHONE).email("tendai.moyo@gmail.com")
+                .roles(User.roleNames(User.Role.CUSTOMER, User.Role.SALES_AGENT))
+                .active(true).approved(true).password("x").build();
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(agent));
+        when(profileRepository.findByUserId(12L)).thenReturn(Optional.of(
+                CustomerProfile.builder().user(agent).registrationTier(1).build()));
+
+        AuthResponseDTO response = service(true).exchange(assertion(PHONE, "j-agent", 60), "device-1", CTX);
+
+        assertThat(response.getToken()).isEqualTo("access");
+        verify(authService).issuePhoneProofToken(agent, "device-1");
+        verify(authService, never()).issueToken(any(), any());
+        // Nothing about the account changes at an app sign-in.
+        assertThat(agent.getRoles()).containsExactlyInAnyOrder("CUSTOMER", "SALES_AGENT");
+        verify(userRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
     @DisplayName("an inactive customer is refused with the same opaque 401")
     void inactiveCustomer_isRefused() {
         when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(customer(false)));

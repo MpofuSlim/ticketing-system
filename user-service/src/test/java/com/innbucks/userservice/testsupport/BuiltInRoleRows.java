@@ -21,7 +21,8 @@ import static org.mockito.Mockito.when;
 /**
  * The built-in role rows exactly as the migrations seed them (V35's grants plus
  * V43's call-center roles, V46's support-console grants and V47's marketplace/loyalty
- * support grants, less what V55 retired), for unit tests that mock {@link RoleRepository}.
+ * support grants, less what V55 retired, plus V56's grant-less SALES_AGENT), for unit
+ * tests that mock {@link RoleRepository}.
  * {@code BuiltInRoleSeedTest}'s Postgres half migrates a fresh database and
  * asserts its built-in {@code role_permissions} EQUAL {@link #GRANTS}, so this
  * copy cannot drift from the migrations unnoticed.
@@ -54,6 +55,8 @@ public final class BuiltInRoleRows {
                 "loyalty-support:read", "loyalty-support:manage", "loyalty-support:supervise",
                 "customer-messages:send"));
         g.put("FRAUD_DESK", Set.of("device-security:read", "device-security:fraud"));
+        // V56: grants nothing; selling is event-service's live team check.
+        g.put("SALES_AGENT", Set.of());
         GRANTS = java.util.Collections.unmodifiableMap(g);
     }
 

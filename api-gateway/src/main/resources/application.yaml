@@ -270,6 +270,28 @@ spring:
                     key-resolver: "#{@preAuthIpKeyResolver}"
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # Sales-agent portal invites (V56): the invite page's three public
+            # calls, POST /auth/sales-agent-invite/inspect, /phone-code and
+            # /accept. The body carries a single-use bearer token, and phone-code
+            # sends an SMS, so the per-IP cap is the brake on hammering accept
+            # and on SMS cost (the code itself also has its per-phone quota in
+            # user-service). IP-keyed (preAuthIpKeyResolver: the caller has no
+            # session) and fail-SAFE, shaped like auth-staff-invite-route, with
+            # its own keys. POST-only. MUST precede the /auth/** catch-all below.
+            - id: auth-sales-agent-invite-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/sales-agent-invite/**
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_SALES_AGENT_INVITE_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${AUTH_SALES_AGENT_INVITE_RATE_LIMIT_BURST_CAPACITY:5}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: user-auth-route
               uri: lb://user-service
               predicates:

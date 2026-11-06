@@ -175,6 +175,58 @@ class ReservedDomainAtEveryEmailWriterTest {
         verify(users, never()).save(any(User.class));
     }
 
+    /** The sales-agent invite service (V56) over this test's repositories and real eligibility. */
+    private SalesAgentInviteService salesAgentInvites(com.innbucks.userservice.repository.SalesAgentInviteRepository
+                                                              invites, OtpService otp) {
+        com.innbucks.userservice.config.StaffProvisioningCheck provisioning =
+                mock(com.innbucks.userservice.config.StaffProvisioningCheck.class);
+        when(provisioning.invitesProvisioned()).thenReturn(true);
+        com.innbucks.userservice.config.SalesAgentInviteProperties properties =
+                new com.innbucks.userservice.config.SalesAgentInviteProperties();
+        properties.afterPropertiesSet();
+        return new SalesAgentInviteService(invites, users, mock(CustomerProfileRepository.class),
+                mock(com.innbucks.userservice.repository.RefreshTokenRepository.class), eligibility, otp,
+                mock(PasswordEncoder.class), mock(TokenVersionBumper.class), mock(AuditService.class),
+                mock(ApplicationEventPublisher.class), properties, provisioning,
+                mock(com.innbucks.userservice.cells.CellAffinityChecker.class));
+    }
+
+    @Test
+    @DisplayName("sales-agent invite (V56): refused when minted, and again at accept before the duplicate check")
+    void salesAgentInvite() {
+        com.innbucks.userservice.repository.SalesAgentInviteRepository invites =
+                mock(com.innbucks.userservice.repository.SalesAgentInviteRepository.class);
+        OtpService otp = mock(OtpService.class);
+        SalesAgentInviteService service = salesAgentInvites(invites, otp);
+
+        // Minted by event-service: refused before anything is stored.
+        assertReserved(() -> service.create(new com.innbucks.userservice.dto.SalesAgentInviteDTOs.CreateRequest(
+                UUID.randomUUID().toString(), UUID.randomUUID().toString(), "Harare Arena Events",
+                "+263771234567", STAFF_EMAIL)));
+        verify(invites, never()).save(any());
+
+        // An invite stored before the domain was reserved: accept refuses it for
+        // an app account with no email, before the duplicate check and the code.
+        String token = com.innbucks.userservice.security.SalesAgentInviteTokens.generate();
+        java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
+        when(invites.findByTokenHash(com.innbucks.userservice.security.SalesAgentInviteTokens.hash(token)))
+                .thenReturn(Optional.of(com.innbucks.userservice.entity.SalesAgentInvite.builder().id(1L)
+                        .teamMemberId(UUID.randomUUID()).organizerUuid(UUID.randomUUID())
+                        .phoneNumber("+263771234567").email(STAFF_EMAIL)
+                        .createdAt(now).expiresAt(now.plusHours(1)).build()));
+        when(invites.consume(anyString(), any(), any())).thenReturn(1);
+        User app = User.builder().id(42L).userUuid(UUID.randomUUID()).phoneNumber("+263771234567")
+                .roles(User.roleNames(User.Role.CUSTOMER)).active(true).approved(true).password("x").build();
+        when(users.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(app));
+        when(users.lockById(42L)).thenReturn(Optional.of(app));
+        when(users.findById(42L)).thenReturn(Optional.of(app));
+        assertReserved(() -> service.accept(new com.innbucks.userservice.dto.SalesAgentInviteDTOs.AcceptRequest(
+                token, "482913", "Correct-Horse-7-Battery"), AuditContext.none()));
+        verify(users, never()).findAllByEmailIgnoreCase(anyString());
+        verify(otp, never()).verifySalesAgentInviteCode(anyString(), anyString());
+        assertThat(app.getEmail()).isNull();
+    }
+
     @Test
     @DisplayName("first approval of a registration at a staff address: 400, nothing approved or mailed")
     void firstApproval() throws Exception {

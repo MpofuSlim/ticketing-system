@@ -473,6 +473,15 @@ public class User {
         CALL_CENTER_SUPERVISOR,
         // An ADD-ON role, held together with an agent or supervisor role: bans,
         // fraud holds and lifting them (device-security:fraud).
-        FRAUD_DESK
+        FRAUD_DESK,
+        // Sells tickets for an organizer (V56). Grants NO permission and no
+        // authority of its own: what an agent may sell is decided live by
+        // event-service's team membership on every sale. It exists so MfaPolicy
+        // treats a Foundry-portal agent as a system user (forced 2FA), while the
+        // InnBucks app's phone-proof session stays CUSTOMER-scoped. A business
+        // built-in (StaffRoles.BUSINESS_BUILT_INS), so a PLATFORM code can never
+        // be added to it. Added only by the sales-agent invite accept
+        // (SalesAgentInviteService), always beside CUSTOMER.
+        SALES_AGENT
     }
 }

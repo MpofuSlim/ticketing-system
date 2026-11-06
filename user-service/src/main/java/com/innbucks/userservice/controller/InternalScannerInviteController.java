@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -49,15 +50,20 @@ public class InternalScannerInviteController {
         this.deploymentCountry = deploymentCountry;
     }
 
-    /** {@code organizerName}, {@code eventTitle} and {@code scannerId} are optional. */
+    /**
+     * {@code organizerName}, {@code eventTitle}, {@code scannerId} and {@code roles}
+     * are optional. {@code roles} is {@code ["SCAN"]}, {@code ["SELL"]} or both
+     * (sales agents, V56); absent means {@code ["SCAN"]}, the message before V56.
+     */
     public record ScannerInviteRequest(String phoneNumber, String organizerName, String eventTitle,
-                                       UUID scannerId) {}
+                                       UUID scannerId, List<String> roles) {}
 
     @PostMapping
-    @Operation(summary = "(S2S) Send the gate-scanner invite message to a phone",
+    @Operation(summary = "(S2S) Send the event-team invite message to a phone",
             description = "Queues one WhatsApp message (SMS if WhatsApp fails) telling the person an organizer "
-                    + "added them as gate staff and to open the InnBucks app to accept. 202 once queued; 400 "
-                    + "for a missing or invalid phone number; 401 without the internal token.")
+                    + "added them as gate staff, a sales agent or both (`roles`: SCAN / SELL, absent = SCAN) and "
+                    + "to open the InnBucks app to accept. The sentence is fixed per role set. 202 once queued; "
+                    + "400 for a missing or invalid phone number; 401 without the internal token.")
     public ResponseEntity<ApiResult<Object>> send(
             @RequestHeader(value = "X-Internal-Token", required = false) String token,
             @RequestBody(required = false) ScannerInviteRequest body,
@@ -72,7 +78,8 @@ public class InternalScannerInviteController {
                     .body(ApiResult.of(HttpStatus.BAD_REQUEST, "A valid phoneNumber is required",
                             Map.of("errorCode", "invalid_phone")));
         }
-        notifier.send(phone, body.organizerName(), body.eventTitle(), body.scannerId());
+        notifier.send(phone, body.organizerName(), body.eventTitle(), body.scannerId(),
+                ScannerInviteNotifier.InviteRole.parse(body.roles()));
         return ResponseEntity.accepted().body(ApiResult.of(HttpStatus.ACCEPTED, "Invite message queued", null));
     }
 }
