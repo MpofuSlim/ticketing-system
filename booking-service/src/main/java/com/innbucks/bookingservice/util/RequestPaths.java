@@ -9,8 +9,9 @@ import java.util.regex.Pattern;
  * A request path as a log line may carry it. Several routes put a credential
  * or personal data in the path itself:
  * <ul>
- *   <li>the hosted QR, fetched by Twilio for every WhatsApp ticket, and the
- *       attendee edit: {@code /bookings/{id}/tickets/{ticketNumber}/...}. A
+ *   <li>the hosted QR, fetched by Twilio for every WhatsApp ticket (and the
+ *       deleted attendee edit by number, should a client still send it):
+ *       {@code /bookings/{id}/tickets/{ticketNumber}/...}. A
  *       ticket number admits whoever holds it, so it is masked as
  *       {@link TicketNumbers#forLog} masks it;</li>
  *   <li>the phone lookups: {@code /bookings/phone/{phone}} and

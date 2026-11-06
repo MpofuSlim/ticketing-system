@@ -1747,7 +1747,9 @@ before the real holder.
   guest-list row and on each item of an authenticated booking read (never on a
   public view), the attendee edit by item
   (`PUT /bookings/{bookingId}/items/{bookingItemId}/attendee`; the by-number
-  path is deprecated, and put the credential in every access log), and
+  path `PUT /bookings/{bookingId}/tickets/{ticketNumber}/attendee` put the
+  credential in every access log and is deleted, after 0 calls on both hosts
+  in the retained nginx logs, 2026-11-06), and
   `GET /bookings/by-event/{id}?ticketNumber=` (any case, dashes optional; that
   ticket's row or `[]`, ownership checked first).
 - **There is no switch any more.** `app.booking.mask-ticket-numbers`
@@ -2406,6 +2408,15 @@ and blocks phones on `/device-security/ussd/**`; the call center works it from
   Blank in the committed cell files; set per host and cleared when the fixed build
   ships — the `_WAIVED` signal disappearing from `device_security_events.features`
   is the proof. Pinned by the three `waived*` cases in `RiskEngineTest`.
+  **Production runs `TAMPER` on purpose (owner decision, 2026-11-06), and must
+  not be cleared until a fixed Android build signs in clean.** The Play Store
+  build (2.4.1) still fails freeRASP's app-integrity check on every launch: every
+  Play Store install seen trips `INTEGRITY_TAMPER_WAIVED`, which is the
+  signature of a config hashing the upload key instead of Google's Play App
+  Signing key. Clearing it bans every Android customer at their next sign-in.
+  Before clearing it on any host, check that store installs of the newest
+  version stop producing `TAMPER_WAIVED`; the waiver's age is no reason. Staging
+  runs it blank. Keep the code: it is the lever for the next bad build.
 - **The fixed test OTP reaches production only through an explicit opt-in.**
   `DEVICE_SECURITY_TEST_OTP_*` (allow-listed numbers get a fixed 6-digit code and
   no message; only that code verifies) is refused on a `DEVICE_SECURITY_PRODUCTION`
