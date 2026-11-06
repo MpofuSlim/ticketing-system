@@ -404,7 +404,9 @@ public class BoxOfficeController {
                 .anyMatch(a -> "ROLE_EVENT_ORGANIZER".equals(a.getAuthority()));
         return new BoxOfficeService.Caller(AuthenticatedCaller.userUuid(authentication),
                 AuthenticatedCaller.organizerUuid(authentication), organizerRole,
-                // A session with no email (the InnBucks app) has the name "".
+                // The token's subject: the email, else (the InnBucks app) the
+                // phone. Only the organizer's own sale stamps it; an agent's
+                // sale is stamped with the name on the event team.
                 authentication == null ? null : trimToNull(authentication.getName()));
     }
 

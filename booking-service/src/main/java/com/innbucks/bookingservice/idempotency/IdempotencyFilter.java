@@ -182,12 +182,14 @@ public class IdempotencyFilter extends OncePerRequestFilter {
                 return "user:" + name;
             }
         }
-        // A super-app session carries no email, so it has no name, and behind
-        // the gateway every caller's address is the gateway's: keyed by IP,
-        // every such session shared one scope, and one could replay another's
-        // response by its key (a box office sale's answer names its buyer).
-        // Its account id is as good a scope as an email. Sessions WITH an email
-        // keep the "user:" scope above, so their stored keys are unchanged.
+        // A session with a subject is scoped above: user-service sets it to the
+        // email, else the phone number, so an InnBucks app session is
+        // "user:<phone>". A signed token with NO subject is not one it mints,
+        // but if one arrived it would fall to the IP scope, and behind the
+        // gateway every caller's address is the gateway's: one shared scope
+        // in which any such caller could replay another's response by its key
+        // (a box office sale's answer names its buyer). Its account id is as
+        // good a scope, so that is the backstop.
         UUID userUuid = auth == null ? null : AuthenticatedCaller.userUuid(auth);
         if (userUuid != null) {
             return "account:" + userUuid;

@@ -103,9 +103,15 @@ class SalesAgentsPostgresIT extends BookingStockPostgresTestBase {
         deleteSeeded();
     }
 
-    /** The agent's InnBucks app session: CUSTOMER, their account id, no email. */
+    /**
+     * The agent's InnBucks app session as user-service mints it: CUSTOMER,
+     * their account id, no email, so the subject is the phone number
+     * (AuthService: the email, else the phone). A token with no subject at
+     * all is not one user-service issues, and Spring then hands a controller
+     * no Authentication.
+     */
     private String agentBearer() {
-        return bearer(null, List.of("CUSTOMER"),
+        return bearer("+263772000111", List.of("CUSTOMER"),
                 Map.of("userUuid", agentAccount.toString(), "phoneNumber", "+263772000111"));
     }
 
