@@ -1736,11 +1736,11 @@ class BookingServiceTest {
                 .totalAmount(new BigDecimal("50.00")).build();
         BookingItem item1 = BookingItem.builder()
                 .booking(b1).seatId(UUID.randomUUID()).categoryId(categoryId)
-                .categoryName("VIP").rowLabel("A").seatNumber(1).ticketNumber("T1")
+                .categoryName("VIP").rowLabel("A").seatNumber(1).ticketNumber("20261030-CH2F0-5V7CB")
                 .priceAtBooking(new BigDecimal("100.00")).build();
         BookingItem item2 = BookingItem.builder()
                 .booking(b2).seatId(UUID.randomUUID()).categoryId(categoryId)
-                .categoryName("VIP").rowLabel("A").seatNumber(2).ticketNumber("T2")
+                .categoryName("VIP").rowLabel("A").seatNumber(2).ticketNumber("20261030-K3D8P-5TV1A")
                 .priceAtBooking(new BigDecimal("50.00")).build();
         when(itemRepo.findByCategoryIdWithBooking(categoryId)).thenReturn(List.of(item1, item2));
 
@@ -1753,7 +1753,8 @@ class BookingServiceTest {
         assertEquals(Booking.BookingStatus.CONFIRMED, result.get(0).getStatus());
         assertEquals("INN-1", result.get(0).getConfirmationNumber());
         // Seat-level fields surface too.
-        assertEquals("T1", result.get(0).getTicketNumber());
+        // The guest list is read by organizers and staff: masked, always.
+        assertEquals("20261030-*****-**7CB", result.get(0).getTicketNumber());
         assertEquals(0, new BigDecimal("100.00").compareTo(result.get(0).getPriceAtBooking()));
         // Cancelled bookings are NOT filtered out — caller decides.
         assertEquals(Booking.BookingStatus.CANCELLED, result.get(1).getStatus());

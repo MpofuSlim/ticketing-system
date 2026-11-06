@@ -252,7 +252,7 @@ class BoxOfficeServiceTest {
         BookingResponseDTO answer = service().sell(request(), null, "+263771234567", organizer());
 
         assertEquals("20261120-7KQ4M-9XZ2B", answer.getItems().get(0).getTicketNumber(),
-                "the cell's masking switch decides for the organizer, as before");
+                "the organizer's answer is the staff view BookingService built; BoxOfficeService adds nothing");
     }
 
     @Test

@@ -55,7 +55,9 @@ class OrganizerBookingScopePostgresIT extends BookingStockPostgresTestBase {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data", hasSize(1)))
                 .andExpect(jsonPath("$.data[0].confirmationNumber").value(atA.getConfirmationNumber()))
-                .andExpect(jsonPath("$.data[0].items[0].qrCode").isNotEmpty());
+                // An organizer is not the ticket's buyer: masked, and no QR.
+                .andExpect(jsonPath("$.data[0].items[0].ticketNumber").value("****"))
+                .andExpect(jsonPath("$.data[0].items[0].qrCode").doesNotExist());
     }
 
     @Test
@@ -105,7 +107,8 @@ class OrganizerBookingScopePostgresIT extends BookingStockPostgresTestBase {
         mvc.perform(get("/bookings/confirmation/" + atA.getConfirmationNumber())
                         .header("Authorization", organizer(organizerA, "+263719999999")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.items[0].qrCode").isNotEmpty());
+                .andExpect(jsonPath("$.data.items[0].ticketNumber").value("****"))
+                .andExpect(jsonPath("$.data.items[0].qrCode").doesNotExist());
 
         mvc.perform(get("/bookings/confirmation/" + atB.getConfirmationNumber())
                         .header("Authorization", organizer(organizerA, "+263719999999")))

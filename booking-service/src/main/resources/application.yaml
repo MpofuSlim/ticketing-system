@@ -218,12 +218,6 @@ app:
     answers-retention: ${BOOKING_ANSWERS_RETENTION:P90D}
     # Daily, under ShedLock; "-" switches the deletion off.
     answers-retention-cron: ${BOOKING_ANSWERS_RETENTION_CRON:0 40 2 * * *}
-    # Ticket numbers on the organizer and staff surfaces (guest list, a booking
-    # read by anyone but its buyer, scan reports, the attendee edit's answer):
-    # true = masked (20261030-*****-**7CB) and no QR image. A ticket number is
-    # the gate credential. Off until the console has moved its attendee edit
-    # and ticket search to the item-id and server-side forms; then on per cell.
-    mask-ticket-numbers: ${BOOKINGS_MASK_TICKET_NUMBERS:false}
     # Public ticket pages by RECORD ID (/bookings/public/{id}, /bookings/{id}/tickets
     # and its QR images, /bookings/tickets/{itemId} and its QR). Every message
     # links by token since V31 (IdLinkPolicy): open = every booking (the rollout

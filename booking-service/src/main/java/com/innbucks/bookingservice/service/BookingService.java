@@ -846,7 +846,7 @@ public class BookingService {
 
     /**
      * A box office sale as its seller reads it: the staff view (masked ticket
-     * numbers when the cell masks them, the seller named). Never the buyer's
+     * numbers and no QR, the seller named). Never the buyer's
      * {@code viewToken}: once paid it opens every ticket's QR, and the buyer's
      * token goes to the buyer alone. An ONLINE sale's screen follows the
      * payment through {@code GET /payments/{transactionId}} and the seller's
@@ -1193,7 +1193,7 @@ public class BookingService {
                 .rowLabel(item.getRowLabel())
                 .seatNumber(item.getSeatNumber())
                 // Read by organizers and staff only, never the holder.
-                .ticketNumber(ticketNumbers.forStaff(item.getTicketNumber()))
+                .ticketNumber(TicketNumbers.forDisplay(item.getTicketNumber()))
                 .priceAtBooking(item.getPriceAtBooking())
                 .priceTierName(item.getPriceTierName())
                 .discountAmount(item.getDiscountAmount())
@@ -1385,7 +1385,7 @@ public class BookingService {
     /**
      * @param staffView true when the reader is not the booking's buyer (an
      *        organizer or staff member): the ticket number is masked and the
-     *        QR left out when the cell masks ticket numbers.
+     *        QR left out.
      */
     private List<BookingItemDTO> toItemDTOs(Booking booking, boolean includeAttendeeContact, boolean staffView) {
         return toItemDTOs(booking, includeAttendeeContact, staffView, false);
@@ -1398,7 +1398,9 @@ public class BookingService {
      */
     private List<BookingItemDTO> toItemDTOs(Booking booking, boolean includeAttendeeContact, boolean staffView,
                                             boolean withAnswers) {
-        boolean masked = staffView && ticketNumbers.masking();
+        // A ticket number is the gate credential: anyone but its buyer, holder
+        // or the gate (staff, an organizer) gets it masked and no QR.
+        boolean masked = staffView;
         return booking.getItems() == null
                 ? List.of()
                 : booking.getItems().stream()
@@ -1412,7 +1414,7 @@ public class BookingService {
                                 .priceAtBooking(i.getPriceAtBooking())
                                 .priceTierName(i.getPriceTierName())
                             .discountAmount(i.getDiscountAmount())
-                                .ticketNumber(masked ? ticketNumbers.forStaff(i.getTicketNumber()) : i.getTicketNumber())
+                                .ticketNumber(masked ? TicketNumbers.forDisplay(i.getTicketNumber()) : i.getTicketNumber())
                                 .qrCode(masked ? null : qrCodeGenerator.toDataUri(i.getTicketNumber()))
                                 .attendeeName(i.getAttendeeName())
                                 .attendeeEmail(includeAttendeeContact ? i.getAttendeeEmail() : null)
@@ -1450,8 +1452,7 @@ public class BookingService {
     /**
      * A booking for a sibling service ({@code GET /bookings/internal/{id}},
      * behind the internal token): exactly as stored, never masked. Services are
-     * not people reading a screen, and what they receive must not change with
-     * the masking switch.
+     * not people reading a screen, and a sibling acts on the number itself.
      */
     public BookingResponseDTO getBookingForService(UUID bookingId) {
         Booking booking = bookingRepository.findByIdWithItems(bookingId)
@@ -2442,19 +2443,11 @@ public class BookingService {
         this.promoCodeRepository = promoCodeRepository;
     }
 
-    /** How ticket numbers reach organizers and staff. Setter for the same reason; without it, in full. */
-    private volatile TicketNumberDisplay ticketNumbers = TicketNumberDisplay.FULL;
-
     private volatile IdLinkPolicy idLinks = IdLinkPolicy.OPEN;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setIdLinkPolicy(IdLinkPolicy idLinks) {
         this.idLinks = Objects.requireNonNull(idLinks, "idLinks");
-    }
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    public void setTicketNumberDisplay(TicketNumberDisplay ticketNumbers) {
-        this.ticketNumbers = Objects.requireNonNull(ticketNumbers, "ticketNumbers");
     }
 
     private volatile TicketNumberAssigner ticketNumberAssigner;
@@ -2791,7 +2784,7 @@ public class BookingService {
     /**
      * A booking as its buyer reads it ({@code staffView} false), or as an
      * organizer or staff member reads someone else's ({@code staffView} true:
-     * ticket numbers masked and no QR when the cell masks them).
+     * ticket numbers masked and no QR).
      */
     private BookingResponseDTO toDTO(Booking booking, boolean staffView) {
         return toDTO(booking, staffView, false);
