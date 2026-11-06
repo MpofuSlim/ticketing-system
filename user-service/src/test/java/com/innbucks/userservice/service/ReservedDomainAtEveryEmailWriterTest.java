@@ -206,7 +206,7 @@ class ReservedDomainAtEveryEmailWriterTest {
         verify(invites, never()).save(any());
 
         // An invite stored before the domain was reserved: accept refuses it for
-        // an app account with no email, before the duplicate check and the code.
+        // an app account with no email, after the code and before the duplicate check.
         String token = com.innbucks.userservice.security.SalesAgentInviteTokens.generate();
         java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
         when(invites.findByTokenHash(com.innbucks.userservice.security.SalesAgentInviteTokens.hash(token)))
@@ -220,10 +220,11 @@ class ReservedDomainAtEveryEmailWriterTest {
         when(users.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(app));
         when(users.lockById(42L)).thenReturn(Optional.of(app));
         when(users.findById(42L)).thenReturn(Optional.of(app));
+        when(otp.verifySalesAgentInviteCode("+263771234567", "482913")).thenReturn(true);
         assertReserved(() -> service.accept(new com.innbucks.userservice.dto.SalesAgentInviteDTOs.AcceptRequest(
                 token, "482913", "Correct-Horse-7-Battery"), AuditContext.none()));
         verify(users, never()).findAllByEmailIgnoreCase(anyString());
-        verify(otp, never()).verifySalesAgentInviteCode(anyString(), anyString());
+        verify(otp).verifySalesAgentInviteCode("+263771234567", "482913");
         assertThat(app.getEmail()).isNull();
     }
 

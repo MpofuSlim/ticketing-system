@@ -159,7 +159,7 @@ class SalesAgentInvitePostgresIT extends StaffItSupport {
     }
 
     @Test
-    @DisplayName("an account with another email is email_mismatch, and nothing changes")
+    @DisplayName("an account with another email is email_mismatch, only after the code, and nothing changes")
     void otherEmail_isRefused() throws Exception {
         User customer = customer();
         String original = customer.getEmail();
@@ -167,10 +167,15 @@ class SalesAgentInvitePostgresIT extends StaffItSupport {
         mint(customer.getPhoneNumber(), invited).andExpect(status().isAccepted());
         String token = inviteTokenSentTo(invited);
 
-        call("phone-code", Map.of("token", token))
+        // The organizer may hold the link: phone-code answers as for any number.
+        String code = phoneCode(token, customer.getPhoneNumber());
+        call("accept", Map.of("token", token, "phoneCode", code.equals("000000") ? "111111" : "000000",
+                "password", NEW_PASSWORD))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.errorCode").value("phone_code_invalid"));
+        call("accept", Map.of("token", token, "phoneCode", code, "password", NEW_PASSWORD))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.data.errorCode").value("email_mismatch"));
-        verify(sms, org.mockito.Mockito.never()).sendSms(anyString(), anyString(), anyString());
         assertThat(users.findById(customer.getId()).orElseThrow().getEmail()).isEqualTo(original);
     }
 

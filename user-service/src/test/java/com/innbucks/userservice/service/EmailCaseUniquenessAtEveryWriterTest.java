@@ -247,7 +247,8 @@ class EmailCaseUniquenessAtEveryWriterTest {
         assertThat(app.getEmail()).isNull();
         verify(users, never()).existsByEmail(anyString());
         verify(users, never()).saveAndFlush(any(User.class));
-        verify(otp, never()).verifySalesAgentInviteCode(anyString(), anyString());
+        // Refused after the code: only the phone's holder learns about the email.
+        verify(otp).verifySalesAgentInviteCode("+263770000042", "482913");
     }
 
     @Test
