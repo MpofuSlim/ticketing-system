@@ -394,6 +394,79 @@ class RemoteCallsOutsideTransactionTest {
         assertThat(txManager.outcomes()).containsExactly(COMMITTED);
     }
 
+    // ---- a sales agent's sale (V36) ---------------------------------------------------
+
+    @Test
+    void agentSale_asksSellerAccessAndTheEventWithNoTransaction_thenTakesTheCapLockInsideTheClaim() {
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        BookingService bookings = bookingService(publisher);
+        UUID eventId = UUID.randomUUID();
+        UUID category = UUID.randomUUID();
+        UUID agentRow = UUID.randomUUID();
+        UUID agentAccount = UUID.randomUUID();
+        when(eventServiceClient.sellerAccess(eq(agentAccount), eq(eventId), any())).thenAnswer(inv -> {
+            record("seller-access");
+            return ApiResult.ok("Seller access", com.innbucks.bookingservice.dto.SellerAccessDTO.builder()
+                    .allowed(true).agentId(agentRow).organizerUuid(organizer).displayName("Tendai Moyo")
+                    .ticketCap(10).commissionPercent(new BigDecimal("5.00")).build());
+        });
+        when(eventServiceClient.salesWindow(eq(eventId), any())).thenAnswer(inv -> {
+            record("sales-window");
+            return ApiResult.ok("ok", com.innbucks.bookingservice.dto.EventSalesWindowDTO.builder().eventId(eventId)
+                    .status(com.innbucks.bookingservice.dto.EventSalesWindowDTO.ON_SALE).tenantUserUuid(organizer)
+                    .build());
+        });
+        when(seatServiceClient.getCategory(category)).thenAnswer(inv -> {
+            record("seat-service");
+            return ApiResult.ok(CategoryLookupDTO.builder().seatCategoryId(category).eventId(eventId)
+                    .name("VIP").price(new BigDecimal("10.00")).totalSeats(100).build());
+        });
+        when(bookingRepo.lockAgentSales(anyInt(), anyInt())).thenAnswer(inv -> {
+            record("agent-lock");
+            return 1;
+        });
+        when(itemRepo.countActiveByAgentAndEvent(eq(agentRow), eq(eventId), any())).thenAnswer(inv -> {
+            record("agent-count");
+            return 0L;
+        });
+        when(inventory.tryClaim(category, 1)).thenAnswer(inv -> {
+            record("claim");
+            return 1;
+        });
+        Booking[] saved = new Booking[1];
+        when(bookingRepo.save(any())).thenAnswer(inv -> {
+            saved[0] = inv.getArgument(0);
+            if (saved[0].getId() == null) {
+                saved[0].setId(UUID.randomUUID());
+            }
+            return saved[0];
+        });
+        when(bookingRepo.lockById(any())).thenAnswer(inv -> {
+            record("lock");
+            return Optional.of(saved[0]);
+        });
+        ObjectProvider<EventServiceClient> events = providerOf(eventServiceClient);
+        BoxOfficeService boxOffice = new BoxOfficeService(bookings, events, "internal");
+        com.innbucks.bookingservice.dto.BoxOfficeSaleRequestDTO request =
+                new com.innbucks.bookingservice.dto.BoxOfficeSaleRequestDTO();
+        request.setEventId(eventId);
+        request.setCustomerName("Rufaro Moyo");
+        com.innbucks.bookingservice.dto.CreateBookingRequestDTO.SeatItemRequest seat =
+                new com.innbucks.bookingservice.dto.CreateBookingRequestDTO.SeatItemRequest();
+        seat.setCategoryId(category);
+        request.setSeats(List.of(seat));
+
+        var sold = boxOffice.sell(request, null, "+263771234567",
+                new BoxOfficeService.Caller(agentAccount, null, false, null));
+
+        assertThat(sold.getStatus()).isEqualTo(Booking.BookingStatus.CONFIRMED);
+        assertThat(calls).containsExactly("seller-access|false", "sales-window|false", "seat-service|false",
+                "agent-lock|true", "agent-count|true", "claim|true", "lock|true");
+        // The claim, then the cash confirm: two write transactions, both committed.
+        assertThat(txManager.readOnlyFlags()).containsExactly(false, false);
+        assertThat(txManager.outcomes()).containsExactly(COMMITTED, COMMITTED);
+    }
+
     // ---- shape -----------------------------------------------------------------
 
     @Test
@@ -401,6 +474,8 @@ class RemoteCallsOutsideTransactionTest {
         for (Method m : new Method[] {
                 TicketScanService.class.getMethod("scan", String.class, String.class),
                 GateLookupService.class.getMethod("lookup", String.class),
+                BoxOfficeService.class.getMethod("sell", com.innbucks.bookingservice.dto.BoxOfficeSaleRequestDTO.class,
+                        String.class, String.class, BoxOfficeService.Caller.class),
                 BookingService.class.getMethod("reverseConfirmedBooking", UUID.class, String.class),
                 BookingService.class.getMethod("confirmBooking", UUID.class),
                 BookingService.class.getMethod("confirmBooking", UUID.class,
@@ -432,6 +507,13 @@ class RemoteCallsOutsideTransactionTest {
         ReflectionTestUtils.setField(scan, "eventDayCheckEnabled", eventDayRule);
         ReflectionTestUtils.setField(scan, "eventDayCheckFailOpen", false);
         return scan;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ObjectProvider<EventServiceClient> providerOf(EventServiceClient client) {
+        ObjectProvider<EventServiceClient> events = mock(ObjectProvider.class);
+        when(events.getIfAvailable()).thenReturn(client);
+        return events;
     }
 
     @SuppressWarnings("unchecked")

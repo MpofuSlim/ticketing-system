@@ -8,14 +8,15 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The box office cash-up (V35): what each organiser account took and handed
- * back in cash over the window, and every sale and void behind it, so a till
- * can be counted against it. A sale counts on the day the cash was taken, a
- * void on the day it was handed back.
+ * The box office cash-up (V35): what each organiser account, and each sales
+ * agent (V36), took and handed back in cash over the window, and every sale
+ * and void behind it, so a till can be counted against it. A sale counts on
+ * the day the cash was taken, a void on the day it was handed back. An
+ * agent's till is named with the name the organiser gave the agent.
  */
 @Schema(description = "Cash taken and handed back at the box office, by seller")
 public record CashUpReportDTO(
-        @Schema(description = "One row per account that sold or voided in the window") List<Seller> sellers,
+        @Schema(description = "One row per account (or sales agent) that sold or voided in the window") List<Seller> sellers,
         Totals totals,
         @Schema(description = "Every sale and void in the window, oldest first") List<Entry> entries) {
 
@@ -27,7 +28,12 @@ public record CashUpReportDTO(
             @Schema(description = "Cash taken", example = "3450.00") BigDecimal taken,
             @Schema(description = "Sales voided", example = "1") int voids,
             @Schema(description = "Cash handed back", example = "150.00") BigDecimal returned,
-            @Schema(description = "taken - returned: what the till should hold", example = "3300.00") BigDecimal net) {
+            @Schema(description = "taken - returned: what the till should hold", example = "3300.00") BigDecimal net,
+            @Schema(description = "A sales agent's till (V36): the agent's event-team row, as on "
+                    + "GET /event-organizer/reports/sales-agents. Absent on an organiser account's till.",
+                    nullable = true, example = "4b1e2c3d-5f60-4a7b-8c9d-0e1f2a3b4c5d")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            UUID agentId) {
     }
 
     public record Totals(

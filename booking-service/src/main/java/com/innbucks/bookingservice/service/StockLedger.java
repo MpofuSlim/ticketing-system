@@ -23,6 +23,16 @@ import java.util.UUID;
  * {@code [A,B]} racing one for {@code [B,A]} could deadlock, and Postgres'
  * deadlock abort reached the client as a 500.
  *
+ * <p><b>A sales agent's sale takes one lock before all of these</b> (V36): a
+ * transaction-scoped advisory lock on its (agent, event) pair
+ * ({@code BookingRepository.lockAgentSales}), taken first in the claim
+ * transaction, under which the agent's ticket cap is counted. The full order
+ * is therefore: agent lock (a new booking only, never with a booking row
+ * held), then the booking row, then the counter rows ascending, then the
+ * promo code row (a claim) or the number series rows (a confirm). Only an
+ * agent's claim takes the agent lock, and it takes exactly one, so it adds no
+ * cycle.
+ *
  * <p><b>"Ascending" means Postgres' order, not {@link UUID#compareTo}.</b>
  * Postgres compares {@code uuid} as 16 unsigned bytes; {@code UUID.compareTo}
  * compares two SIGNED longs, so the two disagree for every id whose first or

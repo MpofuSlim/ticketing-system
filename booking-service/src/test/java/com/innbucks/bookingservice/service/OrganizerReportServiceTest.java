@@ -450,6 +450,48 @@ class OrganizerReportServiceTest {
     }
 
     @Test
+    void cashUp_putsAnAgentsSaleAndItsVoid_onTheAgentsOwnTill_evenWhenTwoAgentsShareAName() {
+        OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
+        LocalDate day = LocalDate.of(2026, 11, 20);
+        UUID agentOne = UUID.fromString("00000000-0000-4000-8000-000000000001");
+        UUID agentTwo = UUID.fromString("00000000-0000-4000-8000-000000000002");
+        Booking organizers = confirmed(EVENT_A, "100.00", "100.00", null, day.atTime(8, 0),
+                item(CAT_VIP, "VIP", "100.00"));
+        organizers.setSoldByName("organizer@example.com");
+        Booking agentSale = confirmed(EVENT_A, "150.00", "150.00", null, day.atTime(9, 0),
+                item(CAT_VIP, "VIP", "150.00"));
+        agentSale.setSoldByName("Tendai Moyo");
+        agentSale.setSoldByAgentId(agentOne);
+        agentSale.setStatus(Booking.BookingStatus.CANCELLED);
+        agentSale.setCancelReason(Booking.CancelReason.CASH_VOIDED);
+        agentSale.setVoidedByName("organizer@example.com");
+        agentSale.setVoidedAt(day.atTime(9, 30));
+        Booking namesake = confirmed(EVENT_A, "50.00", "50.00", null, day.atTime(10, 0),
+                item(CAT_GA, "GA", "50.00"));
+        namesake.setSoldByName("Tendai Moyo");
+        namesake.setSoldByAgentId(agentTwo);
+        when(repo.findCashSalesWithItems(eq(ORG), eq(EVENT_A), any(), any()))
+                .thenReturn(List.of(organizers, agentSale, namesake));
+
+        var report = service(repo).cashUp(ORG, EVENT_A, day, day);
+
+        assertThat(report.sellers()).extracting("seller")
+                .containsExactly("organizer@example.com", "Tendai Moyo", "Tendai Moyo");
+        var organizerTill = report.sellers().get(0);
+        assertThat(organizerTill.voids()).as("the organizer pressed void, the agent's cash came back").isZero();
+        assertThat(organizerTill.agentId()).isNull();
+        var tendai = report.sellers().get(1);
+        assertThat(tendai.agentId()).isEqualTo(agentOne);
+        assertThat(tendai.taken()).isEqualByComparingTo("150.00");
+        assertThat(tendai.returned()).isEqualByComparingTo("150.00");
+        assertThat(tendai.net()).isEqualByComparingTo("0.00");
+        assertThat(report.sellers().get(2).agentId()).isEqualTo(agentTwo);
+        assertThat(report.sellers().get(2).net()).isEqualByComparingTo("50.00");
+        assertThat(report.entries()).extracting("by")
+                .containsExactly("organizer@example.com", "Tendai Moyo", "Tendai Moyo", "Tendai Moyo");
+    }
+
+    @Test
     void resolveRange_rejectsFromAfterTo() {
         OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
         assertThatThrownBy(() -> service(repo).revenueSummary(ORG, null,

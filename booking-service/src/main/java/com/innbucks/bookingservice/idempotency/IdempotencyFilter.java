@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.idempotency;
 
 import jakarta.servlet.FilterChain;
+import com.innbucks.bookingservice.security.AuthenticatedCaller;
 import com.innbucks.bookingservice.util.RequestPaths;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,6 +18,7 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
 import java.io.IOException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Intercepts mutating requests that carry an {@code Idempotency-Key} header.
@@ -179,6 +181,18 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             if (name != null && !name.isBlank()) {
                 return "user:" + name;
             }
+        }
+        // A session with a subject is scoped above: user-service sets it to the
+        // email, else the phone number, so an InnBucks app session is
+        // "user:<phone>". A signed token with NO subject is not one it mints,
+        // but if one arrived it would fall to the IP scope, and behind the
+        // gateway every caller's address is the gateway's: one shared scope
+        // in which any such caller could replay another's response by its key
+        // (a box office sale's answer names its buyer). Its account id is as
+        // good a scope, so that is the backstop.
+        UUID userUuid = auth == null ? null : AuthenticatedCaller.userUuid(auth);
+        if (userUuid != null) {
+            return "account:" + userUuid;
         }
         return "ip:" + extractClientIp(request);
     }

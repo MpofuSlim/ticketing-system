@@ -66,6 +66,14 @@ import java.util.Map;
  *       answered. {@code invalid}: the key was right but the phone or event id
  *       was not. {@code rejected}: a missing or wrong key; a steady stream of
  *       these is someone guessing the key.</li>
+ *   <li>{@code booking.box_office.agent_sale{outcome}} — a sales agent's box
+ *       office sale (V36). {@code sold_cash} / {@code sold_online}: sold.
+ *       {@code not_a_sales_agent}: event-service said the account may not
+ *       sell for the event (a removed agent still trying, or someone who
+ *       never was one). {@code promo_code_refused}: the agent sent a promo
+ *       code. {@code cap_reached}: past the agent's ticket cap.
+ *       {@code unavailable}: event-service could not be asked, so the sale was
+ *       refused with a 503; a steady rise is an outage costing agents' sales.</li>
  * </ul>
  */
 @Component
@@ -79,6 +87,18 @@ public class BookingMetrics {
     public static final String TICKET_CHECK = "booking.ticket_check";
     public static final String UNPAID_PER_NUMBER_REFUSED = "booking.create.unpaid_per_number_refused";
     public static final String EVENT_REFUSED = "booking.create.event_refused";
+    public static final String AGENT_SALE = "booking.box_office.agent_sale";
+
+    /** What happened to a sales agent's sale; the {@code outcome} tag of {@link #AGENT_SALE}. */
+    public enum AgentSaleOutcome {
+        SOLD_CASH, SOLD_ONLINE, NOT_A_SALES_AGENT, PROMO_CODE_REFUSED, CAP_REACHED, UNAVAILABLE;
+
+        public String tag() {
+            return name().toLowerCase(Locale.ROOT);
+        }
+    }
+
+    private final Map<AgentSaleOutcome, Counter> agentSales = new EnumMap<>(AgentSaleOutcome.class);
 
     /** Which generated reference clashed; the {@code reference} tag of {@link #REFERENCE_COLLISION}. */
     public enum ReferenceKind {
@@ -198,6 +218,16 @@ public class BookingMetrics {
                     .tag("outcome", outcome.tag())
                     .register(registry));
         }
+        for (AgentSaleOutcome outcome : AgentSaleOutcome.values()) {
+            agentSales.put(outcome, Counter.builder(AGENT_SALE)
+                    .description("Sales agents' box office sales, by outcome")
+                    .tag("outcome", outcome.tag())
+                    .register(registry));
+        }
+    }
+
+    public void agentSale(AgentSaleOutcome outcome) {
+        agentSales.get(outcome).increment();
     }
 
     public void ticketCheck(TicketCheckOutcome outcome) {
