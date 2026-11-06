@@ -118,7 +118,7 @@ public class BoxOfficeService {
             count(online ? BookingMetrics.AgentSaleOutcome.SOLD_ONLINE : BookingMetrics.AgentSaleOutcome.SOLD_CASH);
             log.info("Agent sale bookingId={} agentId={} eventId={} method={}", held.getId(), seller.agentId(),
                     request.getEventId(), online ? "ONLINE" : "CASH");
-            return withoutEntryCredentials(sold);
+            return withoutEntryCredentials(sold, online);
         }
         return sold;
     }
@@ -129,16 +129,27 @@ public class BoxOfficeService {
      * is the gate credential (the first scan wins), and the agent is neither
      * the buyer, the holder nor the gate: a third party at an outlet holding
      * every ticket they sold could walk in on them first. The buyer gets the
-     * tickets on their own phone. The booking's view token is never in a
-     * seller's answer either (BookingService.toSellerDTO).
+     * tickets on their own phone.
+     *
+     * <p>No record id either, because an id still opens a ticket page while
+     * the cell's id links are open ({@code app.booking.id-links}): no
+     * ticket's {@code bookingItemId}, and no booking {@code id} on a cash
+     * sale. An online sale keeps its {@code id}, which {@code POST /payments}
+     * needs; once it is paid, only {@code legacy} or {@code closed} id links
+     * keep that id from opening its tickets. The booking's view token is
+     * never in a seller's answer (BookingService.toSellerDTO).
      */
-    static BookingResponseDTO withoutEntryCredentials(BookingResponseDTO dto) {
+    static BookingResponseDTO withoutEntryCredentials(BookingResponseDTO dto, boolean online) {
         dto.setViewToken(null);
+        if (!online) {
+            dto.setId(null);
+        }
         if (dto.getItems() != null) {
             dto.getItems().forEach(item -> {
                 item.setTicketNumber(item.getTicketNumber() == null ? null
                         : com.innbucks.common.ticket.TicketNumbers.forDisplay(item.getTicketNumber()));
                 item.setQrCode(null);
+                item.setBookingItemId(null);
             });
         }
         return dto;

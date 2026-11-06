@@ -23,7 +23,7 @@ public class BoxOfficeSaleRequestDTO extends CreateBookingRequestDTO {
             description = "CASH (the default): the seller takes cash and the sale is CONFIRMED at once. "
                     + "ONLINE: the booking stays PENDING (held like any checkout) and the buyer pays through "
                     + "POST /payments with the returned booking id (InnBucks code, EcoCash or card); poll "
-                    + "GET /bookings/view/{viewToken} for the outcome.")
+                    + "GET /payments/{transactionId} for the outcome. The answer never carries a viewToken.")
     private PaymentMethod paymentMethod;
 
     /** CASH unless ONLINE was asked for. */

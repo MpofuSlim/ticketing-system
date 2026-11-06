@@ -213,7 +213,7 @@ class BoxOfficeServiceTest {
                 .viewToken("3f9c2a7e1b4d4e8fa0c6d2b9e5f71a34")
                 .items(new java.util.ArrayList<>(java.util.List.of(com.innbucks.bookingservice.dto.BookingItemDTO
                         .builder().ticketNumber("20261120-7KQ4M-9XZ2B").qrCode("data:image/png;base64,AAAA")
-                        .build())))
+                        .bookingItemId(UUID.randomUUID()).build())))
                 .build();
         when(bookings.confirmBoxOfficeSale(held.getId(), AGENT_ACCOUNT, "Tendai Moyo")).thenReturn(sold);
 
@@ -222,6 +222,21 @@ class BoxOfficeServiceTest {
         assertNull(answer.getViewToken());
         assertEquals("20261120-*****-**Z2B", answer.getItems().get(0).getTicketNumber());
         assertNull(answer.getItems().get(0).getQrCode());
+        // No id that opens a ticket page while the cell's id links are open.
+        assertNull(answer.getItems().get(0).getBookingItemId());
+        assertNull(answer.getId());
+    }
+
+    @Test
+    void anAgentsOnlineSale_keepsItsBookingId_forThePayment_butNoTicketIds() {
+        BookingResponseDTO held = BookingResponseDTO.builder().id(UUID.randomUUID())
+                .items(new java.util.ArrayList<>(java.util.List.of(com.innbucks.bookingservice.dto.BookingItemDTO
+                        .builder().bookingItemId(UUID.randomUUID()).build())))
+                .build();
+        BookingResponseDTO answer = BoxOfficeService.withoutEntryCredentials(held, true);
+
+        assertEquals(held.getId(), answer.getId());
+        assertNull(answer.getItems().get(0).getBookingItemId());
     }
 
     @Test

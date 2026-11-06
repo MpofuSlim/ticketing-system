@@ -119,7 +119,11 @@ public class SalesAgentReportService {
         List<AgentSalesReportDTO.Entry> entries = new ArrayList<>(sales.size());
         for (Booking b : sales) {
             f.add(b, w);
-            entries.add(new AgentSalesReportDTO.Entry(b.getId(), b.getConfirmationNumber(), b.getEventId(),
+            // The booking id only while an online sale awaits payment
+            // (POST /payments takes it): an id opens the tickets' page while
+            // the cell's id links are open, and the agent is not the buyer.
+            UUID bookingId = b.getStatus() == Booking.BookingStatus.PENDING ? b.getId() : null;
+            entries.add(new AgentSalesReportDTO.Entry(bookingId, b.getConfirmationNumber(), b.getEventId(),
                     b.getCreatedAt(), b.getCustomerName(), MsisdnMasking.mask(b.getPhoneNumber()), tickets(b),
                     scale2(b.getTotalAmount()), PaymentMethods.code(b.getPaymentRail()),
                     PaymentMethods.label(b.getPaymentRail()), status(b), b.getAgentCommissionPercent(),

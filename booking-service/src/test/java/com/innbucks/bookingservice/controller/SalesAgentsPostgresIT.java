@@ -141,9 +141,15 @@ class SalesAgentsPostgresIT extends BookingStockPostgresTestBase {
         return sellActions(bearer, phone, tickets, paymentMethod, promo).andReturn();
     }
 
+    /** The sale's booking, found by its confirmation number: an agent's cash sale answers with no id. */
     private UUID sold(MvcResult result) throws Exception {
         assertThat(result.getResponse().getStatus()).as(result.getResponse().getContentAsString()).isEqualTo(201);
-        return UUID.fromString(JsonPath.read(result.getResponse().getContentAsString(), "$.data.id"));
+        String number = JsonPath.read(result.getResponse().getContentAsString(), "$.data.confirmationNumber");
+        return jdbc.queryForObject("SELECT id FROM bookings WHERE confirmation_number = ?", UUID.class, number);
+    }
+
+    private String confirmationNumber(UUID booking) {
+        return jdbc.queryForObject("SELECT confirmation_number FROM bookings WHERE id = ?", String.class, booking);
     }
 
     private long agentTickets() {
@@ -261,6 +267,12 @@ class SalesAgentsPostgresIT extends BookingStockPostgresTestBase {
         }
         assertThat(jdbc.queryForObject("SELECT agent_commission_amount FROM bookings WHERE id = ?",
                 BigDecimal.class, booking)).isNull();
+        // The booking id stays (POST /payments takes it); no ticket's own id does.
+        assertThat((String) JsonPath.read(body, "$.data.id")).isEqualTo(booking.toString());
+        assertThat(body).doesNotContain("bookingItemId");
+        mvc.perform(get("/bookings/box-office/my-sales").header("Authorization", agentBearer()))
+                .andExpect(jsonPath("$.data.entries[0].status").value("PENDING"))
+                .andExpect(jsonPath("$.data.entries[0].bookingId").value(booking.toString()));
 
         mvc.perform(patch("/bookings/internal/" + booking + "/confirm").header("X-Internal-Token", internalToken)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"paymentRail\":\"ECOCASH\"}"))
@@ -272,6 +284,8 @@ class SalesAgentsPostgresIT extends BookingStockPostgresTestBase {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.entries", hasSize(1)))
                 .andExpect(jsonPath("$.data.entries[0].paymentMethod").value("ECOCASH"))
+                // Paid: the id is gone from the agent's list.
+                .andExpect(jsonPath("$.data.entries[0].bookingId").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.totals.onlineSales").value(20.00))
                 .andExpect(jsonPath("$.data.totals.cashTaken").value(0.00))
                 .andExpect(jsonPath("$.data.totals.commissionEarned").value(1.00));
@@ -279,7 +293,16 @@ class SalesAgentsPostgresIT extends BookingStockPostgresTestBase {
 
     @Test
     void theAgentSeesOnlyTheirSales_theOrganizerSeesEveryAgent_andRecordsHandovers() throws Exception {
-        UUID kept = sold(sell(agentBearer(), "+263772004567", 2, null, null));
+        MvcResult keptSale = sell(agentBearer(), "+263772004567", 2, null, null);
+        UUID kept = sold(keptSale);
+        // A cash sale's answer names no booking or ticket id: either opens the
+        // tickets' page while the cell's id links are open.
+        String keptBody = keptSale.getResponse().getContentAsString();
+        assertThat((Object) JsonPath.read(keptBody, "$.data.id")).isNull();
+        assertThat(keptBody).doesNotContain(kept.toString()).doesNotContain("bookingItemId");
+        for (UUID item : jdbc.queryForList("SELECT id FROM booking_items WHERE booking_id = ?", UUID.class, kept)) {
+            assertThat(keptBody).doesNotContain(item.toString());
+        }
         UUID voided = sold(sell(agentBearer(), "+263772000002", 1, null, null));
         sold(sell(organizerBearer(), "+263772000003", 1, null, null)); // the organizer's own: no agent's
         mvc.perform(post("/bookings/box-office/" + voided + "/void").header("Authorization", organizerBearer())
@@ -335,9 +358,12 @@ class SalesAgentsPostgresIT extends BookingStockPostgresTestBase {
                         .header("Authorization", agentBearer()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.entries", hasSize(2)))
-                .andExpect(jsonPath("$.data.entries[?(@.status == 'VOIDED')].bookingId").value(voided.toString()))
-                .andExpect(jsonPath("$.data.entries[?(@.bookingId == '" + kept + "')].customerPhone")
-                        .value("****4567"))
+                .andExpect(jsonPath("$.data.entries[?(@.status == 'VOIDED')].confirmationNumber")
+                        .value(confirmationNumber(voided)))
+                .andExpect(jsonPath("$.data.entries[?(@.confirmationNumber == '" + confirmationNumber(kept)
+                        + "')].customerPhone").value("****4567"))
+                .andExpect(jsonPath("$.data.entries[0].bookingId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.data.entries[1].bookingId").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.totals.ticketsSold").value(2))
                 .andExpect(jsonPath("$.data.totals.cashTaken").value(30.00))
                 .andExpect(jsonPath("$.data.totals.cashVoided").value(10.00))
@@ -347,8 +373,8 @@ class SalesAgentsPostgresIT extends BookingStockPostgresTestBase {
                 .andExpect(jsonPath("$.data.handovers", hasSize(1)))
                 .andExpect(jsonPath("$.data.handovers[0].recordedBy").doesNotExist());
         // Another account sees none of it.
-        mvc.perform(get("/bookings/box-office/my-sales").header("Authorization", bearer(null, List.of("CUSTOMER"),
-                        Map.of("userUuid", UUID.randomUUID().toString()))))
+        mvc.perform(get("/bookings/box-office/my-sales").header("Authorization", bearer("+263772999999",
+                        List.of("CUSTOMER"), Map.of("userUuid", UUID.randomUUID().toString()))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.entries", hasSize(0)))
                 .andExpect(jsonPath("$.data.handovers", hasSize(0)));

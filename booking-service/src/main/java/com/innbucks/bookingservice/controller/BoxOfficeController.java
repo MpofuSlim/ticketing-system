@@ -88,7 +88,7 @@ public class BoxOfficeController {
               "code": "201 CREATED",
               "message": "Cash sale recorded",
               "data": {
-                "id": "2d4f6a8c-1b3d-4e5f-9a7b-6c8d0e2f4a6b",
+                "id": null,
                 "customerName": "Tatenda Chirwa",
                 "phoneNumber": "+263772000111",
                 "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
@@ -148,17 +148,17 @@ public class BoxOfficeController {
                 "to": null,
                 "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                 "entries": [
-                  { "bookingId": "7e9a1c3b-5d7f-4a2b-8c4d-9e0f1a2b3c4d", "confirmationNumber": "INN-20261120-1A2B3C",
+                  { "bookingId": null, "confirmationNumber": "INN-20261120-1A2B3C",
                     "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "createdAt": "2026-11-20T10:02:00+02:00",
                     "customerName": "Tatenda Chirwa", "customerPhone": "****0111", "tickets": 1, "amount": 150.00,
                     "paymentMethod": "ECOCASH", "paymentMethodLabel": "EcoCash", "status": "CONFIRMED",
                     "commissionPercent": 5.00, "commission": 7.50 },
-                  { "bookingId": "2d4f6a8c-1b3d-4e5f-9a7b-6c8d0e2f4a6b", "confirmationNumber": "INN-20261120-9D04E1",
+                  { "bookingId": null, "confirmationNumber": "INN-20261120-9D04E1",
                     "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "createdAt": "2026-11-20T09:15:00+02:00",
                     "customerName": "Rufaro Moyo", "customerPhone": "****4567", "tickets": 2, "amount": 300.00,
                     "paymentMethod": "CASH", "paymentMethodLabel": "Cash (box office)", "status": "CONFIRMED",
                     "commissionPercent": 5.00, "commission": 15.00 },
-                  { "bookingId": "5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f", "confirmationNumber": "INN-20261120-77E0B2",
+                  { "bookingId": null, "confirmationNumber": "INN-20261120-77E0B2",
                     "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "createdAt": "2026-11-20T08:40:00+02:00",
                     "customerName": "Farai Dube", "customerPhone": "****9902", "tickets": 1, "amount": 150.00,
                     "paymentMethod": "CASH", "paymentMethodLabel": "Cash (box office)", "status": "VOIDED",
@@ -205,8 +205,10 @@ public class BoxOfficeController {
                     + "POST /payments with the booking id (InnBucks code, EcoCash or card), and the seller's screen "
                     + "follows the payment with GET /payments/{transactionId} (or the seller's my-sales). The answer "
                     + "never carries the buyer's `viewToken`: once paid it opens every ticket's QR, and it is the "
-                    + "buyer's alone. A sales agent's answer also shows every ticket number masked and no QR, "
-                    + "whatever the cell's masking setting. Unpaid, it expires like any "
+                    + "buyer's alone. A sales agent's answer also shows every ticket number masked, no QR and no "
+                    + "ticket `bookingItemId`, whatever the cell's masking setting, and a cash sale's `id` is "
+                    + "null (an online sale keeps it for POST /payments): an agent keys a sale by "
+                    + "`confirmationNumber`. Unpaid, it expires like any "
                     + "checkout. The buyer's phone may hold at most 5 unpaid bookings in 15 minutes "
                     + "(TOO_MANY_UNPAID_BOOKINGS).\n\n"
                     + "**Who sells.** The event's organiser (promo codes allowed). Anyone else must be a sales agent "

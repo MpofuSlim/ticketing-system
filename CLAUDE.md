@@ -1218,6 +1218,14 @@ codes for agents; voids stay the organizer's; cash handovers are recorded.
   `BOOKINGS_MASK_TICKET_NUMBERS` says (`BoxOfficeService.withoutEntryCredentials`).
   `my-sales` shows the buyer's name and a masked phone, never ticket numbers.
   An online sale's screen follows `GET /payments/{transactionId}` or `my-sales`.
+- **Nor an id that opens a ticket page.** While a cell's `BOOKINGS_ID_LINKS` is
+  `open`, a booking id or item id still opens the QR pages (V31). So an agent's
+  answer has no `items[].bookingItemId`, a cash sale's `id` is null, and
+  `my-sales` gives `bookingId` only on a PENDING online sale (`POST /payments`
+  takes it); agents key sales by `confirmationNumber`. An online sale's id
+  stays with the agent once paid, so **switch agents on in a cell only once its
+  id links are `legacy` or `closed`**. Don't add a booking or item id back to
+  anything an agent reads.
 - **Reports**: the agent's `GET /bookings/box-office/my-sales`; the organizer's
   `GET /event-organizer/reports/sales-agents` (per agent: sold, cash taken and
   voided, online, commission owed, handed over, cash owed = taken − voided −

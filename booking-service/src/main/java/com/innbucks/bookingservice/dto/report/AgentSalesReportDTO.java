@@ -30,6 +30,8 @@ public record AgentSalesReportDTO(
 
     @Schema(name = "AgentSale", description = "One sale")
     public record Entry(
+            @Schema(description = "The booking id, only while an online sale awaits payment (POST /payments "
+                    + "takes it); null on every other sale. Key rows by confirmationNumber.", nullable = true)
             UUID bookingId,
             @Schema(example = "INN-20261114-4F2A9C") String confirmationNumber,
             UUID eventId,
