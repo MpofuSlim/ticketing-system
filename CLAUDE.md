@@ -1184,7 +1184,12 @@ codes for agents; voids stay the organizer's; cash handovers are recorded.
   required, which is what stops an organizer attaching a login to a stranger's
   number. Accept refuses staff-profiled, SUPER_ADMIN, inactive and shop-staff
   accounts (`account_not_eligible`), another email on the account
-  (`email_mismatch`) and a reserved InnBucks domain. **An InnBucks staff member
+  (`email_mismatch`) and a reserved InnBucks domain. **Those refusals come
+  only after the code**: the organizer chose the invite's email, so may hold
+  the link, and phone-code (link checked, code sent, nothing else) and a
+  wrong code at accept answer the same whatever the number holds (the
+  scanner rule). Don't move an account check back in front of the code.
+  **An InnBucks staff member
   can be an agent through their PERSONAL account** (personal phone and email),
   never through the staff login.
 - **`SALES_AGENT` grants nothing.** It is a business built-in
@@ -1196,6 +1201,10 @@ codes for agents; voids stay the organizer's; cash handovers are recorded.
   **Residual, pre-existing:** every Foundry password sign-in revokes all the
   account's refresh families, the app's included, so an agent who signs in to
   the portal is signed out of the app until it exchanges again.
+  An agent can still add a business to their account ("One account for the
+  app and the business"): `isCustomerOnly` takes CUSTOMER plus SALES_AGENT,
+  and an agent's portal email is never moved by it (409 `email_mismatch`,
+  after the code).
 - **A sale is a box-office sale** (`POST /bookings/box-office`, now open to
   `EVENT_ORGANIZER`, `SALES_AGENT`, `CUSTOMER`): the event's organizer keeps
   today's path; anyone else goes through `seller-access` (403
