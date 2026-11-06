@@ -200,6 +200,36 @@ class BusinessRegistrationTest {
     }
 
     @Test
+    void aSalesAgent_addsABusiness_onTheEmailTheyAlreadySignInWith() {
+        // SALES_AGENT grants nothing: the account is still a customer who may add a business.
+        appCustomer.getRoles().add(User.Role.SALES_AGENT.name());
+        appCustomer.setEmail("Tariro@Showtime.co.zw");
+
+        assertThat(auth.register(registration(CODE)).getAddedToExistingAccount()).isTrue();
+        assertThat(appCustomer.getRoles()).containsExactlyInAnyOrder("CUSTOMER", "SALES_AGENT");
+        verify(serviceRequests).submitBusinessRegistration(eq(appCustomer), eq(Set.of("ticketing")), anyString());
+    }
+
+    @Test
+    void aSalesAgentsPortalEmail_isNeverMoved_andOnlyThePhonesHolderLearnsWhy() {
+        appCustomer.getRoles().add(User.Role.SALES_AGENT.name());
+        appCustomer.setEmail("tendai.moyo@gmail.com");
+
+        assertThatThrownBy(() -> auth.register(registration(CODE)))
+                .isInstanceOf(BusinessRegistrationException.class)
+                .satisfies(t -> assertThat(errorCode(t)).isEqualTo(BusinessRegistrationException.EMAIL_MISMATCH))
+                .satisfies(t -> assertThat(((BusinessRegistrationException) t).getStatus())
+                        .isEqualTo(HttpStatus.CONFLICT));
+        // Asked after the code: a wrong code says nothing about the account.
+        verify(otp).verifyBusinessRegistrationCode(PHONE, CODE);
+        assertThatThrownBy(() -> auth.register(registration("111111")))
+                .satisfies(t -> assertThat(errorCode(t)).isEqualTo(BusinessRegistrationException.PHONE_CODE_INVALID));
+        assertThat(appCustomer.getEmail()).isEqualTo("tendai.moyo@gmail.com");
+        verify(users, never()).save(any());
+        verify(serviceRequests, never()).submitBusinessRegistration(any(), anyCollection(), anyString());
+    }
+
+    @Test
     void theAccountsOwnEmail_isNotADuplicate_butAnotherAccountsIs() {
         when(users.findAllByEmailIgnoreCase("tariro@showtime.co.zw")).thenReturn(List.of(appCustomer));
         assertThat(auth.register(registration(CODE)).getAddedToExistingAccount()).isTrue();

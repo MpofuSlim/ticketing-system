@@ -47,6 +47,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -300,14 +301,21 @@ class SalesAgentInviteServiceTest {
     }
 
     @Test
-    @DisplayName("phone-code: a refusal that needs no code costs no SMS")
-    void phoneCode_refusalsSendNothing() {
+    @DisplayName("phone-code: the same answer whatever the phone's account holds; only a bad link is refused")
+    void phoneCode_saysNothingAboutTheAccount() {
+        // Whoever holds the link may be the organizer, who chose its email: an
+        // answer that differed by account would say what the number holds.
         onPhone("someone.else@gmail.com", User.Role.CUSTOMER);
-        assertThatThrownBy(() -> service.sendPhoneCode(token))
-                .satisfies(t -> assertThat(errorCode(t)).isEqualTo("email_mismatch"));
+        service.sendPhoneCode(token);
+        onPhone(null, User.Role.SUPER_ADMIN);
+        service.sendPhoneCode(token);
+        when(users.findByPhoneNumber(PHONE)).thenReturn(Optional.empty());
+        service.sendPhoneCode(token);
+        verify(otp, times(3)).sendSalesAgentInviteCode(PHONE);
+
         assertThatThrownBy(() -> service.sendPhoneCode("garbage"))
                 .satisfies(t -> assertThat(errorCode(t)).isEqualTo("invite_invalid"));
-        verify(otp, never()).sendSalesAgentInviteCode(any());
+        verify(otp, times(3)).sendSalesAgentInviteCode(any());
     }
 
     // ------------------------------------------------------------------
@@ -353,7 +361,7 @@ class SalesAgentInviteServiceTest {
     }
 
     @Test
-    @DisplayName("accept, no account: an email another account holds (any case) is email_in_use, before the code")
+    @DisplayName("accept, no account: an email another account holds (any case) is email_in_use, after the code")
     void accept_newAccount_emailInUse() {
         when(users.findByPhoneNumber(PHONE)).thenReturn(Optional.empty());
         when(users.findAllByEmailIgnoreCase(EMAIL)).thenReturn(List.of(User.builder().id(5L).build()));
@@ -363,7 +371,7 @@ class SalesAgentInviteServiceTest {
                     assertThat(errorCode(t)).isEqualTo("email_in_use");
                     assertThat(((StaffPolicyException) t).getStatus()).isEqualTo(HttpStatus.CONFLICT);
                 });
-        verify(otp, never()).verifySalesAgentInviteCode(any(), any());
+        verify(otp).verifySalesAgentInviteCode(PHONE, CODE);
         nothingWritten();
     }
 
@@ -444,7 +452,7 @@ class SalesAgentInviteServiceTest {
                 });
         assertThat(customer.getEmail()).isEqualTo("rudo@chikwanha.co.zw");
         assertThat(customer.getRoles()).containsExactly("CUSTOMER");
-        verify(otp, never()).verifySalesAgentInviteCode(any(), any());
+        verify(otp).verifySalesAgentInviteCode(PHONE, CODE);
         nothingWritten();
     }
 
@@ -501,12 +509,24 @@ class SalesAgentInviteServiceTest {
         when(staffProfiles.findById(42L)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> service.accept(accept(CODE), CTX))
                 .satisfies(t -> assertThat(errorCode(t)).isEqualTo("account_not_eligible"));
-        verify(otp, never()).verifySalesAgentInviteCode(any(), any());
         nothingWritten();
     }
 
     @Test
-    @DisplayName("accept: a wrong code is 400 phone_code_invalid, after every other check, and changes nothing")
+    @DisplayName("accept: without the right code, an ineligible account or another email reads as a wrong code")
+    void accept_wrongCode_saysNothingAboutTheAccount() {
+        when(otp.verifySalesAgentInviteCode(PHONE, "000000")).thenReturn(false);
+        onPhone("rudo@chikwanha.co.zw", User.Role.CUSTOMER);
+        assertThatThrownBy(() -> service.accept(accept("000000"), CTX))
+                .satisfies(t -> assertThat(errorCode(t)).isEqualTo("phone_code_invalid"));
+        onPhone(null, User.Role.SUPER_ADMIN, User.Role.CUSTOMER);
+        assertThatThrownBy(() -> service.accept(accept("000000"), CTX))
+                .satisfies(t -> assertThat(errorCode(t)).isEqualTo("phone_code_invalid"));
+        nothingWritten();
+    }
+
+    @Test
+    @DisplayName("accept: a wrong code is 400 phone_code_invalid, before any account check, and changes nothing")
     void accept_wrongCode() {
         User customer = onPhone(null, User.Role.CUSTOMER);
 

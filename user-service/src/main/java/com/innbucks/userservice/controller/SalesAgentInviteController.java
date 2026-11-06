@@ -129,8 +129,9 @@ public class SalesAgentInviteController {
                     does not use the link up and can be asked for again (the usual code quota applies; a new code
                     replaces the last one).
 
-                    Every refusal that needs no code comes first, so it costs no SMS: the same ones accept gives
-                    (`account_not_eligible`, `email_mismatch`, `email_in_use`, `email_domain_reserved`).
+                    Only the link is checked: the answer is the same whatever account the phone holds, so it
+                    never says whether the number has an InnBucks account. A refusal about the account or the email
+                    comes from accept, once the code has proved the phone.
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Code sent",
@@ -138,17 +139,10 @@ public class SalesAgentInviteController {
                             value = """
                                     { "code": "200 OK", "message": "We sent a code to the phone number on this invite.", "data": null }
                                     """))),
-            @ApiResponse(responseCode = "400", description = "Invalid link, no token, or a staff address",
+            @ApiResponse(responseCode = "400", description = "Invalid link or no token",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Invite invalid", value = INVITE_INVALID),
-                            @ExampleObject(name = "No token", value = NO_TOKEN),
-                            @ExampleObject(name = "Staff address", value = EMAIL_DOMAIN_RESERVED)
-                    })),
-            @ApiResponse(responseCode = "409", description = "The account on the phone, or the email, can't be used",
-                    content = @Content(mediaType = "application/json", examples = {
-                            @ExampleObject(name = "Account not eligible", value = ACCOUNT_NOT_ELIGIBLE),
-                            @ExampleObject(name = "Email mismatch", value = EMAIL_MISMATCH),
-                            @ExampleObject(name = "Email in use", value = EMAIL_IN_USE)
+                            @ExampleObject(name = "No token", value = NO_TOKEN)
                     })),
             @ApiResponse(responseCode = "429", description = "Too many codes asked for this phone",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Quota",
@@ -182,7 +176,9 @@ public class SalesAgentInviteController {
 
                     A wrong code is checked before the link is used, so it does not burn the link (three wrong
                     codes void the code: ask for a new one). An unknown, used, revoked or expired link is the same
-                    400 `invite_invalid`.
+                    400 `invite_invalid`. The code is checked before anything about the account on the phone or the
+                    email, so a 409 (or `email_domain_reserved`) only ever answers someone who proved the phone, and
+                    uses that code up.
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Sign-in set up; sign in next",

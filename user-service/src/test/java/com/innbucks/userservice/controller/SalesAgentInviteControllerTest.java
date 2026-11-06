@@ -175,7 +175,7 @@ class SalesAgentInviteControllerTest {
     }
 
     @Test
-    @DisplayName("phone-code: 200 generic; the code quota is a 429; a refusal keeps its 409")
+    @DisplayName("phone-code: 200 generic; the code quota is a 429")
     void phoneCode() throws Exception {
         mvc.perform(post("/auth/sales-agent-invite/phone-code").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"token\":\"" + TOKEN + "\"}"))
@@ -191,12 +191,6 @@ class SalesAgentInviteControllerTest {
                         .content("{\"token\":\"" + TOKEN + "\"}"))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.message").value("Too many OTP requests. Try again in 30 minute(s)."));
-
-        doThrow(SalesAgentInviteException.accountNotEligible()).when(service).sendPhoneCode(TOKEN);
-        mvc.perform(post("/auth/sales-agent-invite/phone-code").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"token\":\"" + TOKEN + "\"}"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.data.errorCode").value("account_not_eligible"));
     }
 
     @Test

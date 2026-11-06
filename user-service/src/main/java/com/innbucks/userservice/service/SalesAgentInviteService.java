@@ -76,9 +76,15 @@ import java.util.regex.Pattern;
  * overwrite. InnBucks staff domains are reserved ({@code email_domain_reserved}):
  * a staff member sells through their personal account only.
  *
- * <p><b>Order.</b> Every refusal that does not need the code comes before it, in
- * phone-code as well as accept, so a refusal costs no SMS and no guess. The code
- * is checked in a transaction of its own, so a wrong guess stays counted when
+ * <p><b>Order, and what no answer says.</b> The organizer chose the invite's
+ * email, so the organizer may hold the link: nothing a caller learns before
+ * proving the phone may depend on the account the phone holds (the scanner
+ * rule: nothing says whether a number has an InnBucks account). Phone-code
+ * checks the link alone and sends the code; accept checks the code BEFORE any
+ * refusal about the account or the email ({@code account_not_eligible},
+ * {@code email_mismatch}, {@code email_in_use}, a foreign number for a new
+ * account), so only the person holding the phone ever reads one. The code is
+ * checked in a transaction of its own, so a wrong guess stays counted when
  * accept then fails. Accept locks the account row first, then consumes the
  * invite (the {@code StaffInviteService} order), checks everything again under
  * the lock, and writes the REQUIRED audit last.
@@ -209,16 +215,16 @@ public class SalesAgentInviteService {
     }
 
     /**
-     * Sends the code that proves the invite's phone. Every refusal that does
-     * not need the code is made first, so it costs no SMS. No transaction is
-     * open while the message is sent ({@code OtpService} commits the code, then
-     * sends). Same quota as every other code ({@code otp_retry_attempts}).
+     * Sends the code that proves the invite's phone. Checks the link and
+     * nothing else: the answer is the same whatever account the phone holds,
+     * because whoever holds the link may be the organizer (see the class
+     * comment). No transaction is open while the message is sent
+     * ({@code OtpService} commits the code, then sends). Same quota as every
+     * other code ({@code otp_retry_attempts}).
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public void sendPhoneCode(String rawToken) {
         SalesAgentInvite invite = liveInvite(rawToken);
-        User account = users.findByPhoneNumber(invite.getPhoneNumber()).orElse(null);
-        assess(invite, account);
         otpService.sendSalesAgentInviteCode(invite.getPhoneNumber());
         log.info("Sales-agent invite code sent inviteId={} phone={}", invite.getId(),
                 MsisdnMasking.mask(invite.getPhoneNumber()));
@@ -261,15 +267,16 @@ public class SalesAgentInviteService {
                     .filter(u -> phone.equals(u.getPhoneNumber()))
                     .orElseThrow(SalesAgentInviteException::tryAgain);
         }
-        Plan plan = assess(invite, account);
-
-        // The code last of the checks: it commits on its own, so a wrong guess
-        // stays counted while everything above rolls back (the invite included).
+        // The code BEFORE any refusal about the account or the email, so only
+        // the person holding the phone learns one. It commits on its own, so a
+        // wrong guess stays counted while everything here rolls back (the
+        // invite included).
         if (!otpService.verifySalesAgentInviteCode(phone, request.phoneCode())) {
             log.warn("Sales-agent invite refused: wrong or expired code inviteId={} phone={}", invite.getId(),
                     MsisdnMasking.mask(phone));
             throw SalesAgentInviteException.phoneCodeInvalid();
         }
+        Plan plan = assess(invite, account);
 
         String passwordHash = passwordEncoder.encode(request.password());
         Map<String, Object> metadata = new LinkedHashMap<>();
@@ -316,7 +323,8 @@ public class SalesAgentInviteService {
     record Plan(boolean writesEmail) {}
 
     /**
-     * Every refusal that needs no code, in the order the person can act on it.
+     * Every refusal about the account on the phone or the email, in the order
+     * the person can act on it; asked only after the code proved the phone.
      * {@code account} null = no account holds the invite's phone.
      */
     Plan assess(SalesAgentInvite invite, User account) {
