@@ -118,8 +118,30 @@ public class BoxOfficeService {
             count(online ? BookingMetrics.AgentSaleOutcome.SOLD_ONLINE : BookingMetrics.AgentSaleOutcome.SOLD_CASH);
             log.info("Agent sale bookingId={} agentId={} eventId={} method={}", held.getId(), seller.agentId(),
                     request.getEventId(), online ? "ONLINE" : "CASH");
+            return withoutEntryCredentials(sold);
         }
         return sold;
+    }
+
+    /**
+     * What a sales agent may keep of the sale they made: no whole ticket
+     * number, no QR, whatever the cell's masking switch says. A ticket number
+     * is the gate credential (the first scan wins), and the agent is neither
+     * the buyer, the holder nor the gate: a third party at an outlet holding
+     * every ticket they sold could walk in on them first. The buyer gets the
+     * tickets on their own phone. The booking's view token is never in a
+     * seller's answer either (BookingService.toSellerDTO).
+     */
+    static BookingResponseDTO withoutEntryCredentials(BookingResponseDTO dto) {
+        dto.setViewToken(null);
+        if (dto.getItems() != null) {
+            dto.getItems().forEach(item -> {
+                item.setTicketNumber(item.getTicketNumber() == null ? null
+                        : com.innbucks.common.ticket.TicketNumbers.forDisplay(item.getTicketNumber()));
+                item.setQrCode(null);
+            });
+        }
+        return dto;
     }
 
     /** Voids a cash sale; see {@link BookingService#voidCashSale}. The organizer's alone. */

@@ -166,9 +166,9 @@ class BookingServiceAgentSaleTest {
         assertNull(b.getAgentCommissionAmount(), "nothing is earned until the sale is CONFIRMED");
         assertEquals(Booking.BookingStatus.PENDING, b.getStatus());
         assertEquals(List.of(COMMITTED), txManager.outcomes());
-        // The seller's view, with the buyer's link token an online sale's checkout polls with.
-        assertEquals(b.getLinkToken(), held.getViewToken());
-        assertNotNull(held.getViewToken());
+        // The seller's view: never the buyer's link token, which opens every
+        // ticket's QR once paid.
+        assertNull(held.getViewToken());
         assertEquals("Tendai Moyo", held.getSoldBy());
     }
 

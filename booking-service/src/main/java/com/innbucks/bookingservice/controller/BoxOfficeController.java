@@ -116,7 +116,6 @@ public class BoxOfficeController {
                 "totalAmount": 150.00,
                 "soldBy": "Tendai Moyo",
                 "expiresAt": "2026-11-20T10:07:00+02:00",
-                "viewToken": "3f9c2a7e1b4d4e8fa0c6d2b9e5f71a34",
                 "items": [ { "categoryName": "VIP", "priceAtBooking": 150.00, "ticketNumber": "20261120-*****-**M4P" } ]
               }
             }""";
@@ -202,9 +201,12 @@ public class BoxOfficeController {
                     + "ADD_ON_SOLD_OUT, sold out, ...).\n\n"
                     + "**CASH** (the default): CONFIRMED at once, paid in cash, with the seller recorded; the "
                     + "tickets go to the buyer exactly as for an online sale.\n\n"
-                    + "**ONLINE**: the booking is held (PENDING, `expiresAt`) and the answer carries `viewToken`. "
-                    + "The buyer then pays through POST /payments with the booking id (InnBucks code, EcoCash or "
-                    + "card), and the client polls GET /bookings/view/{viewToken}. Unpaid, it expires like any "
+                    + "**ONLINE**: the booking is held (PENDING, `expiresAt`). The buyer then pays through "
+                    + "POST /payments with the booking id (InnBucks code, EcoCash or card), and the seller's screen "
+                    + "follows the payment with GET /payments/{transactionId} (or the seller's my-sales). The answer "
+                    + "never carries the buyer's `viewToken`: once paid it opens every ticket's QR, and it is the "
+                    + "buyer's alone. A sales agent's answer also shows every ticket number masked and no QR, "
+                    + "whatever the cell's masking setting. Unpaid, it expires like any "
                     + "checkout. The buyer's phone may hold at most 5 unpaid bookings in 15 minutes "
                     + "(TOO_MANY_UNPAID_BOOKINGS).\n\n"
                     + "**Who sells.** The event's organiser (promo codes allowed). Anyone else must be a sales agent "

@@ -108,13 +108,13 @@ class BoxOfficeControllerTest {
     @Test
     void anAppAgentsOnlineSale_isAwaitingPayment_andTheSellerIsTheAppAccount() throws Exception {
         when(boxOffice.sell(any(), any(), any(), any())).thenReturn(BookingResponseDTO.builder()
-                .status(Booking.BookingStatus.PENDING).viewToken("3f9c2a7e1b4d4e8fa0c6d2b9e5f71a34").build());
+                .status(Booking.BookingStatus.PENDING).build());
 
         mvc.perform(sale("ONLINE", appAgent()))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.message").value("Sale created, awaiting payment"))
                 .andExpect(jsonPath("$.data.status").value("PENDING"))
-                .andExpect(jsonPath("$.data.viewToken").value("3f9c2a7e1b4d4e8fa0c6d2b9e5f71a34"));
+                .andExpect(jsonPath("$.data.viewToken").doesNotExist());
 
         ArgumentCaptor<BoxOfficeService.Caller> caller = ArgumentCaptor.forClass(BoxOfficeService.Caller.class);
         verify(boxOffice).sell(any(), any(), any(), caller.capture());

@@ -236,16 +236,23 @@ class SalesAgentsPostgresIT extends BookingStockPostgresTestBase {
     }
 
     @Test
-    void anOnlineSale_staysPending_carriesItsViewToken_andEarnsAtTheConfirm() throws Exception {
+    void anOnlineSale_staysPending_carriesNoViewToken_andEarnsAtTheConfirm() throws Exception {
         MvcResult result = sell(agentBearer(), "+263772000001", 2, "ONLINE", null);
         String body = result.getResponse().getContentAsString();
         UUID booking = sold(result);
         assertThat((String) JsonPath.read(body, "$.message")).isEqualTo("Sale created, awaiting payment");
         assertThat((String) JsonPath.read(body, "$.data.status")).isEqualTo("PENDING");
         assertThat((String) JsonPath.read(body, "$.data.soldBy")).isEqualTo("Tendai Moyo");
-        String viewToken = JsonPath.read(body, "$.data.viewToken");
-        assertThat(viewToken).isEqualTo(jdbc.queryForObject("SELECT link_token FROM bookings WHERE id = ?",
-                String.class, booking));
+        // Never the buyer's link token: once paid it opens every ticket's QR.
+        assertThat(body).doesNotContain("viewToken")
+                .doesNotContain(jdbc.queryForObject("SELECT link_token FROM bookings WHERE id = ?",
+                        String.class, booking));
+        // Nor any whole ticket number or QR: the agent is not the buyer.
+        assertThat(body).doesNotContain("data:image");
+        for (String issued : jdbc.queryForList("SELECT ticket_number FROM booking_items WHERE booking_id = ?",
+                String.class, booking)) {
+            assertThat(body).doesNotContain(issued);
+        }
         assertThat(jdbc.queryForObject("SELECT agent_commission_amount FROM bookings WHERE id = ?",
                 BigDecimal.class, booking)).isNull();
 

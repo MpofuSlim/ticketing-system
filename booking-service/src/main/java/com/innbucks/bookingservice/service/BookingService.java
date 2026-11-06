@@ -202,8 +202,7 @@ public class BookingService {
     /**
      * A box office sale's booking (V35, V36): created exactly like an online
      * one, stamped at insert with its {@code seller}, and answered as the
-     * seller sees it plus the buyer's {@code viewToken} (an ONLINE sale's
-     * checkout polls with it).
+     * seller sees it (never with the buyer's {@code viewToken}).
      *
      * <p>A CASH sale ({@code online} false) skips the buyer's per-number
      * unpaid limit: that limit bounds the EcoCash prompts an unpaid booking can
@@ -847,13 +846,15 @@ public class BookingService {
 
     /**
      * A box office sale as its seller reads it: the staff view (masked ticket
-     * numbers when the cell masks them, the seller named) plus the buyer's
-     * {@code viewToken}, which an ONLINE sale's checkout polls with.
+     * numbers when the cell masks them, the seller named). Never the buyer's
+     * {@code viewToken}: once paid it opens every ticket's QR, and the buyer's
+     * token goes to the buyer alone. An ONLINE sale's screen follows the
+     * payment through {@code GET /payments/{transactionId}} and the seller's
+     * own {@code my-sales}. A sales agent's answer is cut further in
+     * {@code BoxOfficeService.withoutEntryCredentials}.
      */
     private BookingResponseDTO toSellerDTO(Booking booking) {
-        BookingResponseDTO dto = toDTO(booking, true, false);
-        dto.setViewToken(booking.getLinkToken());
-        return dto;
+        return toDTO(booking, true, false);
     }
 
     /**

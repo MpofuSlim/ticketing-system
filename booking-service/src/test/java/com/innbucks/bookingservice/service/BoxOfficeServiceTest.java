@@ -204,6 +204,43 @@ class BoxOfficeServiceTest {
     }
 
     @Test
+    void anAgentsAnswer_neverCarriesAWholeTicketNumber_aQr_orTheBuyersLink() {
+        // A sales agent is neither the buyer, the holder nor the gate: the
+        // tickets they sold go to the buyer's phone, never stay on the agent's.
+        sellerAccess(allowed(null, null));
+        BookingResponseDTO held = held();
+        BookingResponseDTO sold = BookingResponseDTO.builder().id(held.getId())
+                .viewToken("3f9c2a7e1b4d4e8fa0c6d2b9e5f71a34")
+                .items(new java.util.ArrayList<>(java.util.List.of(com.innbucks.bookingservice.dto.BookingItemDTO
+                        .builder().ticketNumber("20261120-7KQ4M-9XZ2B").qrCode("data:image/png;base64,AAAA")
+                        .build())))
+                .build();
+        when(bookings.confirmBoxOfficeSale(held.getId(), AGENT_ACCOUNT, "Tendai Moyo")).thenReturn(sold);
+
+        BookingResponseDTO answer = service().sell(request(), null, "+263771234567", appAgent());
+
+        assertNull(answer.getViewToken());
+        assertEquals("20261120-*****-**Z2B", answer.getItems().get(0).getTicketNumber());
+        assertNull(answer.getItems().get(0).getQrCode());
+    }
+
+    @Test
+    void theOrganizersAnswer_isLeftAsTheBoxOfficeAlwaysAnsweredIt() {
+        window(EventSalesWindowDTO.ON_SALE, ORGANIZER);
+        BookingResponseDTO held = held();
+        BookingResponseDTO sold = BookingResponseDTO.builder().id(held.getId())
+                .items(java.util.List.of(com.innbucks.bookingservice.dto.BookingItemDTO.builder()
+                        .ticketNumber("20261120-7KQ4M-9XZ2B").build()))
+                .build();
+        when(bookings.confirmBoxOfficeSale(eq(held.getId()), any(), any())).thenReturn(sold);
+
+        BookingResponseDTO answer = service().sell(request(), null, "+263771234567", organizer());
+
+        assertEquals("20261120-7KQ4M-9XZ2B", answer.getItems().get(0).getTicketNumber(),
+                "the cell's masking switch decides for the organizer, as before");
+    }
+
+    @Test
     void anOrganizerOfAnotherEvent_isAskedAboutAsAnAgent() {
         window(EventSalesWindowDTO.ON_SALE, UUID.randomUUID());
         when(events.sellerAccess(eq(ORGANIZER), eq(EVENT), anyString()))
