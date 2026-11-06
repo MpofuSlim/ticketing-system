@@ -28,6 +28,7 @@ import static org.mockito.Mockito.when;
 class AttendeeEditServiceTest {
 
     private static final String TICKET = "20261020-97554W";
+    private static final UUID ITEM = UUID.fromString("7c1e2f4a-3b5d-4e6f-8a9b-0c1d2e3f4a5b");
 
     private final BookingRepository repo = mock(BookingRepository.class);
     private final AttendeeEditService service = new AttendeeEditService(repo, "ZW");
@@ -46,6 +47,7 @@ class AttendeeEditServiceTest {
         b.setTenantUserUuid(tenant);
         b.setConfirmationNumber("INN-20261020-3BD788");
         BookingItem i = new BookingItem();
+        i.setId(ITEM);
         i.setTicketNumber(TICKET);
         i.setAttendeeName("Joel Mandingaisa");
         i.setAttendeePhone("+263773863024");
@@ -59,10 +61,11 @@ class AttendeeEditServiceTest {
     void superAdmin_correctsThePhone_storedE164_andReportsWhatChanged() {
         Booking b = booking(UUID.randomUUID(), Booking.BookingStatus.CONFIRMED);
 
-        AttendeeUpdateResponseDTO r = service.update(auth("SUPER_ADMIN", null), b.getId(), TICKET,
+        AttendeeUpdateResponseDTO r = service.updateByItem(auth("SUPER_ADMIN", null), b.getId(), ITEM,
                 new AttendeeUpdateRequestDTO("Joel Mandingaisa", null, "0713664366"));
 
         assertThat(r.attendeePhone()).isEqualTo("+263713664366");
+        assertThat(r.ticketNumber()).isEqualTo("20261020-****4W");
         assertThat(b.getItems().get(0).getAttendeePhone()).isEqualTo("+263713664366");
         assertThat(r.changed()).containsExactly("phoneNumber");
     }
@@ -71,7 +74,7 @@ class AttendeeEditServiceTest {
     void blankFields_clearTheContact() {
         Booking b = booking(null, Booking.BookingStatus.CONFIRMED);
 
-        AttendeeUpdateResponseDTO r = service.update(auth("SUPER_ADMIN", null), b.getId(), TICKET,
+        AttendeeUpdateResponseDTO r = service.updateByItem(auth("SUPER_ADMIN", null), b.getId(), ITEM,
                 new AttendeeUpdateRequestDTO(" Joel M ", " ", ""));
 
         assertThat(r.attendeeName()).isEqualTo("Joel M");
@@ -85,11 +88,11 @@ class AttendeeEditServiceTest {
         Booking b = booking(owner, Booking.BookingStatus.CONFIRMED);
         var req = new AttendeeUpdateRequestDTO("Joel Mandingaisa", null, "+263713664366");
 
-        assertThat(service.update(auth("EVENT_ORGANIZER", owner), b.getId(), TICKET, req).changed())
+        assertThat(service.updateByItem(auth("EVENT_ORGANIZER", owner), b.getId(), ITEM, req).changed())
                 .containsExactly("phoneNumber");
-        assertThatThrownBy(() -> service.update(auth("EVENT_ORGANIZER", UUID.randomUUID()), b.getId(), TICKET, req))
+        assertThatThrownBy(() -> service.updateByItem(auth("EVENT_ORGANIZER", UUID.randomUUID()), b.getId(), ITEM, req))
                 .isInstanceOf(AccessDeniedException.class);
-        assertThatThrownBy(() -> service.update(auth("PRODUCT_OFFICER", null), b.getId(), TICKET, req))
+        assertThatThrownBy(() -> service.updateByItem(auth("PRODUCT_OFFICER", null), b.getId(), ITEM, req))
                 .isInstanceOf(AccessDeniedException.class);
     }
 
@@ -98,20 +101,20 @@ class AttendeeEditServiceTest {
         Booking b = booking(null, Booking.BookingStatus.CONFIRMED);
         var admin = auth("SUPER_ADMIN", null);
 
-        assertThatThrownBy(() -> service.update(admin, b.getId(), TICKET,
+        assertThatThrownBy(() -> service.updateByItem(admin, b.getId(), ITEM,
                 new AttendeeUpdateRequestDTO("Joel", null, "12345")))
                 .isInstanceOf(BadRequestException.class).hasMessageContaining("doesn't look valid");
-        assertThatThrownBy(() -> service.update(admin, b.getId(), "20261020-XXXXXX",
+        assertThatThrownBy(() -> service.updateByItem(admin, b.getId(), UUID.randomUUID(),
                 new AttendeeUpdateRequestDTO("Joel", null, null)))
                 .isInstanceOf(NotFoundException.class);
 
         b.getItems().get(0).setRedeemedAt(LocalDateTime.now(ZoneOffset.UTC));
-        assertThatThrownBy(() -> service.update(admin, b.getId(), TICKET,
+        assertThatThrownBy(() -> service.updateByItem(admin, b.getId(), ITEM,
                 new AttendeeUpdateRequestDTO("Joel", null, null)))
                 .isInstanceOf(BadRequestException.class).hasMessageContaining("used at the gate");
 
         Booking c = booking(null, Booking.BookingStatus.CANCELLED);
-        assertThatThrownBy(() -> service.update(admin, c.getId(), TICKET,
+        assertThatThrownBy(() -> service.updateByItem(admin, c.getId(), ITEM,
                 new AttendeeUpdateRequestDTO("Joel", null, null)))
                 .isInstanceOf(BadRequestException.class).hasMessageContaining("cancelled");
     }

@@ -48,33 +48,21 @@ public class AttendeeEditService {
         this.deploymentCountry = deploymentCountry;
     }
 
-    /** The ticket addressed by its number: the original path, kept for the console until it moves. */
-    @Transactional
-    public AttendeeUpdateResponseDTO update(Authentication caller, UUID bookingId, String ticketNumber,
-                                            AttendeeUpdateRequestDTO request) {
-        return update(caller, bookingId, i -> ticketNumber.equals(i.getTicketNumber()), request);
-    }
-
     /**
-     * The ticket addressed by its own id. Replaces the ticket-number path: a
+     * The ticket is addressed by its own id, never by its ticket number: a
      * masked guest list cannot address a ticket by number, and a ticket number
-     * in a URL lands in every access log on the way.
+     * in a URL lands in every access log on the way. (The by-number path,
+     * {@code PUT /bookings/{id}/tickets/{ticketNumber}/attendee}, is gone.)
      */
     @Transactional
     public AttendeeUpdateResponseDTO updateByItem(Authentication caller, UUID bookingId, UUID bookingItemId,
                                                   AttendeeUpdateRequestDTO request) {
-        return update(caller, bookingId, i -> bookingItemId.equals(i.getId()), request);
-    }
-
-    private AttendeeUpdateResponseDTO update(Authentication caller, UUID bookingId,
-                                             java.util.function.Predicate<BookingItem> theTicket,
-                                             AttendeeUpdateRequestDTO request) {
         Booking booking = bookingRepository.lockById(bookingId)
                 .orElseThrow(() -> new NotFoundException("Booking not found"));
         requireOwnershipUnlessStaff(caller, booking);
 
         BookingItem item = booking.getItems() == null ? null : booking.getItems().stream()
-                .filter(theTicket)
+                .filter(i -> bookingItemId.equals(i.getId()))
                 .findFirst().orElse(null);
         if (item == null) {
             throw new NotFoundException("Ticket not found on this booking");
