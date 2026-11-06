@@ -1223,8 +1223,8 @@ codes for agents; voids stay the organizer's; cash handovers are recorded.
   resurrect included); voided and cancelled sales earn nothing in every report.
 - **An agent never holds an entry credential.** A seller's answer never carries
   the buyer's `viewToken` (once paid it opens every QR), and an agent's answer
-  masks every ticket number and drops the QR whatever
-  `BOOKINGS_MASK_TICKET_NUMBERS` says (`BoxOfficeService.withoutEntryCredentials`).
+  masks every ticket number and drops the QR
+  (`BoxOfficeService.withoutEntryCredentials`).
   `my-sales` shows the buyer's name and a masked phone, never ticket numbers.
   An online sale's screen follows `GET /payments/{transactionId}` or `my-sales`.
 - **Nor an id that opens a ticket page.** While a cell's `BOOKINGS_ID_LINKS` is
@@ -1733,7 +1733,7 @@ could see the console or the export the console builds from it (the bookings
 CSV, Excel and PDF are the guest-list JSON), and any of them could walk in on it
 before the real holder.
 
-- **Masked** (`TicketNumberDisplay.forStaff`): the guest list (`/bookings/by-event`,
+- **Masked** (`TicketNumbers.forDisplay`, always: there is no switch): the guest list (`/bookings/by-event`,
   `/by-category`, and through it seat-service's analytics, which passes the field
   through), a booking read by anyone but its buyer (`/bookings/{id}` by staff,
   `/confirmation/{n}` by an organizer or staff, `/phone/{p}` for someone else's
@@ -1742,7 +1742,7 @@ before the real holder.
 - **Whole**: the buyer's own reads and wallet, the magic-link and holder pages,
   every message we send, the gate's scan and lookup, and
   `GET /bookings/internal/{id}` (`getBookingForService`: a service is not a
-  person, and what siblings receive must not change with the switch).
+  person, and siblings read the number they act on).
 - **What replaced the full number in the console:** `bookingItemId` on every
   guest-list row and on each item of an authenticated booking read (never on a
   public view), the attendee edit by item
@@ -1750,10 +1750,12 @@ before the real holder.
   path is deprecated, and put the credential in every access log), and
   `GET /bookings/by-event/{id}?ticketNumber=` (any case, dashes optional; that
   ticket's row or `[]`, ownership checked first).
-- **The switch is a rollout device** (`app.booking.mask-ticket-numbers`,
-  `BOOKINGS_MASK_TICKET_NUMBERS`, default false): masked before the console
-  moves, its edit-by-number and in-browser search stop finding tickets. Turn it
-  on per cell once the console has moved; then delete it and mask always.
+- **There is no switch any more.** `app.booking.mask-ticket-numbers`
+  (`BOOKINGS_MASK_TICKET_NUMBERS`) was the rollout device while the console
+  moved off edit-by-number and in-browser search; both cells ran it `true`
+  (staging and production, 2026-11-06) and it was then deleted. A host's
+  leftover `BOOKINGS_MASK_TICKET_NUMBERS` line is read by nothing. Never
+  reintroduce a way to show a staff surface the whole number.
 - **The ids on those same surfaces stop being credentials with V31** (next
   section): the public ticket pages are keyed by link tokens, and the id-keyed
   routes close behind `app.booking.id-links`. Until a cell is `legacy` or

@@ -38,12 +38,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * A ticket number is the gate credential. With the cell's masking switch on,
- * every surface an organizer or staff member reads (the guest list, a booking
- * read by someone other than its buyer, the scan reports, the attendee edit's
- * answer) shows it masked and carries no QR; the buyer, the holder and sibling
- * services still get it whole. With the switch off nothing changes, which is
- * what keeps production as it is until the console has moved.
+ * A ticket number is the gate credential. Every surface an organizer or staff
+ * member reads (the guest list, a booking read by someone other than its buyer,
+ * the scan reports, the attendee edit's answer) shows it masked and carries no
+ * QR; the buyer, the holder and sibling services still get it whole. Masking
+ * was a per-cell switch for the console's move; every cell ran with it on, so
+ * it is no longer a setting.
  */
 class TicketNumberMaskingTest {
 
@@ -54,12 +54,10 @@ class TicketNumberMaskingTest {
     private final BookingItemRepository itemRepo = mock(BookingItemRepository.class);
     private final UUID eventId = UUID.randomUUID();
 
-    private BookingService service(boolean mask) {
-        BookingService service = new BookingService(bookingRepo, itemRepo, mock(CategoryInventoryRepository.class),
+    private BookingService service() {
+        return new BookingService(bookingRepo, itemRepo, mock(CategoryInventoryRepository.class),
                 mock(SeatServiceClient.class), mock(ApplicationEventPublisher.class), new QrCodeGenerator(), null,
                 mock(PlatformTransactionManager.class));
-        service.setTicketNumberDisplay(new TicketNumberDisplay(mask));
-        return service;
     }
 
     private Booking booking() {
@@ -90,19 +88,10 @@ class TicketNumberMaskingTest {
         Booking booking = booking();
         when(itemRepo.findByEventIdWithBooking(eventId)).thenReturn(booking.getItems());
 
-        CategoryBookingDTO row = service(true).getBookingsByEvent(eventId, null, true).get(0);
+        CategoryBookingDTO row = service().getBookingsByEvent(eventId, null, true).get(0);
 
         assertThat(row.getTicketNumber()).isEqualTo(MASKED);
         assertThat(row.getBookingItemId()).isEqualTo(booking.getItems().get(0).getId());
-    }
-
-    @Test
-    void guestList_switchOff_isAsBefore() {
-        Booking booking = booking();
-        when(itemRepo.findByEventIdWithBooking(eventId)).thenReturn(booking.getItems());
-
-        assertThat(service(false).getBookingsByEvent(eventId, null, true).get(0).getTicketNumber())
-                .isEqualTo(TICKET);
     }
 
     // ------------------------------------------------------------------ search
@@ -112,7 +101,7 @@ class TicketNumberMaskingTest {
         Booking booking = booking();
         when(itemRepo.findByTicketNumberWithBooking(TICKET)).thenReturn(Optional.of(booking.getItems().get(0)));
 
-        List<CategoryBookingDTO> rows = service(true).findInEventByTicketNumber(eventId, "20261030 ch2f0 5v7cb", null, true);
+        List<CategoryBookingDTO> rows = service().findInEventByTicketNumber(eventId, "20261030 ch2f0 5v7cb", null, true);
 
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).getTicketNumber()).isEqualTo(MASKED);
@@ -123,19 +112,19 @@ class TicketNumberMaskingTest {
         Booking booking = booking();
         when(itemRepo.findByTicketNumberWithBooking(TICKET)).thenReturn(Optional.of(booking.getItems().get(0)));
 
-        assertThat(service(true).findInEventByTicketNumber(UUID.randomUUID(), TICKET, null, true)).isEmpty();
+        assertThat(service().findInEventByTicketNumber(UUID.randomUUID(), TICKET, null, true)).isEmpty();
     }
 
     @Test
     void search_somethingThatIsNotATicket_isEmpty_withoutALookup() {
-        assertThat(service(true).findInEventByTicketNumber(eventId, "alice", null, true)).isEmpty();
+        assertThat(service().findInEventByTicketNumber(eventId, "alice", null, true)).isEmpty();
         verify(itemRepo, never()).findByTicketNumberWithBooking(anyString());
     }
 
     @Test
     void search_byANonOwner_isRefusedBeforeAnyLookup() {
         // No event-service client: ownership cannot be confirmed, so it is refused.
-        assertThatThrownBy(() -> service(true).findInEventByTicketNumber(eventId, TICKET, UUID.randomUUID(), false))
+        assertThatThrownBy(() -> service().findInEventByTicketNumber(eventId, TICKET, UUID.randomUUID(), false))
                 .isInstanceOf(AccessDeniedException.class);
         verify(itemRepo, never()).findByTicketNumberWithBooking(anyString());
     }
@@ -147,7 +136,7 @@ class TicketNumberMaskingTest {
         Booking booking = booking();
         when(bookingRepo.findByConfirmationNumberWithItems("INN-20261030-3C8849")).thenReturn(Optional.of(booking));
 
-        BookingItemDTO item = service(true)
+        BookingItemDTO item = service()
                 .getByConfirmationNumber("INN-20261030-3C8849", "support@innbucks.co.zw", null, true)
                 .getItems().get(0);
 
@@ -160,7 +149,7 @@ class TicketNumberMaskingTest {
     void confirmationLookup_byTheBuyer_isWhole_withTheQr() {
         when(bookingRepo.findByConfirmationNumberWithItems("INN-20261030-3C8849")).thenReturn(Optional.of(booking()));
 
-        BookingItemDTO item = service(true)
+        BookingItemDTO item = service()
                 .getByConfirmationNumber("INN-20261030-3C8849", null, "+263772000111", false)
                 .getItems().get(0);
 
@@ -173,9 +162,9 @@ class TicketNumberMaskingTest {
         Booking booking = booking();
         when(bookingRepo.findByIdWithItems(booking.getId())).thenReturn(Optional.of(booking));
 
-        assertThat(service(true).getBookingById(booking.getId(), "support@innbucks.co.zw", true)
+        assertThat(service().getBookingById(booking.getId(), "support@innbucks.co.zw", true)
                 .getItems().get(0).getQrCode()).isNull();
-        assertThat(service(true).getBookingById(booking.getId(), "alice@example.com", true)
+        assertThat(service().getBookingById(booking.getId(), "alice@example.com", true)
                 .getItems().get(0).getTicketNumber()).isEqualTo(TICKET);
     }
 
@@ -184,7 +173,7 @@ class TicketNumberMaskingTest {
         Booking booking = booking();
         when(bookingRepo.findByIdWithItems(booking.getId())).thenReturn(Optional.of(booking));
 
-        BookingResponseDTO dto = service(true).getBookingForService(booking.getId());
+        BookingResponseDTO dto = service().getBookingForService(booking.getId());
 
         assertThat(dto.getItems().get(0).getTicketNumber()).isEqualTo(TICKET);
         assertThat(dto.getItems().get(0).getQrCode()).isNotNull();
@@ -194,9 +183,9 @@ class TicketNumberMaskingTest {
     void phoneLookup_staffReadingSomeoneElsesNumber_isMasked_theirOwnIsWhole() {
         when(bookingRepo.findByPhoneNumberOrderByCreatedAtDesc("+263772000111")).thenReturn(List.of(booking()));
 
-        assertThat(service(true).getActiveByPhoneNumber("+263772000111", false).get(0).getItems().get(0)
+        assertThat(service().getActiveByPhoneNumber("+263772000111", false).get(0).getItems().get(0)
                 .getTicketNumber()).isEqualTo(MASKED);
-        assertThat(service(true).getActiveByPhoneNumber("+263772000111", true).get(0).getItems().get(0)
+        assertThat(service().getActiveByPhoneNumber("+263772000111", true).get(0).getItems().get(0)
                 .getTicketNumber()).isEqualTo(TICKET);
     }
 
@@ -206,7 +195,7 @@ class TicketNumberMaskingTest {
         when(bookingRepo.findByPhoneNumberAndTenantUserUuidOrderByCreatedAtDesc("+263772000111", organizer))
                 .thenReturn(List.of(booking()));
 
-        assertThat(service(true).getActiveByPhoneNumberForOrganizer("+263772000111", organizer).get(0)
+        assertThat(service().getActiveByPhoneNumberForOrganizer("+263772000111", organizer).get(0)
                 .getItems().get(0).getQrCode()).isNull();
     }
 
@@ -216,7 +205,7 @@ class TicketNumberMaskingTest {
         when(bookingRepo.findById(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingRepo.findByIdWithItems(booking.getId())).thenReturn(Optional.of(booking));
 
-        assertThat(service(true).getBookingByIdPublic(booking.getId()).getItems().get(0).getTicketNumber())
+        assertThat(service().getBookingByIdPublic(booking.getId()).getItems().get(0).getTicketNumber())
                 .isEqualTo(TICKET);
     }
 
@@ -226,7 +215,6 @@ class TicketNumberMaskingTest {
     void scanReports_areMasked() {
         ScanAttemptRepository repo = mock(ScanAttemptRepository.class);
         ScanReportService reports = new ScanReportService(repo, new MarketTimeZone("ZW"));
-        reports.setTicketNumberDisplay(new TicketNumberDisplay(true));
         ScanAttempt attempt = ScanAttempt.builder().id(UUID.randomUUID()).attemptedAt(Instant.now())
                 .outcome(ScanAttempt.Outcome.WRONG_EVENT_DAY).ticketNumber(TICKET).build();
         when(repo.findByEventIdAndAttemptedAtBetween(any(), any(), any(), any()))
@@ -244,7 +232,6 @@ class TicketNumberMaskingTest {
         BookingItem item = booking.getItems().get(0);
         when(bookingRepo.lockById(booking.getId())).thenReturn(Optional.of(booking));
         AttendeeEditService edits = new AttendeeEditService(bookingRepo, "ZW");
-        edits.setTicketNumberDisplay(new TicketNumberDisplay(true));
         var staff = new UsernamePasswordAuthenticationToken("admin@innbucks.co.zw", null,
                 List.of(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN")));
 

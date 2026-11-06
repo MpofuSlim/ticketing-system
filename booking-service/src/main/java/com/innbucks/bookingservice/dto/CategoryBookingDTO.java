@@ -52,9 +52,8 @@ public class CategoryBookingDTO {
     private String rowLabel;
     private Integer seatNumber;
     /**
-     * The gate credential. Masked ({@code 20261030-*****-**7CB}) when the cell
-     * masks ticket numbers ({@code app.booking.mask-ticket-numbers}): this list
-     * is read by organizers and staff, never by the ticket's holder.
+     * The gate credential, always masked ({@code 20261030-*****-**7CB}): this
+     * list is read by organizers and staff, never by the ticket's holder.
      */
     private String ticketNumber;
     private BigDecimal priceAtBooking;

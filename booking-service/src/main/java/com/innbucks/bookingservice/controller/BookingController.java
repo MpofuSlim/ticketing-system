@@ -525,7 +525,9 @@ public class BookingController {
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "Get booking by id", description = "Returns a specific booking if it belongs to the authenticated user.")
+    @Operation(summary = "Get booking by id", description = "Returns a specific booking if it belongs to the "
+            + "authenticated user. Read by platform staff (not the buyer), every `ticketNumber` is masked "
+            + "(`20260502-*****-**K2D`) and `qrCode` is null: a ticket number is the gate credential.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1200,7 +1202,9 @@ public class BookingController {
                     "**Who is coming (V22):** every row carries the purchaser's `customerName`, and — when the purchaser " +
                     "named a guest for that ticket — `attendeeName`/`attendeeEmail`/`attendeePhone`. `holderName` is " +
                     "the attendee if named, else the purchaser: print that for a guest list. `paymentMethod` / " +
-                    "`paymentMethodLabel` (V29): how the booking was paid, absent when not recorded."
+                    "`paymentMethodLabel` (V29): how the booking was paid, absent when not recorded.\n\n" +
+                    "**Ticket numbers are the gate credential**, so `ticketNumber` here is always masked " +
+                    "(`20260502-*****-**K2D`). `bookingItemId` addresses a ticket for the attendee edit."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -1228,7 +1232,7 @@ public class BookingController {
                                           "categoryName": "VIP",
                                           "rowLabel": "GA",
                                           "seatNumber": 1,
-                                          "ticketNumber": "20260502-3FQ7M-X9K2D",
+                                          "ticketNumber": "20260502-*****-**K2D",
                                           "priceAtBooking": 100.00,
                                           "paymentMethod": "ECOCASH",
                                           "paymentMethodLabel": "EcoCash",
@@ -1254,7 +1258,7 @@ public class BookingController {
                                           "categoryName": "VIP",
                                           "rowLabel": "GA",
                                           "seatNumber": 2,
-                                          "ticketNumber": "20260502-8TN4W-2HC6R",
+                                          "ticketNumber": "20260502-*****-**C6R",
                                           "priceAtBooking": 100.00,
                                           "paymentMethod": "ECOCASH",
                                           "paymentMethodLabel": "EcoCash",
@@ -1300,8 +1304,8 @@ public class BookingController {
                     "`paymentMethod` (V29) is how the booking was paid: INNBUCKS, ECOCASH or CARD (a ZimSwitch-enabled " +
                     "bank card), with `paymentMethodLabel` in words; both are absent when not recorded (unpaid, or " +
                     "confirmed before V29 and not backfilled).\n\n" +
-                    "**Ticket numbers are the gate credential.** Where the cell masks them " +
-                    "(`app.booking.mask-ticket-numbers`), `ticketNumber` reads `20260502-*****-**K2D`. To find one " +
+                    "**Ticket numbers are the gate credential**, so `ticketNumber` here is always masked " +
+                    "(`20260502-*****-**K2D`) and there is no QR. To find one " +
                     "ticket a customer reads out, send `?ticketNumber=` (any case, dashes optional): the answer is " +
                     "that ticket's row alone, or an empty list. `bookingItemId` addresses a ticket for the attendee " +
                     "edit (`PUT /bookings/{bookingId}/items/{bookingItemId}/attendee`)."
@@ -1332,7 +1336,7 @@ public class BookingController {
                                           "categoryName": "VIP",
                                           "rowLabel": "GA",
                                           "seatNumber": 1,
-                                          "ticketNumber": "20260502-3FQ7M-X9K2D",
+                                          "ticketNumber": "20260502-*****-**K2D",
                                           "priceAtBooking": 100.00,
                                           "paymentMethod": "ECOCASH",
                                           "paymentMethodLabel": "EcoCash",
@@ -1358,7 +1362,7 @@ public class BookingController {
                                           "categoryName": "VIP",
                                           "rowLabel": "GA",
                                           "seatNumber": 2,
-                                          "ticketNumber": "20260502-8TN4W-2HC6R",
+                                          "ticketNumber": "20260502-*****-**C6R",
                                           "priceAtBooking": 100.00,
                                           "paymentMethod": "ECOCASH",
                                           "paymentMethodLabel": "EcoCash",
@@ -1384,7 +1388,7 @@ public class BookingController {
                                           "categoryName": "GA",
                                           "rowLabel": "GA",
                                           "seatNumber": 1,
-                                          "ticketNumber": "20260502-R5V9Z-0YB3G",
+                                          "ticketNumber": "20260502-*****-**B3G",
                                           "priceAtBooking": 60.00,
                                           "attendeeName": null,
                                           "attendeeEmail": null,
@@ -1653,8 +1657,9 @@ public class BookingController {
                     "does not confirm whether a given confirmation number exists to someone who doesn't own it. " +
                     "An EVENT_ORGANIZER may also look up bookings of their OWN events, for support; any other " +
                     "booking is the same 404. Platform staff (SUPER_ADMIN, PRODUCT_OFFICER, PRODUCT_MANAGER) " +
-                    "may look up any booking. Returns the full booking including the scannable ticket QR / " +
-                    "ticketNumber.")
+                    "may look up any booking. The buyer gets the full booking with each ticket's QR and whole " +
+                    "`ticketNumber`; an organizer or staff gets every `ticketNumber` masked " +
+                    "(`20260502-*****-**K2D`) and no QR.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -1733,7 +1738,9 @@ public class BookingController {
                     "bookings are excluded, so a booking only appears here once payment is confirmed. Returns " +
                     "an empty list if no confirmed bookings exist for that phone. To track an in-flight booking " +
                     "through payment, poll GET /bookings/view/{viewToken} instead (the viewToken is on the create response): it surfaces the " +
-                    "PENDING booking and flips to CONFIRMED when the InnBucks code is approved."
+                    "PENDING booking and flips to CONFIRMED when the InnBucks code is approved. For the caller's " +
+                    "own number the tickets carry their whole `ticketNumber` and QR; for anyone else's (an " +
+                    "organizer, staff) every `ticketNumber` is masked (`20260502-*****-**K2D`) and `qrCode` is null."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

@@ -63,7 +63,7 @@ public class AttendeeController {
                               "data": {
                                 "bookingId": "2a44b230-a61b-400e-b0fc-2cbadb59ba5a",
                                 "confirmationNumber": "INN-20261020-3BD788",
-                                "ticketNumber": "20261020-97554W",
+                                "ticketNumber": "20261020-****4W",
                                 "attendeeName": "Joel Mandingaisa",
                                 "attendeeEmail": "joel@example.com",
                                 "attendeePhone": "+263713664366",
@@ -122,7 +122,7 @@ public class AttendeeController {
                     **SUPER_ADMIN** and **PRODUCT_MANAGER** may edit any booking; an **EVENT_ORGANIZER**
                     only bookings of its own events. A CANCELLED booking and a ticket already used at the
                     gate are refused. `changed` lists the fields that actually changed (empty = none).
-                    `ticketNumber` in the answer is masked where the cell masks ticket numbers.
+                    `ticketNumber` in the answer is always masked: the editor is never the ticket's holder.
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Attendee updated",

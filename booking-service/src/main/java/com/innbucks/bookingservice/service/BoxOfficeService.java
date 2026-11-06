@@ -125,7 +125,7 @@ public class BoxOfficeService {
 
     /**
      * What a sales agent may keep of the sale they made: no whole ticket
-     * number, no QR, whatever the cell's masking switch says. A ticket number
+     * number, no QR, no item id, no viewToken. A ticket number
      * is the gate credential (the first scan wins), and the agent is neither
      * the buyer, the holder nor the gate: a third party at an outlet holding
      * every ticket they sold could walk in on them first. The buyer gets the

@@ -48,14 +48,6 @@ public class AttendeeEditService {
         this.deploymentCountry = deploymentCountry;
     }
 
-    /** How the answer's ticket number reaches the editor (organizer or staff). Without it, in full. */
-    private TicketNumberDisplay ticketNumbers = TicketNumberDisplay.FULL;
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    void setTicketNumberDisplay(TicketNumberDisplay ticketNumbers) {
-        this.ticketNumbers = Objects.requireNonNull(ticketNumbers, "ticketNumbers");
-    }
-
     /** The ticket addressed by its number: the original path, kept for the console until it moves. */
     @Transactional
     public AttendeeUpdateResponseDTO update(Authentication caller, UUID bookingId, String ticketNumber,
@@ -123,7 +115,8 @@ public class AttendeeEditService {
         }
 
         return new AttendeeUpdateResponseDTO(booking.getId(), booking.getConfirmationNumber(),
-                ticketNumbers.forStaff(item.getTicketNumber()), item.getAttendeeName(), item.getAttendeeEmail(),
+                // The editor is an organizer or staff, never the holder: masked.
+                TicketNumbers.forDisplay(item.getTicketNumber()), item.getAttendeeName(), item.getAttendeeEmail(),
                 item.getAttendeePhone(), item.holderName(), List.copyOf(changed));
     }
 

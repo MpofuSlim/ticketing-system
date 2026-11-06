@@ -62,19 +62,6 @@ public class ScanReportService {
     private final ScanAttemptRepository repository;
     private final MarketTimeZone marketTimeZone;
 
-    /**
-     * Every scan report is read by organizers, staff or the scanner, never by
-     * the ticket's holder, and a refused scan's number (wrong day, not yet
-     * paid) can still get in. Masked when the cell masks ticket numbers.
-     * Setter so hand-built instances keep their constructor; without it, in full.
-     */
-    private TicketNumberDisplay ticketNumbers = TicketNumberDisplay.FULL;
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    void setTicketNumberDisplay(TicketNumberDisplay ticketNumbers) {
-        this.ticketNumbers = java.util.Objects.requireNonNull(ticketNumbers, "ticketNumbers");
-    }
-
     @Transactional(readOnly = true)
     public PageResponse<ScanAttemptDTO> listMyScans(UUID scannerUserUuid,
                                                     Instant from,
@@ -212,7 +199,9 @@ public class ScanReportService {
                 s.getId(),
                 marketTimeZone.atMarket(s.getAttemptedAt()),
                 s.getOutcome() == null ? null : s.getOutcome().name(),
-                ticketNumbers.forStaff(s.getTicketNumber()),
+                // Read by organizers, staff and scanners, never the holder; a refused
+                // scan's number (wrong day, not yet paid) can still get in.
+                com.innbucks.common.ticket.TicketNumbers.forDisplay(s.getTicketNumber()),
                 s.getBookingItemId(),
                 s.getBookingId(),
                 s.getEventId(),

@@ -39,8 +39,8 @@ public class BookingItemDTO {
     private BigDecimal discountAmount;
 
     // e.g. 20260419-7KQ4M-9XZ2B (legacy tickets: 20260419-48291X). Masked
-    // (20260419-*****-**Z2B) when someone other than the buyer reads the
-    // booking and the cell masks ticket numbers.
+    // (20260419-*****-**Z2B) whenever someone other than the buyer reads the
+    // booking.
     private String ticketNumber;
 
     // Per-seat scan code. Base64 PNG wrapped as a data URI so the frontend
