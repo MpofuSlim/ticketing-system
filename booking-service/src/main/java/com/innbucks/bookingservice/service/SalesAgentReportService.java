@@ -85,7 +85,7 @@ public class SalesAgentReportService {
     private static final LocalDateTime OPEN_END = LocalDateTime.of(9999, 1, 1, 0, 0);
     /** A received-at this far ahead of the server clock is still "now" (a phone's clock running fast). */
     private static final Duration CLOCK_SKEW = Duration.ofMinutes(5);
-    private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2);
+    private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2, RoundingMode.UNNECESSARY);
 
     private final OrganizerReportRepository reports;
     private final AgentCashHandoverRepository handovers;

@@ -35,7 +35,7 @@ public record BoxOfficeSeller(UUID userUuid, String name, UUID agentId, UUID org
                                         Integer ticketCap, BigDecimal commissionPercent) {
         String name = displayName == null || displayName.isBlank() ? UNNAMED_AGENT : displayName.strip();
         return new BoxOfficeSeller(userUuid, clip(name), agentId, organizerUuid, ticketCap,
-                commissionPercent == null ? BigDecimal.ZERO.setScale(2) : commissionPercent.setScale(2,
+                commissionPercent == null ? BigDecimal.ZERO.setScale(2, RoundingMode.UNNECESSARY) : commissionPercent.setScale(2,
                         RoundingMode.HALF_UP));
     }
 
