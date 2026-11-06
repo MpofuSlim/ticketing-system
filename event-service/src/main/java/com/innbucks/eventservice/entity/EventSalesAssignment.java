@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -56,7 +57,7 @@ public class EventSalesAssignment {
     void onCreate() {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         if (assignedAt == null) assignedAt = now;
-        if (commissionPercent == null) commissionPercent = BigDecimal.ZERO.setScale(2);
+        if (commissionPercent == null) commissionPercent = BigDecimal.ZERO.setScale(2, RoundingMode.UNNECESSARY);
         updatedAt = now;
     }
 
