@@ -1155,6 +1155,83 @@ refused, and an account created first made `/auth/exchange` refuse the number
   live, so a removal bites at the next scan.
 - **Scanning with a super-app token** is booking-service V30 (below).
 
+## Sales agents sell for an organizer (event-service V21, user-service V56, booking-service V36)
+
+**An organizer invites a sales agent to sell tickets on their behalf, for cash
+or online, from the InnBucks app and from the Foundry portal.** Owner decisions
+(2026-11-06): the name is "Sales agent"; the organizer assigns the events; an
+optional ticket cap per agent per event; a commission % per agent per event,
+default 0, on what the buyer paid, paid by the organizer separately; no promo
+codes for agents; voids stay the organizer's; cash handovers are recorded.
+
+- **An agent is a row on the event team** (`event_scanners`, the V14 scanner
+  rows): `can_scan` / `can_sell` (V21; existing rows are scan-only). One invite
+  in the app covers both jobs. Selling events live in `event_sales_assignments`
+  (cap, commission) and have NO overlap rule: an outlet sells for several events
+  at once. A sell-only row's scan assignments count for nothing.
+- **Authority is one live question, on every sale, from either surface**:
+  booking-service asks `GET /events/internal/seller-access` with the SESSION's
+  `userUuid` (never a request value), no transaction open, never cached, and
+  fails closed (503 `TRY_AGAIN`). Switching an agent off, removing Sell or
+  unassigning stops their next sale at once; past sales stay under their name.
+- **One account, two sign-ins.** The app is the agent's ordinary CUSTOMER
+  phone-proof session. The portal needs email + password + 2FA on the SAME
+  account: the organizer sends a portal invite (`PUT .../portal-access`), the
+  person opens the email link, proves the phone with a code
+  (`/auth/sales-agent-invite/{inspect,phone-code,accept}`, gateway
+  `auth-sales-agent-invite-route`), and sets their own password. The organizer
+  never sets or sees it. Both the token (email) and the code (phone) are
+  required, which is what stops an organizer attaching a login to a stranger's
+  number. Accept refuses staff-profiled, SUPER_ADMIN, inactive and shop-staff
+  accounts (`account_not_eligible`), another email on the account
+  (`email_mismatch`) and a reserved InnBucks domain. **An InnBucks staff member
+  can be an agent through their PERSONAL account** (personal phone and email),
+  never through the staff login.
+- **`SALES_AGENT` grants nothing.** It is a business built-in
+  (`StaffRoles.BUSINESS_BUILT_INS`, never staff) whose only job is to make
+  `MfaPolicy` force 2FA on the portal; phone-proof app sessions are still
+  scoped to CUSTOMER. Never give it a permission or name it in a `hasRole` as
+  authority: selling is the live team check. Accepting on an existing account
+  is treated like a password reset (sessions ended, `PASSWORD_CHANGED` alert).
+  **Residual, pre-existing:** every Foundry password sign-in revokes all the
+  account's refresh families, the app's included, so an agent who signs in to
+  the portal is signed out of the app until it exchanges again.
+- **A sale is a box-office sale** (`POST /bookings/box-office`, now open to
+  `EVENT_ORGANIZER`, `SALES_AGENT`, `CUSTOMER`): the event's organizer keeps
+  today's path; anyone else goes through `seller-access` (403
+  `NOT_A_SALES_AGENT`). `paymentMethod` CASH (confirmed at once, rail `CASH`) or
+  ONLINE (PENDING; the buyer pays through `POST /payments`; the per-number unpaid
+  limit applies). An agent's promo code is 400 `PROMO_CODE_NOT_ALLOWED` before
+  anything else.
+- **The cap is exact because of one more lock, taken FIRST**:
+  `pg_advisory_xact_lock` per (agent, event), then the category stock locks in
+  `StockLedger` order. Nothing else takes the agent lock, so no cycle. Counted:
+  tickets of the agent's non-CANCELLED bookings for the event, so a void or an
+  expired hold frees room. A resurrected ONLINE sale can end above the cap by
+  that booking, as for tiers and promo codes.
+- **Commission** = `totalAmount × percent / 100`, HALF_UP, stamped when the
+  booking is CONFIRMED (cash at once, online at the payment's confirm, a
+  resurrect included); voided and cancelled sales earn nothing in every report.
+- **An agent never holds an entry credential.** A seller's answer never carries
+  the buyer's `viewToken` (once paid it opens every QR), and an agent's answer
+  masks every ticket number and drops the QR whatever
+  `BOOKINGS_MASK_TICKET_NUMBERS` says (`BoxOfficeService.withoutEntryCredentials`).
+  `my-sales` shows the buyer's name and a masked phone, never ticket numbers.
+  An online sale's screen follows `GET /payments/{transactionId}` or `my-sales`.
+- **Reports**: the agent's `GET /bookings/box-office/my-sales`; the organizer's
+  `GET /event-organizer/reports/sales-agents` (per agent: sold, cash taken and
+  voided, online, commission owed, handed over, cash owed = taken − voided −
+  handed over) and handovers (`.../sales-agents/{agentId}/handovers`, soft
+  delete, only for an agent who sold for the caller's events). These two default
+  to ALL TIME when `from`/`to` are omitted, unlike the other organizer reports,
+  on purpose: cash older than 30 days must not drop out of "cash owed". The
+  cash-up counts CASH only and puts an agent's void on the agent's till.
+- **`IdempotencyFilter` scopes an email-less session by `userUuid`.** App
+  sessions have no email and used to be scoped by IP, which behind the gateway
+  is the gateway's: every app session shared one scope.
+- **Deploy order:** user-service, api-gateway, event-service, booking-service.
+  Every migration is additive.
+
 ## Deactivation ends sessions at once; `token_version` is written atomically (user-service, V42)
 
 **`PUT /admin/users/{id}/active` with `false` signs the person out everywhere, immediately, through
