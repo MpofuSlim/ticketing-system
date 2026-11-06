@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.idempotency;
 
 import jakarta.servlet.FilterChain;
+import com.innbucks.bookingservice.security.AuthenticatedCaller;
 import com.innbucks.bookingservice.util.RequestPaths;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,6 +18,7 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
 import java.io.IOException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Intercepts mutating requests that carry an {@code Idempotency-Key} header.
@@ -179,6 +181,16 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             if (name != null && !name.isBlank()) {
                 return "user:" + name;
             }
+        }
+        // A super-app session carries no email, so it has no name, and behind
+        // the gateway every caller's address is the gateway's: keyed by IP,
+        // every such session shared one scope, and one could replay another's
+        // response by its key (a box office sale's answer names its buyer).
+        // Its account id is as good a scope as an email. Sessions WITH an email
+        // keep the "user:" scope above, so their stored keys are unchanged.
+        UUID userUuid = auth == null ? null : AuthenticatedCaller.userUuid(auth);
+        if (userUuid != null) {
+            return "account:" + userUuid;
         }
         return "ip:" + extractClientIp(request);
     }

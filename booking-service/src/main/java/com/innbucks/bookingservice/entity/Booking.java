@@ -192,6 +192,27 @@ public class Booking {
     @Column(name = "sold_by_name", length = 254)
     private String soldByName;
 
+    // Sales agents (V36): the event-team row (event-service scanner_id) a
+    // sales agent sold this booking under, and their commission percentage
+    // for the event at that moment. Both written at insert, never changed:
+    // the agent's ticket cap is counted from sold_by_agent_id under a per-
+    // (agent, event) lock, and a later change by the organizer must never
+    // restate a past sale. NULL on every other booking. For an agent's sale,
+    // sold_by_user_uuid is the agent's account and sold_by_name the name the
+    // organizer gave them.
+    @Column(name = "sold_by_agent_id", updatable = false)
+    private UUID soldByAgentId;
+
+    @Column(name = "agent_commission_percent", precision = 5, scale = 2, updatable = false)
+    private BigDecimal agentCommissionPercent;
+
+    // totalAmount x agentCommissionPercent / 100, HALF_UP to the cent, stamped
+    // when the booking is CONFIRMED (markConfirmed: a cash sale at once, an
+    // online one at payment-service's confirm, a resurrect too). Reports count
+    // it only on CONFIRMED bookings: a voided or cancelled sale earns nothing.
+    @Column(name = "agent_commission_amount", precision = 12, scale = 2)
+    private BigDecimal agentCommissionAmount;
+
     // A voided cash sale (V35, cancel_reason CASH_VOIDED): who, when and why.
     @Column(name = "voided_by_user_uuid")
     private UUID voidedByUserUuid;

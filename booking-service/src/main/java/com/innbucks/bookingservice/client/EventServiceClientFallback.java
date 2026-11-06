@@ -8,7 +8,8 @@ import org.springframework.stereotype.Component;
 
 // Returns a null payload on event-service failure. Each caller decides what
 // "could not ask" means for it: display reads degrade, while booking creation
-// (salesWindow) and super-app scans (scannerAccess) refuse with a retryable 503,
+// (salesWindow), super-app scans (scannerAccess) and sales agents' sales
+// (sellerAccess) refuse with a retryable 503,
 // because selling or admitting unchecked is worse than asking the buyer to
 // retry.
 @Component
@@ -42,6 +43,16 @@ public class EventServiceClientFallback implements EventServiceClient {
             java.util.UUID userUuid, java.util.UUID eventId, String internalToken) {
         log.warn("event-service circuit open or call failed (scannerAccess) eventId={}", eventId);
         return ApiResult.<com.innbucks.bookingservice.dto.ScannerAccessDTO>builder()
+                .code("503").message("event unavailable").data(null).build();
+    }
+
+    // Null data = "could not ask". A sales agent's sale refuses that with a
+    // retryable 503: an outage is never read as "may sell".
+    @Override
+    public ApiResult<com.innbucks.bookingservice.dto.SellerAccessDTO> sellerAccess(
+            java.util.UUID accountUserUuid, java.util.UUID eventId, String internalToken) {
+        log.warn("event-service circuit open or call failed (sellerAccess) eventId={}", eventId);
+        return ApiResult.<com.innbucks.bookingservice.dto.SellerAccessDTO>builder()
                 .code("503").message("event unavailable").data(null).build();
     }
 

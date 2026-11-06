@@ -196,24 +196,40 @@ public class BookingService {
             String phoneNumber,
             CreateBookingRequestDTO request
     ) {
-        return createBooking(userEmail, phoneNumber, request, false);
+        return createBooking(userEmail, phoneNumber, request, null, true);
     }
 
     /**
-     * A box office sale's booking (V35): created exactly like an online one,
-     * except that the buyer's per-number unpaid limit is not asked. That limit
-     * bounds the EcoCash prompts an unpaid booking can lead to, and this one is
-     * paid in cash the moment it exists ({@link #confirmBoxOfficeSale}).
+     * A box office sale's booking (V35, V36): created exactly like an online
+     * one, stamped at insert with its {@code seller}, and answered as the
+     * seller sees it plus the buyer's {@code viewToken} (an ONLINE sale's
+     * checkout polls with it).
+     *
+     * <p>A CASH sale ({@code online} false) skips the buyer's per-number
+     * unpaid limit: that limit bounds the EcoCash prompts an unpaid booking can
+     * lead to, and this one is paid in cash the moment it exists
+     * ({@link #confirmBoxOfficeSale}). An ONLINE sale stays PENDING until the
+     * buyer pays through POST /payments, which is exactly what the limit is
+     * for, so it is asked: for an agent's sale and the organizer's own alike
+     * (a seller account is no reason to let one number be sent unlimited PIN
+     * prompts).
+     *
+     * <p>A sales agent's sale is also refused (403 {@value #NOT_A_SALES_AGENT})
+     * when the event's organizer, from the live sales window, is not the one
+     * whose team event-service said the agent is on; and its ticket cap is
+     * checked inside the claim (see {@link #requireAgentRoom}).
      */
-    BookingResponseDTO createBoxOfficeBooking(String userEmail, String phoneNumber, CreateBookingRequestDTO request) {
-        return createBooking(userEmail, phoneNumber, request, true);
+    BookingResponseDTO createBoxOfficeBooking(String userEmail, String phoneNumber, CreateBookingRequestDTO request,
+                                              BoxOfficeSeller seller, boolean online) {
+        return createBooking(userEmail, phoneNumber, request, Objects.requireNonNull(seller, "seller"), online);
     }
 
     private BookingResponseDTO createBooking(
             String userEmail,
             String phoneNumber,
             CreateBookingRequestDTO request,
-            boolean boxOffice
+            BoxOfficeSeller seller,
+            boolean askUnpaidLimit
     ) {
         log.info("Creating booking userEmail={} eventId={} seats={}",
                 userEmail, request.getEventId(), request.getSeats().size());
@@ -225,7 +241,7 @@ public class BookingService {
                     "You may book at most " + maxSeatsPerBooking + " seats per booking.");
         }
 
-        if (!boxOffice) {
+        if (askUnpaidLimit) {
             requireUnpaidRoomFor(phoneNumber);
         }
 
@@ -256,6 +272,15 @@ public class BookingService {
         // never a sale. Its answer also names the organizer stamped on the
         // booking, so every new booking now carries one.
         EventSalesWindowDTO salesWindow = requireOnSale(request.getEventId());
+        // A sales agent sells only for the organizer whose team they are on:
+        // event-service checks that too, and this keeps the two answers from
+        // ever disagreeing about whose sale it is.
+        if (seller != null && seller.isAgent()
+                && !Objects.equals(seller.organizerUuid(), salesWindow.getTenantUserUuid())) {
+            log.warn("Agent sale refused, the agent's organizer is not the event's eventId={} agentId={}",
+                    request.getEventId(), seller.agentId());
+            throw notASalesAgent();
+        }
         // The event's terms and booking questions, from the same live answer
         // (event-service V16): refused before anything is looked up or held.
         com.innbucks.bookingservice.answers.BookingAnswers.Checked checked =
@@ -322,7 +347,8 @@ public class BookingService {
                 ? salesWindow.getEndDateTime().plus(answersRetention) : null;
         ClaimInputs inputs = new ClaimInputs(userEmail, customerName, phoneNumber, request.getEventId(),
                 tenantUserUuid, qtyByCategory, categoryById, ticketSpecs,
-                PromoCodes.normalize(request.getPromoCode()), checked.acceptedTermsVersion(), answersPurgeAfter);
+                PromoCodes.normalize(request.getPromoCode()), checked.acceptedTermsVersion(), answersPurgeAfter,
+                seller);
 
         // === Write phase — the ONLY place a DB connection is held. ===
         return claimWithRetries(inputs);
@@ -337,7 +363,8 @@ public class BookingService {
     private record ClaimInputs(String userEmail, String customerName, String phoneNumber, UUID eventId,
                                UUID tenantUserUuid, Map<UUID, Integer> qtyByCategory,
                                Map<UUID, CategoryLookupDTO> categoryById, List<TicketSpec> ticketSpecs,
-                               String promoCode, Integer termsVersion, LocalDateTime answersPurgeAfter) {
+                               String promoCode, Integer termsVersion, LocalDateTime answersPurgeAfter,
+                               BoxOfficeSeller seller) {
     }
 
     /**
@@ -423,7 +450,17 @@ public class BookingService {
         // Tickets are held for holdTtlMinutes; if no /confirm (= payment) lands
         // by then, the expiration scheduler flips the booking to CANCELLED and
         // releases the held tickets back to the category counter.
+        //
+        // A box office sale is stamped with its seller here, at insert (V36):
+        // an agent's ticket cap counts the agent's bookings that are not
+        // CANCELLED, PENDING ones included, so the row must name its agent
+        // from the moment it exists.
+        BoxOfficeSeller seller = inputs.seller();
         Booking booking = Booking.builder()
+                .soldByUserUuid(seller == null ? null : seller.userUuid())
+                .soldByName(seller == null ? null : seller.name())
+                .soldByAgentId(seller == null ? null : seller.agentId())
+                .agentCommissionPercent(seller == null || !seller.isAgent() ? null : seller.commissionPercent())
                 .userEmail(inputs.userEmail())
                 .customerName(inputs.customerName())
                 .phoneNumber(inputs.phoneNumber())
@@ -437,7 +474,7 @@ public class BookingService {
                 .answersPurgeAfter(inputs.answersPurgeAfter())
                 .build();
         return txTemplate.execute(status -> persistBooking(booking, inputs.qtyByCategory(),
-                inputs.categoryById(), inputs.ticketSpecs(), inputs.userEmail(), inputs.promoCode()));
+                inputs.categoryById(), inputs.ticketSpecs(), inputs.userEmail(), inputs.promoCode(), seller));
     }
 
     /** The SQLState that makes {@code ex} worth one retry (40P01 / 40001), else null. */
@@ -571,13 +608,27 @@ public class BookingService {
      * {@link #claimOnce}'s {@code txTemplate.execute} callback, once per
      * attempt. {@code qtyByCategory} is in the canonical lock order, so the
      * counter rows are claimed in it.
+     *
+     * <p>Lock order inside the claim: a sales agent's (agent, event) advisory
+     * lock first (V36, only for an agent with a ticket cap), then the
+     * category_inventory rows in {@link StockLedger} order, then the promo
+     * code row. The agent lock is taken by nothing else, and a booking never
+     * takes it with a booking row held, so it closes no cycle.
      */
     private BookingResponseDTO persistBooking(Booking booking,
                                               Map<UUID, Integer> qtyByCategory,
                                               Map<UUID, CategoryLookupDTO> categoryById,
                                               List<TicketSpec> ticketSpecs,
                                               String userEmail,
-                                              String promoCode) {
+                                              String promoCode,
+                                              BoxOfficeSeller seller) {
+        // A sales agent's ticket cap (V36), counted under the agent's lock
+        // before anything is claimed. A refusal rolls the claim back: nothing
+        // is held.
+        if (seller != null && seller.isAgent() && seller.ticketCap() != null) {
+            requireAgentRoom(seller, booking.getEventId(), ticketSpecs.size());
+        }
+
         // Claim capacity atomically, per category, in THIS transaction. The
         // per-category counter — not a seat row — is the oversell guard now.
         // Seed the counter once per category (remaining = total_seats −
@@ -722,7 +773,87 @@ public class BookingService {
         log.info("Booking created bookingId={} confirmation={} userEmail={} eventId={} total={} items={}",
                 booking.getId(), booking.getConfirmationNumber(), userEmail, booking.getEventId(),
                 booking.getTotalAmount(), items.size());
-        return toBuyerDTO(booking);
+        return seller == null ? toBuyerDTO(booking) : toSellerDTO(booking);
+    }
+
+    // ---- Sales agents (V36) --------------------------------------------------
+
+    /** {@code data.errorCode} of the 403 a sale by someone who may not sell for the event answers. */
+    public static final String NOT_A_SALES_AGENT = "NOT_A_SALES_AGENT";
+    static final String NOT_A_SALES_AGENT_MESSAGE = "You can't sell tickets for this event.";
+
+    /** {@code data.errorCode} of the 409 a sale past the agent's ticket cap answers. */
+    public static final String AGENT_CAP_REACHED = "AGENT_CAP_REACHED";
+
+    /**
+     * The advisory-lock namespace of the per-(agent, event) cap lock: "AGNT".
+     * The two-integer form keeps the key apart from any one-integer key.
+     */
+    static final int AGENT_LOCK_NAMESPACE = 0x41474E54;
+
+    static ApiProblemException notASalesAgent() {
+        return new ApiProblemException(HttpStatus.FORBIDDEN, NOT_A_SALES_AGENT, NOT_A_SALES_AGENT_MESSAGE);
+    }
+
+    /** The cap lock's key for one (agent, event) pair; a key two pairs share only makes them queue. */
+    static int agentLockKey(UUID agentId, UUID eventId) {
+        return 31 * agentId.hashCode() + eventId.hashCode();
+    }
+
+    /**
+     * Refuses (409 {@value #AGENT_CAP_REACHED}, {@code data.cap},
+     * {@code data.remaining}) a sale that would take the agent past their
+     * ticket cap for the event. Runs FIRST inside the claim transaction: the
+     * per-(agent, event) advisory lock, then the count of the agent's tickets
+     * for the event on bookings that are not CANCELLED (a voided or expired
+     * sale frees its tickets). Every sale of that agent for that event takes
+     * the same lock first and inserts its rows before it commits, so the count
+     * cannot move under this one: the cap is exact on any number of replicas.
+     *
+     * <p>One way past it, stated rather than hidden: a CANCELLED online sale
+     * that a late payment resurrects (H2) takes its tickets back without this
+     * lock, so the agent can end up over the cap by that booking. The buyer
+     * paid; the same holds for promo codes and price tiers.
+     */
+    private void requireAgentRoom(BoxOfficeSeller seller, UUID eventId, int requested) {
+        bookingRepository.lockAgentSales(AGENT_LOCK_NAMESPACE, agentLockKey(seller.agentId(), eventId));
+        long held = bookingItemRepository.countActiveByAgentAndEvent(seller.agentId(), eventId,
+                Booking.BookingStatus.CANCELLED);
+        int cap = seller.ticketCap();
+        long remaining = Math.max(0L, cap - held);
+        if (requested <= remaining) {
+            return;
+        }
+        BookingMetrics m = metrics;
+        if (m != null) {
+            m.agentSale(BookingMetrics.AgentSaleOutcome.CAP_REACHED);
+        }
+        log.info("Agent sale refused, past the agent's ticket cap agentId={} eventId={} cap={} held={} requested={}",
+                seller.agentId(), eventId, cap, held, requested);
+        Map<String, Object> extra = new LinkedHashMap<>();
+        extra.put("cap", cap);
+        extra.put("remaining", remaining);
+        throw new ApiProblemException(HttpStatus.CONFLICT, AGENT_CAP_REACHED, agentCapMessage(cap, remaining),
+                extra);
+    }
+
+    public static String agentCapMessage(int cap, long remaining) {
+        if (remaining <= 0) {
+            return "You have sold all " + cap + " tickets you may sell for this event.";
+        }
+        return "You may sell only " + remaining + " more " + (remaining == 1 ? "ticket" : "tickets")
+                + " for this event (your limit is " + cap + ").";
+    }
+
+    /**
+     * A box office sale as its seller reads it: the staff view (masked ticket
+     * numbers when the cell masks them, the seller named) plus the buyer's
+     * {@code viewToken}, which an ONLINE sale's checkout polls with.
+     */
+    private BookingResponseDTO toSellerDTO(Booking booking) {
+        BookingResponseDTO dto = toDTO(booking, true, false);
+        dto.setViewToken(booking.getLinkToken());
+        return dto;
     }
 
     /**
@@ -1600,7 +1731,9 @@ public class BookingService {
      * #createBoxOfficeBooking} just made becomes CONFIRMED, paid in CASH,
      * stamped with its seller, under its row lock. {@link #markConfirmed} is
      * the online confirm's own, so the tickets, numbers and messages are
-     * exactly an online sale's. Answers the organizer's (staff) view.
+     * exactly an online sale's (and a sales agent's commission is stamped
+     * there). Answers the seller's (staff) view. The seller was stamped at
+     * insert (V36); a booking that somehow carries none gets this one.
      */
     BookingResponseDTO confirmBoxOfficeSale(UUID bookingId, UUID sellerUserUuid, String sellerName) {
         return Objects.requireNonNull(txTemplate.execute(status -> {
@@ -1609,8 +1742,10 @@ public class BookingService {
                 log.warn("Box office sale not confirmable bookingId={} status={}", bookingId, booking.getStatus());
                 throw new BookingConflictException(NOT_CONFIRMABLE_MESSAGE);
             }
-            booking.setSoldByUserUuid(sellerUserUuid);
-            booking.setSoldByName(sellerName);
+            if (booking.getSoldByUserUuid() == null) {
+                booking.setSoldByUserUuid(sellerUserUuid);
+                booking.setSoldByName(sellerName);
+            }
             booking.setPaymentRail(PaymentMethods.CASH);
             markConfirmed(booking, null);
             log.info("Box office sale bookingId={} seller={} total={}", bookingId, sellerUserUuid,
@@ -2183,6 +2318,7 @@ public class BookingService {
         booking.setPointsUsed(pointsToUse.signum() > 0 ? pointsToUse : null);
         booking.setCashAmount(cashAmount);
         recordPaymentRail(booking, confirmRequest);
+        stampAgentCommission(booking);
         booking.setStatus(Booking.BookingStatus.CONFIRMED);
         booking.setExpiresAt(null); // paid — hold no longer applicable
         bookingRepository.save(booking);
@@ -2208,6 +2344,21 @@ public class BookingService {
         log.info("Booking confirmed bookingId={} userEmail={} pointsUsed={} cashAmount={}",
                 booking.getId(), booking.getUserEmail(), booking.getPointsUsed(), booking.getCashAmount());
         return toDTO(booking);
+    }
+
+    /**
+     * A sales agent's commission on the sale (V36): what the buyer paid
+     * ({@code totalAmount}, tickets and add-ons) times the percentage stamped
+     * at the sale, HALF_UP to the cent. Stamped once, when the booking becomes
+     * CONFIRMED (a cash sale at once, an online one at payment-service's
+     * confirm, a resurrect too), never on any other booking.
+     */
+    private static void stampAgentCommission(Booking booking) {
+        if (booking.getSoldByAgentId() == null || booking.getAgentCommissionAmount() != null) {
+            return;
+        }
+        booking.setAgentCommissionAmount(
+                BoxOfficeSeller.commissionOn(booking.getTotalAmount(), booking.getAgentCommissionPercent()));
     }
 
     /**

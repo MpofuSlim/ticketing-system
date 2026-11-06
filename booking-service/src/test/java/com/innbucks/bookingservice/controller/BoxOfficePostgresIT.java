@@ -4,6 +4,7 @@ import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.EventSalesWindowDTO;
+import com.innbucks.bookingservice.dto.SellerAccessDTO;
 import com.innbucks.bookingservice.testsupport.BookingStockPostgresTestBase;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterEach;
@@ -26,6 +27,7 @@ import static com.innbucks.bookingservice.controller.BoxOfficeController.EXAMPLE
 import static com.innbucks.bookingservice.controller.BoxOfficeController.EXAMPLE_EVENT_STARTED;
 import static com.innbucks.bookingservice.controller.BoxOfficeController.EXAMPLE_KEY_REQUIRED;
 import static com.innbucks.bookingservice.controller.BoxOfficeController.EXAMPLE_NOT_A_CASH_SALE;
+import static com.innbucks.bookingservice.controller.BoxOfficeController.EXAMPLE_NOT_A_SALES_AGENT;
 import static com.innbucks.bookingservice.controller.BoxOfficeController.EXAMPLE_TICKET_SCANNED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
@@ -77,6 +79,10 @@ class BoxOfficePostgresIT extends BookingStockPostgresTestBase {
         released.setAvailableTickets(98);
         when(eventServiceClient.releaseAvailability(eq(eventId), anyInt(), anyString()))
                 .thenReturn(ApiResult.ok(released));
+        // Nobody here is a sales agent (V36): anyone but the event's organizer
+        // is asked about as one, and refused.
+        when(eventServiceClient.sellerAccess(any(), any(), any())).thenReturn(ApiResult.ok("Seller access",
+                SellerAccessDTO.builder().allowed(false).build()));
     }
 
     @AfterEach
@@ -172,11 +178,20 @@ class BoxOfficePostgresIT extends BookingStockPostgresTestBase {
         sell(organizerBearer(), null, 1)
                 .andExpect(status().isBadRequest())
                 .andExpect(content().json(EXAMPLE_KEY_REQUIRED, JsonCompareMode.STRICT));
+        // Another organizer, and a customer, are asked about as sales agents
+        // (V36) and are not ones: the documented 403.
         sell(bearer("other@example.com", List.of("EVENT_ORGANIZER"),
-                Map.of("organizerUuid", UUID.randomUUID().toString())), UUID.randomUUID().toString(), 1)
-                .andExpect(status().isForbidden());
-        sell(bearer("buyer@example.com", List.of("CUSTOMER"), Map.of("phoneNumber", "+263771234567")),
+                Map.of("organizerUuid", UUID.randomUUID().toString(), "userUuid", UUID.randomUUID().toString())),
                 UUID.randomUUID().toString(), 1)
+                .andExpect(status().isForbidden())
+                .andExpect(content().json(EXAMPLE_NOT_A_SALES_AGENT, JsonCompareMode.STRICT));
+        sell(bearer("buyer@example.com", List.of("CUSTOMER"),
+                Map.of("phoneNumber", "+263771234567", "userUuid", UUID.randomUUID().toString())),
+                UUID.randomUUID().toString(), 1)
+                .andExpect(status().isForbidden())
+                .andExpect(content().json(EXAMPLE_NOT_A_SALES_AGENT, JsonCompareMode.STRICT));
+        // A session with no selling role at all never reaches the check.
+        sell(bearer("staff@example.com", List.of("PRODUCT_OFFICER"), Map.of()), UUID.randomUUID().toString(), 1)
                 .andExpect(status().isForbidden());
         assertThat(jdbc.queryForObject("SELECT count(*) FROM bookings WHERE event_id = ?", Integer.class, eventId))
                 .isZero();

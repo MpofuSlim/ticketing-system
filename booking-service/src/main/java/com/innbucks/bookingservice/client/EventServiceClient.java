@@ -5,6 +5,7 @@ import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.EventSalesWindowDTO;
 import com.innbucks.bookingservice.dto.ScannerAccessDTO;
+import com.innbucks.bookingservice.dto.SellerAccessDTO;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -53,6 +54,19 @@ public interface EventServiceClient {
     @GetMapping("/events/internal/scanner-access")
     ApiResult<ScannerAccessDTO> scannerAccess(
             @RequestParam("userUuid") UUID userUuid,
+            @RequestParam("eventId") UUID eventId,
+            @RequestHeader("X-Internal-Token") String internalToken
+    );
+
+    // May this account sell tickets for this event as a sales agent (event-
+    // service team rows with Sell)? Asked live before every agent's box office
+    // sale, with no transaction open. event-service always answers 200 (a
+    // refusal is allowed=false), so the fallback's null data only ever means
+    // "could not ask", which the sale refuses with a retryable 503: an
+    // unverified seller never sells.
+    @GetMapping("/events/internal/seller-access")
+    ApiResult<SellerAccessDTO> sellerAccess(
+            @RequestParam("accountUserUuid") UUID accountUserUuid,
             @RequestParam("eventId") UUID eventId,
             @RequestHeader("X-Internal-Token") String internalToken
     );

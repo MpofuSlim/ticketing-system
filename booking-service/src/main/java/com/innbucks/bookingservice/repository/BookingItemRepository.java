@@ -107,6 +107,26 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
             @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
     );
 
+    /**
+     * Tickets a sales agent holds or has sold for one event (V36): items of
+     * the agent's bookings for it that are not CANCELLED, so a voided or
+     * expired sale frees its tickets. The agent's ticket cap is checked
+     * against this, read under the per-(agent, event) advisory lock
+     * ({@link BookingRepository#lockAgentSales}) so two sales of one agent
+     * cannot both pass it. Served by idx_bookings_sold_by_agent_event.
+     */
+    @Query("""
+        SELECT COUNT(i) FROM BookingItem i
+        WHERE i.booking.soldByAgentId = :agentId
+          AND i.booking.eventId = :eventId
+          AND i.booking.status <> :cancelledStatus
+    """)
+    long countActiveByAgentAndEvent(
+            @Param("agentId") UUID agentId,
+            @Param("eventId") UUID eventId,
+            @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
+    );
+
     // Batch sibling of countActiveByCategoryId, grouped by category. Powers
     // seat-service's live per-category availableSeats: a category returns
     // availableSeats = totalSeats − activeCount, the same totalCapacity −

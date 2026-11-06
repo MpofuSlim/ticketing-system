@@ -90,6 +90,18 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     @Query(value = "SELECT * FROM bookings WHERE id = :id FOR UPDATE SKIP LOCKED", nativeQuery = true)
     Optional<Booking> lockByIdSkipLocked(@Param("id") UUID id);
 
+    // Sales agents (V36): a transaction-scoped advisory lock on one (agent,
+    // event) pair, taken by an agent's sale FIRST in its claim transaction,
+    // before any category_inventory row, so the agent's ticket cap is counted
+    // exactly (BookingItemRepository.countActiveByAgentAndEvent): two sales of
+    // one agent queue here. Released at commit or rollback. Nothing else takes
+    // it, and a transaction takes at most one, so it adds no cycle to the lock
+    // order (StockLedger). A key that two pairs share only makes them queue.
+    // pg_advisory_xact_lock returns void; called in FROM, it always runs.
+    @Query(value = "SELECT 1 FROM pg_advisory_xact_lock(CAST(:namespace AS integer), CAST(:pairKey AS integer))",
+            nativeQuery = true)
+    Integer lockAgentSales(@Param("namespace") int namespace, @Param("pairKey") int pairKey);
+
     // The expiry sweep's candidates, read with NO lock: PENDING holds that
     // lapsed before :now, oldest first, (expires_at, id) as a keyset cursor so
     // a booking the sweep has to skip never stops it reaching the ones after

@@ -309,4 +309,52 @@ class IdempotencyFilterTest {
         assertEquals("{\"confirmation\":\"INN-9\"}", res.getContentAsString());
         verify(store).release(contains("oom-1"));
     }
+
+    /** A super-app session: no email (so no name), CUSTOMER only, its account id in the JWT details. */
+    private void authenticateAppSession(java.util.UUID userUuid) {
+        var auth = new UsernamePasswordAuthenticationToken(null, null,
+                List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_CUSTOMER")));
+        auth.setDetails(new com.innbucks.bookingservice.security.JwtAuthDetails(null, "+263772000111", userUuid,
+                null, null, null));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    @Test
+    void twoAppSessionsWithNoEmail_behindTheSameGateway_doNotShareAScope() throws Exception {
+        IdempotencyStore store = new InMemoryIdempotencyStore();
+        IdempotencyFilter filter = new IdempotencyFilter(store);
+
+        authenticateAppSession(java.util.UUID.randomUUID());
+        MockHttpServletRequest reqA = new MockHttpServletRequest("POST", "/bookings/box-office");
+        reqA.setRemoteAddr("10.0.0.1");
+        reqA.addHeader("Idempotency-Key", "sale-key");
+        filter.doFilterInternal(reqA, new MockHttpServletResponse(), (req, res) -> {
+            HttpServletResponse http = (HttpServletResponse) res;
+            http.setStatus(201);
+            http.getWriter().write("{\"buyer\":\"Rufaro Moyo\"}");
+        });
+
+        // Another agent's app, same gateway address, same key: their own sale runs.
+        SecurityContextHolder.clearContext();
+        java.util.UUID other = java.util.UUID.randomUUID();
+        authenticateAppSession(other);
+        MockHttpServletRequest reqB = new MockHttpServletRequest("POST", "/bookings/box-office");
+        reqB.setRemoteAddr("10.0.0.1");
+        reqB.addHeader("Idempotency-Key", "sale-key");
+        MockHttpServletResponse resB = new MockHttpServletResponse();
+        AtomicInteger executed = new AtomicInteger();
+        filter.doFilterInternal(reqB, resB, (req, res) -> {
+            executed.incrementAndGet();
+            ((HttpServletResponse) res).setStatus(201);
+        });
+        assertEquals(1, executed.get(), "another account must never replay this one's sale");
+
+        // The same app session retrying still gets its first answer.
+        MockHttpServletRequest retry = new MockHttpServletRequest("POST", "/bookings/box-office");
+        retry.setRemoteAddr("10.0.0.1");
+        retry.addHeader("Idempotency-Key", "sale-key");
+        AtomicInteger again = new AtomicInteger();
+        filter.doFilterInternal(retry, new MockHttpServletResponse(), (req, res) -> again.incrementAndGet());
+        assertEquals(0, again.get());
+    }
 }
