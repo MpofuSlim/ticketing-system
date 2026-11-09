@@ -55,7 +55,7 @@
         <dependency>
             <groupId>com.googlecode.libphonenumber</groupId>
             <artifactId>libphonenumber</artifactId>
-            <version>9.0.41</version>
+            <version>9.0.43</version>
         </dependency>
 
         <!-- JWT -->
