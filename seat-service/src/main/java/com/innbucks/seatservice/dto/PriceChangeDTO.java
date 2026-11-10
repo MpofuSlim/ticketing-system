@@ -42,7 +42,8 @@ public class PriceChangeDTO {
     private List<Tier> tiersAfter;
 
     @Schema(example = "7a1c3e5f-2b4d-4f6a-8c0e-1a2b3c4d5e6f", nullable = true,
-            description = "Who made the change: the organizer's uuid, or the admin's email.")
+            description = "Who made the change. The organizer reads their own uuid, or \"InnBucks\" for a "
+                    + "change InnBucks staff made; SUPER_ADMIN reads the organizer's uuid or the admin's email.")
     private String changedBy;
 
     @Schema(example = "2026-09-02T10:15:00+02:00", description = "When, at the market's offset.")

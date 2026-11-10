@@ -3327,7 +3327,11 @@ runs when a tier closes: every read works out the price in force at that moment.
   and a trigger refusing UPDATE and DELETE. **`category_id` has no foreign key on
   purpose**: the record outlives the category, and the ITs hard-delete categories.
   `GET /seat-categories/{id}/price-history` (owner or SUPER_ADMIN, newest first,
-  at most 200; a deleted category's history stays readable).
+  at most 200; a deleted category's history stays readable). **The organizer
+  never learns which staff account changed their price**: `changed_by` holds an
+  admin's JWT email, so for the owner a change they did not make reads
+  `changedBy: "InnBucks"` (`PriceHistory.toDto`); SUPER_ADMIN reads it whole.
+  event-service's sales-window history follows the same rule.
 
 ## Bookings record how they were paid (booking-service V29)
 

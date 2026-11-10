@@ -785,7 +785,8 @@ public class SeatCategoryController {
             description = "Every change to the category's full price or its price tiers, newest first (at most "
                     + "200): CREATED (the price and tiers it was created with), PRICE_CHANGED (old and new full "
                     + "price) and TIERS_CHANGED (the tiers before and after, each with its terms as they were). "
-                    + "`changedBy` is the organizer's uuid or the admin's email. The record is append-only. "
+                    + "`changedBy` is the organizer's uuid, or for a change InnBucks staff made, \"InnBucks\" to "
+                    + "the organizer and the admin's email to SUPER_ADMIN. The record is append-only. "
                     + "Requires the owning EVENT_ORGANIZER or SUPER_ADMIN; a deleted category's history stays "
                     + "readable.")
     @ApiResponses({
@@ -827,7 +828,7 @@ public class SeatCategoryController {
                                           "newPrice": 160.00,
                                           "tiersBefore": null,
                                           "tiersAfter": null,
-                                          "changedBy": "7a1c3e5f-2b4d-4f6a-8c0e-1a2b3c4d5e6f",
+                                          "changedBy": "InnBucks",
                                           "changedAt": "2026-09-02T10:15:00+02:00"
                                         },
                                         {

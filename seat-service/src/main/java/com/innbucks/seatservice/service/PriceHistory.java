@@ -44,7 +44,20 @@ final class PriceHistory {
         }
     }
 
-    static PriceChangeDTO toDto(SeatCategoryPriceChange change) {
+    /**
+     * What an organizer reads in {@code changedBy} for a change someone else
+     * made. Only the event's organizer and SUPER_ADMIN can change a price, so
+     * that someone is InnBucks staff, whose JWT email is how a staff account is
+     * found: it goes to staff readers only.
+     */
+    static final String CHANGED_BY_INNBUCKS = "InnBucks";
+
+    /**
+     * {@code readerOrganizerUuid} is the reading organizer (the event's owner,
+     * checked before this); {@code staffReader} sees who made every change.
+     */
+    static PriceChangeDTO toDto(SeatCategoryPriceChange change, java.util.UUID readerOrganizerUuid,
+                                boolean staffReader) {
         return PriceChangeDTO.builder()
                 .id(change.getId())
                 .changeType(change.getChangeType().name())
@@ -52,9 +65,17 @@ final class PriceHistory {
                 .newPrice(change.getNewPrice())
                 .tiersBefore(read(change.getTiersBefore()))
                 .tiersAfter(read(change.getTiersAfter()))
-                .changedBy(change.getChangedBy())
+                .changedBy(changedBy(change.getChangedBy(), readerOrganizerUuid, staffReader))
                 .changedAt(change.getChangedAt())
                 .build();
+    }
+
+    private static String changedBy(String stored, java.util.UUID readerOrganizerUuid, boolean staffReader) {
+        if (stored == null || staffReader) {
+            return stored;
+        }
+        return readerOrganizerUuid != null && readerOrganizerUuid.toString().equalsIgnoreCase(stored)
+                ? stored : CHANGED_BY_INNBUCKS;
     }
 
     /** Null for no snapshot. An unreadable one is logged and read as none: history is never a 500. */
