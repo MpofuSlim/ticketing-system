@@ -46,6 +46,12 @@ public class PriceChangeDTO {
                     + "change InnBucks staff made; SUPER_ADMIN reads the organizer's uuid or the admin's email.")
     private String changedBy;
 
+    @Schema(example = "true", nullable = true,
+            description = "Whether the event's organizer made the change (false: InnBucks staff did). Null when "
+                    + "it cannot be said: no author was recorded, or, for SUPER_ADMIN only, the event could not "
+                    + "be read (deleted, or event-service unreachable).")
+    private Boolean changedByOrganizer;
+
     @Schema(example = "2026-09-02T10:15:00+02:00", description = "When, at the market's offset.")
     private LocalDateTime changedAt;
 

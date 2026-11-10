@@ -531,6 +531,12 @@ public class SeatCategoryService {
      * were), and who did it. The owning EVENT_ORGANIZER or SUPER_ADMIN; a
      * deleted category's history stays readable. The ownership check asks
      * event-service with no transaction open, like the edits.
+     *
+     * <p>Each change says whether the event's organizer made it. For the
+     * organizer the owner is themselves (the ownership check just proved it);
+     * for SUPER_ADMIN it is asked of event-service, also with no transaction
+     * open, and is unknown when the event cannot be read (deleted, or
+     * event-service unreachable): the history is still served.
      */
     public List<PriceChangeDTO> getPriceHistory(UUID categoryId,
                                                 UUID callerOrganizerUuid,
@@ -539,8 +545,12 @@ public class SeatCategoryService {
                                                 String authHeader) {
         SeatCategory category = TransactionPhases.inTransaction(readTx, () -> categoryRepository.findById(categoryId)
                 .orElseThrow(() -> new NotFoundException("Seat category not found")));
-        if (!isAdmin) {
+        UUID eventOwner;
+        if (isAdmin) {
+            eventOwner = eventOwnerIfKnown(category.getEventId(), authHeader);
+        } else {
             requireEventOwnership(category.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
+            eventOwner = callerOrganizerUuid;
         }
         if (priceChangeRepository == null) {
             return List.of();
@@ -548,8 +558,17 @@ public class SeatCategoryService {
         return TransactionPhases.inTransaction(readTx,
                         () -> priceChangeRepository.findTop200ByCategoryIdOrderByChangedAtDesc(categoryId))
                 .stream()
-                .map(change -> PriceHistory.toDto(change, callerOrganizerUuid, isAdmin))
+                .map(change -> PriceHistory.toDto(change, eventOwner, isAdmin))
                 .toList();
+    }
+
+    /** The event's organizer, or null when event-service cannot say (best-effort: display only). */
+    private UUID eventOwnerIfKnown(UUID eventId, String authHeader) {
+        EventServiceClient client = eventClientProvider == null ? null : eventClientProvider.getIfAvailable();
+        if (client == null) {
+            return null;
+        }
+        return client.fetchEvent(eventId, authHeader).map(EventLookupDTO::getTenantUserUuid).orElse(null);
     }
 
     /**

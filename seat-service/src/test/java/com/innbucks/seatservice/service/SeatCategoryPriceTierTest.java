@@ -601,10 +601,64 @@ class SeatCategoryPriceTierTest {
                 false, "Bearer t");
         assertEquals(List.of("InnBucks", owner.toString()),
                 asOwner.stream().map(PriceChangeDTO::getChangedBy).toList());
+        assertEquals(List.of(false, true), asOwner.stream().map(PriceChangeDTO::getChangedByOrganizer).toList());
 
         List<PriceChangeDTO> asAdmin = service.getPriceHistory(vip.getId(), null, "admin@example.com", true, null);
         assertEquals(List.of("tmpofu@innbucks.co.zw", owner.toString()),
                 asAdmin.stream().map(PriceChangeDTO::getChangedBy).toList());
+        assertEquals(List.of(false, true), asAdmin.stream().map(PriceChangeDTO::getChangedByOrganizer).toList());
+    }
+
+    @Test
+    void aStaffChangeStampedWithAnOrganizerUuid_isNotTheOrganizers() {
+        // The auditor stamps any caller's organizerUuid claim, so a uuid alone does
+        // not mean the event's organizer: the flag compares with the event's owner.
+        SeatCategoryService service = service();
+        String otherUuid = UUID.randomUUID().toString();
+        changes.add(SeatCategoryPriceChange.builder().categoryId(vip.getId()).eventId(eventId)
+                .changeType(SeatCategoryPriceChange.ChangeType.PRICE_CHANGED).oldPrice(new BigDecimal("150.00"))
+                .newPrice(new BigDecimal("160.00")).changedBy(otherUuid)
+                .changedAt(LocalDateTime.of(2026, 9, 2, 8, 0)).build());
+
+        PriceChangeDTO asOwner = service.getPriceHistory(vip.getId(), owner, "organizer@example.com", false,
+                "Bearer t").get(0);
+        assertEquals("InnBucks", asOwner.getChangedBy());
+        assertEquals(Boolean.FALSE, asOwner.getChangedByOrganizer());
+
+        PriceChangeDTO asAdmin = service.getPriceHistory(vip.getId(), null, "admin@example.com", true, "Bearer a")
+                .get(0);
+        assertEquals(otherUuid, asAdmin.getChangedBy());
+        assertEquals(Boolean.FALSE, asAdmin.getChangedByOrganizer());
+    }
+
+    @Test
+    void superAdmin_stillReadsTheHistory_whenTheEventCannotBeRead_withoutTheFlag() {
+        SeatCategoryService service = service();
+        changes.add(SeatCategoryPriceChange.builder().categoryId(vip.getId()).eventId(eventId)
+                .changeType(SeatCategoryPriceChange.ChangeType.CREATED).newPrice(new BigDecimal("150.00"))
+                .changedBy(owner.toString()).changedAt(LocalDateTime.of(2026, 9, 1, 8, 0)).build());
+        EventServiceClient unreachable = mock(EventServiceClient.class);
+        when(unreachable.fetchEvent(any(), any())).thenReturn(Optional.empty());
+        when(provider.getIfAvailable()).thenReturn(unreachable);
+
+        PriceChangeDTO asAdmin = service.getPriceHistory(vip.getId(), null, "admin@example.com", true, "Bearer a")
+                .get(0);
+
+        assertEquals(owner.toString(), asAdmin.getChangedBy());
+        assertNull(asAdmin.getChangedByOrganizer());
+    }
+
+    @Test
+    void aChangeWithNoRecordedAuthor_saysNothingAboutWho() {
+        SeatCategoryService service = service();
+        changes.add(SeatCategoryPriceChange.builder().categoryId(vip.getId()).eventId(eventId)
+                .changeType(SeatCategoryPriceChange.ChangeType.CREATED).newPrice(new BigDecimal("150.00"))
+                .changedBy(null).changedAt(LocalDateTime.of(2026, 9, 1, 8, 0)).build());
+
+        PriceChangeDTO asOwner = service.getPriceHistory(vip.getId(), owner, "organizer@example.com", false,
+                "Bearer t").get(0);
+        assertNull(asOwner.getChangedBy());
+        assertNull(asOwner.getChangedByOrganizer());
     }
 
     @Test
