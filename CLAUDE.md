@@ -3884,6 +3884,55 @@ covered by the `/events/internal/*` permitAll and `event-internal-deny`).
   (`GlobalExceptionHandler.handleUnreadable`); it was a 500 through the
   `RuntimeException` catch-all.
 
+## Ticket sales close at a scheduled time (event-service V22, booking-service, payment-service)
+
+**An organizer can set `salesEndDateTime`: from then the event is still listed
+but sells nothing (`salesStatus: SALES_CLOSED`), on every channel (app, website,
+box office, sales agents).** Owner's go and the FE sign-off (2026-11-10):
+enforced in the backend; the customer apps need no change beyond showing the
+new status and the 409.
+
+- **The rule is `SalesStatus.of`**, one step added: NOT_PUBLISHED, then ENDED
+  (the event's end still wins), then SALES_CLOSED (now ≥ the sales end), then
+  NOT_YET_ON_SALE, else ON_SALE. Market-local in (`MarketTimeZone.toUtc`), UTC
+  stored (`events.sales_end_at`), null = sell until the event ends.
+  `EventService.requireSalesWindow` refuses (400) a sales start at or after the
+  end, a sales end at or before the sales start, and a sales end after the
+  event's end, all against the MERGED values on update (so moving the event's
+  end before a stored sales end is refused). The sales end may be in the past
+  (close sales now). On `PUT`, absent = unchanged, explicit `null` = cleared
+  (`salesEndDateTimeSent`).
+- **The organizer list filters on it in SQL** (`GET /events/my?salesStatus=`,
+  `EventRepository.findByTenantUserUuidAndSalesStatus`): the same rule written
+  in JPQL, so every page is filtered. **Change `SalesStatus.of` and that query
+  together**; `EventSalesWindowPostgresIT` compares them for every status.
+- **Who moved the window is on record** (`event_sales_window_changes`, V22):
+  one CREATED row when an event is created with a sales start or end, one
+  CHANGED row per update that moves either, old and new of both, in the same
+  transaction. Append-only like seat-service's price history (no FK on
+  `event_id`, `@Immutable`, a trigger refusing UPDATE/DELETE). Read at
+  `GET /events/{id}/sales-window/history` (owner or platform staff, else the
+  same 404; `authenticated()` before the `GET /events/**` permitAll). **An
+  organizer never learns which staff account changed their event**: a staff
+  change reads `changedBy: "InnBucks"` for them.
+- **booking-service refuses a booking with 409 `SALES_CLOSED`** ("Ticket sales
+  for this event have closed.", `data.salesEndDateTime`), box office and agents
+  included (same create path). An older booking-service already refuses it as
+  the unknown status (409 `EVENT_NOT_ON_SALE`), so event-service can deploy first.
+- **Extend-hold asks too**: payment-service calls it before minting every
+  instrument, so a payment cannot START after the cut-off (409 `SALES_CLOSED`,
+  or `EVENT_ENDED`, which payment-service shows in words instead of "Your
+  booking has expired"). The question runs with no transaction open, then the
+  locked phase. **It fails OPEN** when event-service cannot answer (WARN,
+  counted): the booking was admitted while on sale, the most that slips is a
+  payment started within one hold of the cut-off during an outage, and failing
+  closed would stop every payment whenever event-service blips. **A payment
+  started before the cut-off is honoured**: confirm never reads the window.
+- **No scheduled job, nothing cached**: every read works the status out.
+  Price-tier reminders skip an event whose sales have closed.
+- **Deploy order:** event-service, booking-service, payment-service. V22 is a
+  nullable column plus a new table.
+
 ## Event terms and booking questions (event-service V16, booking-service V32)
 
 **An organizer can give an event terms and conditions (versioned) and up to 10

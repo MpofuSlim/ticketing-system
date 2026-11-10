@@ -129,7 +129,7 @@ class JwtFilterParseOnceTest {
         verify(jwtUtil, times(1)).parseClaims(token);
         verify(jwtUtil, times(1)).parseClaims(anyString());
         // The organizer scope still reaches the service — from the one parse.
-        verify(eventService).getMyEvents(eq(organizer), any(), any(), any(), anyInt(), anyInt(), anyString());
+        verify(eventService).getMyEvents(eq(organizer), any(), any(), any(), any(), anyInt(), anyInt(), anyString());
     }
 
     @Test

@@ -28,9 +28,10 @@ public class EventMapper {
                 .startDateTime(event.getStartDateTime())
                 .endDateTime(event.getEndDateTime())
                 .salesStartDateTime(event.getSalesStartAt())
+                .salesEndDateTime(event.getSalesEndAt())
                 // Worked out per call, never cached (see SalesStatus).
                 .salesStatus(SalesStatus.of(event.isActive(), event.isRejected(), event.getSalesStartAt(),
-                        event.getEndDateTime(), LocalDateTime.now(ZoneOffset.UTC)))
+                        event.getSalesEndAt(), event.getEndDateTime(), LocalDateTime.now(ZoneOffset.UTC)))
                 // The version only; the text and the questions are attached by
                 // EventService where a response carries them (never on lists).
                 .termsVersion(event.getTermsVersion())

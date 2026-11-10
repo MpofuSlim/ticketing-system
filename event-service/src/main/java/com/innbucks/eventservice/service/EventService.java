@@ -8,6 +8,7 @@ import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.*;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.EventCategory;
+import com.innbucks.eventservice.entity.EventSalesWindowChange;
 import com.innbucks.eventservice.entity.Location;
 import com.innbucks.eventservice.exception.BadRequestException;
 import com.innbucks.eventservice.exception.ConflictException;
@@ -102,6 +103,18 @@ public class EventService {
 
     /** Terms and booking questions (V16); absent in hand-built tests, which then neither save nor show them. */
     private EventTermsAndQuestions termsAndQuestions;
+
+    /**
+     * The record of who set or moved a sales window, and when (V22); absent in
+     * hand-built tests, which then record nothing and cannot read it.
+     */
+    private com.innbucks.eventservice.repository.EventSalesWindowChangeRepository salesWindowChanges;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setSalesWindowChanges(
+            com.innbucks.eventservice.repository.EventSalesWindowChangeRepository salesWindowChanges) {
+        this.salesWindowChanges = salesWindowChanges;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setTermsAndQuestions(EventTermsAndQuestions termsAndQuestions) {
@@ -233,11 +246,33 @@ public class EventService {
             int size,
             String sortBy
     ) {
+        return getMyEvents(tenantUserUuid, from, to, venue, null, page, size, sortBy);
+    }
+
+    /**
+     * The organizer's own events, optionally only those whose
+     * {@link SalesStatus} is {@code salesStatus} right now (null = all). The
+     * filter runs in the query (the same rule in SQL), so every page of the
+     * answer is filtered, not just the first.
+     */
+    public Page<EventResponseDTO> getMyEvents(
+            UUID tenantUserUuid,
+            LocalDateTime from,
+            LocalDateTime to,
+            String venue,
+            SalesStatus salesStatus,
+            int page,
+            int size,
+            String sortBy
+    ) {
         Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
-        log.debug("Fetching events for tenantUserUuid={} from={} to={} venue={} page={} size={} sortBy={}",
-                tenantUserUuid, from, to, venue, page, size, sortBy);
-        return enrichWithAvailability(
-                eventRepository.findByTenantUserUuid(tenantUserUuid, from, to, venue, pageable));
+        log.debug("Fetching events for tenantUserUuid={} from={} to={} venue={} salesStatus={} page={} size={} sortBy={}",
+                tenantUserUuid, from, to, venue, salesStatus, page, size, sortBy);
+        Page<Event> events = salesStatus == null
+                ? eventRepository.findByTenantUserUuid(tenantUserUuid, from, to, venue, pageable)
+                : eventRepository.findByTenantUserUuidAndSalesStatus(tenantUserUuid, from, to, venue,
+                        salesStatus.name(), LocalDateTime.now(ZoneOffset.UTC), pageable);
+        return enrichWithAvailability(events);
     }
 
     /**
@@ -664,7 +699,9 @@ public class EventService {
         LocalDateTime endUtc = marketTimeZone.toUtc(request.getEndDateTime());
         LocalDateTime salesStartUtc = request.getSalesStartDateTime() == null
                 ? null : marketTimeZone.toUtc(request.getSalesStartDateTime());
-        requireSalesOpenBeforeEnd(salesStartUtc, endUtc);
+        LocalDateTime salesEndUtc = request.getSalesEndDateTime() == null
+                ? null : marketTimeZone.toUtc(request.getSalesEndDateTime());
+        requireSalesWindow(salesStartUtc, salesEndUtc, endUtc);
         // Terms become version 1, written once the event row exists (FK).
         String terms = termsAndQuestions == null ? null : EventTermsAndQuestions.cleanTerms(request.getTermsText());
 
@@ -690,6 +727,7 @@ public class EventService {
                 .startDateTime(startUtc)
                 .endDateTime(endUtc)
                 .salesStartAt(salesStartUtc)
+                .salesEndAt(salesEndUtc)
                 .termsVersion(terms == null ? null : 1)
                 .totalCapacity(request.getTotalCapacity())
                 .availableTickets(request.getTotalCapacity())
@@ -710,6 +748,10 @@ public class EventService {
         }
         if (terms != null) {
             termsAndQuestions.recordFirstVersion(saved.getEventId(), terms);
+        }
+        if (salesStartUtc != null || salesEndUtc != null) {
+            recordSalesWindowChange(saved.getEventId(), EventSalesWindowChange.ChangeType.CREATED,
+                    null, salesStartUtc, null, salesEndUtc);
         }
         log.info("Event created eventId={} tenantUserUuid={}",
                 saved.getEventId(), saved.getTenantUserUuid());
@@ -999,6 +1041,9 @@ public class EventService {
         // attendee notification — a description/category/capacity tweak does not.
         java.time.LocalDateTime oldStartDateTime = event.getStartDateTime();
         String oldVenue = event.getVenue();
+        // And the sales window, for its change record (V22).
+        LocalDateTime oldSalesStart = event.getSalesStartAt();
+        LocalDateTime oldSalesEnd = event.getSalesEndAt();
 
         // OWASP A03: sanitize free text on the write path (title/venue plain-text,
         // description rich-text) before it lands on the entity. category is an
@@ -1027,14 +1072,19 @@ public class EventService {
                 && !event.getEndDateTime().isAfter(event.getStartDateTime())) {
             throw new BadRequestException("The event end time must be after the start time.");
         }
-        // Explicit null clears the schedule; left out leaves it alone (see the
-        // DTO's flag). Checked against the MERGED end, so moving the end before
-        // a stored sales time is refused too.
+        // Explicit null clears either side; left out leaves it alone (see the
+        // DTO's flags). Checked against the MERGED values, so moving the event's
+        // end before a stored sales time, or one side past the other, is refused
+        // too.
         if (request.isSalesStartDateTimeSent()) {
             event.setSalesStartAt(request.getSalesStartDateTime() == null
                     ? null : marketTimeZone.toUtc(request.getSalesStartDateTime()));
         }
-        requireSalesOpenBeforeEnd(event.getSalesStartAt(), event.getEndDateTime());
+        if (request.isSalesEndDateTimeSent()) {
+            event.setSalesEndAt(request.getSalesEndDateTime() == null
+                    ? null : marketTimeZone.toUtc(request.getSalesEndDateTime()));
+        }
+        requireSalesWindow(event.getSalesStartAt(), event.getSalesEndAt(), event.getEndDateTime());
         if (request.isTermsTextSent() && termsAndQuestions != null) {
             termsAndQuestions.applyEdit(event, request.getTermsText());
         }
@@ -1046,6 +1096,11 @@ public class EventService {
         }
 
         Event saved = eventRepository.save(event);
+        if (!Objects.equals(oldSalesStart, saved.getSalesStartAt())
+                || !Objects.equals(oldSalesEnd, saved.getSalesEndAt())) {
+            recordSalesWindowChange(saved.getEventId(), EventSalesWindowChange.ChangeType.CHANGED,
+                    oldSalesStart, saved.getSalesStartAt(), oldSalesEnd, saved.getSalesEndAt());
+        }
         publicEventCatalog.invalidateAll();
         log.info("Event updated eventId={} tenantUserUuid={} title={} venue={} startDateTime={} endDateTime={}",
                 eventId, tenantUserUuid, saved.getTitle(), saved.getVenue(), saved.getStartDateTime(), saved.getEndDateTime());
@@ -1132,12 +1187,73 @@ public class EventService {
 
     /** The refusal when ticket sales would open at or after the event's end. */
     public static final String SALES_START_AFTER_END_MESSAGE = "Ticket sales must open before the event ends.";
+    /** The refusal when ticket sales would close at or before they open. */
+    public static final String SALES_END_NOT_AFTER_START_MESSAGE = "Ticket sales must close after they open.";
+    /** The refusal when ticket sales would close after the event's end. */
+    public static final String SALES_END_AFTER_END_MESSAGE = "Ticket sales must close by the time the event ends.";
 
-    /** Sales open strictly before the end, or never would; both values UTC. Null start = no schedule. */
-    private static void requireSalesOpenBeforeEnd(LocalDateTime salesStartUtc, LocalDateTime endUtc) {
+    /**
+     * The sales window's shape, all values UTC, null = no schedule on that side:
+     * sales open strictly before the event ends, close strictly after they open,
+     * and close no later than the event ends. Sales closing AT the event's end is
+     * allowed (it is the same as no sales end). {@link SalesStatus} relies on
+     * the second rule: a sales end before the sales start would leave an event
+     * that is both closed and not yet open.
+     */
+    private static void requireSalesWindow(LocalDateTime salesStartUtc, LocalDateTime salesEndUtc,
+                                           LocalDateTime endUtc) {
         if (salesStartUtc != null && endUtc != null && !salesStartUtc.isBefore(endUtc)) {
             throw new BadRequestException(SALES_START_AFTER_END_MESSAGE);
         }
+        if (salesEndUtc != null && salesStartUtc != null && !salesEndUtc.isAfter(salesStartUtc)) {
+            throw new BadRequestException(SALES_END_NOT_AFTER_START_MESSAGE);
+        }
+        if (salesEndUtc != null && endUtc != null && salesEndUtc.isAfter(endUtc)) {
+            throw new BadRequestException(SALES_END_AFTER_END_MESSAGE);
+        }
+    }
+
+    /** Appends one sales-window change (V22), in the caller's transaction. A no-op when not wired. */
+    private void recordSalesWindowChange(UUID eventId, EventSalesWindowChange.ChangeType type,
+                                         LocalDateTime oldStart, LocalDateTime newStart,
+                                         LocalDateTime oldEnd, LocalDateTime newEnd) {
+        if (salesWindowChanges == null) {
+            return;
+        }
+        salesWindowChanges.save(EventSalesWindowChange.builder()
+                .eventId(eventId)
+                .changeType(type)
+                .oldSalesStartAt(oldStart)
+                .newSalesStartAt(newStart)
+                .oldSalesEndAt(oldEnd)
+                .newSalesEndAt(newEnd)
+                .build());
+    }
+
+    /**
+     * Who set or moved the event's ticket sales window, and when (V22), newest
+     * first, at most 200. The event's organizer or platform staff
+     * ({@code isStaff}, the read set). A deleted event's record is not served:
+     * the event itself is a 404 by then.
+     */
+    @Transactional(readOnly = true)
+    public List<SalesWindowChangeDTO> salesWindowHistory(UUID tenantUserUuid, boolean isStaff, UUID eventId) {
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> new NotFoundException("Event not found"));
+        if (!isStaff && (tenantUserUuid == null
+                || !Objects.equals(event.getTenantUserUuid(), tenantUserUuid))) {
+            // The same 404 as a missing event: no existence oracle for another
+            // organizer's events.
+            log.warn("Sales window history refused, not the owner eventId={} tenantUserUuid={}",
+                    eventId, tenantUserUuid);
+            throw new NotFoundException("Event not found");
+        }
+        if (salesWindowChanges == null) {
+            throw new IllegalStateException("Sales window history is not wired");
+        }
+        return salesWindowChanges.findTop200ByEventIdOrderByChangedAtDesc(eventId).stream()
+                .map(change -> SalesWindowChangeDTO.of(change, event.getTenantUserUuid(), isStaff))
+                .toList();
     }
 
     /**
@@ -1155,8 +1271,10 @@ public class EventService {
                 .map(event -> SalesWindowDTO.builder()
                         .eventId(event.getEventId())
                         .status(SalesStatus.of(event.isActive(), event.isRejected(), event.getSalesStartAt(),
-                                event.getEndDateTime(), LocalDateTime.now(ZoneOffset.UTC)).name())
+                                event.getSalesEndAt(), event.getEndDateTime(),
+                                LocalDateTime.now(ZoneOffset.UTC)).name())
                         .salesStartDateTime(event.getSalesStartAt())
+                        .salesEndDateTime(event.getSalesEndAt())
                         .endDateTime(event.getEndDateTime())
                         .tenantUserUuid(event.getTenantUserUuid())
                         .termsVersion(event.getTermsVersion())

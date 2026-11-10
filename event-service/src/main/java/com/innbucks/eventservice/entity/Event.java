@@ -125,6 +125,13 @@ public class Event {
     @Column(name = "sales_start_at")
     private LocalDateTime salesStartAt;
 
+    // When ticket sales close (UTC, V22). Null = they close when the event
+    // ends. After it the event is still listed (SALES_CLOSED) but cannot be
+    // booked, and booking-service refuses to extend a hold for it. Always after
+    // salesStartAt and no later than endDateTime (EventService.requireSalesWindow).
+    @Column(name = "sales_end_at")
+    private LocalDateTime salesEndAt;
+
     // The review step (V17). The status is derived from these and `rejected`,
     // never stored (ReviewStatus.of). approvedAt set = allowed to go live;
     // approvedBy null = went live without a review (step off, or live before

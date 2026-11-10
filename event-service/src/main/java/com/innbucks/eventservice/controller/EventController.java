@@ -234,6 +234,11 @@ public class EventController {
 
                     Filters and sorting follow the same rules as `GET /events`.
 
+                    `salesStatus` (optional) keeps only the events whose `salesStatus` is that
+                    value right now: `ON_SALE`, `NOT_YET_ON_SALE`, `SALES_CLOSED`, `ENDED` or
+                    `NOT_PUBLISHED` (upper case). The filter runs on the server, so `totalElements`
+                    and every page count only matching events. Leave it out for all of them.
+
                     Use this instead of `GET /events` when the caller wants to see
                     only their own events. SUPER_ADMIN can also call this — they
                     will see only events they personally created (their own
@@ -268,6 +273,7 @@ public class EventController {
                                             "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777734000000",
                                             "startDateTime": "2026-06-15T19:00:00+02:00", "endDateTime": "2026-06-15T22:00:00+02:00",
                                             "salesStartDateTime": null,
+                                            "salesEndDateTime": "2026-06-15T18:00:00+02:00",
                                             "salesStatus": "ON_SALE",
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
@@ -320,6 +326,9 @@ public class EventController {
             @Parameter(description = "Venue substring filter (case-insensitive)")
             @RequestParam(required = false) String venue,
 
+            @Parameter(description = "Only events with this sales status right now", example = "SALES_CLOSED")
+            @RequestParam(required = false) com.innbucks.eventservice.dto.SalesStatus salesStatus,
+
             @Parameter(description = "Zero-based page index")
             @RequestParam(defaultValue = "0") @Min(0) int page,
 
@@ -337,15 +346,15 @@ public class EventController {
         // the previous email fallback.
         UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
                 .organizerUuid(authentication);
-        log.info("GET /events/my organizerUuid={} from={} to={} venue={} page={} size={}",
-                organizerUuid, from, to, venue, page, size);
+        log.info("GET /events/my organizerUuid={} from={} to={} venue={} salesStatus={} page={} size={}",
+                organizerUuid, from, to, venue, salesStatus, page, size);
         if (organizerUuid == null) {
             return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully",
                     Page.empty(org.springframework.data.domain.PageRequest.of(page, size))));
         }
         // EVENT_ORGANIZER (or SUPER_ADMIN-as-organizer): full organizer-wide view.
         Page<EventResponseDTO> result = eventService.getMyEvents(
-                organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy);
+                organizerUuid, fromDateTime, toDateTime, venue, salesStatus, page, size, sortBy);
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
@@ -1095,12 +1104,19 @@ public class EventController {
                                     """)
                     )
             ),
-            @ApiResponse(responseCode = "400", description = "No organizer to own the event",
+            @ApiResponse(responseCode = "400", description = "No organizer to own the event, or the sales window "
+                    + "does not fit the event",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Staff account (e.g. SUPER_ADMIN)",
                                     value = EXAMPLE_STAFF_CANNOT_CREATE_EVENT),
                             @ExampleObject(name = "Organizer session without its organizer id",
-                                    value = EXAMPLE_SESSION_MISSING_ORGANIZER)
+                                    value = EXAMPLE_SESSION_MISSING_ORGANIZER),
+                            @ExampleObject(name = "Sales close after the event ends", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Ticket sales must close by the time the event ends.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Sales close before they open", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Ticket sales must close after they open.", "data": null }
+                                    """)
                     })),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER"),
@@ -1348,12 +1364,17 @@ public class EventController {
                     Updates an existing event.
 
                     Authorization:
-                    - Requires **EVENT_ORGANIZER**.
-                    - EVENT_ORGANIZER can update only their own event. .
+                    - Requires **EVENT_ORGANIZER** (their own event) or **SUPER_ADMIN**.
 
                     Behavior:
                     - Fields omitted from the body remain unchanged (partial update).
                     - If `totalCapacity` changes, `availableTickets` is adjusted by the capacity difference.
+                    - `salesStartDateTime` and `salesEndDateTime` (market-local time, like the event's) are
+                      checked against the values the event will have after this update: sales open before the
+                      event ends, close after they open, and close no later than the event ends. Moving the
+                      event's end before a stored sales time is refused too; send both in one request.
+                      `null` removes either. Every change to them is recorded
+                      (`GET /events/{id}/sales-window/history`).
                     """
     )
     @ApiResponses({
@@ -1377,12 +1398,15 @@ public class EventController {
                                         "country": "Zimbabwe", "category": "CONCERT",
                                         "location": { "latitude": -17.8252, "longitude": 31.0335 },
                                         "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777737600000",
-                                        "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
+                                        "startDateTime": "2026-06-15T19:00:00+02:00", "endDateTime": "2026-06-15T22:00:00+02:00",
+                                        "salesStartDateTime": null,
+                                        "salesEndDateTime": "2026-06-15T18:00:00+02:00",
+                                        "salesStatus": "ON_SALE",
                                         "totalCapacity": 600,
                                         "availableTickets": 520,
                                         "active": true,
-                                        "createdAt": "2026-04-25T08:00:00",
-                                        "updatedAt": "2026-05-02T16:00:00",
+                                        "createdAt": "2026-04-25T08:00:00+02:00",
+                                        "updatedAt": "2026-05-02T16:00:00+02:00",
                                         "seatCategories": null,
                                         "priceFrom": null
                                       }
@@ -1390,10 +1414,33 @@ public class EventController {
                                     """)
                     )
             ),
-            @ApiResponse(responseCode = "400", description = "Not found or not authorized",
-                    content = @Content(schema = @Schema(example = "{\"error\":\"You are not authorized to update this event\"}"))),
-            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER")
+            @ApiResponse(responseCode = "400", description = "The update would leave the event's times out of order",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Sales close after the event ends", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Ticket sales must close by the time the event ends.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Sales close before they open", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Ticket sales must close after they open.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Sales open after the event ends", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Ticket sales must open before the event ends.", "data": null }
+                                    """),
+                            @ExampleObject(name = "End before start", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "The event end time must be after the start time.", "data": null }
+                                    """)
+                    })),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                            """))),
+            @ApiResponse(responseCode = "403", description = "Another organizer's event",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "403 FORBIDDEN", "message": "You are not authorized to update this event", "data": null }
+                            """))),
+            @ApiResponse(responseCode = "404", description = "No such event",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "404 NOT_FOUND", "message": "Event not found", "data": null }
+                            """)))
     })
     public ResponseEntity<ApiResult<EventResponseDTO>> updateEvent(
             @Parameter(description = "Event UUID") @PathVariable UUID id,
@@ -1517,6 +1564,71 @@ public class EventController {
             @Parameter(description = "Event UUID") @PathVariable UUID id,
             @Parameter(description = "Terms version", example = "1") @PathVariable int version) {
         return ResponseEntity.ok(ApiResult.ok("Terms retrieved", eventService.getTerms(id, version)));
+    }
+
+    @GetMapping("/{id}/sales-window/history")
+    @PreAuthorize("isAuthenticated()")
+    @Operation(
+            summary = "Who set or moved the event's ticket sales window, and when",
+            description = """
+                    The record of every change to the event's `salesStartDateTime` and `salesEndDateTime`
+                    (V22), newest first, at most 200. One `CREATED` entry when the event was created with
+                    either set, then one `CHANGED` entry for each update that moved either. Each entry has
+                    both sides before and after; `null` means none (on sale once published / sales close
+                    when the event ends). Times are the market's local time with its offset.
+
+                    The record cannot be edited or deleted. The event's organizer reads their own event's
+                    record (a change made by InnBucks staff reads `"changedBy": "InnBucks"`); SUPER_ADMIN,
+                    PRODUCT_MANAGER and PRODUCT_OFFICER read any event's. Anyone else, and any unknown or
+                    deleted event, is the same 404.
+                    """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The record, newest first",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(
+                            name = "Created with a sales start, then a sales end added", value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Sales window history retrieved",
+                              "data": [
+                                {
+                                  "changeType": "CHANGED",
+                                  "oldSalesStartDateTime": "2026-11-14T10:00:00+02:00",
+                                  "newSalesStartDateTime": "2026-11-14T10:00:00+02:00",
+                                  "oldSalesEndDateTime": null,
+                                  "newSalesEndDateTime": "2026-12-05T18:00:00+02:00",
+                                  "changedBy": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
+                                  "changedByOrganizer": true,
+                                  "changedAt": "2026-11-10T14:32:00+02:00"
+                                },
+                                {
+                                  "changeType": "CREATED",
+                                  "oldSalesStartDateTime": null,
+                                  "newSalesStartDateTime": "2026-11-14T10:00:00+02:00",
+                                  "oldSalesEndDateTime": null,
+                                  "newSalesEndDateTime": null,
+                                  "changedBy": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
+                                  "changedByOrganizer": true,
+                                  "changedAt": "2026-11-03T16:40:00+02:00"
+                                }
+                              ]
+                            }
+                            """))),
+            @ApiResponse(responseCode = "401", description = "No session",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                            """))),
+            @ApiResponse(responseCode = "404", description = "Unknown or deleted event, or another organizer's",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "404 NOT_FOUND", "message": "Event not found", "data": null }
+                            """)))
+    })
+    public ResponseEntity<ApiResult<List<com.innbucks.eventservice.dto.SalesWindowChangeDTO>>> salesWindowHistory(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            Authentication authentication) {
+        UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller.organizerUuid(authentication);
+        boolean staff = com.innbucks.eventservice.security.AuthenticatedCaller.isPlatformStaff(authentication);
+        return ResponseEntity.ok(ApiResult.ok("Sales window history retrieved",
+                eventService.salesWindowHistory(organizerUuid, staff, id)));
     }
 
     @PutMapping("/{id}/activate")
@@ -1805,6 +1917,7 @@ public class EventController {
                                             "bannerUrl": "https://dtx.innbucks.co.zw/foundry/events/4b6d1f0e-2c8a-4e7b-9a31-7f5e2d9c0a11/banner?v=1762182300",
                                             "startDateTime": "2026-11-28T07:00:00+02:00", "endDateTime": "2026-11-28T11:00:00+02:00",
                                             "salesStartDateTime": "2026-11-10T09:00:00+02:00",
+                                            "salesEndDateTime": null,
                                             "salesStatus": "NOT_PUBLISHED",
                                             "termsVersion": null,
                                             "termsText": null,
@@ -2032,8 +2145,10 @@ public class EventController {
                     unless `status` is `ON_SALE`. Read live from the event row on every call, never cached.
 
                     `status` is one of `ON_SALE`, `NOT_YET_ON_SALE` (sales open at `salesStartDateTime`),
-                    `ENDED` (the event's end has passed), `NOT_PUBLISHED` (draft or rejected) and `NOT_FOUND`
-                    (no such event, or deleted). Always a 200 for a valid id, an unknown event included, so a
+                    `SALES_CLOSED` (sales closed at `salesEndDateTime`), `ENDED` (the event's end has passed),
+                    `NOT_PUBLISHED` (draft or rejected) and `NOT_FOUND` (no such event, or deleted).
+                    booking-service also asks before extending a booking's hold for payment, so a payment can
+                    no longer be started once sales have closed. Always a 200 for a valid id, an unknown event included, so a
                     caller's circuit-breaker fallback can only mean "event-service could not be asked".
 
                     Times are UTC (`Z`) on this S2S path. Requires the `X-Internal-Token` shared secret; the
@@ -2052,8 +2167,27 @@ public class EventController {
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "status": "NOT_YET_ON_SALE",
                                         "salesStartDateTime": "2026-11-14T08:00:00Z",
+                                        "salesEndDateTime": "2026-12-05T16:00:00Z",
                                         "endDateTime": "2026-12-05T21:00:00Z",
-                                        "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e"
+                                        "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
+                                        "termsVersion": null,
+                                        "bookingQuestions": []
+                                      }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Sales closed before the event", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Sales window resolved",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "status": "SALES_CLOSED",
+                                        "salesStartDateTime": "2026-11-14T08:00:00Z",
+                                        "salesEndDateTime": "2026-12-05T16:00:00Z",
+                                        "endDateTime": "2026-12-05T21:00:00Z",
+                                        "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
+                                        "termsVersion": null,
+                                        "bookingQuestions": []
                                       }
                                     }
                                     """),
@@ -2065,8 +2199,11 @@ public class EventController {
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "status": "NOT_FOUND",
                                         "salesStartDateTime": null,
+                                        "salesEndDateTime": null,
                                         "endDateTime": null,
-                                        "tenantUserUuid": null
+                                        "tenantUserUuid": null,
+                                        "termsVersion": null,
+                                        "bookingQuestions": null
                                       }
                                     }
                                     """)

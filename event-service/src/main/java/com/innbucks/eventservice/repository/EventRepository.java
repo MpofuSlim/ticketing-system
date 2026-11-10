@@ -165,6 +165,43 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
+    // findByTenantUserUuid narrowed to one SalesStatus (GET /events/my
+    // ?salesStatus=), so a paged list filters across every page, not just the
+    // one the portal holds. This is SalesStatus.of written in SQL, step for
+    // step, and must stay so: NOT_PUBLISHED, then ENDED (now >= end), then
+    // SALES_CLOSED (now >= sales end), then NOT_YET_ON_SALE (now < sales start),
+    // else ON_SALE. EventRepositoryPostgresIT checks every status against the
+    // Java rule. :status is the enum's name; :now is UTC, like every column.
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.tenantUserUuid = :tenantUserUuid
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
+        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+        AND (
+             (CAST(:status AS string) = 'NOT_PUBLISHED' AND (e.active = false OR e.rejected = true))
+          OR (e.active = true AND e.rejected = false AND (
+                 (CAST(:status AS string) = 'ENDED' AND e.endDateTime <= :now)
+              OR (e.endDateTime > :now AND (
+                     (CAST(:status AS string) = 'SALES_CLOSED' AND e.salesEndAt IS NOT NULL AND e.salesEndAt <= :now)
+                  OR ((e.salesEndAt IS NULL OR e.salesEndAt > :now) AND (
+                         (CAST(:status AS string) = 'NOT_YET_ON_SALE'
+                              AND e.salesStartAt IS NOT NULL AND e.salesStartAt > :now)
+                      OR (CAST(:status AS string) = 'ON_SALE'
+                              AND (e.salesStartAt IS NULL OR e.salesStartAt <= :now))))))))
+        )
+    """)
+    Page<Event> findByTenantUserUuidAndSalesStatus(
+            @Param("tenantUserUuid") UUID tenantUserUuid,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            @Param("status") String status,
+            @Param("now") LocalDateTime now,
+            Pageable pageable
+    );
+
     // Same as findByTenantUserUuid but additionally filters active=true, hides
     // events whose endDateTime has passed (independent of the expiry scheduler
     // so the read is always correct), and excludes admin-rejected events. Used

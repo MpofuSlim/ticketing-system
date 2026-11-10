@@ -51,6 +51,9 @@ public class SecurityConfig {
                         // The sales agent's own selling events (V21): read from the
                         // caller's session, same reason, same place.
                         .requestMatchers(HttpMethod.GET, "/events/sales").authenticated()
+                        // Who moved an event's sales window (V22): the organizer's
+                        // and staff's record, never public. Same reason, same place.
+                        .requestMatchers(HttpMethod.GET, "/events/*/sales-window/history").authenticated()
                         .requestMatchers(HttpMethod.GET, "/events").permitAll()
                         // Internal: full event lookup (tenantUserUuid intact) for sibling
                         // services — booking-service's ownership checks + tenant capture.

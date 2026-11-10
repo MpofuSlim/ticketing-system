@@ -50,6 +50,7 @@ public record EventSnapshot(
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
         LocalDateTime salesStartDateTime,
+        LocalDateTime salesEndDateTime,
         Integer termsVersion
 ) {
 
@@ -80,6 +81,7 @@ public record EventSnapshot(
                 dto.getCreatedAt(),
                 dto.getUpdatedAt(),
                 dto.getSalesStartDateTime(),
+                dto.getSalesEndDateTime(),
                 dto.getTermsVersion());
     }
 
@@ -100,7 +102,8 @@ public record EventSnapshot(
                 .startDateTime(startDateTime)
                 .endDateTime(endDateTime)
                 .salesStartDateTime(salesStartDateTime)
-                .salesStatus(SalesStatus.of(active, rejected, salesStartDateTime, endDateTime,
+                .salesEndDateTime(salesEndDateTime)
+                .salesStatus(SalesStatus.of(active, rejected, salesStartDateTime, salesEndDateTime, endDateTime,
                         LocalDateTime.now(ZoneOffset.UTC)))
                 .termsVersion(termsVersion)
                 .totalCapacity(totalCapacity)
