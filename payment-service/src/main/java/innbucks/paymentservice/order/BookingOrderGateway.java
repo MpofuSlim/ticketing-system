@@ -102,6 +102,13 @@ public class BookingOrderGateway implements OrderGateway {
                 true);
     }
 
+    /** booking-service's errorCode when the event's ticket sales have closed (event-service V22). */
+    static final String SALES_CLOSED = "SALES_CLOSED";
+    /** booking-service's errorCode when the event is over. */
+    static final String EVENT_ENDED = "EVENT_ENDED";
+    static final String SALES_CLOSED_MESSAGE = "Ticket sales for this event have closed.";
+    static final String EVENT_ENDED_MESSAGE = "This event has ended, so tickets are no longer on sale.";
+
     @Override
     public void extendHold(String orderRef, Instant payableUntil) {
         UUID bookingId = parseBookingId(orderRef);
@@ -116,6 +123,19 @@ public class BookingOrderGateway implements OrderGateway {
         try {
             bookingServiceClient.extendHold(bookingId, payableUntil.plus(HOLD_SAFETY_MARGIN));
         } catch (BookingServiceClient.BookingConfirmationException e) {
+            if (e.getStatusCode() == 409 && SALES_CLOSED.equals(e.getErrorCode())) {
+                // event-service V22: the event's ticket sales closed after this
+                // booking was made. A new booking would be refused too, so the
+                // usual "create a new booking" would send the buyer in a circle.
+                log.info("[booking-gateway] hold extension refused, ticket sales have closed bookingId={}"
+                        + " — payment refused pre-mint", bookingId);
+                throw new InvalidPaymentRequestException(SALES_CLOSED_MESSAGE, 409);
+            }
+            if (e.getStatusCode() == 409 && EVENT_ENDED.equals(e.getErrorCode())) {
+                log.info("[booking-gateway] hold extension refused, the event has ended bookingId={}"
+                        + " — payment refused pre-mint", bookingId);
+                throw new InvalidPaymentRequestException(EVENT_ENDED_MESSAGE, 409);
+            }
             if (e.getStatusCode() == 404 || e.getStatusCode() == 409 || e.getStatusCode() == 400) {
                 log.warn("[booking-gateway] hold extension refused bookingId={} status={} — payment refused pre-mint: {}",
                         bookingId, e.getStatusCode(), e.getMessage());

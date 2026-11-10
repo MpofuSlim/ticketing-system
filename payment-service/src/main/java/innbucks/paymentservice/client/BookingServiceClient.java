@@ -99,8 +99,10 @@ public class BookingServiceClient {
      * card checkout) so the hold provably outlives what the customer is given
      * (the hold-shorter-than-instrument paid-but-no-ticket gap; the rail sizes
      * {@code holdUntil}). 409/404 from booking-service means the booking
-     * is already expired/cancelled/confirmed: the caller refuses the payment
-     * BEFORE any money moves.
+     * is already expired/cancelled/confirmed, or (event-service V22) the
+     * event's ticket sales have closed, named by {@code data.errorCode}
+     * ({@code SALES_CLOSED}, {@code EVENT_ENDED}), which the exception
+     * carries: the caller refuses the payment BEFORE any money moves.
      */
     public void extendHold(UUID bookingId, java.time.Instant holdUntil) {
         try {
@@ -116,9 +118,10 @@ public class BookingServiceClient {
         } catch (RestClientResponseException e) {
             String detail = parseErrorMessage(e.getResponseBodyAsString())
                     .orElse(e.getStatusText());
-            log.warn("booking-service extend-hold refused bookingId={} status={} detail={}",
-                    bookingId, e.getStatusCode().value(), detail);
-            throw new BookingConfirmationException(detail, e.getStatusCode().value());
+            String errorCode = parseErrorCode(e.getResponseBodyAsString()).orElse(null);
+            log.warn("booking-service extend-hold refused bookingId={} status={} errorCode={} detail={}",
+                    bookingId, e.getStatusCode().value(), errorCode, detail);
+            throw new BookingConfirmationException(detail, e.getStatusCode().value(), errorCode);
         } catch (Exception e) {
             log.warn("booking-service extend-hold errored bookingId={} cause={}", bookingId, e.toString());
             throw new BookingConfirmationException(
@@ -180,12 +183,35 @@ public class BookingServiceClient {
         }
     }
 
+    /** {@code data.errorCode} of booking-service's error envelope, when it names one. */
+    private Optional<String> parseErrorCode(String body) {
+        if (body == null || body.isBlank()) return Optional.empty();
+        try {
+            ApiResult<Object> envelope = objectMapper.readValue(body,
+                    new TypeReference<ApiResult<Object>>() {});
+            if (envelope.getData() instanceof Map<?, ?> data && data.get("errorCode") instanceof String code
+                    && !code.isBlank()) {
+                return Optional.of(code);
+            }
+            return Optional.empty();
+        } catch (Exception ignored) {
+            return Optional.empty();
+        }
+    }
+
     public static class BookingConfirmationException extends RuntimeException {
         private final int statusCode;
+        /** booking-service's {@code data.errorCode}, or null when it named none. */
+        private final String errorCode;
         public BookingConfirmationException(String message, int statusCode) {
+            this(message, statusCode, null);
+        }
+        public BookingConfirmationException(String message, int statusCode, String errorCode) {
             super(message);
             this.statusCode = statusCode;
+            this.errorCode = errorCode;
         }
         public int getStatusCode() { return statusCode; }
+        public String getErrorCode() { return errorCode; }
     }
 }
