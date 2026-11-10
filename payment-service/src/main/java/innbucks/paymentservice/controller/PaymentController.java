@@ -387,13 +387,29 @@ public class PaymentController {
                             + "and no replayable payment row exists; or its product service refused to "
                             + "extend the hold before anything was minted — the booking/order has lapsed, "
                             + "or can no longer be held for this rail's window. Nothing was charged: send "
-                            + "the customer back to rebook / re-order",
+                            + "the customer back to rebook / re-order. Or the event's ticket sales closed "
+                            + "after the booking was made (or the event is over): nothing was charged and a "
+                            + "new booking would be refused too, so do not offer to rebook",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "Not payable", value = """
                                             {
                                               "code": "409 CONFLICT",
                                               "message": "This order is not awaiting payment — it may already be paid, cancelled or expired",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Ticket sales have closed — nothing was charged, do not rebook", value = """
+                                            {
+                                              "code": "409 CONFLICT",
+                                              "message": "Ticket sales for this event have closed.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "The event has ended — nothing was charged", value = """
+                                            {
+                                              "code": "409 CONFLICT",
+                                              "message": "This event has ended, so tickets are no longer on sale.",
                                               "data": null
                                             }
                                             """),
