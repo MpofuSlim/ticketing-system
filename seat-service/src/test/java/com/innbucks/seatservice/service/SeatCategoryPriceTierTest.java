@@ -587,6 +587,27 @@ class SeatCategoryPriceTierTest {
     }
 
     @Test
+    void theOrganizer_neverReadsWhichStaffAccountChangedTheirPrice_butSuperAdminDoes() {
+        SeatCategoryService service = service();
+        changes.add(SeatCategoryPriceChange.builder().categoryId(vip.getId()).eventId(eventId)
+                .changeType(SeatCategoryPriceChange.ChangeType.CREATED).newPrice(new BigDecimal("150.00"))
+                .changedBy(owner.toString()).changedAt(LocalDateTime.of(2026, 9, 1, 8, 0)).build());
+        changes.add(SeatCategoryPriceChange.builder().categoryId(vip.getId()).eventId(eventId)
+                .changeType(SeatCategoryPriceChange.ChangeType.PRICE_CHANGED).oldPrice(new BigDecimal("150.00"))
+                .newPrice(new BigDecimal("160.00")).changedBy("tmpofu@innbucks.co.zw")
+                .changedAt(LocalDateTime.of(2026, 9, 2, 8, 0)).build());
+
+        List<PriceChangeDTO> asOwner = service.getPriceHistory(vip.getId(), owner, "organizer@example.com",
+                false, "Bearer t");
+        assertEquals(List.of("InnBucks", owner.toString()),
+                asOwner.stream().map(PriceChangeDTO::getChangedBy).toList());
+
+        List<PriceChangeDTO> asAdmin = service.getPriceHistory(vip.getId(), null, "admin@example.com", true, null);
+        assertEquals(List.of("tmpofu@innbucks.co.zw", owner.toString()),
+                asAdmin.stream().map(PriceChangeDTO::getChangedBy).toList());
+    }
+
+    @Test
     void anotherOrganizer_cannotReadTheHistory() {
         SeatCategoryService service = service();
 

@@ -548,7 +548,7 @@ public class SeatCategoryService {
         return TransactionPhases.inTransaction(readTx,
                         () -> priceChangeRepository.findTop200ByCategoryIdOrderByChangedAtDesc(categoryId))
                 .stream()
-                .map(PriceHistory::toDto)
+                .map(change -> PriceHistory.toDto(change, callerOrganizerUuid, isAdmin))
                 .toList();
     }
 
