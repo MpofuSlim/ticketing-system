@@ -83,6 +83,13 @@ public class BookingMetrics {
     public static final String CLAIM_RETRY = "booking.claim.retry";
     public static final String EXPIRY_SKIPPED = "booking.expiry.skipped";
     public static final String HOLD_EXTENSION_REFUSED = "booking.hold.extension_refused";
+    /**
+     * Hold extensions allowed WITHOUT checking the event's sales window,
+     * because event-service could not answer (they fail open). A steady rise is
+     * an event-service outage during which the sales end is not enforced at
+     * payment start.
+     */
+    public static final String HOLD_SALES_WINDOW_UNCHECKED = "booking.hold.sales_window_unchecked";
     public static final String CONFIRM_RESURRECTED = "booking.confirm.resurrected";
     public static final String TICKET_CHECK = "booking.ticket_check";
     public static final String UNPAID_PER_NUMBER_REFUSED = "booking.create.unpaid_per_number_refused";
@@ -119,8 +126,14 @@ public class BookingMetrics {
         }
     }
 
+    /**
+     * Why a hold extension was refused. MAX_TOTAL / MAX_PER_CALL: the caps.
+     * SALES_CLOSED / EVENT_ENDED: the event can no longer be sold (event-service
+     * V22), so no payment may start; a buyer reaching checkout too late, not a
+     * fault.
+     */
     public enum HoldExtensionRefusal {
-        MAX_TOTAL, MAX_PER_CALL;
+        MAX_TOTAL, MAX_PER_CALL, SALES_CLOSED, EVENT_ENDED;
 
         String tag() {
             return name().toLowerCase(Locale.ROOT);
@@ -141,7 +154,7 @@ public class BookingMetrics {
      * outage costing sales, not buyers doing anything wrong.
      */
     public enum EventRefusal {
-        NOT_FOUND, NOT_STARTED, ENDED, NOT_ON_SALE, UNAVAILABLE;
+        NOT_FOUND, NOT_STARTED, SALES_CLOSED, ENDED, NOT_ON_SALE, UNAVAILABLE;
 
         String tag() {
             return name().toLowerCase(Locale.ROOT);
@@ -160,6 +173,7 @@ public class BookingMetrics {
     private final Map<EventRefusal, Counter> eventRefusals = new EnumMap<>(EventRefusal.class);
     private final Map<ClaimRetryOutcome, Counter> claimRetries = new EnumMap<>(ClaimRetryOutcome.class);
     private final Counter expirySkipped;
+    private final Counter holdSalesWindowUnchecked;
     private final Counter unpaidPerNumberRefused;
     private final Map<HoldExtensionRefusal, Counter> holdExtensionRefusals = new EnumMap<>(HoldExtensionRefusal.class);
     private final Map<Booking.CancelReason, Map<ResurrectOutcome, Counter>> resurrections =
@@ -181,9 +195,12 @@ public class BookingMetrics {
         this.expirySkipped = Counter.builder(EXPIRY_SKIPPED)
                 .description("Lapsed holds the expiry sweep failed to cancel and skipped")
                 .register(registry);
+        this.holdSalesWindowUnchecked = Counter.builder(HOLD_SALES_WINDOW_UNCHECKED)
+                .description("Hold extensions allowed because event-service could not say whether sales are open")
+                .register(registry);
         for (HoldExtensionRefusal reason : HoldExtensionRefusal.values()) {
             holdExtensionRefusals.put(reason, Counter.builder(HOLD_EXTENSION_REFUSED)
-                    .description("Hold extensions refused because the requested hold was past a cap")
+                    .description("Hold extensions refused: the requested hold was past a cap, or the event's sales closed")
                     .tag("reason", reason.tag())
                     .register(registry));
         }
@@ -256,6 +273,10 @@ public class BookingMetrics {
 
     public void holdExtensionRefused(HoldExtensionRefusal reason) {
         holdExtensionRefusals.get(reason).increment();
+    }
+
+    public void holdSalesWindowUnchecked() {
+        holdSalesWindowUnchecked.increment();
     }
 
     /** {@code reason} must be resurrectable; anything else is ignored, never thrown. */

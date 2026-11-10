@@ -3653,7 +3653,8 @@ CANCELLED booking was cancelled (CHECK: `EXPIRED`, `CUSTOMER_CANCELLED`,
   refusal, items re-activated, the expiry notice), `BookingCancelledNotificationListenerTest`,
   `StockPathsLockTheBookingFirstTest`, `BookingMetricsTest` and the H2 examples
   in `BookingErrorExamplesPostgresIT`. `LazyAssociationsPostgresIT`: extend-hold
-  is 3 statements (lock, items, update).
+  is 4 statements (the unlocked read for the sales window, then lock, items,
+  update; see "Ticket sales close at a scheduled time").
 
 ## New bookings and EcoCash prompts are capped, per caller and per number
 

@@ -1960,16 +1960,74 @@ public class BookingService {
      *       {@code max_total}.</li>
      * </ul>
      *
-     * <p>The booking row is locked first ({@link #lockWithItems}), so the
+     * <p><b>No payment starts once sales have closed</b> (event-service V22).
+     * Before the lock, with no transaction open, a PENDING booking's event is
+     * asked for its sales window: {@code SALES_CLOSED} is 409
+     * {@code SALES_CLOSED} and {@code ENDED} is 409 {@code EVENT_ENDED}, which
+     * payment-service shows in words and mints nothing for. A payment already
+     * started before the cut-off is honoured: confirm never asks. When
+     * event-service cannot answer the extension goes ahead (counted on
+     * {@code booking.hold.sales_window_unchecked}): the booking was admitted
+     * while on sale, so the most that slips is a payment started within one
+     * hold of the cut-off, while failing closed would stop every payment
+     * whenever event-service blips.
+     *
+     * <p>The booking row is then locked ({@link #lockWithItems}), so the
      * extension serialises with the expiry sweep, a cancel and a confirm. A
      * hold whose {@code expiresAt} has passed but which is still PENDING is
      * extended: its tickets stay claimed until the sweep commits, and confirm
      * honours it too. One the sweep has already cancelled is refused as not
      * PENDING (409), as is a CONFIRMED one.
      */
-    @Transactional
     public BookingResponseDTO extendHold(UUID bookingId, LocalDateTime holdUntil) {
         Objects.requireNonNull(holdUntil, "holdUntil");
+        requireSalesStillOpenForPayment(bookingId);
+        return TransactionPhases.inTransaction(txTemplate, () -> extendHoldLocked(bookingId, holdUntil));
+    }
+
+    /**
+     * The sales-window half of {@link #extendHold}, with no transaction open.
+     * Only a PENDING booking is asked about: anything else is refused by the
+     * locked phase in its own words, and an unknown id is its 404.
+     */
+    private void requireSalesStillOpenForPayment(UUID bookingId) {
+        Booking booking = bookingRepository.findById(bookingId).orElse(null);
+        if (booking == null || booking.getStatus() != Booking.BookingStatus.PENDING
+                || booking.getEventId() == null) {
+            return;
+        }
+        UUID eventId = booking.getEventId();
+        EventSalesWindowDTO window = fetchSalesWindow(eventId);
+        if (window == null || window.getStatus() == null) {
+            log.warn("Hold extension allowed without the sales window: event-service could not answer "
+                    + "bookingId={} eventId={}", bookingId, eventId);
+            BookingMetrics m = metrics;
+            if (m != null) {
+                m.holdSalesWindowUnchecked();
+            }
+            return;
+        }
+        switch (window.getStatus()) {
+            case EventSalesWindowDTO.SALES_CLOSED -> {
+                log.info("Hold extension refused, ticket sales have closed bookingId={} eventId={} salesEndUtc={}",
+                        bookingId, eventId, window.getSalesEndDateTime());
+                recordHoldExtensionRefused(BookingMetrics.HoldExtensionRefusal.SALES_CLOSED);
+                throw salesClosed(window);
+            }
+            case EventSalesWindowDTO.ENDED -> {
+                log.info("Hold extension refused, the event has ended bookingId={} eventId={}", bookingId, eventId);
+                recordHoldExtensionRefused(BookingMetrics.HoldExtensionRefusal.EVENT_ENDED);
+                throw new ApiProblemException(HttpStatus.CONFLICT, EVENT_ENDED, EVENT_ENDED_MESSAGE, Map.of());
+            }
+            default -> {
+                // ON_SALE, and everything else: a booking made while on sale
+                // keeps its chance to pay unless sales have closed or the event
+                // is over (an unpublished event's holds simply lapse).
+            }
+        }
+    }
+
+    private BookingResponseDTO extendHoldLocked(UUID bookingId, LocalDateTime holdUntil) {
         Booking booking = lockWithItems(bookingId, "Extend hold");
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
             log.warn("Hold extension refused, booking not pending bookingId={} status={}",
@@ -2636,10 +2694,12 @@ public class BookingService {
 
     public static final String EVENT_NOT_FOUND = "EVENT_NOT_FOUND";
     public static final String SALES_NOT_STARTED = "SALES_NOT_STARTED";
+    public static final String SALES_CLOSED = "SALES_CLOSED";
     public static final String EVENT_ENDED = "EVENT_ENDED";
     public static final String EVENT_NOT_ON_SALE = "EVENT_NOT_ON_SALE";
     static final String EVENT_NOT_FOUND_MESSAGE = "Event not found";
     static final String EVENT_ENDED_MESSAGE = "This event has ended, so tickets are no longer on sale.";
+    static final String SALES_CLOSED_MESSAGE = "Ticket sales for this event have closed.";
     static final String EVENT_NOT_ON_SALE_MESSAGE = "Tickets for this event are not on sale.";
     static final String EVENT_UNCHECKED_MESSAGE = "We couldn't check this event just now. Please try again.";
     private static final java.time.format.DateTimeFormatter SALES_START_FORMAT =
@@ -2662,6 +2722,8 @@ public class BookingService {
      *       the same answer for all four, so a draft's existence never leaks;</li>
      *   <li>before its sales start: 409 {@code SALES_NOT_STARTED}, with the
      *       time in the message and as {@code data.salesStartDateTime};</li>
+     *   <li>at or after its sales end (event-service V22): 409
+     *       {@code SALES_CLOSED}, with the time as {@code data.salesEndDateTime};</li>
      *   <li>at or after its end: 409 {@code EVENT_ENDED};</li>
      *   <li>a status this build does not know: 409 {@code EVENT_NOT_ON_SALE}
      *       (fail closed against a newer event-service);</li>
@@ -2693,6 +2755,12 @@ public class BookingService {
                 throw new ApiProblemException(HttpStatus.CONFLICT, SALES_NOT_STARTED,
                         salesNotStartedMessage(window.getSalesStartDateTime()), extra);
             }
+            case EventSalesWindowDTO.SALES_CLOSED -> {
+                countEventRefusal(BookingMetrics.EventRefusal.SALES_CLOSED);
+                log.info("Booking refused, ticket sales have closed eventId={} salesEndUtc={}",
+                        eventId, window.getSalesEndDateTime());
+                throw salesClosed(window);
+            }
             case EventSalesWindowDTO.ENDED -> {
                 countEventRefusal(BookingMetrics.EventRefusal.ENDED);
                 log.info("Booking refused, event has ended eventId={}", eventId);
@@ -2712,6 +2780,15 @@ public class BookingService {
                         Map.of());
             }
         }
+    }
+
+    /** 409 {@code SALES_CLOSED}, naming when sales closed when event-service said. */
+    private static ApiProblemException salesClosed(EventSalesWindowDTO window) {
+        Map<String, Object> extra = new LinkedHashMap<>();
+        if (window.getSalesEndDateTime() != null) {
+            extra.put("salesEndDateTime", window.getSalesEndDateTime());
+        }
+        return new ApiProblemException(HttpStatus.CONFLICT, SALES_CLOSED, SALES_CLOSED_MESSAGE, extra);
     }
 
     private EventSalesWindowDTO fetchSalesWindow(UUID eventId) {

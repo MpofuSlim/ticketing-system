@@ -334,4 +334,110 @@ class BookingServiceExtendHoldTest {
         assertThatThrownBy(() -> service.extendHold(UUID.randomUUID(), null))
                 .isInstanceOf(NullPointerException.class);
     }
+
+    // ---- the sales end (event-service V22) -------------------------------------------
+
+    /** A service whose event-service answers {@code status} (null = could not be asked) for every event. */
+    private BookingService withSalesWindow(String status, LocalDateTime salesEnd) {
+        com.innbucks.bookingservice.client.EventServiceClient events =
+                mock(com.innbucks.bookingservice.client.EventServiceClient.class);
+        if (status == null) {
+            when(events.salesWindow(any(), any())).thenReturn(null);
+        } else {
+            when(events.salesWindow(any(), any())).thenAnswer(inv -> com.innbucks.bookingservice.dto.ApiResult.ok(
+                    com.innbucks.bookingservice.dto.EventSalesWindowDTO.builder()
+                            .eventId(inv.getArgument(0)).status(status).salesEndDateTime(salesEnd).build()));
+        }
+        ObjectProvider<com.innbucks.bookingservice.client.EventServiceClient> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(events);
+        BookingService s = new BookingService(
+                bookingRepository,
+                mock(BookingItemRepository.class),
+                mock(CategoryInventoryRepository.class),
+                mock(SeatServiceClient.class),
+                mock(ApplicationEventPublisher.class),
+                mock(QrCodeGenerator.class),
+                provider,
+                mock(PlatformTransactionManager.class));
+        s.setMetrics(new BookingMetrics(registry));
+        return s;
+    }
+
+    /** {@link #pending} for a booking of an event, readable unlocked too (the sales-window read). */
+    private Booking pendingForAnEvent(int minutesAgo, LocalDateTime expiresAt) {
+        Booking b = pending(minutesAgo, expiresAt);
+        b.setEventId(UUID.randomUUID());
+        when(bookingRepository.findById(b.getId())).thenReturn(Optional.of(b));
+        return b;
+    }
+
+    @Test
+    void afterTheSalesEnd_noPaymentMayStart_409SalesClosed_andNothingIsWritten() {
+        LocalDateTime closedAt = now().minusMinutes(1);
+        BookingService closed = withSalesWindow("SALES_CLOSED", closedAt);
+        Booking b = pendingForAnEvent(2, now().plusMinutes(3));
+
+        assertThatThrownBy(() -> closed.extendHold(b.getId(), now().plusMinutes(13)))
+                .isInstanceOfSatisfying(com.innbucks.bookingservice.exception.ApiProblemException.class, e -> {
+                    assertThat(e.getStatus().value()).isEqualTo(409);
+                    assertThat(e.getErrorCode()).isEqualTo("SALES_CLOSED");
+                    assertThat(e.getMessage()).isEqualTo("Ticket sales for this event have closed.");
+                    assertThat(e.getExtra()).containsEntry("salesEndDateTime", closedAt);
+                });
+
+        verify(bookingRepository, never()).lockById(any());
+        verify(bookingRepository, never()).save(any());
+        assertThat(b.getPaymentOpenUntil()).isNull();
+        assertThat(refused("sales_closed")).isEqualTo(1.0);
+    }
+
+    @Test
+    void afterTheEventEnds_noPaymentMayStart_409EventEnded() {
+        BookingService ended = withSalesWindow("ENDED", null);
+        Booking b = pendingForAnEvent(2, now().plusMinutes(3));
+
+        assertThatThrownBy(() -> ended.extendHold(b.getId(), now().plusMinutes(13)))
+                .isInstanceOfSatisfying(com.innbucks.bookingservice.exception.ApiProblemException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("EVENT_ENDED");
+                    assertThat(e.getMessage()).isEqualTo("This event has ended, so tickets are no longer on sale.");
+                });
+        verify(bookingRepository, never()).save(any());
+        assertThat(refused("event_ended")).isEqualTo(1.0);
+    }
+
+    @Test
+    void whileOnSale_theHoldExtends_asBefore() {
+        BookingService onSale = withSalesWindow("ON_SALE", now().plusHours(1));
+        Booking b = pendingForAnEvent(2, now().plusMinutes(3));
+        LocalDateTime until = now().plusMinutes(13);
+
+        BookingResponseDTO dto = onSale.extendHold(b.getId(), until);
+
+        assertThat(dto.getExpiresAt()).isEqualTo(until);
+        assertThat(b.getPaymentOpenUntil()).isEqualTo(until);
+    }
+
+    @Test
+    void whenEventServiceCannotAnswer_theHoldStillExtends_andItIsCounted() {
+        BookingService unanswered = withSalesWindow(null, null);
+        Booking b = pendingForAnEvent(2, now().plusMinutes(3));
+        LocalDateTime until = now().plusMinutes(13);
+
+        BookingResponseDTO dto = unanswered.extendHold(b.getId(), until);
+
+        assertThat(dto.getExpiresAt()).isEqualTo(until);
+        assertThat(registry.get(BookingMetrics.HOLD_SALES_WINDOW_UNCHECKED).counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void aBookingThatIsNotPending_isNeverAskedAbout_andKeepsItsOwnRefusal() {
+        BookingService closed = withSalesWindow("SALES_CLOSED", now().minusMinutes(1));
+        Booking b = pendingForAnEvent(6, null);
+        b.setStatus(Booking.BookingStatus.CONFIRMED);
+
+        assertThatThrownBy(() -> closed.extendHold(b.getId(), now().plusMinutes(13)))
+                .isInstanceOf(BookingConflictException.class)
+                .hasMessageContaining("PENDING");
+        assertThat(refused("sales_closed")).isZero();
+    }
 }

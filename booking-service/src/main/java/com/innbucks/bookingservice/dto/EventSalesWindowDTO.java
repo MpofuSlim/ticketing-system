@@ -23,6 +23,8 @@ public class EventSalesWindowDTO {
 
     public static final String ON_SALE = "ON_SALE";
     public static final String NOT_YET_ON_SALE = "NOT_YET_ON_SALE";
+    /** Published and not over, but past its sales end (event-service V22). */
+    public static final String SALES_CLOSED = "SALES_CLOSED";
     public static final String ENDED = "ENDED";
     public static final String NOT_PUBLISHED = "NOT_PUBLISHED";
     public static final String NOT_FOUND = "NOT_FOUND";
@@ -31,6 +33,8 @@ public class EventSalesWindowDTO {
     private String status;
     /** UTC, as event-service stores it. Null: no schedule. */
     private LocalDateTime salesStartDateTime;
+    /** When sales close (UTC, event-service V22). Null: when the event ends. */
+    private LocalDateTime salesEndDateTime;
     private LocalDateTime endDateTime;
     private UUID tenantUserUuid;
     /** The terms version a buyer must accept now (event-service V16); null = no terms. */

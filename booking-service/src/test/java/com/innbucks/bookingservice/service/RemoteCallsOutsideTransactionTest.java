@@ -333,6 +333,38 @@ class RemoteCallsOutsideTransactionTest {
         assertThat(txManager.outcomes()).containsExactly(COMMITTED, ROLLED_BACK);
     }
 
+    // ---- extend-hold (the sales end, event-service V22) -------------------------------
+
+    @Test
+    void extendHold_asksEventServiceWithNoTransaction_thenLocksAndExtendsInOne() {
+        BookingService service = bookingService(mock(ApplicationEventPublisher.class));
+        Booking booking = confirmedBooking(1L);
+        booking.setStatus(Booking.BookingStatus.PENDING);
+        booking.setCreatedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(2));
+        when(bookingRepo.findById(booking.getId())).thenAnswer(inv -> {
+            record("read");
+            return Optional.of(booking);
+        });
+        when(eventServiceClient.salesWindow(eq(booking.getEventId()), any())).thenAnswer(inv -> {
+            record("event-service");
+            return ApiResult.ok(com.innbucks.bookingservice.dto.EventSalesWindowDTO.builder()
+                    .eventId(booking.getEventId()).status("ON_SALE").build());
+        });
+        when(bookingRepo.lockById(booking.getId())).thenAnswer(inv -> {
+            record("lock");
+            return Optional.of(booking);
+        });
+        when(bookingRepo.save(any())).thenAnswer(inv -> {
+            record("save");
+            return inv.getArgument(0);
+        });
+
+        service.extendHold(booking.getId(), java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(13));
+
+        assertThat(calls).containsExactly("read|false", "event-service|false", "lock|true", "save|true");
+        assertThat(txManager.outcomes()).containsExactly(COMMITTED);
+    }
+
     // ---- resurrect on confirm ------------------------------------------------------
 
     @Test

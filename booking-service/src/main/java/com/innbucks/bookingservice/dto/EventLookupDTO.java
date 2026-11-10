@@ -37,6 +37,11 @@ public class EventLookupDTO {
     // assuming it. Needed to tell a finished event from one still running:
     // startDateTime alone cannot distinguish PAST from LIVE.
     private LocalDateTime endDateTime;
+    // When ticket sales close (UTC, event-service V22). Null: when the event
+    // ends. Read by the price-tier reminders, which never invite a buyer to an
+    // event whose sales have closed; a booking itself asks the live sales
+    // window instead.
+    private LocalDateTime salesEndDateTime;
     // Venue name, shown on the customer's ticket list. Display only — never
     // used for a decision.
     private String venue;

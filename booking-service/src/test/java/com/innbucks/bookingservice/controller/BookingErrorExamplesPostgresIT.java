@@ -40,6 +40,8 @@ import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_N
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_FOUND;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_NOT_PENDING;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_PAYMENT_IN_PROGRESS;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_HOLD_SALES_CLOSED;
+import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_SALES_CLOSED;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_SALES_NOT_STARTED;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_SEAT_SERVICE_DOWN;
 import static com.innbucks.bookingservice.controller.BookingController.EXAMPLE_UNREADABLE_HOLD_UNTIL;
@@ -142,6 +144,29 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
         assertThat(jdbc.queryForObject("SELECT expires_at FROM bookings WHERE id = ?", LocalDateTime.class,
                 hold.getId())).isNull();
         assertThat(remaining(category)).as("released once, by the sweep").isEqualTo(6);
+    }
+
+    @Test
+    void extendHold_afterTheEventsSalesClosed_isTheDocumented409_andWritesNothing() throws Exception {
+        Booking hold = seedBooking(Booking.BookingStatus.PENDING,
+                LocalDateTime.now(ZoneOffset.UTC).plusMinutes(2), category);
+        // 16:00 UTC; on this S2S path the time stays UTC (event-service V22).
+        EventSalesWindowDTO closed = window(hold.getEventId(), EventSalesWindowDTO.SALES_CLOSED);
+        closed.setSalesEndDateTime(LocalDateTime.of(2026, 12, 5, 16, 0));
+        when(eventServiceClient.salesWindow(eq(hold.getEventId()), any()))
+                .thenReturn(ApiResult.ok("Sales window resolved", closed));
+
+        mvc.perform(patch("/bookings/internal/" + hold.getId() + "/extend-hold")
+                        .header("X-Internal-Token", internalToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"holdUntil\":\"" + LocalDateTime.now(ZoneOffset.UTC).plusMinutes(13)
+                                .truncatedTo(ChronoUnit.SECONDS) + "Z\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(content().json(EXAMPLE_HOLD_SALES_CLOSED, JsonCompareMode.STRICT));
+
+        assertThat(jdbc.queryForObject("SELECT payment_open_until FROM bookings WHERE id = ?",
+                LocalDateTime.class, hold.getId())).as("no payment window opened").isNull();
+        assertThat(statusOf(hold.getId())).isEqualTo("PENDING");
     }
 
     @Test
@@ -337,6 +362,12 @@ class BookingErrorExamplesPostgresIT extends BookingStockPostgresTestBase {
         createAgainst(eventId, ApiResult.ok("Sales window resolved", window(eventId, EventSalesWindowDTO.ENDED)))
                 .andExpect(status().isConflict())
                 .andExpect(content().json(EXAMPLE_EVENT_ENDED, JsonCompareMode.STRICT));
+        // 16:00 UTC: rendered at the market offset as 18:00+02:00 (event-service V22).
+        EventSalesWindowDTO closed = window(eventId, EventSalesWindowDTO.SALES_CLOSED);
+        closed.setSalesEndDateTime(LocalDateTime.of(2026, 12, 5, 16, 0));
+        createAgainst(eventId, ApiResult.ok("Sales window resolved", closed))
+                .andExpect(status().isConflict())
+                .andExpect(content().json(EXAMPLE_SALES_CLOSED, JsonCompareMode.STRICT));
         for (String status : List.of(EventSalesWindowDTO.NOT_PUBLISHED, EventSalesWindowDTO.NOT_FOUND)) {
             createAgainst(eventId, ApiResult.ok("Sales window resolved", window(eventId, status)))
                     .andExpect(status().isNotFound())

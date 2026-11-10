@@ -386,7 +386,9 @@ class LazyAssociationsPostgresIT extends PostgresIntegrationTestBase {
 
         // Since H2 extend-hold LOCKS the booking row before reading it, like
         // confirm and cancel: lock, its items, update (hold + payment window).
-        assertThat(measured.get("PATCH /bookings/internal/{id}/extend-hold")).isEqualTo(3);
+        // Since V22 (event-service) one unlocked read comes first, to ask the
+        // event's sales window with no transaction open: 4.
+        assertThat(measured.get("PATCH /bookings/internal/{id}/extend-hold")).isEqualTo(4);
         // lock the booking row, its items, update booking, release the
         // counter, the listener's read.
         assertThat(measured.get("PATCH /bookings/{id}/cancel + async notice")).isEqualTo(5);

@@ -195,22 +195,35 @@ public class PriceTierReminderService {
     @SchedulerLock(name = "PriceTierReminderService.remind", lockAtMostFor = "PT30M", lockAtLeastFor = "PT30S")
     public void remind() {
         LocalDateTime now = nowUtc();
-        Map<UUID, List<Ending>> endingByEvent = endingTiersOnSale(now);
+        Map<UUID, List<Ending>> endingByEvent = new LinkedHashMap<>(endingTiersOnSale(now));
         if (endingByEvent.isEmpty()) {
             return;
         }
         // Each event is looked up BEFORE anything is claimed: a claim is final,
         // so a reminder claimed while event-service was unreachable would go out
         // without the event's name and never be corrected. An event the public
-        // read cannot return (unreachable, unpublished, rejected, deleted) or one
-        // already over is skipped this run, and an unreachable one is tried
-        // again at the next run.
+        // read cannot return (unreachable, unpublished, rejected, deleted), one
+        // already over, or one whose ticket sales have closed is skipped this
+        // run, and an unreachable one is tried again at the next run. A tier
+        // that ends after the event's sales end is not announced: sales close
+        // first, so "book before the price goes up" would not be true
+        // (event-service V22).
         Map<UUID, String> titles = new HashMap<>();
-        for (UUID eventId : endingByEvent.keySet()) {
-            String title = bookableEventTitle(eventId, now);
-            if (title != null) {
-                titles.put(eventId, title);
+        for (UUID eventId : List.copyOf(endingByEvent.keySet())) {
+            EventLookupDTO event = bookableEvent(eventId, now);
+            if (event == null) {
+                continue;
             }
+            LocalDateTime salesEnd = event.getSalesEndDateTime();
+            List<Ending> announceable = endingByEvent.get(eventId).stream()
+                    .filter(e -> salesEnd == null || !e.endsAtUtc().isAfter(salesEnd))
+                    .toList();
+            if (announceable.isEmpty()) {
+                continue;
+            }
+            endingByEvent.put(eventId, announceable);
+            String title = event.getTitle();
+            titles.put(eventId, title == null || title.isBlank() ? "An event you follow" : title.trim());
         }
         if (titles.isEmpty()) {
             return;
@@ -328,11 +341,11 @@ public class PriceTierReminderService {
     }
 
     /**
-     * The event's title when it can be booked now: the public read returns it
-     * (so it is published and not deleted) and it has not ended. Null otherwise,
-     * including when event-service cannot be asked.
+     * The event when it can be booked now: the public read returns it (so it is
+     * published and not deleted), it has not ended, and its ticket sales have
+     * not closed. Null otherwise, including when event-service cannot be asked.
      */
-    private String bookableEventTitle(UUID eventId, LocalDateTime now) {
+    private EventLookupDTO bookableEvent(UUID eventId, LocalDateTime now) {
         EventLookupDTO event;
         try {
             ApiResult<EventLookupDTO> res = eventService.getEvent(eventId);
@@ -347,8 +360,10 @@ public class PriceTierReminderService {
         if (event.getEndDateTime() != null && !event.getEndDateTime().isAfter(now)) {
             return null;
         }
-        String title = event.getTitle();
-        return title == null || title.isBlank() ? "An event you follow" : title.trim();
+        if (event.getSalesEndDateTime() != null && !event.getSalesEndDateTime().isAfter(now)) {
+            return null;
+        }
+        return event;
     }
 
     /**
