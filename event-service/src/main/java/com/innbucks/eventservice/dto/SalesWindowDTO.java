@@ -27,11 +27,16 @@ public class SalesWindowDTO {
 
     private UUID eventId;
 
-    @Schema(example = "ON_SALE", description = "ON_SALE, NOT_YET_ON_SALE, ENDED, NOT_PUBLISHED or NOT_FOUND.")
+    @Schema(example = "ON_SALE",
+            description = "ON_SALE, NOT_YET_ON_SALE, SALES_CLOSED, ENDED, NOT_PUBLISHED or NOT_FOUND.")
     private String status;
 
     @Schema(nullable = true, description = "When sales open (UTC on this S2S path). Null: no schedule.")
     private LocalDateTime salesStartDateTime;
+
+    @Schema(nullable = true, description = "When sales close (UTC on this S2S path, V22). Null: when the "
+            + "event ends.")
+    private LocalDateTime salesEndDateTime;
 
     @Schema(nullable = true)
     private LocalDateTime endDateTime;

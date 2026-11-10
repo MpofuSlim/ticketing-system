@@ -111,6 +111,25 @@ public class CreateEventRequestDTO {
     @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     private LocalDateTime salesStartDateTime;
 
+    @Schema(
+            example = "2026-12-05T18:00:00",
+            nullable = true,
+            description = """
+                    Optional: when ticket sales close (`yyyy-MM-ddTHH:mm:ss`). Leave it out to sell until the
+                    event ends.
+
+                    **Send the local time of the market**, exactly like `startDateTime`: no offset, no `Z`; the
+                    server converts it. Must be **after `salesStartDateTime`** (when one is sent) and **no
+                    later than `endDateTime`**. It may be after the event starts (sales close an hour in).
+
+                    From this time the event is still listed, but bookings are refused
+                    (`salesStatus: SALES_CLOSED`), from every channel: the app, the website, the box office
+                    and sales agents. A payment already started before it is honoured.
+                    """
+    )
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    private LocalDateTime salesEndDateTime;
+
     @Schema(example = "1. Entry fees are not refundable.\n2. Runners must collect their race pack in person with ID.",
             nullable = true,
             description = """

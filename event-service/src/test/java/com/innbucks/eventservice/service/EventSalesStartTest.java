@@ -51,22 +51,22 @@ class EventSalesStartTest {
         LocalDateTime start = NOW.plusDays(1);
         LocalDateTime end = NOW.plusDays(10);
 
-        assertEquals(SalesStatus.ON_SALE, SalesStatus.of(true, false, null, end, NOW),
+        assertEquals(SalesStatus.ON_SALE, SalesStatus.of(true, false, null, null, end, NOW),
                 "no schedule: on sale as soon as published");
-        assertEquals(SalesStatus.NOT_YET_ON_SALE, SalesStatus.of(true, false, start, end, NOW));
-        assertEquals(SalesStatus.ON_SALE, SalesStatus.of(true, false, start, end, start),
+        assertEquals(SalesStatus.NOT_YET_ON_SALE, SalesStatus.of(true, false, start, null, end, NOW));
+        assertEquals(SalesStatus.ON_SALE, SalesStatus.of(true, false, start, null, end, start),
                 "sales open AT the scheduled instant");
-        assertEquals(SalesStatus.ENDED, SalesStatus.of(true, false, start, end, end),
+        assertEquals(SalesStatus.ENDED, SalesStatus.of(true, false, start, null, end, end),
                 "sales close AT the event's end");
-        assertEquals(SalesStatus.ENDED, SalesStatus.of(true, false, null, end, end.plusSeconds(1)));
+        assertEquals(SalesStatus.ENDED, SalesStatus.of(true, false, null, null, end, end.plusSeconds(1)));
     }
 
     @Test
     void status_unpublishedWinsOverEverything() {
         LocalDateTime end = NOW.plusDays(1);
-        assertEquals(SalesStatus.NOT_PUBLISHED, SalesStatus.of(false, false, null, end, NOW), "draft");
-        assertEquals(SalesStatus.NOT_PUBLISHED, SalesStatus.of(true, true, null, end, NOW), "rejected");
-        assertEquals(SalesStatus.NOT_PUBLISHED, SalesStatus.of(false, false, null, NOW.minusDays(1), NOW),
+        assertEquals(SalesStatus.NOT_PUBLISHED, SalesStatus.of(false, false, null, null, end, NOW), "draft");
+        assertEquals(SalesStatus.NOT_PUBLISHED, SalesStatus.of(true, true, null, null, end, NOW), "rejected");
+        assertEquals(SalesStatus.NOT_PUBLISHED, SalesStatus.of(false, false, null, null, NOW.minusDays(1), NOW),
                 "an ended draft is still a draft: never leak that it exists through ENDED");
     }
 

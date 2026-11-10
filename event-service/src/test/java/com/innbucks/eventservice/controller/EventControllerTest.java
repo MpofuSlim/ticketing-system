@@ -1522,4 +1522,131 @@ class EventControllerTest {
                     .andExpect(jsonPath("$.data.content[0].tenantUserUuid", nullValue()));
         }
     }
+
+    // ---- the sales end (V22) ------------------------------------------------
+
+    /** An organizer session as JwtFilter builds it: the account's uuid AND its organizer uuid (the same id). */
+    private static RequestPostProcessor organizerSession(UUID organizer) {
+        UsernamePasswordAuthenticationToken token = new UsernamePasswordAuthenticationToken(
+                "organizer@example.com", null, List.of(new SimpleGrantedAuthority("ROLE_EVENT_ORGANIZER")));
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put(AuthDetailsKeys.USER_UUID, organizer);
+        details.put(AuthDetailsKeys.ORGANIZER_UUID, organizer);
+        token.setDetails(details);
+        return authentication(token);
+    }
+
+    @Test
+    void createEvent_withASalesEndAfterTheEventEnd_is400() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile("event", "event.json",
+                MediaType.APPLICATION_JSON_VALUE, eventJson(",\"salesEndDateTime\":\"2030-04-18T23:30:00\""));
+
+        mockMvc.perform(multipart("/events").file(eventPart)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
+                        .requestAttr("jwtCountry", "Zimbabwe"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", is("Ticket sales must close by the time the event ends.")));
+    }
+
+    @Test
+    void salesEnd_isSetAtTheMarketOffset_readsSalesClosedOncePast_andItsHistoryIsTheOrganizers() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        Event saved = eventRepository.save(eventBuilder()
+                .tenantUserUuid(organizer)
+                .title("Closing early")
+                .startDateTime(LocalDateTime.of(2030, 4, 18, 16, 0))
+                .endDateTime(LocalDateTime.of(2030, 4, 18, 21, 0))
+                .build());
+
+        mockMvc.perform(put("/events/" + saved.getEventId())
+                        .with(organizerSession(organizer))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"salesEndDateTime\":\"2030-04-18T17:00:00\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.salesEndDateTime", is("2030-04-18T17:00:00+02:00")))
+                .andExpect(jsonPath("$.data.salesStatus", is("ON_SALE")));
+        assertEquals(LocalDateTime.of(2030, 4, 18, 15, 0),
+                eventRepository.findById(saved.getEventId()).orElseThrow().getSalesEndAt(),
+                "17:00 Harare is stored as 15:00 UTC");
+
+        // Closing sales now: a time in the past is allowed and closes them at once.
+        String past = LocalDateTime.now(ZoneOffset.UTC).plusHours(2).minusMinutes(5)
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"));
+        mockMvc.perform(put("/events/" + saved.getEventId())
+                        .with(organizerSession(organizer))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"salesEndDateTime\":\"" + past + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.salesStatus", is("SALES_CLOSED")));
+
+        mockMvc.perform(get("/events/" + saved.getEventId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.salesStatus", is("SALES_CLOSED")));
+
+        mockMvc.perform(get("/events/my").param("salesStatus", "SALES_CLOSED")
+                        .with(organizerSession(organizer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalElements", is(1)))
+                .andExpect(jsonPath("$.data.content[0].eventId", is(saved.getEventId().toString())));
+        mockMvc.perform(get("/events/my").param("salesStatus", "ON_SALE")
+                        .with(organizerSession(organizer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalElements", is(0)));
+
+        mockMvc.perform(get("/events/" + saved.getEventId() + "/sales-window/history")
+                        .with(organizerSession(organizer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(2)))
+                .andExpect(jsonPath("$.data[*].changeType", everyItem(is("CHANGED"))))
+                .andExpect(jsonPath("$.data[*].changedByOrganizer", everyItem(is(true))))
+                .andExpect(jsonPath("$.data[1].oldSalesEndDateTime", nullValue()))
+                .andExpect(jsonPath("$.data[1].newSalesEndDateTime", is("2030-04-18T17:00:00+02:00")));
+    }
+
+    @Test
+    void salesWindowHistory_isNeverPublic_andAnotherOrganizerGetsTheSame404() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        Event saved = eventRepository.save(eventBuilder()
+                .tenantUserUuid(organizer)
+                .title("Mine")
+                .startDateTime(LocalDateTime.of(2030, 4, 18, 16, 0))
+                .endDateTime(LocalDateTime.of(2030, 4, 18, 21, 0))
+                .build());
+
+        mockMvc.perform(get("/events/" + saved.getEventId() + "/sales-window/history"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/events/" + saved.getEventId() + "/sales-window/history")
+                        .with(organizerSession(UUID.randomUUID())))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message", is("Event not found")));
+        mockMvc.perform(get("/events/" + saved.getEventId() + "/sales-window/history")
+                        .with(jwtAuth("pm@innbucks.co.zw", null, "PRODUCT_MANAGER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(0)));
+    }
+
+    @Test
+    void myEvents_anUnknownSalesStatus_is400() throws Exception {
+        mockMvc.perform(get("/events/my").param("salesStatus", "SOLD_OUT")
+                        .with(organizerSession(UUID.randomUUID())))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void salesWindow_carriesTheSalesEnd_andSalesClosed_inUtc() throws Exception {
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).withNano(0);
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Closed early")
+                .startDateTime(now.plusHours(2))
+                .endDateTime(now.plusHours(6))
+                .salesEndAt(now.minusMinutes(1))
+                .build());
+
+        mockMvc.perform(get("/events/internal/sales-window").param("eventId", saved.getEventId().toString())
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status", is("SALES_CLOSED")))
+                .andExpect(jsonPath("$.data.salesEndDateTime", is(now.minusMinutes(1)
+                        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")) + "Z")));
+    }
 }

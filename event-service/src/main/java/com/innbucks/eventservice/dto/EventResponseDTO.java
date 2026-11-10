@@ -78,6 +78,11 @@ public class EventResponseDTO {
                     + "event before this time is listed but cannot be booked (see salesStatus).")
     private LocalDateTime salesStartDateTime;
 
+    @Schema(example = "2026-12-05T18:00:00+02:00", nullable = true,
+            description = "When ticket sales close. Null: they close when the event ends. From this time the "
+                    + "event is listed but cannot be booked (salesStatus SALES_CLOSED).")
+    private LocalDateTime salesEndDateTime;
+
     @Schema(example = "NOT_YET_ON_SALE",
             description = "Whether tickets can be bought right now, worked out when this response was built. "
                     + "Show the Buy button only for ON_SALE; never work it out on the device.")

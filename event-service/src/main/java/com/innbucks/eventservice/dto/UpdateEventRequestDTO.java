@@ -126,6 +126,34 @@ public class UpdateEventRequestDTO {
         this.salesStartDateTimeSent = true;
     }
 
+    @Schema(
+            example = "2026-12-05T18:00:00",
+            nullable = true,
+            description = """
+                    When ticket sales close, as the market's local time (like `startDateTime`). Must be after
+                    the sales start (when there is one) and no later than the event's end.
+
+                    - Left out: unchanged.
+                    - A date-time: sales close then. A time at or before now closes them at once.
+                    - `null`: removes it, so tickets sell until the event ends.
+                    """
+    )
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    private LocalDateTime salesEndDateTime;
+
+    // Same reason as salesStartDateTimeSent: null means "sell until the event
+    // ends", which must not be confused with "not sent".
+    @JsonIgnore
+    @Schema(hidden = true)
+    @Setter(AccessLevel.NONE)
+    private boolean salesEndDateTimeSent;
+
+    @JsonSetter("salesEndDateTime")
+    public void setSalesEndDateTime(LocalDateTime salesEndDateTime) {
+        this.salesEndDateTime = salesEndDateTime;
+        this.salesEndDateTimeSent = true;
+    }
+
     @Schema(example = "1. Entry fees are not refundable.\n2. Runners must collect their race pack in person with ID.",
             nullable = true,
             description = """
