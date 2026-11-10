@@ -134,6 +134,14 @@ public class BookingController {
     static final String EXAMPLE_EVENT_ENDED = """
             { "code": "409 CONFLICT", "message": "This event has ended, so tickets are no longer on sale.", "data": { "errorCode": "EVENT_ENDED" } }
             """;
+    // POST /bookings after the event's sales end (event-service V22): the time at the market offset.
+    static final String EXAMPLE_SALES_CLOSED = """
+            { "code": "409 CONFLICT", "message": "Ticket sales for this event have closed.", "data": { "errorCode": "SALES_CLOSED", "salesEndDateTime": "2026-12-05T18:00:00+02:00" } }
+            """;
+    // The same refusal on the S2S extend-hold, where times are UTC.
+    static final String EXAMPLE_HOLD_SALES_CLOSED = """
+            { "code": "409 CONFLICT", "message": "Ticket sales for this event have closed.", "data": { "errorCode": "SALES_CLOSED", "salesEndDateTime": "2026-12-05T16:00:00Z" } }
+            """;
     static final String EXAMPLE_EVENT_NOT_FOUND = """
             { "code": "404 NOT_FOUND", "message": "Event not found", "data": { "errorCode": "EVENT_NOT_FOUND" } }
             """;
@@ -268,12 +276,14 @@ public class BookingController {
                     description = "Nothing was held. Not enough tickets left in a category the request names; the "
                             + "promo code is used up (overall, or by this buyer); or the event is not on sale right "
                             + "now: SALES_NOT_STARTED (data.salesStartDateTime, at the market offset, is when sales "
-                            + "open; the message says it in words) or EVENT_ENDED; or the event's terms changed after checkout opened: "
+                            + "open; the message says it in words), SALES_CLOSED (data.salesEndDateTime is when "
+                            + "sales closed) or EVENT_ENDED; or the event's terms changed after checkout opened: "
                             + "TERMS_CHANGED (data.termsVersion is the new version; show the terms again); or an add-on "
                             + "has reached its limit: ADD_ON_SOLD_OUT (data.addOnId, data.remaining).",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Sales have not opened yet (SALES_NOT_STARTED)",
                                     value = EXAMPLE_SALES_NOT_STARTED),
+                            @ExampleObject(name = "Ticket sales have closed (SALES_CLOSED)", value = EXAMPLE_SALES_CLOSED),
                             @ExampleObject(name = "The event has ended (EVENT_ENDED)", value = EXAMPLE_EVENT_ENDED),
                             @ExampleObject(name = "The terms changed after checkout opened (TERMS_CHANGED)",
                                     value = EXAMPLE_TERMS_CHANGED),
@@ -1082,8 +1092,9 @@ public class BookingController {
      * instrument it is about to mint (hold 5 min vs code 10 min was the
      * paid-but-no-ticket gap), and the call stamps the booking's payment
      * window. Same internal-token discipline as the GET above; 409 when the
-     * booking is no longer PENDING or the hold asked for is past a cap — the
-     * caller refuses the payment before any money moves.
+     * booking is no longer PENDING, the hold asked for is past a cap, or the
+     * event's ticket sales have closed — the caller refuses the payment before
+     * any money moves.
      */
     @org.springframework.web.bind.annotation.PatchMapping("/internal/{id}/extend-hold")
     @SecurityRequirements()
@@ -1097,8 +1108,13 @@ public class BookingController {
                     + "Two caps, both REFUSED with a 409 and never clamped (a hold clamped short under a live "
                     + "instrument is a payment that lands with no ticket): holdUntil more than "
                     + "app.booking.max-hold-extension (PT45M) from now, and holdUntil past the booking's "
-                    + "createdAt + app.booking.max-total-hold (PT60M). Authenticated with the shared "
-                    + "X-Internal-Token; denied at the gateway edge.")
+                    + "createdAt + app.booking.max-total-hold (PT60M).\n\n"
+                    + "No payment may START once the event's ticket sales have closed (event-service V22): a "
+                    + "PENDING booking's sales window is asked first, with no transaction open, and SALES_CLOSED "
+                    + "or EVENT_ENDED is refused with that errorCode. A payment started before the cut-off is "
+                    + "honoured (confirm never asks). When event-service cannot answer, the hold is extended "
+                    + "(counted on booking.hold.sales_window_unchecked).\n\n"
+                    + "Authenticated with the shared X-Internal-Token; denied at the gateway edge.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Hold extended (or already long enough)"),
@@ -1126,13 +1142,17 @@ public class BookingController {
                     })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
                     description = "Booking not PENDING (paid, or cancelled — by the expiry sweep too, which this "
-                            + "call waits for when it holds the row), or the hold asked for is past a cap: more "
-                            + "than 45 minutes from now, or past 60 minutes from the booking. Nothing was written; "
-                            + "refuse the payment either way.",
+                            + "call waits for when it holds the row), the hold asked for is past a cap (more "
+                            + "than 45 minutes from now, or past 60 minutes from the booking), or the event's "
+                            + "ticket sales have closed (data.errorCode SALES_CLOSED, or EVENT_ENDED once it is "
+                            + "over). Nothing was written; refuse the payment either way.",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Not PENDING", value = EXAMPLE_HOLD_NOT_EXTENDABLE),
                             @ExampleObject(name = "Past a hold cap (60 min from booking, or 45 min from now)",
-                                    value = EXAMPLE_HOLD_CAP_REACHED)
+                                    value = EXAMPLE_HOLD_CAP_REACHED),
+                            @ExampleObject(name = "Ticket sales have closed (SALES_CLOSED)",
+                                    value = EXAMPLE_HOLD_SALES_CLOSED),
+                            @ExampleObject(name = "The event has ended (EVENT_ENDED)", value = EXAMPLE_EVENT_ENDED)
                     }))
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> extendHoldInternal(

@@ -1974,6 +1974,25 @@ class BookingServiceTest {
     }
 
     @Test
+    void createBooking_afterTheSalesEnd_is409SalesClosed_namingWhenTheyClosed() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        SeatServiceClient seats = mock(SeatServiceClient.class);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        LocalDateTime closedUtc = LocalDateTime.of(2026, 12, 5, 16, 0);
+        EventSalesWindowDTO closed = window(EventSalesWindowDTO.SALES_CLOSED);
+        closed.setSalesEndDateTime(closedUtc);
+
+        ApiProblemException ex = refusedBeforeAnything(serviceAnswering(bookingRepo, seats, closed, registry),
+                request(new BigDecimal("20.00")), bookingRepo, seats);
+
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals(BookingService.SALES_CLOSED, ex.getErrorCode());
+        assertEquals("Ticket sales for this event have closed.", ex.getMessage());
+        assertEquals(closedUtc, ex.getExtra().get("salesEndDateTime"));
+        assertEquals(1.0, refused(registry, "sales_closed"));
+    }
+
+    @Test
     void createBooking_draftRejectedOrUnknownEvent_isTheSame404() {
         // A draft's existence must not leak: unpublished and unknown read alike.
         SimpleMeterRegistry registry = new SimpleMeterRegistry();

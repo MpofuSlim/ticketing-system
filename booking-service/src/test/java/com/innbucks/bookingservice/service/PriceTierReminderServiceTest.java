@@ -212,6 +212,48 @@ class PriceTierReminderServiceTest {
     }
 
     @Test
+    void anEventWhoseSalesHaveClosed_isNotAnnounced() {
+        seatReports("2026-09-08T21:59:59Z");
+        sold(4);
+        follower();
+        when(events.getEvent(eventId)).thenReturn(ApiResult.ok(EventLookupDTO.builder().eventId(eventId)
+                .title("Harare Jazz Festival").salesEndDateTime(LocalDateTime.of(2026, 9, 8, 7, 0)).build()));
+
+        service.remind();
+
+        verifyNoInteractions(whatsApp, sms);
+        verify(subs, never()).claimReminder(any(), any(), any());
+    }
+
+    @Test
+    void aTierEndingAfterTheSalesEnd_isNotAnnounced_becauseSalesCloseFirst() {
+        seatReports("2026-09-08T21:59:59Z");
+        sold(4);
+        follower();
+        // Sales close at 18:00Z, before Early bird's 21:59:59Z: "book before the price goes up" would be false.
+        when(events.getEvent(eventId)).thenReturn(ApiResult.ok(EventLookupDTO.builder().eventId(eventId)
+                .title("Harare Jazz Festival").salesEndDateTime(LocalDateTime.of(2026, 9, 8, 18, 0)).build()));
+
+        service.remind();
+
+        verifyNoInteractions(whatsApp, sms);
+        verify(subs, never()).claimReminder(any(), any(), any());
+    }
+
+    @Test
+    void aTierEndingBeforeTheSalesEnd_isStillAnnounced() {
+        seatReports("2026-09-08T21:59:59Z");
+        sold(4);
+        follower();
+        when(events.getEvent(eventId)).thenReturn(ApiResult.ok(EventLookupDTO.builder().eventId(eventId)
+                .title("Harare Jazz Festival").salesEndDateTime(LocalDateTime.of(2026, 9, 9, 18, 0)).build()));
+
+        service.remind();
+
+        verify(whatsApp).sendCustomNotification(eq(PHONE), contains("Early bird tickets for VIP (100.00)"));
+    }
+
+    @Test
     void theSmsText_survivesTheGatewaySanitizerUnchanged() {
         PriceTierReminderService.Ending early = new PriceTierReminderService.Ending(earlyId, "Early bird", "VIP",
                 new BigDecimal("100.00"), LocalDateTime.of(2026, 9, 8, 21, 59, 59));
