@@ -8,6 +8,7 @@ import com.innbucks.userservice.security.OtpHasher;
 import com.innbucks.userservice.service.CustomerService;
 import com.innbucks.userservice.service.OtpService;
 import com.innbucks.userservice.testsupport.PostgresIntegrationTestBase;
+import com.innbucks.userservice.testsupport.TestPhones;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,7 +22,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,7 +66,7 @@ class OtpDeliveryOutsideTransactionIT extends PostgresIntegrationTestBase {
     }
 
     private static String phone() {
-        return "+26377" + (1_000_000 + ThreadLocalRandom.current().nextInt(8_999_999));
+        return TestPhones.unique();
     }
 
     private static String codeIn(String message) {
