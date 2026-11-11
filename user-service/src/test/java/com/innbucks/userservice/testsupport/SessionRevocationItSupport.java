@@ -24,7 +24,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -60,7 +59,7 @@ public abstract class SessionRevocationItSupport extends PostgresIntegrationTest
     }
 
     protected static String phone() {
-        return "+26377" + (1_000_000 + ThreadLocalRandom.current().nextInt(8_999_999));
+        return TestPhones.unique();
     }
 
     protected TransactionTemplate tx() {

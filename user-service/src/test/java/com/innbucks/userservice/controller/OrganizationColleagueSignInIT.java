@@ -14,6 +14,7 @@ import com.innbucks.userservice.repository.OrganizationProductRepository;
 import com.innbucks.userservice.repository.OrganizationRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.service.OrganizationService;
+import com.innbucks.userservice.testsupport.TestPhones;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -28,7 +29,6 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -84,7 +84,7 @@ class OrganizationColleagueSignInIT {
     }
 
     private static String phone() {
-        return "+26377" + (1_000_000 + ThreadLocalRandom.current().nextInt(8_999_999));
+        return TestPhones.unique();
     }
 
     private User account(String email, String role) {

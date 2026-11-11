@@ -5,6 +5,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.client.WhatsAppNotificationClient;
+import com.innbucks.userservice.testsupport.TestPhones;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,7 +45,6 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
@@ -862,6 +862,6 @@ class SingleDeviceConcurrencyTest {
 
     /** A fresh valid Econet number per call, so rounds never share a registry row. */
     private static String number() {
-        return "+26377" + String.format("%07d", ThreadLocalRandom.current().nextInt(10_000_000));
+        return TestPhones.unique();
     }
 }

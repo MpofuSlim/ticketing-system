@@ -5,6 +5,7 @@ import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.config.MarketTimeZone;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.testsupport.TestPhones;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,7 +40,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -1992,7 +1992,7 @@ class DeviceSecurityFlowTest {
 
     /** A fresh valid Econet number per call, so tests never share a registry row. */
     private static String number() {
-        return "+26377" + String.format("%07d", ThreadLocalRandom.current().nextInt(10_000_000));
+        return TestPhones.unique();
     }
 
     /**
