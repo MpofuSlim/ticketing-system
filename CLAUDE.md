@@ -3331,7 +3331,12 @@ runs when a tier closes: every read works out the price in force at that moment.
   never learns which staff account changed their price**: `changed_by` holds an
   admin's JWT email, so for the owner a change they did not make reads
   `changedBy: "InnBucks"` (`PriceHistory.toDto`); SUPER_ADMIN reads it whole.
-  event-service's sales-window history follows the same rule.
+  event-service's sales-window history follows the same rule. Both carry
+  `changedByOrganizer`, compared with the EVENT'S OWNER, never inferred from
+  the value's shape: the auditor stamps any caller's `organizerUuid` claim, so
+  a uuid alone does not mean the owner. For SUPER_ADMIN, seat-service asks
+  event-service for the owner (no transaction open, best-effort); when it
+  cannot answer, the flag is null and the history is still served.
 
 ## Bookings record how they were paid (booking-service V29)
 

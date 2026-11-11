@@ -786,7 +786,9 @@ public class SeatCategoryController {
                     + "200): CREATED (the price and tiers it was created with), PRICE_CHANGED (old and new full "
                     + "price) and TIERS_CHANGED (the tiers before and after, each with its terms as they were). "
                     + "`changedBy` is the organizer's uuid, or for a change InnBucks staff made, \"InnBucks\" to "
-                    + "the organizer and the admin's email to SUPER_ADMIN. The record is append-only. "
+                    + "the organizer and the admin's email to SUPER_ADMIN. `changedByOrganizer` says whether the "
+                    + "event's organizer made it (null when that cannot be said: no recorded author, or, for "
+                    + "SUPER_ADMIN, the event could not be read). The record is append-only. "
                     + "Requires the owning EVENT_ORGANIZER or SUPER_ADMIN; a deleted category's history stays "
                     + "readable.")
     @ApiResponses({
@@ -819,6 +821,7 @@ public class SeatCategoryController {
                                               "endsAt": "2026-09-27T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true }
                                           ],
                                           "changedBy": "7a1c3e5f-2b4d-4f6a-8c0e-1a2b3c4d5e6f",
+                                          "changedByOrganizer": true,
                                           "changedAt": "2026-09-03T09:30:00+02:00"
                                         },
                                         {
@@ -829,6 +832,7 @@ public class SeatCategoryController {
                                           "tiersBefore": null,
                                           "tiersAfter": null,
                                           "changedBy": "InnBucks",
+                                          "changedByOrganizer": false,
                                           "changedAt": "2026-09-02T10:15:00+02:00"
                                         },
                                         {
@@ -844,6 +848,7 @@ public class SeatCategoryController {
                                               "endsAt": "2026-09-20T23:59:59+02:00", "quantity": null, "maxPerCustomer": null, "refundsReopen": true }
                                           ],
                                           "changedBy": "7a1c3e5f-2b4d-4f6a-8c0e-1a2b3c4d5e6f",
+                                          "changedByOrganizer": true,
                                           "changedAt": "2026-08-25T08:00:00+02:00"
                                         }
                                       ]

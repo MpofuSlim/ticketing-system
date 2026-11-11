@@ -53,11 +53,14 @@ final class PriceHistory {
     static final String CHANGED_BY_INNBUCKS = "InnBucks";
 
     /**
-     * {@code readerOrganizerUuid} is the reading organizer (the event's owner,
-     * checked before this); {@code staffReader} sees who made every change.
+     * {@code eventOwner} is the event's organizer: for an organizer reader
+     * themselves (the ownership check ran before this), for a staff reader
+     * whatever event-service answered, null when it could not.
+     * {@code staffReader} sees who made every change.
      */
-    static PriceChangeDTO toDto(SeatCategoryPriceChange change, java.util.UUID readerOrganizerUuid,
-                                boolean staffReader) {
+    static PriceChangeDTO toDto(SeatCategoryPriceChange change, java.util.UUID eventOwner, boolean staffReader) {
+        String stored = change.getChangedBy();
+        Boolean byOrganizer = byOrganizer(stored, eventOwner);
         return PriceChangeDTO.builder()
                 .id(change.getId())
                 .changeType(change.getChangeType().name())
@@ -65,17 +68,25 @@ final class PriceHistory {
                 .newPrice(change.getNewPrice())
                 .tiersBefore(read(change.getTiersBefore()))
                 .tiersAfter(read(change.getTiersAfter()))
-                .changedBy(changedBy(change.getChangedBy(), readerOrganizerUuid, staffReader))
+                .changedBy(stored == null || staffReader || Boolean.TRUE.equals(byOrganizer)
+                        ? stored : CHANGED_BY_INNBUCKS)
+                .changedByOrganizer(byOrganizer)
                 .changedAt(change.getChangedAt())
                 .build();
     }
 
-    private static String changedBy(String stored, java.util.UUID readerOrganizerUuid, boolean staffReader) {
-        if (stored == null || staffReader) {
-            return stored;
+    /**
+     * Whether the event's organizer made the change: the auditor stamps an
+     * organizer's own uuid. Null when it cannot be said: no author was
+     * recorded, or the owner is unknown (a staff reader whose event lookup
+     * failed). An organizer reader always has an owner, so for them it is null
+     * only for a change with no recorded author.
+     */
+    private static Boolean byOrganizer(String stored, java.util.UUID eventOwner) {
+        if (stored == null || eventOwner == null) {
+            return null;
         }
-        return readerOrganizerUuid != null && readerOrganizerUuid.toString().equalsIgnoreCase(stored)
-                ? stored : CHANGED_BY_INNBUCKS;
+        return eventOwner.toString().equalsIgnoreCase(stored);
     }
 
     /** Null for no snapshot. An unreadable one is logged and read as none: history is never a 500. */
