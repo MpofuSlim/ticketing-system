@@ -64,7 +64,7 @@ services:
     container_name: innbucks-user-service
     restart: unless-stopped
     networks: ["default", "shared"]
-    mem_limit: 768m
+    mem_limit: 1024m
     mem_reservation: 512m
     depends_on:
       postgres:
@@ -73,7 +73,7 @@ services:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       INNBUCKS_CELLS_REGISTRY: "${INNBUCKS_CELLS_REGISTRY:-{}}"
-      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=55.0}
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
       TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0.1}
       DB_URL: jdbc:postgresql://postgres:5432/user_service
@@ -146,7 +146,7 @@ services:
     image: ghcr.io/${GHCR_OWNER:-mpofuslim}/event-service:${IMAGE_TAG:-dev}
     container_name: innbucks-event-service
     restart: unless-stopped
-    mem_limit: 640m
+    mem_limit: 1024m
     mem_reservation: 448m
     depends_on:
       postgres:
@@ -154,7 +154,7 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
-      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=55.0}
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
       TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0.1}
       DB_URL: jdbc:postgresql://postgres:5432/event_service
@@ -189,7 +189,7 @@ services:
     image: ghcr.io/${GHCR_OWNER:-mpofuslim}/seat-service:${IMAGE_TAG:-dev}
     container_name: innbucks-seat-service
     restart: unless-stopped
-    mem_limit: 640m
+    mem_limit: 1024m
     mem_reservation: 448m
     depends_on:
       postgres:
@@ -199,7 +199,7 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
-      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=55.0}
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
       TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0.1}
       DB_URL: jdbc:postgresql://postgres:5432/seat_service
@@ -233,7 +233,7 @@ services:
     image: ghcr.io/${GHCR_OWNER:-mpofuslim}/booking-service:${IMAGE_TAG:-dev}
     container_name: innbucks-booking-service
     restart: unless-stopped
-    mem_limit: 768m
+    mem_limit: 1024m
     mem_reservation: 512m
     depends_on:
       postgres:
@@ -243,7 +243,7 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
-      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=55.0}
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
       TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0.1}
       DB_URL: jdbc:postgresql://postgres:5432/booking_service
@@ -296,7 +296,7 @@ services:
     container_name: innbucks-payment-service
     restart: unless-stopped
     networks: ["default", "shared"]
-    mem_limit: 768m
+    mem_limit: 1024m
     mem_reservation: 512m
     depends_on:
       booking-service:
@@ -309,7 +309,7 @@ services:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       INNBUCKS_CURRENCY: ${INNBUCKS_CURRENCY:-USD}
-      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=55.0}
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
       TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0.1}
       DB_URL: jdbc:postgresql://postgres:5432/payment_service
@@ -381,7 +381,7 @@ services:
     container_name: innbucks-api-gateway
     restart: unless-stopped
     networks: ["default", "shared"]
-    mem_limit: 768m
+    mem_limit: 1024m
     mem_reservation: 512m
     depends_on:
       redis:
@@ -389,7 +389,7 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
-      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=55.0}
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
       TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0.1}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}

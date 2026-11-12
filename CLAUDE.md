@@ -401,6 +401,9 @@ fails on one that sizes the heap with `-Xmx`, `-XX:MaxHeapSize` or
 - **Changing a limit or the percentage** is one `kubectl set resources` /
   `kubectl set env JAVA_TOOL_OPTIONS=…` per Deployment. Pause the rollout around
   the two, so the pod restarts once.
+- **`docker-compose.yml` follows the same rule** for its six JVM services
+  (`mem_limit: 1024m`, `MaxRAMPercentage=55.0` by default), and the same test
+  checks it.
 
 ## loans-service joins behind the gateway (MpofuSlim/innbucks-loans)
 

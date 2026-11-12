@@ -84,6 +84,54 @@ class JvmMemoryBudgetTest {
                 .isEmpty();
     }
 
+    /**
+     * docker-compose.yml runs this repo's six JVM services under {@code mem_limit}
+     * with the same rule. Its {@code JAVA_TOOL_OPTIONS} is a default
+     * ({@code ${JAVA_TOOL_OPTIONS:-…}}), which is what is checked.
+     */
+    @Test
+    void everyComposeJvmService_leavesRoomOutsideTheHeap() throws IOException {
+        Map<String, Object> services = map(documents(K8S.getParent().getParent().resolve("docker-compose.yml"))
+                .get(0).get("services"));
+        List<String> checked = new ArrayList<>();
+        List<String> tooTight = new ArrayList<>();
+        for (Map.Entry<String, Object> e : services.entrySet()) {
+            Map<String, Object> service = map(e.getValue());
+            if (!String.valueOf(service.get("image")).contains("/mpofuslim/")
+                    && !String.valueOf(service.get("image")).contains("${GHCR_OWNER")) {
+                continue;
+            }
+            String options = String.valueOf(map(service.get("environment")).get("JAVA_TOOL_OPTIONS"));
+            Matcher m = MAX_RAM_PERCENTAGE.matcher(options);
+            assertThat(m.find()).as(e.getKey() + " must default -XX:MaxRAMPercentage: " + options).isTrue();
+            assertThat(HEAP_SIZED_ELSEWHERE.matcher(options).find())
+                    .as(e.getKey() + " sizes its heap outside MaxRAMPercentage: " + options).isFalse();
+            Object limit = service.get("mem_limit");
+            assertThat(limit).as(e.getKey() + " must set mem_limit").isNotNull();
+            JvmPod p = new JvmPod(e.getKey(), composeMebibytes(String.valueOf(limit)), Double.parseDouble(m.group(1)));
+            checked.add(e.getKey());
+            if (p.leftMib() < NON_HEAP_MIB) {
+                tooTight.add(String.format("%s: mem_limit %d MiB, heap up to %d MiB, leaves %d MiB",
+                        p.deployment(), p.limitMib(), p.heapMib(), p.leftMib()));
+            }
+        }
+        assertThat(checked).contains("user-service", "event-service", "seat-service", "booking-service",
+                "payment-service", "api-gateway");
+        assertThat(tooTight).as("compose JVM services leaving less than %d MiB outside the heap", NON_HEAP_MIB)
+                .isEmpty();
+    }
+
+    /** A compose {@code mem_limit} in m or g. */
+    static long composeMebibytes(String limit) {
+        if (limit.endsWith("g")) {
+            return Long.parseLong(limit.substring(0, limit.length() - 1)) * 1024;
+        }
+        if (limit.endsWith("m")) {
+            return Long.parseLong(limit.substring(0, limit.length() - 1));
+        }
+        throw new AssertionError("write mem_limit in m or g, got " + limit);
+    }
+
     @Test
     void theRuleCatchesTheSettingThatTookEventServiceDown() {
         assertThat(new JvmPod("event-service", 640, 70.0).leftMib()).isLessThan(NON_HEAP_MIB);
