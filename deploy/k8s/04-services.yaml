@@ -64,7 +64,11 @@ spec:
             - { name: FLYWAY_ENABLED, value: "true" }
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
-          resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
+          # 768Mi like booking/payment/user/gateway. At 640Mi the sales-agents
+          # build was OOMKilled during startup on production (2026-11-12): the
+          # heap takes 70% of the limit, and the rest of the JVM no longer fit
+          # in the 192Mi left. Applied there by hand with `set resources`.
+          resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8082 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8082 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           # Keep serving while the endpoint is removed from the Service, so a
