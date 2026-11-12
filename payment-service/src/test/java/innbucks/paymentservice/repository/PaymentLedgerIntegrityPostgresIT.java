@@ -56,6 +56,60 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
                 .build();
     }
 
+    /**
+     * The card sweep's query on real Postgres: it returns open card checkouts
+     * past their ceiling (deadline + grace, or 30 minutes from creation when
+     * the deadline is missing) and nothing a shopper may still be paying on.
+     * The sweep used to read every open checkout, and a read kills a checkout
+     * nobody has paid yet (staging, 2026-11-12).
+     */
+    @Test
+    void cardSweepQuery_returnsOnlyOpenCheckoutsPastTheirCeiling() {
+        java.time.Instant now = java.time.Instant.now();
+        java.time.Instant deadlineBefore = now.minus(java.time.Duration.ofMinutes(2));
+        java.time.Instant createdBefore = now.minus(java.time.Duration.ofMinutes(30));
+
+        Payment lapsed = cardRow(PaymentStatus.TOKEN_ISSUED, now.minus(java.time.Duration.ofMinutes(31)),
+                now.minus(java.time.Duration.ofMinutes(3)));
+        Payment open = cardRow(PaymentStatus.TOKEN_ISSUED, now.minus(java.time.Duration.ofMinutes(5)),
+                now.plus(java.time.Duration.ofMinutes(23)));
+        Payment inGrace = cardRow(PaymentStatus.TOKEN_ISSUED, now.minus(java.time.Duration.ofMinutes(29)),
+                now.minus(java.time.Duration.ofMinutes(1)));
+        Payment oldNoDeadline = cardRow(PaymentStatus.TOKEN_ISSUED, now.minus(java.time.Duration.ofMinutes(31)), null);
+        Payment youngNoDeadline = cardRow(PaymentStatus.TOKEN_ISSUED, now.minus(java.time.Duration.ofMinutes(10)), null);
+        Payment closed = cardRow(PaymentStatus.EXPIRED, now.minus(java.time.Duration.ofMinutes(40)),
+                now.minus(java.time.Duration.ofMinutes(12)));
+        Payment codeRow = row(UUID.randomUUID(), PaymentStatus.TOKEN_ISSUED);
+        codeRow.setCreatedAt(now.minus(java.time.Duration.ofMinutes(40)));
+        codeRow.setCodeExpiresAt(now.minus(java.time.Duration.ofMinutes(20)));
+        for (Payment p : java.util.List.of(lapsed, open, inGrace, oldNoDeadline, youngNoDeadline, closed, codeRow)) {
+            payments.saveAndFlush(p);
+        }
+
+        java.util.Set<UUID> due = payments.findOpenPastCeiling(PaymentStatus.TOKEN_ISSUED,
+                        innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD, deadlineBefore, createdBefore,
+                        org.springframework.data.domain.PageRequest.of(0, 1000))
+                .stream().map(Payment::getId).collect(java.util.stream.Collectors.toSet());
+
+        assertTrue(due.contains(lapsed.getId()), "deadline + grace passed");
+        assertTrue(due.contains(oldNoDeadline.getId()), "no deadline: 30 minutes from creation passed");
+        assertFalse(due.contains(open.getId()), "the shopper may still be on the card form");
+        assertFalse(due.contains(inGrace.getId()), "past the local deadline but inside the grace: still payable");
+        assertFalse(due.contains(youngNoDeadline.getId()));
+        assertFalse(due.contains(closed.getId()), "only open rows");
+        assertFalse(due.contains(codeRow.getId()), "only the card rail");
+    }
+
+    private static Payment cardRow(PaymentStatus status, java.time.Instant createdAt,
+                                   java.time.Instant deadline) {
+        Payment p = row(UUID.randomUUID(), status);
+        p.setPaymentRail(innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD);
+        p.setCheckoutId("CHK" + UUID.randomUUID().toString().replace("-", "").substring(0, 20) + ".uat01-vm-tx04");
+        p.setCreatedAt(createdAt);
+        p.setCodeExpiresAt(deadline);
+        return p;
+    }
+
     @Test
     void secondActivePaymentForSameBooking_isRefusedByTheIndex() {
         UUID bookingId = UUID.randomUUID();

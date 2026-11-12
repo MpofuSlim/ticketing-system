@@ -2,6 +2,7 @@ package innbucks.paymentservice.dto;
 
 import innbucks.paymentservice.order.OrderType;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.UUID;
@@ -43,4 +44,15 @@ public class PaymentRequest {
                     + "rails: while an attempt is open on one rail, POSTing with another returns "
                     + "the open attempt's receipt unchanged (switch rails after it lapses).")
     private innbucks.paymentservice.entity.PaymentRail paymentRail;
+
+    @Size(max = 256)
+    @Schema(example = "/v1/checkouts/8a82944a4cc25ebf014cc2c782423202/payment",
+            description = "Card rail only, and only from the card result page: the `resourcePath` query "
+                    + "parameter ZimSwitch put on the redirect to `shopperResultUrl`, passed through as it "
+                    + "arrived. It tells us the shopper has finished with the card form, which is the one "
+                    + "moment we check the payment with ZimSwitch before the checkout's 30 minutes are up: "
+                    + "checking earlier kills the card form under a shopper who is still typing. Never send it "
+                    + "from anywhere else. It is compared with our own checkout id and never used to build a "
+                    + "request; a value naming another checkout is ignored.")
+    private String resourcePath;
 }

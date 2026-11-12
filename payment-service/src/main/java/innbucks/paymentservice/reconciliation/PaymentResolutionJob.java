@@ -55,8 +55,10 @@ import java.util.List;
  *       TTL + grace has passed. <b>UNKNOWN/error never expires a row</b> — a code
  *       the customer may have paid must keep blocking the slot until an answer or
  *       an operator; auto-expiring it would invite a second charge.</li>
- *   <li><b>Card-status poll (~30s):</b> the same job for open ZimSwitch
- *       COPYandPAY checkouts.</li>
+ *   <li><b>Card-status poll (~30s):</b> the same job for ZimSwitch COPYandPAY
+ *       checkouts, but only once each is past its 30-minute ceiling: a read
+ *       before then kills the checkout under the shopper. Before the ceiling
+ *       the shopper's return to the result page triggers the read.</li>
  *   <li><b>EcoCash Query poll (~20s):</b> the same job for open EcoCash EIP
  *       charges — the customer approves a PIN prompt on their phone and this
  *       poll (plus the notify-webhook trigger, which runs the SAME resolver)
@@ -213,39 +215,48 @@ public class PaymentResolutionJob {
     }
 
     /**
-     * The card-rail resolver: polls open ZimSwitch COPYandPAY checkouts.
-     * Wider cadence than the code poll because the gateway throttles status
-     * reads to TWO per checkout per minute — the per-row
-     * {@code card_status_checked_at} gate inside
-     * {@code resolveOpenCheckout} is the real budget-keeper (it also
-     * arbitrates with the customer-triggered instant check), this interval
-     * just sets how often the sweep offers each row a chance.
+     * The card-rail sweep: resolves open ZimSwitch COPYandPAY checkouts that
+     * are PAST THEIR CEILING (the local deadline plus grace, past the
+     * gateway's 30-minute checkout life), and only those.
+     *
+     * <p>It used to read every open checkout every 30 seconds. A read of a
+     * checkout nobody has paid yet kills it upstream within minutes (staging,
+     * 2026-11-12), so the sweep was killing card forms while shoppers were
+     * still typing. A checkout is read before its ceiling only when the
+     * shopper returns from ZimSwitch ({@code POST /payments} with the
+     * redirect's {@code resourcePath}). This sweep closes what is left:
+     * abandoned checkouts (no payment → EXPIRED, slot freed), a last decline
+     * (→ FAILED), and a shopper who paid but never came back (→ confirmed,
+     * up to ~30 minutes after the checkout was made).
      *
      * <p>All money rules live in
-     * {@link ZimswitchCardPaymentService#resolveOpenCheckout} — the SAME
-     * implementation the instant check uses: paid → confirm → SUCCEEDED (echo
-     * mismatch parks IN_DOUBT; confirm failure leaves COMPLETED_UNCONFIRMED for
-     * the shared retry sweep); declines keep the checkout open for a shopper
-     * retry; NOT_FOUND past the checkout ceiling is the positive never-paid
-     * answer that frees the slot.
+     * {@link ZimswitchCardPaymentService#resolveOpenCheckout}, shared with the
+     * shopper's return; it refuses a {@code POLLER} read before the ceiling
+     * even if this query ever hands it one. The per-row
+     * {@code card_status_checked_at} gate keeps the two inside the gateway's
+     * two-reads-per-checkout-per-minute throttle.
      */
     @Scheduled(fixedDelayString = "${payment-service.card-poll.interval:PT30S}")
     @SchedulerLock(name = "PaymentResolutionJob.pollCardPayments", lockAtMostFor = "PT2M", lockAtLeastFor = "PT15S")
     public void pollCardPayments() {
-        List<Payment> open = paymentRepository.findByStatusAndPaymentRail(
-                PaymentStatus.TOKEN_ISSUED, PaymentRail.ZIMSWITCH_CARD, PageRequest.of(0, batchSize));
+        ZimswitchCardPaymentService.CeilingCutoffs cutoffs =
+                ZimswitchCardPaymentService.CeilingCutoffs.at(Instant.now());
+        List<Payment> open = paymentRepository.findOpenPastCeiling(
+                PaymentStatus.TOKEN_ISSUED, PaymentRail.ZIMSWITCH_CARD,
+                cutoffs.deadlineBefore(), cutoffs.createdBefore(), PageRequest.of(0, batchSize));
         if (open.isEmpty()) {
             return;
         }
         if (!zimswitchCardPaymentService.isRailConfigured()) {
-            log.warn("Card poll: {} TOKEN_ISSUED card rows but ZimSwitch is not configured — cannot resolve",
-                    open.size());
+            log.warn("Card poll: {} TOKEN_ISSUED card rows past their ceiling but ZimSwitch is not configured — "
+                    + "cannot resolve", open.size());
             return;
         }
         for (Payment p : open) {
             // Per-row isolation: one checkout's failure must not stall the rest.
             try {
-                zimswitchCardPaymentService.resolveOpenCheckout(p, cardPollMinInterval);
+                zimswitchCardPaymentService.resolveOpenCheckout(p, cardPollMinInterval,
+                        ZimswitchCardPaymentService.ReadTrigger.POLLER);
             } catch (RuntimeException e) {
                 metrics.incCardResolution("error");
                 log.warn("Card poll failed for paymentReference={} — leaving row for next pass: {}",

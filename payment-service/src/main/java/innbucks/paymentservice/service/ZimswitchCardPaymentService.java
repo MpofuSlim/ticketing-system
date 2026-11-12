@@ -49,8 +49,10 @@ import java.util.UUID;
  *   5. Return PROCESSING with the widget artifacts (script URL + integrity +
  *      brands + shopperResultUrl) — the FE renders the PCI-scoped COPYandPAY
  *      widget; card data goes browser -> gateway, never through us.
- *   6. The card status poller (and the customer-triggered instant check on
- *      replay) resolves the row via GET /v1/checkouts/{id}/payment.
+ *   6. The row is resolved via GET /v1/checkouts/{id}/payment, but ONLY when
+ *      the shopper comes back from ZimSwitch (the result page re-POSTs with
+ *      the redirect's resourcePath) or once the checkout is past its
+ *      30-minute ceiling (the poller, or any re-POST). See {@link ReadTrigger}.
  * </pre>
  *
  * <p><b>Resolution rules this rail adds over the code rail</b> (each pinned
@@ -64,13 +66,25 @@ import java.util.UUID;
  *   <li><b>Echo verification (the 100x guard):</b> a paid read whose
  *       amount/currency/merchantTransactionId echo doesn't match the ledger
  *       parks IN_DOUBT for an operator — never confirmed, never guessed.</li>
- *   <li><b>Declines don't close the row:</b> the checkout stays alive
- *       upstream and the shopper may retry another card on it (the
- *       documented multi-transaction reuse). The decline is journalled; the
- *       row expires via the NOT_FOUND-past-deadline rule if never paid.</li>
+ *   <li><b>No status read before the shopper returns:</b> a read of a
+ *       checkout nobody has paid yet ({@code 200.300.404}) kills it upstream
+ *       within minutes (measured on staging, 2026-11-12: a checkout never read
+ *       still rendered at six minutes; every one we had read was "invalid"
+ *       within three to five). So before the ceiling only
+ *       {@link ReadTrigger#SHOPPER_RETURN} reads; the poller and a plain
+ *       re-POST wait for the ceiling, when the checkout can no longer be paid
+ *       and a read can no longer harm it.</li>
+ *   <li><b>Declines before the ceiling don't close the row:</b> the decline is
+ *       journalled and the row stays open, per the documented
+ *       multi-transaction reuse. Whether the checkout survives the read that
+ *       reported the decline is an open question for ZimSwitch. A decline read
+ *       past the ceiling closes the row FAILED: no retry can follow it.</li>
+ *   <li><b>Every read is journalled</b> with ZimSwitch's result code and what
+ *       triggered it, so a checkout that dies early can be traced to the read
+ *       that preceded it.</li>
  *   <li><b>Throttle:</b> two status reads per checkout per minute, enforced
  *       through the persisted {@code card_status_checked_at} stamp shared by
- *       poller and instant check.</li>
+ *       every caller.</li>
  * </ul>
  */
 @Slf4j
@@ -87,6 +101,13 @@ public class ZimswitchCardPaymentService {
      * what the product hold is sized from.
      */
     static final Duration CHECKOUT_EXPIRY_GRACE = Duration.ofMinutes(2);
+
+    /** The gateway's own checkout life, for a row missing its local deadline. */
+    private static final Duration GATEWAY_CHECKOUT_CEILING = Duration.ofMinutes(30);
+
+    /** The path ZimSwitch puts in the shopper's redirect: {@code /v1/checkouts/{id}/payment}. */
+    private static final String RESOURCE_PATH_PREFIX = "/v1/checkouts/";
+    private static final String RESOURCE_PATH_SUFFIX = "/payment";
 
     private final PaymentRecordService paymentRecordService;
     private final ZimswitchCopyPayClient zimswitchClient;
@@ -318,26 +339,121 @@ public class ZimswitchCardPaymentService {
                 .build();
     }
 
-    /** Outcome of a status poll / instant check on an open card checkout. */
+    /**
+     * Outcome of a status read (or a skipped one) on an open card checkout.
+     * {@code EXPIRED} means the row just closed unpaid and its slot is free:
+     * EXPIRED (no payment past the ceiling) or FAILED (declined past it).
+     */
     public enum CardCheckOutcome { PAID, EXPIRED, PENDING }
 
     /**
-     * Resolve an open card checkout by querying the gateway — THE resolver
-     * for this rail, shared by the reconciler poll and the customer-triggered
-     * instant check so the money rules cannot drift between them.
+     * Why a caller wants the checkout's status read. It decides whether a read
+     * may happen before the checkout's ceiling.
      *
-     * @param minGap minimum age of the previous status read before another
-     *               is allowed (the two-per-minute throttle share for this
-     *               caller); a fresher stamp skips the read and reports
-     *               PENDING
+     * <p>A read of a checkout nobody has paid yet is not harmless: on staging
+     * (2026-11-12) a checkout we never read still rendered its card form six
+     * minutes after it was made, and every checkout we had read answered
+     * "checkoutId is invalid" within three to five minutes. Reading while the
+     * shopper was still typing their card killed the form under them. So
+     * before the ceiling only the shopper's return reads.
      */
-    public CardCheckOutcome resolveOpenCheckout(Payment p, Duration minGap) {
+    public enum ReadTrigger {
+        /**
+         * The shopper came back from ZimSwitch to {@code shopperResultUrl}
+         * and the result page re-POSTed with the redirect's
+         * {@code resourcePath}. The one moment a read before the ceiling is
+         * wanted: the shopper has finished with the form.
+         */
+        SHOPPER_RETURN("on the shopper's return"),
+        /** A plain re-POST (reload, retry). Reads only past the ceiling. */
+        CUSTOMER_RETRY("on a customer re-POST"),
+        /** The reconciler's card sweep. Reads only past the ceiling. */
+        POLLER("by the card poller");
+
+        private final String journalLabel;
+
+        ReadTrigger(String journalLabel) {
+            this.journalLabel = journalLabel;
+        }
+    }
+
+    /**
+     * The instant after which the checkout can take no payment: the local
+     * deadline plus {@link #CHECKOUT_EXPIRY_GRACE}, which lands past the
+     * gateway's own 30-minute ceiling. A row missing its local deadline
+     * (defensive; {@code markCardCheckoutIssued} always stamps one) falls back
+     * to the gateway ceiling from creation, never earlier.
+     */
+    static Instant ceiling(Payment p) {
+        Instant deadline = p.getCodeExpiresAt() != null
+                ? p.getCodeExpiresAt()
+                : p.getCreatedAt().plus(GATEWAY_CHECKOUT_CEILING).minus(CHECKOUT_EXPIRY_GRACE);
+        return deadline.plus(CHECKOUT_EXPIRY_GRACE);
+    }
+
+    static boolean isPastCeiling(Payment p, Instant now) {
+        return now.isAfter(ceiling(p));
+    }
+
+    /**
+     * The sweep's cut-offs for {@code PaymentRepository.findOpenPastCeiling}:
+     * a row is past its {@link #ceiling} when its local deadline is before
+     * {@code deadlineBefore}, or, with no deadline, when it was created before
+     * {@code createdBefore}. Kept here so the query and {@link #ceiling} share
+     * one definition.
+     */
+    public record CeilingCutoffs(Instant deadlineBefore, Instant createdBefore) {
+        public static CeilingCutoffs at(Instant now) {
+            return new CeilingCutoffs(now.minus(CHECKOUT_EXPIRY_GRACE), now.minus(GATEWAY_CHECKOUT_CEILING));
+        }
+    }
+
+    /**
+     * Whether a POST's {@code resourcePath} is the redirect ZimSwitch sends
+     * for THIS row's checkout. Compared, never used: the status URL is always
+     * rebuilt from the stored checkout id (the client's SSRF rule). A value
+     * naming another checkout, or none, is a plain re-POST.
+     */
+    public static boolean isShopperReturn(String resourcePath, Payment p) {
+        if (resourcePath == null || p == null || p.getCheckoutId() == null || p.getCheckoutId().isBlank()) {
+            return false;
+        }
+        return resourcePath.strip().equals(RESOURCE_PATH_PREFIX + p.getCheckoutId() + RESOURCE_PATH_SUFFIX);
+    }
+
+    /**
+     * Resolve an open card checkout by querying the gateway — THE resolver
+     * for this rail, shared by the shopper's return, a re-POST and the
+     * reconciler poll so the money rules cannot drift between them.
+     *
+     * <p>Before the checkout's {@link #ceiling} only
+     * {@link ReadTrigger#SHOPPER_RETURN} reads; any other trigger reports
+     * PENDING without calling the gateway.
+     *
+     * @param minGap  minimum age of the previous status read before another
+     *                is allowed (the two-per-minute throttle share for this
+     *                caller); a fresher stamp skips the read and reports
+     *                PENDING
+     * @param trigger why the read is wanted, which decides whether it may
+     *                happen before the ceiling, and is journalled with it
+     */
+    public CardCheckOutcome resolveOpenCheckout(Payment p, Duration minGap, ReadTrigger trigger) {
+        Objects.requireNonNull(trigger, "trigger");
         if (p.getStatus() != Payment.PaymentStatus.TOKEN_ISSUED
                 || p.getCheckoutId() == null || p.getCheckoutId().isBlank()) {
             return CardCheckOutcome.PENDING;
         }
+        Instant now = Instant.now();
+        boolean pastCeiling = isPastCeiling(p, now);
+        if (!pastCeiling && trigger != ReadTrigger.SHOPPER_RETURN) {
+            // The shopper may still be on the card form: a read now would
+            // kill the checkout under them. Wait for their return or the
+            // ceiling.
+            metrics.incCardResolution("read_deferred");
+            return CardCheckOutcome.PENDING;
+        }
         Instant lastChecked = p.getCardStatusCheckedAt();
-        if (lastChecked != null && lastChecked.isAfter(Instant.now().minus(minGap))) {
+        if (lastChecked != null && lastChecked.isAfter(now.minus(minGap))) {
             metrics.incCardResolution("throttled_skip");
             return CardCheckOutcome.PENDING;
         }
@@ -350,25 +466,44 @@ public class ZimswitchCardPaymentService {
             status = zimswitchClient.getPaymentStatus(p.getCheckoutId());
         } catch (RuntimeException e) {
             metrics.incCardResolution("error");
-            log.warn("[zimswitch-card] status read unavailable paymentReference={} cause={}",
-                    p.getPaymentReference(), e.getMessage());
+            log.warn("[zimswitch-card] status read unavailable paymentReference={} trigger={} cause={}",
+                    p.getPaymentReference(), trigger, e.getMessage());
+            // The request may still have reached ZimSwitch, so it is on the
+            // record like any other read.
+            paymentRecordService.noteEvent(p.getId(),
+                    "Card status read " + trigger.journalLabel + " got no answer: " + e.getMessage());
             return CardCheckOutcome.PENDING;
         }
+        String answer = describe(status);
+        log.info("[zimswitch-card] status read paymentReference={} trigger={} resultCode={} pastCeiling={}",
+                p.getPaymentReference(), trigger, status.resultCode(), pastCeiling);
 
         switch (status.outcome()) {
             case SUCCESS, SUCCESS_MANUAL_REVIEW -> {
-                return onPaidRead(p, status);
+                // No separate journal row before the money fact: the paid
+                // path's own transition carries the result code.
+                return onPaidRead(p, status, trigger);
             }
             case REJECTED -> {
-                // A decline closes the ATTEMPT, not the checkout: the shopper
-                // can retry another card on the same checkout until it
-                // expires (documented multi-transaction reuse). Journal the
-                // decline verbatim; the row lapses via NOT_FOUND-past-
-                // deadline if never paid.
+                if (pastCeiling) {
+                    // No retry can follow a decline once the checkout is
+                    // past its ceiling: close the attempt and free the slot.
+                    paymentRecordService.markFailed(p.getId(),
+                            status.resultCode() != null ? status.resultCode() : "card_declined",
+                            "Card declined, read " + trigger.journalLabel + " past the checkout ceiling: "
+                                    + answer);
+                    metrics.incCardResolution("declined_closed");
+                    log.info("[zimswitch-card] attempt declined past the ceiling paymentReference={} resultCode={} — closed FAILED",
+                            p.getPaymentReference(), status.resultCode());
+                    return CardCheckOutcome.EXPIRED;
+                }
+                // Before the ceiling a decline closes the ATTEMPT, not the
+                // row: the documented multi-transaction reuse lets the shopper
+                // try another card. Whether the checkout survives this read is
+                // an open question for ZimSwitch (docs/api/zimswitch-copyandpay.md).
                 metrics.incCardResolution("declined_noted");
                 paymentRecordService.noteEvent(p.getId(),
-                        "Card attempt declined by gateway: " + status.resultCode()
-                                + (status.resultMessage() != null ? " (" + status.resultMessage() + ")" : "")
+                        "Card status read " + trigger.journalLabel + ": declined " + answer
                                 + " — checkout stays open for a retry");
                 log.info("[zimswitch-card] attempt declined paymentReference={} resultCode={} — checkout stays open",
                         p.getPaymentReference(), status.resultCode());
@@ -376,31 +511,36 @@ public class ZimswitchCardPaymentService {
             }
             case PENDING -> {
                 metrics.incCardResolution("still_pending");
+                paymentRecordService.noteEvent(p.getId(),
+                        "Card status read " + trigger.journalLabel + ": still pending " + answer);
                 return CardCheckOutcome.PENDING;
             }
             case CHECKOUT_NOT_FOUND -> {
-                // Normal while the shopper still has the form open. Past the
-                // deadline + grace (i.e. past the gateway's own 30-minute
-                // ceiling) it is a POSITIVE never-paid answer: no transaction
-                // exists, none can be created anymore — free the slot. A row
-                // missing its local deadline (defensive; markCardCheckoutIssued
-                // always stamps one) falls back to the gateway CEILING from
-                // creation, never earlier — expiring while the checkout is
-                // still payable upstream would orphan a late payment.
-                Instant deadline = (p.getCodeExpiresAt() == null
-                        ? p.getCreatedAt().plus(Duration.ofMinutes(30)) : p.getCodeExpiresAt())
-                        .plus(CHECKOUT_EXPIRY_GRACE);
-                if (Instant.now().isAfter(deadline)) {
+                // Past the ceiling it is a POSITIVE never-paid answer: no
+                // transaction exists and none can be created any more, so the
+                // slot is freed. Before it (the shopper's return only) the
+                // shopper came back without paying, or the payment has not
+                // landed yet: keep the row.
+                if (pastCeiling) {
                     paymentRecordService.markExpired(p.getId(),
-                            "Checkout ceiling passed and the gateway reports no payment — closing unpaid");
+                            "Checkout ceiling passed and the gateway reports no payment (read "
+                                    + trigger.journalLabel + ": " + answer + ") — closing unpaid");
                     metrics.incCardResolution("expired");
                     return CardCheckOutcome.EXPIRED;
                 }
                 metrics.incCardResolution("not_found_pending");
+                paymentRecordService.noteEvent(p.getId(),
+                        "Card status read " + trigger.journalLabel + ": no payment yet " + answer);
                 return CardCheckOutcome.PENDING;
             }
         }
         return CardCheckOutcome.PENDING;
+    }
+
+    /** ZimSwitch's answer as one journal fragment: {@code 200.300.404 (description)}. */
+    private static String describe(CardPaymentStatus status) {
+        String code = status.resultCode() != null ? status.resultCode() : "no result code";
+        return status.resultMessage() != null ? code + " (" + status.resultMessage() + ")" : code;
     }
 
     /**
@@ -417,7 +557,7 @@ public class ZimswitchCardPaymentService {
      *       existing confirm-retry sweep, success promotes to SUCCEEDED.</li>
      * </ol>
      */
-    private CardCheckOutcome onPaidRead(Payment p, CardPaymentStatus status) {
+    private CardCheckOutcome onPaidRead(Payment p, CardPaymentStatus status, ReadTrigger trigger) {
         String gatewayTxnId = status.transactionId() != null ? status.transactionId() : p.getCheckoutId();
 
         String mismatch = echoMismatch(p, status);
@@ -441,7 +581,8 @@ public class ZimswitchCardPaymentService {
 
         // Money fact FIRST — the one-shot write.
         paymentRecordService.markCompletedUnconfirmed(p.getId(), gatewayTxnId,
-                "Card payment succeeded (result " + status.resultCode() + "); confirming order");
+                "Card payment succeeded (result " + status.resultCode() + ", read "
+                        + trigger.journalLabel + "); confirming order");
 
         ConfirmOutcome outcome = resolutionService.confirmOrder(p);
         if (outcome.succeeded()) {

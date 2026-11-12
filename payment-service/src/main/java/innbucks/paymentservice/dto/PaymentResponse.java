@@ -286,10 +286,14 @@ public class PaymentResponse {
      *         data-brands="{checkoutBrands}"&gt;&lt;/form&gt;
      * </pre>
      * Card data goes browser → gateway; it never touches our servers. On
-     * landing back on {@code shopperResultUrl} the FE IGNORES the
-     * {@code resourcePath} query parameter and simply re-POSTs
-     * {@code /payments} with the same order key — the backend resolves the
-     * status server-side and answers SUCCESS / PROCESSING accordingly.
+     * landing back on {@code shopperResultUrl} the FE re-POSTs
+     * {@code /payments} once with the same order key plus the page's
+     * {@code resourcePath} query parameter — the backend checks the status
+     * with ZimSwitch server-side (from its own checkout id) and answers
+     * SUCCESS / PROCESSING accordingly. Without {@code resourcePath} a
+     * re-POST never checks before the checkout's ceiling (a check kills a
+     * form the shopper is still on); progress is followed with
+     * {@code GET /payments/{transactionId}}.
      * {@code checkoutExpiresAt} is the deadline after which the checkout
      * lapses and a fresh POST mints a new one.
      */

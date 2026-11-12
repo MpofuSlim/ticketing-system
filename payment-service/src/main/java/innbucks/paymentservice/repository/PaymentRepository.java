@@ -5,6 +5,8 @@ import innbucks.paymentservice.entity.PaymentRail;
 import innbucks.paymentservice.order.OrderType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -73,6 +75,30 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
      */
     List<Payment> findByStatusAndPaymentRail(
             Payment.PaymentStatus status, PaymentRail paymentRail, Pageable pageable);
+
+    /**
+     * The card sweep's rows: open checkouts past their ceiling, oldest first.
+     * The ceiling is the local deadline plus the grace, so the caller passes
+     * {@code now − grace} as {@code deadlineBefore}; a row missing its
+     * deadline falls back to its creation time against the gateway's
+     * 30-minute ceiling ({@code createdBefore = now − 30 min}). Filtering
+     * here, not in Java, keeps a page of young checkouts on a busy on-sale
+     * from starving the old ones.
+     */
+    @Query("""
+            select p from Payment p
+             where p.status = :status
+               and p.paymentRail = :rail
+               and ((p.codeExpiresAt is not null and p.codeExpiresAt < :deadlineBefore)
+                 or (p.codeExpiresAt is null and p.createdAt < :createdBefore))
+             order by p.createdAt asc
+            """)
+    List<Payment> findOpenPastCeiling(
+            @Param("status") Payment.PaymentStatus status,
+            @Param("rail") PaymentRail rail,
+            @Param("deadlineBefore") Instant deadlineBefore,
+            @Param("createdBefore") Instant createdBefore,
+            Pageable pageable);
 
     /**
      * Settlement reconciliation: every code-bearing row created in the
