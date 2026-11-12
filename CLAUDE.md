@@ -940,6 +940,17 @@ permission, where "holds everything it holds" would be vacuously true.
   role (e.g. `DEV_READONLY`, for developers), next to `PRODUCT_OFFICER`, which
   is booking's and event's read-only reader. Like any PLATFORM code, the role
   that holds them is a staff role.
+- **InnRewards voucher fees are InnBucks' to set: `loyalty-fees:manage`
+  (PLATFORM, owner decision 2026-11-12).**
+  - It sets a tenant's default issue and redemption fees and any merchant's
+    own. loyalty-service enforces it; user-service only defines it.
+  - Merchants no longer set their own fees, because fees are what they pay
+    InnBucks.
+  - It is **not** wildcard-reserved, so a finance role that is not SUPER_ADMIN
+    can hold it. SUPER_ADMIN holds it through `*`. No built-in role is granted
+    it.
+  - Loyalty also accepts the SUPER_ADMIN role itself, so either repo can deploy
+    first.
 - **Staff reset their password by EMAIL only.** `PasswordResetService` makes both
   phone steps no-ops (the generic 200 / "Invalid or expired code") for any
   staff-role holder — a phone on a staff account is a takeover path.

@@ -62,7 +62,8 @@ class PermissionCatalogScopeTest {
                 "device-security:read", "device-security:manage", "device-security:fraud",
                 "marketplace-support:read", "marketplace-support:manage", "marketplace-support:supervise",
                 "loyalty-support:read", "loyalty-support:manage", "loyalty-support:supervise",
-                "customer-messages:send", "loyalty-reports:read", "marketplace-reports:read")) {
+                "customer-messages:send", "loyalty-reports:read", "marketplace-reports:read",
+                "loyalty-fees:manage")) {
             assertThat(PermissionCatalog.scopeOf(code)).as(code).isEqualTo(Scope.PLATFORM);
         }
         assertThat(PermissionCatalog.scopeOf(PermissionCatalog.WILDCARD)).isEqualTo(Scope.PLATFORM);
