@@ -147,6 +147,17 @@ public final class PermissionCatalog {
     public static final String MARKETPLACE_REPORTS_READ = "marketplace-reports:read";
 
     /**
+     * Set what merchants pay InnBucks for vouchers: a tenant's default issue and
+     * redemption fees, and a merchant's own (enforced in loyalty-service, which
+     * reads the token's {@code perms}). Fees are InnBucks' commercial terms, so a
+     * merchant never sets its own (owner decision, 2026-11-12). Not
+     * wildcard-reserved: it is meant for a finance role that is not SUPER_ADMIN.
+     * Nothing in user-service checks it; it lives here because this catalog is
+     * the fleet's one vocabulary.
+     */
+    public static final String LOYALTY_FEES_MANAGE = "loyalty-fees:manage";
+
+    /**
      * Unified customer support (V46) — the Foundry console section of
      * {@code /admin/support/**}. Tiered like device security: an agent reads and
      * does the routine things (unlock, send a reset code); resetting a second
@@ -272,6 +283,8 @@ public final class PermissionCatalog {
                 entry(MARKETPLACE_REPORTS_READ, "Read the marketplace across every seller, read-only: listings, "
                         + "orders, sellers and reports. No payout details or codes, no single buyer's record",
                         Scope.PLATFORM),
+                entry(LOYALTY_FEES_MANAGE, "Set the voucher fees InnRewards merchants pay InnBucks: a tenant's "
+                        + "default issue and redemption fees, and any merchant's own", Scope.PLATFORM),
                 entry(CUSTOMER_MESSAGES_SEND, "Type and send an SMS or WhatsApp message to a customer on "
                         + "record from a support screen", Scope.PLATFORM),
                 entry(SUPPORT_CONSOLE_READ, "Look customers up in customer support and see their Foundry console "
