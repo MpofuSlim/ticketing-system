@@ -167,11 +167,20 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
 
     // findByTenantUserUuid narrowed to one SalesStatus (GET /events/my
     // ?salesStatus=), so a paged list filters across every page, not just the
-    // one the portal holds. This is SalesStatus.of written in SQL, step for
-    // step, and must stay so: NOT_PUBLISHED, then ENDED (now >= end), then
-    // SALES_CLOSED (now >= sales end), then NOT_YET_ON_SALE (now < sales start),
-    // else ON_SALE. EventRepositoryPostgresIT checks every status against the
-    // Java rule. :status is the enum's name; :now is UTC, like every column.
+    // one the portal holds. This is SalesStatus.of written in SQL and must stay
+    // so: NOT_PUBLISHED, then ENDED (now >= end), then SALES_CLOSED (now >=
+    // sales end), then NOT_YET_ON_SALE (now < sales start), else ON_SALE.
+    // EventSalesWindowPostgresIT checks every status against the Java rule.
+    // :status is the enum's name; :now is UTC, like every column.
+    //
+    // Keep it FLAT: one branch per status, each spelling out every condition
+    // of the steps before it. Spring Data parses every @Query with its own
+    // ANTLR grammar at startup, and the same rule written as nested brackets
+    // (seven levels deep) allocated about 900 MiB doing so. That churn grew
+    // the heap to its maximum and the pod was OOMKilled at 640Mi and at 768Mi
+    // on production (2026-11-12). This shape parses in about 215 MiB, like any
+    // other query here. RepositoryQueryParseCostTest fails the build on a
+    // query that costs much more.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
@@ -180,16 +189,16 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
         AND (
-             (CAST(:status AS string) = 'NOT_PUBLISHED' AND (e.active = false OR e.rejected = true))
-          OR (e.active = true AND e.rejected = false AND (
-                 (CAST(:status AS string) = 'ENDED' AND e.endDateTime <= :now)
-              OR (e.endDateTime > :now AND (
-                     (CAST(:status AS string) = 'SALES_CLOSED' AND e.salesEndAt IS NOT NULL AND e.salesEndAt <= :now)
-                  OR ((e.salesEndAt IS NULL OR e.salesEndAt > :now) AND (
-                         (CAST(:status AS string) = 'NOT_YET_ON_SALE'
-                              AND e.salesStartAt IS NOT NULL AND e.salesStartAt > :now)
-                      OR (CAST(:status AS string) = 'ON_SALE'
-                              AND (e.salesStartAt IS NULL OR e.salesStartAt <= :now))))))))
+             (:status = 'NOT_PUBLISHED' AND (e.active = false OR e.rejected = true))
+          OR (:status = 'ENDED' AND e.active = true AND e.rejected = false AND e.endDateTime <= :now)
+          OR (:status = 'SALES_CLOSED' AND e.active = true AND e.rejected = false AND e.endDateTime > :now
+              AND e.salesEndAt IS NOT NULL AND e.salesEndAt <= :now)
+          OR (:status = 'NOT_YET_ON_SALE' AND e.active = true AND e.rejected = false AND e.endDateTime > :now
+              AND (e.salesEndAt IS NULL OR e.salesEndAt > :now)
+              AND e.salesStartAt IS NOT NULL AND e.salesStartAt > :now)
+          OR (:status = 'ON_SALE' AND e.active = true AND e.rejected = false AND e.endDateTime > :now
+              AND (e.salesEndAt IS NULL OR e.salesEndAt > :now)
+              AND (e.salesStartAt IS NULL OR e.salesStartAt <= :now))
         )
     """)
     Page<Event> findByTenantUserUuidAndSalesStatus(
