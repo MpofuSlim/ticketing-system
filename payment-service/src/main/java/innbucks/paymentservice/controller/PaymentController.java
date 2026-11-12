@@ -112,9 +112,13 @@ public class PaymentController {
                     "`checkoutScriptUrl`, `checkoutIntegrity`, `checkoutBrands`, `shopperResultUrl`) — render " +
                     "the script + `<form class=\"paymentWidgets\" data-brands=\"{checkoutBrands}\" " +
                     "action=\"{shopperResultUrl}\">`; card data goes browser→gateway and never touches this " +
-                    "API. After the shopper lands back on `shopperResultUrl`, IGNORE its `resourcePath` query " +
-                    "parameter and re-POST this endpoint with the same order key — the backend verifies the " +
-                    "payment server-side (never trust the redirect as proof) and replies SUCCESS/PROCESSING. " +
+                    "API. When ZimSwitch sends the shopper back to `shopperResultUrl`, re-POST this endpoint " +
+                    "ONCE with the same order key plus that page's `resourcePath` query parameter, as it " +
+                    "arrived: that is the moment the backend checks the payment with ZimSwitch (server-side; " +
+                    "the redirect itself proves nothing) and replies SUCCESS/PROCESSING. A re-POST without " +
+                    "`resourcePath` never checks a card payment before its checkout's 30 minutes are up — " +
+                    "a check while the shopper is still on the card form kills the form — so follow progress " +
+                    "with `GET /payments/{transactionId}`, not by re-POSTing. " +
                     "One active payment per order across BOTH rails: while an attempt is open on one rail, " +
                     "POSTing with the other returns the open attempt unchanged; switch rails once it lapses. " +
                     "Amount and currency are read server-side from the order. An InnBucks PAYMENT code is " +
@@ -273,6 +277,26 @@ public class PaymentController {
                                                 "checkoutBrands": "PRIVATE_LABEL",
                                                 "shopperResultUrl": "https://tickets.example.co.zw/checkout/card-result",
                                                 "checkoutExpiresAt": "2026-06-11T16:16:00"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Booking — card paid, shopper back on the result page (request: {\"bookingId\":\"a3b9c1d2-...\",\"paymentRail\":\"ZIMSWITCH_CARD\",\"resourcePath\":\"/v1/checkouts/8a82944a4cc25ebf014cc2c782423202/payment\"})", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Payment processed successfully",
+                                              "data": {
+                                                "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "SUCCESS",
+                                                "stage": "COMPLETED",
+                                                "fundsCaptured": true,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "confirmationNumber": "INN-20260611-AB12CD",
+                                                "processedAt": "2026-06-11T15:52:00",
+                                                "paymentRail": "ZIMSWITCH_CARD"
                                               }
                                             }
                                             """),
@@ -518,11 +542,26 @@ public class PaymentController {
             } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
                     && p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD
                     && p.getCheckoutId() != null) {
-                // Card twin of the instant check below: the shopper just
-                // landed back on the result page (or refreshed) — ask the
-                // gateway NOW, inside the per-checkout throttle share.
+                // Card twin of the instant check below, with one difference:
+                // before the checkout's ceiling the gateway is asked ONLY when
+                // the shopper is back from ZimSwitch (the result page sends
+                // the redirect's resourcePath). A read while they are still
+                // on the card form kills the checkout under them, and a
+                // website that re-POSTs every few seconds made exactly that
+                // happen on staging. Past the ceiling any re-POST reads, so a
+                // dead checkout closes and a fresh one starts here.
+                boolean shopperReturned = innbucks.paymentservice.service.ZimswitchCardPaymentService
+                        .isShopperReturn(request.getResourcePath(), p);
+                if (request.getResourcePath() != null && !shopperReturned) {
+                    log.info("POST /payments card resourcePath does not name the open checkout orderType={} "
+                                    + "orderRef={} paymentReference={} — treated as a plain re-POST",
+                            key.type(), key.ref(), p.getPaymentReference());
+                }
                 var cardCheck = zimswitchCardPaymentService.resolveOpenCheckout(
-                        p, zimswitchProperties.getInstantCheckMinGap());
+                        p, zimswitchProperties.getInstantCheckMinGap(),
+                        shopperReturned
+                                ? innbucks.paymentservice.service.ZimswitchCardPaymentService.ReadTrigger.SHOPPER_RETURN
+                                : innbucks.paymentservice.service.ZimswitchCardPaymentService.ReadTrigger.CUSTOMER_RETRY);
                 if (cardCheck == innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PAID) {
                     Payment resolved = paymentRepository.findById(p.getId()).orElse(p);
                     log.info("POST /payments card instant-check PAID orderType={} orderRef={} paymentReference={}",
@@ -954,7 +993,8 @@ public class PaymentController {
                     + "Use it to learn how an attempt ENDED, which polling the booking cannot tell you: stage "
                     + "`DECLINED` carries EcoCash's own reason in `failureReason` (e.g. \"You have insufficient "
                     + "funds to complete this transaction.\") and, while a new EcoCash attempt for the order is "
-                    + "held back, `retryAfterSeconds`. Stage `LAPSED` means the instrument ended unpaid. Every "
+                    + "held back, `retryAfterSeconds`. A card attempt whose last try was declined is `DECLINED` "
+                    + "with no `failureReason`. Stage `LAPSED` means the instrument ended unpaid. Every "
                     + "other stage means what it means on `POST /payments`.\n\n"
                     + "Poll this, never `POST /payments`: a POST after an attempt has ended starts a NEW payment.")
     @ApiResponses({

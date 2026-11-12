@@ -327,7 +327,7 @@ class PaymentControllerTest {
         replayLookup(f, bookingId).thenReturn(Optional.of(
                 base.status(Payment.PaymentStatus.TOKEN_ISSUED).build()));
         // The instant check parks IN_DOUBT and reports PENDING.
-        when(f.card().resolveOpenCheckout(any(), any()))
+        when(f.card().resolveOpenCheckout(any(), any(), any()))
                 .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService
                         .CardCheckOutcome.PENDING);
         // The DB now holds the parked row.
@@ -344,6 +344,79 @@ class PaymentControllerTest {
         assertNull(data.getCheckoutId());
         assertNull(data.getCheckoutScriptUrl());
         assertNull(data.getShopperResultUrl());
+    }
+
+    /** An open card row for {@code bookingId} on checkout {@code checkoutId}, as the replay lookup returns it. */
+    private static Payment openCardRow(UUID bookingId, String checkoutId) {
+        return Payment.builder()
+                .id(UUID.randomUUID()).paymentReference("TKZ-PINKRUN26-4F3A2B1C0D9E")
+                .orderType(OrderType.BOOKING).orderRef(bookingId.toString())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("92.00")).currency("USD")
+                .paymentRail(innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD)
+                .status(Payment.PaymentStatus.TOKEN_ISSUED)
+                .checkoutId(checkoutId)
+                .createdAt(java.time.Instant.now())
+                .codeExpiresAt(java.time.Instant.now().plusSeconds(600))
+                .build();
+    }
+
+    private static final String CHECKOUT = "67B6338009845562954024F5A44FC2AE.uat01-vm-tx04";
+
+    private static innbucks.paymentservice.service.ZimswitchCardPaymentService.ReadTrigger triggerOf(
+            Fixture f) {
+        var captor = org.mockito.ArgumentCaptor.forClass(
+                innbucks.paymentservice.service.ZimswitchCardPaymentService.ReadTrigger.class);
+        verify(f.card()).resolveOpenCheckout(any(), any(), captor.capture());
+        return captor.getValue();
+    }
+
+    @Test
+    void cardRePost_withTheRedirectsResourcePath_isTheShoppersReturn() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        replayLookup(f, bookingId).thenReturn(Optional.of(openCardRow(bookingId, CHECKOUT)));
+        when(f.card().resolveOpenCheckout(any(), any(), any()))
+                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
+
+        PaymentRequest returned = paymentFor(bookingId);
+        returned.setResourcePath("/v1/checkouts/" + CHECKOUT + "/payment");
+        f.controller().processPayment(returned);
+
+        assertEquals(innbucks.paymentservice.service.ZimswitchCardPaymentService.ReadTrigger.SHOPPER_RETURN,
+                triggerOf(f), "the redirect's resourcePath is what lets a read happen before the ceiling");
+    }
+
+    @Test
+    void cardRePost_withoutResourcePath_isAPlainRetry_neverTheShoppersReturn() {
+        // A website that re-POSTs every few seconds must not read the
+        // checkout while the shopper is still typing their card: a read kills it.
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        replayLookup(f, bookingId).thenReturn(Optional.of(openCardRow(bookingId, CHECKOUT)));
+        when(f.card().resolveOpenCheckout(any(), any(), any()))
+                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
+
+        f.controller().processPayment(paymentFor(bookingId));
+
+        assertEquals(innbucks.paymentservice.service.ZimswitchCardPaymentService.ReadTrigger.CUSTOMER_RETRY,
+                triggerOf(f));
+    }
+
+    @Test
+    void cardRePost_withAResourcePathForAnotherCheckout_isAPlainRetry() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        replayLookup(f, bookingId).thenReturn(Optional.of(openCardRow(bookingId, CHECKOUT)));
+        when(f.card().resolveOpenCheckout(any(), any(), any()))
+                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
+
+        PaymentRequest stale = paymentFor(bookingId);
+        stale.setResourcePath("/v1/checkouts/43914C7C89177901A2E33EE1C6CCB1C7.uat01-vm-tx02/payment");
+        f.controller().processPayment(stale);
+
+        assertEquals(innbucks.paymentservice.service.ZimswitchCardPaymentService.ReadTrigger.CUSTOMER_RETRY,
+                triggerOf(f), "an older checkout's redirect says nothing about the open one");
     }
 
     @Test

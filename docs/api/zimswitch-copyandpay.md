@@ -152,13 +152,11 @@ handle.
   brand codes. `PRIVATE_LABEL` is exactly such a per-entity custom code, which
   is why it never appeared in the generic catalog.
 
-  > **Residual uncertainty, deliberately recorded.** ZimSwitch named the
-  > *payment brand*; nobody has yet rendered the COPYandPAY widget with
-  > `data-brands="PRIVATE_LABEL"` against our entity. If the widget renders
-  > **empty**, that is this token being spelled differently on the widget
-  > side — not a bug in our code. Re-confirm the literal with ZimSwitch and
-  > correct `ZIMSWITCH_BRANDS`; it stays a config change with no code change
-  > and no FE deploy, because the FE reads it from the payment response.
+  > **Rendered 2026-11-12.** The COPYandPAY widget drew its card form with
+  > `data-brands="PRIVATE_LABEL"` against the staging entity (Ticketize web,
+  > checkout `43914C7C…uat01-vm-tx02`), so the token is spelled the same on the
+  > widget as on the payment brand. That proves the form, not a completed
+  > payment: no test card has yet been approved on it.
   >
   > **Do NOT fall back to `VISA MASTER`.** It does not work on this channel
   > (staging test entity, 2026-09-16). The only correction an empty widget
@@ -224,16 +222,58 @@ decline. Note the wording says "no payment session found for the requested
 id" — it is about the PAYMENT, not the checkout, so it does not mean our
 checkout id was wrong.
 
+### Reading the status of an unpaid checkout kills it
+
+**Measured on staging, 2026-11-12.** A checkout we never read still rendered
+its card form six minutes after it was made. Every checkout we had read
+(each read answered `200.300.404`) made the widget answer "checkoutId is
+invalid" within three to five minutes, well inside the 30-minute life. The
+poller then read every open checkout every 30 seconds, and every re-POST of
+`/payments` read it too (Ticketize web re-POSTed every few seconds), so the
+card form died under shoppers who were still typing their card. Nothing in
+the platform doc says a read before payment ends the checkout; this is
+observed behaviour, and it is on the open-questions list below.
+
+So the status is read only:
+
+- **when the shopper returns from ZimSwitch**: the result page re-POSTs
+  `/payments` with the redirect's `resourcePath`, and that value names the
+  row's own checkout (`ZimswitchCardPaymentService.isShopperReturn`); or
+- **past the checkout's ceiling** (local deadline + 2 min grace, past the
+  gateway's 30 minutes), when it can no longer be paid and a read can no
+  longer harm it: the poller (`findOpenPastCeiling`) or any re-POST.
+
+`resolveOpenCheckout` takes a `ReadTrigger` and refuses a read before the
+ceiling for anything but `SHOPPER_RETURN` (`card_resolution{outcome=read_deferred}`),
+so a new caller cannot reintroduce the early read by accident. Every read
+writes one journal row (`payment_event`) with ZimSwitch's result code and its
+trigger, so a checkout that dies early can be traced to the read before it.
+
+**What this costs:** a shopper who pays and never comes back to the result
+page (closes the tab mid-redirect) is confirmed by the poller at the ceiling,
+about 30 minutes after the checkout was made, instead of within 30 seconds.
+The booking hold is 33 minutes, and confirm honours a lapsed hold that is
+still PENDING, so the booking is not lost. Webhooks (below) would close that
+gap.
+
 > **SECURITY — do not follow the documented happy path literally.**
 > `resourcePath` arrives as a query parameter on a browser redirect, i.e. it is
 > attacker-controllable. Concatenating it onto our base URL builds a
 > server-side request URL — carrying our Bearer token — out of untrusted
 > input: a textbook SSRF / credential-exfiltration shape. Our client
-> **ignores the supplied `resourcePath` entirely** and rebuilds the path from
-> the `checkoutId` we stored when we prepared the checkout. The inbound
-> `resourcePath` is validated against
-> `^/v1/checkouts/[A-Za-z0-9.\-]{1,64}/payment$` and compared to our own
-> checkout id purely as a mismatch signal.
+> **never builds a request from the supplied `resourcePath`**: the status
+> path is always rebuilt from the `checkoutId` we stored when we prepared the
+> checkout. The inbound value (`PaymentRequest.resourcePath`, at most 256
+> characters) is only compared, exactly, with
+> `/v1/checkouts/{our checkoutId}/payment`; a match is the signal that the
+> shopper is back, a mismatch makes the call a plain re-POST, and the value is
+> never logged. (An earlier version of this note described a regex check that
+> the code never had: until 2026-11-12 the request had no such field.)
+>
+> A caller who knows the booking id and the checkout id (both are in the
+> `POST /payments` answer, which only the buyer has) can trigger a read
+> before the ceiling. Before this change ANY re-POST did, so the exposure is
+> narrower than it was, and the per-checkout throttle still bounds it.
 
 ### The successful read is ONE-SHOT
 
@@ -282,20 +322,26 @@ Classified by regex on `result.code` (`ZimswitchResultCode`):
 | Success, needs manual fraud review | `^(000\.400\.0[^3]\|000\.400\.100)` | as above, plus a journal note with the review flag |
 | Pending / still open | `^(000\.200)` | stays `TOKEN_ISSUED`, poll again |
 | No payment for this checkout | exactly `200.300.404` | `CHECKOUT_NOT_FOUND` — see below |
-| Everything else | — | decline: journalled, row **stays open** (see below) |
+| Everything else | — | decline: journalled; row **stays open** before the ceiling, closed `FAILED` past it (see below) |
 
 Nuances the classifier table can't carry:
 
 - **`200.300.404` is the NORMAL answer while the shopper still has the form
-  open** (nothing submitted yet), and also what a dead checkout answers.
-  Before the local deadline it means "keep waiting"; after the deadline +
+  open** (nothing submitted yet), and also what a dead checkout answers —
+  and reading it kills an unpaid checkout (§3). Before the ceiling we read
+  it only on the shopper's return, and it means "they came back without
+  paying, or the payment has not landed": keep the row. After the deadline +
   grace (past the gateway's own 30-minute ceiling, when no new transaction
   can exist) it is a POSITIVE never-paid answer and the row is `EXPIRED`,
   freeing the order's payment slot.
-- **A decline does NOT close the row.** The checkout stays alive upstream
-  and the shopper can retry another card on the same checkout (the
-  documented multi-transaction reuse). The decline is journalled verbatim;
-  an unpaid row lapses via the `200.300.404`-past-deadline rule.
+- **A decline before the ceiling does NOT close the row.** The documented
+  multi-transaction reuse says the shopper can try another card on the same
+  checkout, so the decline is journalled and the row stays open. **Open:**
+  whether the checkout survives the status read that reported the decline
+  (see §3 and open question 4). If it does not, the shopper's retry renders
+  "checkoutId is invalid" and the order's payment slot stays held until the
+  ceiling. A decline read **past** the ceiling closes the row `FAILED`
+  (stage `DECLINED` on `GET /payments/{transactionId}`): no retry can follow.
 - A pending row is **never** auto-failed early — blocked slot beats double
   charge, same rule as the InnBucks rail.
 - An unmatched code classifies as a decline, never as success — the success
@@ -315,10 +361,12 @@ classifier.
 - `ZimswitchCardPaymentService.startCheckout` mirrors
   `InnbucksPaymentService.processPayment` step for step (slot check → gateway
   fetch → hold extension → PENDING row → upstream call → `TOKEN_ISSUED`).
-- Resolution (`resolveOpenCheckout`) is shared verbatim by the reconciler's
-  card poll and the customer-triggered instant check on replay; the
-  `card_status_checked_at` stamp keeps their combined rate inside the
-  2-per-minute throttle.
+- Resolution (`resolveOpenCheckout`) is shared verbatim by the shopper's
+  return, a re-POST and the reconciler's card sweep; its `ReadTrigger` decides
+  whether a read may happen before the ceiling (only `SHOPPER_RETURN`), and
+  the `card_status_checked_at` stamp keeps their combined rate inside the
+  2-per-minute throttle. The sweep asks the database only for checkouts past
+  their ceiling (`PaymentRepository.findOpenPastCeiling`).
 - A paid read persists `COMPLETED_UNCONFIRMED` BEFORE confirming the order
   (the one-shot read means a crash after confirm-first would lose the money
   fact); the existing confirm-retry sweep then promotes to `SUCCEEDED`.
@@ -339,14 +387,16 @@ Request: `POST /payments` with the usual order key plus
       data-brands="{checkoutBrands}"></form>
 ```
 
-On landing back on `shopperResultUrl`, IGNORE the `resourcePath` query
-parameter and re-POST `/payments` with the same order key — the backend
-verifies server-side (the redirect is never proof of payment) and replies
-SUCCESS / PROCESSING; bookings then confirm exactly like the code rail
-(poll the booking). A re-POST while the checkout is open replays the SAME
-checkout (reload/decline-retry); after `checkoutExpiresAt` it mints a fresh
-one. One active payment per order across BOTH rails — switching rails needs
-the open attempt to lapse first.
+On landing back on `shopperResultUrl`, re-POST `/payments` ONCE with the same
+order key plus the page's `resourcePath` query parameter, as it arrived — the
+backend checks with ZimSwitch server-side from its own checkout id (the
+redirect is never proof of payment) and replies SUCCESS / PROCESSING. Follow
+progress after that with `GET /payments/{transactionId}`, which never calls
+ZimSwitch; never by re-POSTing. A re-POST without `resourcePath` never reads
+the checkout before its ceiling: while the checkout is open it replays the
+SAME checkout (reload/decline-retry); past the ceiling it closes the old one
+and mints a fresh one. One active payment per order across ALL rails —
+switching rails needs the open attempt to lapse first.
 
 ## Configuration
 
@@ -361,8 +411,8 @@ the open attempt to lapse first.
 | `zimswitch.request-integrity` | `ZIMSWITCH_REQUEST_INTEGRITY` | default `true` — SRI digest for the widget script |
 | `zimswitch.checkout-ttl` | `ZIMSWITCH_CHECKOUT_TTL` | default `PT28M`, just under the gateway's 30-min ceiling |
 | `zimswitch.status-poll-min-interval` | `ZIMSWITCH_STATUS_POLL_MIN_INTERVAL` | default `PT30S` — the poller's share of the 2/min throttle |
-| `zimswitch.instant-check-min-gap` | `ZIMSWITCH_INSTANT_CHECK_MIN_GAP` | default `PT15S` — the customer instant check's share |
-| `payment-service.card-poll.interval` | `CARD_POLL_INTERVAL` | default `PT30S` — sweep cadence |
+| `zimswitch.instant-check-min-gap` | `ZIMSWITCH_INSTANT_CHECK_MIN_GAP` | default `PT15S` — the shopper's return's (and a past-ceiling re-POST's) share |
+| `payment-service.card-poll.interval` | `CARD_POLL_INTERVAL` | default `PT30S` — sweep cadence; the sweep reads only checkouts past their ceiling |
 
 Amount/currency always come from the ORDER (gateway snapshot / cell config)
 — deliberately no ZimSwitch-side currency setting, so the two rails cannot
@@ -403,7 +453,8 @@ isConfigured() gate, mirroring the `BANK_API_*` credential pattern.
   the reliance on the shopper actually returning to `shopperResultUrl`.
   **UNVERIFIED** whether they are enabled on TICKETIZE's entity — worth asking
   ZimSwitch, because a customer who closes the tab after paying currently
-  resolves only via the reconciler poll.
+  resolves only via the reconciler sweep at the checkout's ceiling, about 30
+  minutes after the checkout was made (§3).
 - **Refunds / reversals** (`POST /v1/payments/{id}` with `paymentType=RF`).
 
 ## Open questions for ZimSwitch (UAT blockers)
@@ -411,12 +462,17 @@ isConfigured() gate, mirroring the `BANK_API_*` credential pattern.
 Tracked here so the answers land in-tree with the code they affect:
 
 1. ~~**Private-label `data-brands` code** for TICKETIZE's entity.~~
-   **ANSWERED 2026-09-11: `PRIVATE_LABEL`** (see §2). Still worth a single
-   widget render against our entity to confirm the token spells the same way
-   on the widget as it does on the payment brand.
+   **ANSWERED 2026-09-11: `PRIVATE_LABEL`** (see §2), and the widget rendered
+   with it on 2026-11-12.
 2. **Test cards** (and any 3-D Secure test credentials) for a `testMode=EXTERNAL`
    entity, to drive approved/declined UAT cases.
 3. **Webhooks** — available on our entity? See "Not yet modelled" above.
+4. **Does a status read end the checkout?** Observed 2026-11-12 (§3): a read
+   answering `200.300.404` before payment was followed by "checkoutId is
+   invalid" within minutes. Is that by design? And after a status read that
+   reports a DECLINE, can the shopper try another card on the same checkout
+   (the documented multi-transaction reuse), or must we prepare a new one?
+   The answer decides whether a decline on return should close the row.
 
 (1) is answered: `ZIMSWITCH_BRANDS` is `PRIVATE_LABEL` on **every** host,
 staging included. `VISA MASTER` is not a fallback and there is no per-host

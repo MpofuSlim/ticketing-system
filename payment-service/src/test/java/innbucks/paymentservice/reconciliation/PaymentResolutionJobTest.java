@@ -98,6 +98,50 @@ class PaymentResolutionJobTest {
         return p;
     }
 
+    // -- Card sweep: only checkouts past their ceiling ----------------------
+
+    /**
+     * The card sweep used to read every open checkout every 30 seconds, and a
+     * read of a checkout nobody has paid yet kills it upstream (staging,
+     * 2026-11-12): shoppers lost the card form while typing. It now asks the
+     * database only for checkouts past their ceiling, and reads them as the
+     * POLLER, which the resolver refuses before the ceiling anyway.
+     */
+    @Test
+    void cardSweep_readsOnlyCheckoutsPastTheirCeiling_asThePoller() {
+        PaymentRepository payments = mock(PaymentRepository.class);
+        ZimswitchCardPaymentService card = mock(ZimswitchCardPaymentService.class);
+        PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
+        PaymentResolutionJob job = new PaymentResolutionJob(payments,
+                mock(PaymentRecordService.class), mock(InnbucksApiClient.class), metrics,
+                mock(CodePaymentResolutionService.class), card,
+                mock(innbucks.paymentservice.service.EcocashPaymentService.class),
+                mock(UnconfirmedPaymentAlerter.class), new ZimswitchProperties(), FIVE_MINUTES, 100);
+        Payment lapsed = paymentRow(Payment.PaymentStatus.TOKEN_ISSUED, Instant.now().minus(Duration.ofMinutes(31)));
+        lapsed.setPaymentRail(PaymentRail.ZIMSWITCH_CARD);
+        lapsed.setCheckoutId("43914C7C89177901A2E33EE1C6CCB1C7.uat01-vm-tx02");
+        when(card.isRailConfigured()).thenReturn(true);
+        when(payments.findOpenPastCeiling(eq(Payment.PaymentStatus.TOKEN_ISSUED), eq(PaymentRail.ZIMSWITCH_CARD),
+                any(Instant.class), any(Instant.class), any(Pageable.class))).thenReturn(List.of(lapsed));
+
+        Instant before = Instant.now();
+        job.pollCardPayments();
+        Instant after = Instant.now();
+
+        var deadlineBefore = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        var createdBefore = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(payments).findOpenPastCeiling(eq(Payment.PaymentStatus.TOKEN_ISSUED), eq(PaymentRail.ZIMSWITCH_CARD),
+                deadlineBefore.capture(), createdBefore.capture(), any(Pageable.class));
+        // deadline + 2 min grace = the ceiling; no deadline = 30 min from creation
+        assertFalse(deadlineBefore.getValue().isBefore(before.minus(Duration.ofMinutes(2))));
+        assertFalse(deadlineBefore.getValue().isAfter(after.minus(Duration.ofMinutes(2))));
+        assertFalse(createdBefore.getValue().isBefore(before.minus(Duration.ofMinutes(30))));
+        assertFalse(createdBefore.getValue().isAfter(after.minus(Duration.ofMinutes(30))));
+        verify(payments, never()).findByStatusAndPaymentRail(any(), eq(PaymentRail.ZIMSWITCH_CARD), any());
+        verify(card).resolveOpenCheckout(eq(lapsed), any(Duration.class),
+                eq(ZimswitchCardPaymentService.ReadTrigger.POLLER));
+    }
+
     // -- The sweeps must stay SCHEDULED -------------------------------------
 
     /**

@@ -4800,12 +4800,29 @@ it pins the four wire facts that are easy to get wrong. Non-negotiables:
   (`COMPLETED_UNCONFIRMED`) and the order confirm runs after — the inverse
   of the code rail's confirm-then-mark order. Status reads are throttled
   upstream to two per checkout per minute, enforced through the persisted
-  `card_status_checked_at` stamp shared by poller and instant check.
-- **A decline does not close the row**: the checkout stays alive upstream
-  for a shopper retry (documented multi-transaction reuse); `200.300.404`
-  ("no payment for this checkout") is the NORMAL pre-submission answer and
-  only counts as positively-unpaid once the checkout's 30-minute ceiling has
-  passed.
+  `card_status_checked_at` stamp shared by every caller.
+- **Never read an unpaid checkout's status before its ceiling, except on the
+  shopper's return.** Measured on staging (2026-11-12): a checkout we never
+  read still drew its card form at six minutes; every one we had read
+  (`200.300.404`) was "checkoutId is invalid" within three to five. The
+  poller read every open checkout every 30 s and every re-POST read it too,
+  so the form died under shoppers who were still typing. Now
+  `resolveOpenCheckout` takes a `ReadTrigger`: before the ceiling (deadline +
+  2 min grace) only `SHOPPER_RETURN` reads, i.e. a `POST /payments` whose
+  `resourcePath` is exactly `/v1/checkouts/{the row's checkoutId}/payment`
+  (compared, never used to build a request, never logged). The poller asks
+  only for rows past the ceiling (`findOpenPastCeiling`), and a plain re-POST
+  reads only past it. Every read writes a journal row with ZimSwitch's code
+  and its trigger. Cost, accepted: a shopper who pays and never returns is
+  confirmed at the ceiling (~30 min), inside the 33-minute hold. Don't add a
+  caller that reads earlier; webhooks are the way to learn sooner.
+- **A decline before the ceiling does not close the row** (documented
+  multi-transaction reuse: another card on the same checkout). Whether the
+  checkout survives the read that reported the decline is open with
+  ZimSwitch (`docs/api/zimswitch-copyandpay.md`, open question 4). A decline
+  read past the ceiling closes it FAILED. `200.300.404` ("no payment for this
+  checkout") only counts as positively-unpaid once the checkout's 30-minute
+  ceiling has passed.
 - **The order hold is sized BEFORE prepare; the ledger deadline is stamped
   AFTER it.** The hold (`OrderGateway.extendHold`) must land before any
   instrument exists, so it is sized from the call instant: checkout TTL +

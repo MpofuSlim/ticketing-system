@@ -12,6 +12,7 @@ import innbucks.paymentservice.order.ConfirmOutcome;
 import innbucks.paymentservice.order.OrderGatewayRegistry;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
 import innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome;
+import innbucks.paymentservice.service.ZimswitchCardPaymentService.ReadTrigger;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -45,8 +47,12 @@ import static org.mockito.Mockito.when;
  *   <li>a paid read persists the money fact BEFORE the order confirm (the
  *       one-shot status read makes confirm-first a data-loss window);</li>
  *   <li>an echo mismatch on a paid read parks IN_DOUBT and never confirms;</li>
- *   <li>declines/NOT_FOUND-before-deadline leave the checkout open;
- *       NOT_FOUND past the ceiling positively expires it;</li>
+ *   <li>before the checkout's ceiling only the shopper's return reads it —
+ *       a read kills a checkout the shopper may still be paying on (staging,
+ *       2026-11-12); the poller and a plain re-POST wait for the ceiling;</li>
+ *   <li>declines/NOT_FOUND before the ceiling leave the checkout open;
+ *       past it NOT_FOUND expires the row and a decline closes it FAILED;</li>
+ *   <li>every read is journalled with ZimSwitch's result code and its trigger;</li>
  *   <li>the persisted stamp keeps reads inside the 2/min throttle, and is
  *       written even when the read then fails.</li>
  * </ul>
@@ -63,6 +69,7 @@ class ZimswitchCardPaymentServiceTest {
             records, client, properties, mock(OrderGatewayRegistry.class), resolution, metrics);
 
     private static final Duration NO_GAP = Duration.ZERO;
+    private static final ReadTrigger RETURN = ReadTrigger.SHOPPER_RETURN;
 
     private static Payment openCardRow() {
         return Payment.builder()
@@ -93,7 +100,7 @@ class ZimswitchCardPaymentServiceTest {
                 status(ZimswitchResultCode.SUCCESS, "000.000.000", "92.00", "USD", p.getPaymentReference()));
         when(resolution.confirmOrder(p)).thenReturn(ConfirmOutcome.confirmed("INN-123"));
 
-        CardCheckOutcome outcome = service.resolveOpenCheckout(p, NO_GAP);
+        CardCheckOutcome outcome = service.resolveOpenCheckout(p, NO_GAP, RETURN);
 
         assertThat(outcome).isEqualTo(CardCheckOutcome.PAID);
         InOrder inOrder = inOrder(records, resolution);
@@ -112,7 +119,7 @@ class ZimswitchCardPaymentServiceTest {
                 status(ZimswitchResultCode.SUCCESS, "000.000.000", "92.00", "USD", p.getPaymentReference()));
         when(resolution.confirmOrder(p)).thenReturn(ConfirmOutcome.unreachable("booking-service down"));
 
-        assertThat(service.resolveOpenCheckout(p, NO_GAP)).isEqualTo(CardCheckOutcome.PAID);
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PAID);
 
         verify(records).markCompletedUnconfirmed(eq(p.getId()), eq("gw-tx-1"), anyString());
         verify(records, never()).resolveUnconfirmed(any(), any());
@@ -125,7 +132,7 @@ class ZimswitchCardPaymentServiceTest {
         when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
                 status(ZimswitchResultCode.SUCCESS, "000.000.000", "9200.00", "USD", p.getPaymentReference()));
 
-        assertThat(service.resolveOpenCheckout(p, NO_GAP)).isEqualTo(CardCheckOutcome.PENDING);
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PENDING);
 
         verify(records).markInDoubt(eq(p.getId()), contains("amount"));
         verify(records, never()).markCompletedUnconfirmed(any(), any(), any());
@@ -139,7 +146,7 @@ class ZimswitchCardPaymentServiceTest {
         when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
                 status(ZimswitchResultCode.SUCCESS, "000.000.000", "92.00", "USD", "TKT-PMT-someone-else"));
 
-        assertThat(service.resolveOpenCheckout(p, NO_GAP)).isEqualTo(CardCheckOutcome.PENDING);
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PENDING);
         verify(records).markInDoubt(eq(p.getId()), contains("merchantTransactionId"));
         verifyNoInteractions(resolution);
     }
@@ -152,7 +159,7 @@ class ZimswitchCardPaymentServiceTest {
                 status(ZimswitchResultCode.SUCCESS_MANUAL_REVIEW, "000.400.000", "92.00", "USD", p.getPaymentReference()));
         when(resolution.confirmOrder(p)).thenReturn(ConfirmOutcome.confirmed("INN-124"));
 
-        assertThat(service.resolveOpenCheckout(p, NO_GAP)).isEqualTo(CardCheckOutcome.PAID);
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PAID);
         verify(records).noteEvent(eq(p.getId()), contains("manual fraud review"));
         verify(records).resolveUnconfirmed(p.getId(), "INN-124");
     }
@@ -164,7 +171,7 @@ class ZimswitchCardPaymentServiceTest {
         when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
                 status(ZimswitchResultCode.REJECTED, "800.100.153", "92.00", "USD", p.getPaymentReference()));
 
-        assertThat(service.resolveOpenCheckout(p, NO_GAP)).isEqualTo(CardCheckOutcome.PENDING);
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PENDING);
 
         verify(records).noteEvent(eq(p.getId()), contains("800.100.153"));
         verify(records, never()).markFailed(any(), any(), any());
@@ -179,7 +186,7 @@ class ZimswitchCardPaymentServiceTest {
         when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
                 status(ZimswitchResultCode.CHECKOUT_NOT_FOUND, "200.300.404", null, null, null));
 
-        assertThat(service.resolveOpenCheckout(p, NO_GAP)).isEqualTo(CardCheckOutcome.PENDING);
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PENDING);
         verify(records, never()).markExpired(any(), any());
     }
 
@@ -192,8 +199,8 @@ class ZimswitchCardPaymentServiceTest {
         when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
                 status(ZimswitchResultCode.CHECKOUT_NOT_FOUND, "200.300.404", null, null, null));
 
-        assertThat(service.resolveOpenCheckout(p, NO_GAP)).isEqualTo(CardCheckOutcome.EXPIRED);
-        verify(records).markExpired(eq(p.getId()), anyString());
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, ReadTrigger.POLLER)).isEqualTo(CardCheckOutcome.EXPIRED);
+        verify(records).markExpired(eq(p.getId()), contains("200.300.404"));
     }
 
     @Test
@@ -205,7 +212,7 @@ class ZimswitchCardPaymentServiceTest {
         when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
                 status(ZimswitchResultCode.CHECKOUT_NOT_FOUND, "200.300.404", null, null, null));
 
-        assertThat(service.resolveOpenCheckout(p, NO_GAP)).isEqualTo(CardCheckOutcome.PENDING);
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PENDING);
         verify(records, never()).markExpired(any(), any());
     }
 
@@ -215,7 +222,7 @@ class ZimswitchCardPaymentServiceTest {
         Payment p = openCardRow();
         p.setCardStatusCheckedAt(Instant.now().minusSeconds(5));
 
-        assertThat(service.resolveOpenCheckout(p, Duration.ofSeconds(30)))
+        assertThat(service.resolveOpenCheckout(p, Duration.ofSeconds(30), RETURN))
                 .isEqualTo(CardCheckOutcome.PENDING);
 
         verifyNoInteractions(client);
@@ -229,7 +236,7 @@ class ZimswitchCardPaymentServiceTest {
         when(client.getPaymentStatus(p.getCheckoutId()))
                 .thenThrow(new ZimswitchApiTransientException("down", 503));
 
-        assertThat(service.resolveOpenCheckout(p, NO_GAP)).isEqualTo(CardCheckOutcome.PENDING);
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PENDING);
 
         InOrder inOrder = inOrder(records, client);
         inOrder.verify(records).stampCardStatusChecked(p.getId());
@@ -459,12 +466,139 @@ class ZimswitchCardPaymentServiceTest {
     void nonOpenRows_areNeverQueried() {
         Payment noCheckout = openCardRow();
         noCheckout.setCheckoutId(null);
-        assertThat(service.resolveOpenCheckout(noCheckout, NO_GAP)).isEqualTo(CardCheckOutcome.PENDING);
+        assertThat(service.resolveOpenCheckout(noCheckout, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PENDING);
 
         Payment terminal = openCardRow();
         terminal.setStatus(Payment.PaymentStatus.SUCCEEDED);
-        assertThat(service.resolveOpenCheckout(terminal, NO_GAP)).isEqualTo(CardCheckOutcome.PENDING);
+        assertThat(service.resolveOpenCheckout(terminal, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PENDING);
 
         verifyNoInteractions(client);
+    }
+
+    @Test
+    @DisplayName("before the ceiling the poller and a plain re-POST never read: a read kills a checkout the shopper may still be on")
+    void beforeCeiling_onlyTheShoppersReturnReads() {
+        Payment p = openCardRow(); // made 5 minutes ago, deadline 23 minutes away
+
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, ReadTrigger.POLLER)).isEqualTo(CardCheckOutcome.PENDING);
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, ReadTrigger.CUSTOMER_RETRY))
+                .isEqualTo(CardCheckOutcome.PENDING);
+
+        verifyNoInteractions(client);
+        verify(records, never()).stampCardStatusChecked(any());
+        verify(records, never()).noteEvent(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("between the local deadline and the ceiling a plain re-POST still waits: the checkout may still be payable")
+    void betweenDeadlineAndCeiling_plainRePostWaits() {
+        Payment p = openCardRow();
+        p.setCodeExpiresAt(Instant.now().minusSeconds(30)); // deadline passed, ceiling (+2 min) not yet
+
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, ReadTrigger.CUSTOMER_RETRY))
+                .isEqualTo(CardCheckOutcome.PENDING);
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    @DisplayName("past the ceiling a plain re-POST reads: the checkout can no longer be paid, so the read harms nothing and frees the slot")
+    void pastCeiling_plainRePostReadsAndFreesTheSlot() {
+        Payment p = openCardRow();
+        p.setCodeExpiresAt(Instant.now().minus(ZimswitchCardPaymentService.CHECKOUT_EXPIRY_GRACE)
+                .minus(Duration.ofSeconds(5)));
+        when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
+                status(ZimswitchResultCode.CHECKOUT_NOT_FOUND, "200.300.404", null, null, null));
+
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, ReadTrigger.CUSTOMER_RETRY))
+                .isEqualTo(CardCheckOutcome.EXPIRED);
+        verify(records).markExpired(eq(p.getId()), contains("customer re-POST"));
+    }
+
+    @Test
+    @DisplayName("a decline read past the ceiling closes the row FAILED: no retry can follow it")
+    void declinePastCeiling_closesTheRowFailed() {
+        Payment p = openCardRow();
+        p.setCodeExpiresAt(Instant.now().minus(ZimswitchCardPaymentService.CHECKOUT_EXPIRY_GRACE)
+                .minus(Duration.ofSeconds(5)));
+        when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
+                status(ZimswitchResultCode.REJECTED, "800.100.153", "92.00", "USD", p.getPaymentReference()));
+
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, ReadTrigger.POLLER)).isEqualTo(CardCheckOutcome.EXPIRED);
+
+        verify(records).markFailed(eq(p.getId()), eq("800.100.153"), contains("past the checkout ceiling"));
+        verify(records, never()).markExpired(any(), any());
+        verifyNoInteractions(resolution);
+    }
+
+    @Test
+    @DisplayName("every read lands in the journal with ZimSwitch's result code and what triggered it")
+    void everyRead_isJournalled() {
+        Payment notYet = openCardRow();
+        when(client.getPaymentStatus(notYet.getCheckoutId())).thenReturn(
+                status(ZimswitchResultCode.CHECKOUT_NOT_FOUND, "200.300.404", null, null, null));
+        service.resolveOpenCheckout(notYet, NO_GAP, RETURN);
+        verify(records).noteEvent(eq(notYet.getId()),
+                argThat(d -> d.contains("200.300.404") && d.contains("shopper's return")));
+
+        Payment pending = openCardRow();
+        pending.setId(UUID.randomUUID());
+        when(client.getPaymentStatus(pending.getCheckoutId())).thenReturn(
+                status(ZimswitchResultCode.PENDING, "000.200.000", null, null, null));
+        service.resolveOpenCheckout(pending, NO_GAP, RETURN);
+        verify(records).noteEvent(eq(pending.getId()), contains("000.200.000"));
+
+        Payment unanswered = openCardRow();
+        unanswered.setId(UUID.randomUUID());
+        when(client.getPaymentStatus(unanswered.getCheckoutId()))
+                .thenThrow(new ZimswitchApiTransientException("read timed out", 0));
+        service.resolveOpenCheckout(unanswered, NO_GAP, RETURN);
+        verify(records).noteEvent(eq(unanswered.getId()), contains("got no answer"));
+    }
+
+    @Test
+    @DisplayName("the shopper's return is the redirect for THIS checkout, compared exactly, never used")
+    void isShopperReturn_matchesOnlyThisRowsCheckout() {
+        Payment p = openCardRow();
+        String own = "/v1/checkouts/" + p.getCheckoutId() + "/payment";
+
+        assertThat(ZimswitchCardPaymentService.isShopperReturn(own, p)).isTrue();
+        assertThat(ZimswitchCardPaymentService.isShopperReturn("  " + own + "\n", p)).isTrue();
+        assertThat(ZimswitchCardPaymentService.isShopperReturn(null, p)).isFalse();
+        assertThat(ZimswitchCardPaymentService.isShopperReturn("", p)).isFalse();
+        assertThat(ZimswitchCardPaymentService.isShopperReturn(
+                "/v1/checkouts/43914C7C89177901A2E33EE1C6CCB1C7.uat01-vm-tx02/payment", p)).isFalse();
+        assertThat(ZimswitchCardPaymentService.isShopperReturn(
+                "https://evil.example/v1/checkouts/" + p.getCheckoutId() + "/payment", p)).isFalse();
+        assertThat(ZimswitchCardPaymentService.isShopperReturn(
+                "/v1/checkouts/" + p.getCheckoutId().toUpperCase() + "/payment", p)).isFalse();
+
+        Payment noCheckout = openCardRow();
+        noCheckout.setCheckoutId(null);
+        assertThat(ZimswitchCardPaymentService.isShopperReturn("/v1/checkouts/null/payment", noCheckout)).isFalse();
+    }
+
+    @Test
+    @DisplayName("the sweep's query cut-offs and the resolver's ceiling are one definition")
+    void ceilingCutoffs_agreeWithTheCeiling() {
+        Instant now = Instant.now();
+        ZimswitchCardPaymentService.CeilingCutoffs cutoffs = ZimswitchCardPaymentService.CeilingCutoffs.at(now);
+
+        Payment justPast = openCardRow();
+        justPast.setCodeExpiresAt(cutoffs.deadlineBefore().minusSeconds(1));
+        assertThat(ZimswitchCardPaymentService.isPastCeiling(justPast, now)).isTrue();
+
+        Payment notYet = openCardRow();
+        notYet.setCodeExpiresAt(cutoffs.deadlineBefore().plusSeconds(1));
+        assertThat(ZimswitchCardPaymentService.isPastCeiling(notYet, now)).isFalse();
+
+        Payment noDeadlineOld = openCardRow();
+        noDeadlineOld.setCodeExpiresAt(null);
+        noDeadlineOld.setCreatedAt(cutoffs.createdBefore().minusSeconds(1));
+        assertThat(ZimswitchCardPaymentService.isPastCeiling(noDeadlineOld, now)).isTrue();
+
+        Payment noDeadlineYoung = openCardRow();
+        noDeadlineYoung.setCodeExpiresAt(null);
+        noDeadlineYoung.setCreatedAt(cutoffs.createdBefore().plusSeconds(1));
+        assertThat(ZimswitchCardPaymentService.isPastCeiling(noDeadlineYoung, now)).isFalse();
     }
 }
