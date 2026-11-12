@@ -376,6 +376,32 @@ move the sum unseen.
 - `docker-compose.yml` runs only this repo's five services at their packaged
   20 each (100 of 150) and is not part of the test.
 
+## JVM memory: the heap ceiling leaves room for the rest of the JVM
+
+**Every JVM pod runs with a 1Gi limit and `-XX:MaxRAMPercentage=55.0`: a heap
+of up to 563 MiB, with 461 MiB left for the rest of the JVM.**
+`JvmMemoryBudgetTest` (api-gateway) fails the build when a Deployment running
+one of our images leaves less than 448 MiB outside its heap ceiling. It also
+fails on one that sizes the heap with `-Xmx`, `-XX:MaxHeapSize` or
+`-XX:MaxRAM`, and on one that sets no memory limit.
+
+- **Why.** The heap is not the JVM's only memory. Metaspace, the code cache, GC
+  structures, symbols and thread stacks come on top: event-service measured
+  336 MiB of that while idle, and 365 MiB with its heap at its maximum.
+- **How it went wrong (2026-11-12).** At 70% of a 640Mi or 768Mi limit, a heap
+  that grew to its ceiling filled the pod. The kernel OOMKilled it, with no Java
+  error and no log line. On production, a burst of startup garbage did exactly
+  that to event-service, and every event read failed for about 80 minutes.
+- **What 55% of 1Gi buys.** The same broken build peaked at 929 MiB, with its
+  heap at the full 564 MiB, and survived. Heap is never less than the 537 MiB
+  the old 70%-of-768Mi nominally allowed.
+- **Requests are unchanged** (448Mi/512Mi), so scheduling is unchanged. Limits
+  are not reserved, so the extra headroom costs node memory only when it is
+  used.
+- **Changing a limit or the percentage** is one `kubectl set resources` /
+  `kubectl set env JAVA_TOOL_OPTIONS=…` per Deployment. Pause the rollout around
+  the two, so the pod restarts once.
+
 ## loans-service joins behind the gateway (MpofuSlim/innbucks-loans)
 
 **The lending API runs in the cell as `loans-service` (image

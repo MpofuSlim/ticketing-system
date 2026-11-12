@@ -97,7 +97,7 @@ spec:
             # header): under a 1792MB limit the JVM picks SerialGC by ergonomics.
             # ExitOnOutOfMemoryError lets the kubelet restart a pod that ran out
             # of heap instead of leaving it half-working.
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -Duser.home=/tmp -Dpdfbox.fontcache=/tmp" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=55.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -Duser.home=/tmp -Dpdfbox.fontcache=/tmp" }
             - { name: SPRING_PROFILES_ACTIVE, value: "api" }
             # Pinned empty so a Secret line of the same name cannot add
             # scheduled-tasks (or override anything else: SPRING_APPLICATION_JSON

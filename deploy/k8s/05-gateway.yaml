@@ -44,10 +44,10 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=55.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
-          resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
+          resources: { requests: { memory: 512Mi }, limits: { memory: 1Gi } }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 9090 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 9090 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           # Keep serving while the endpoint is removed from the Service, so a

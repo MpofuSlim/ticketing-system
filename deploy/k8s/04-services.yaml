@@ -50,7 +50,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=55.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/event_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -64,11 +64,11 @@ spec:
             - { name: FLYWAY_ENABLED, value: "true" }
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
-          # 768Mi like booking/payment/user/gateway. At 640Mi the sales-agents
-          # build was OOMKilled during startup on production (2026-11-12): the
-          # heap takes 70% of the limit, and the rest of the JVM no longer fit
-          # in the 192Mi left. Applied there by hand with `set resources`.
-          resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
+          # Every JVM service: 1Gi limit, heap 55% of it (563 MiB), so the
+          # ~330-450 MiB the JVM needs outside the heap always fits.
+          # At 70% the heap alone could fill the pod: production's event-service
+          # was OOMKilled at 640Mi and 768Mi (2026-11-12). JvmMemoryBudgetTest.
+          resources: { requests: { memory: 512Mi }, limits: { memory: 1Gi } }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8082 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8082 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           # Keep serving while the endpoint is removed from the Service, so a
@@ -112,7 +112,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=55.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/seat_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -127,7 +127,7 @@ spec:
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
             - { name: LOCK_STORE, value: "redis" }
-          resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
+          resources: { requests: { memory: 448Mi }, limits: { memory: 1Gi } }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8083 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8083 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           # Keep serving while the endpoint is removed from the Service, so a
@@ -171,7 +171,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=55.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/booking_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -212,7 +212,7 @@ spec:
             # Inert while the two switches above are off; set here so turning
             # commission back on does not also need this remembered.
             - { name: INVOICE_SETTLE_GRACE_DAYS, value: "7" }
-          resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
+          resources: { requests: { memory: 512Mi }, limits: { memory: 1Gi } }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8084 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8084 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           # Keep serving while the endpoint is removed from the Service, so a
@@ -256,7 +256,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=55.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/payment_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -270,7 +270,7 @@ spec:
             - { name: REDIS_PORT, value: "6379" }
             - { name: IDEMPOTENCY_STORE, value: "redis" }
             - { name: PAYMENTS_INNBUCKS_ENABLED, value: "true" }
-          resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
+          resources: { requests: { memory: 512Mi }, limits: { memory: 1Gi } }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8085 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8085 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           # Keep serving while the endpoint is removed from the Service, so a
@@ -314,7 +314,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=55.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/loyalty_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -328,7 +328,7 @@ spec:
             - { name: FLYWAY_ENABLED, value: "true" }
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
-          resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
+          resources: { requests: { memory: 448Mi }, limits: { memory: 1Gi } }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8086 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8086 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           # Keep serving while the endpoint is removed from the Service, so a
@@ -378,7 +378,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=55.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/marketplace_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -392,7 +392,7 @@ spec:
             - { name: FLYWAY_ENABLED, value: "true" }
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
-          resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
+          resources: { requests: { memory: 448Mi }, limits: { memory: 1Gi } }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8087 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8087 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           # Keep serving while the endpoint is removed from the Service, so a
