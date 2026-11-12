@@ -3927,6 +3927,13 @@ new status and the 409.
   `EventRepository.findByTenantUserUuidAndSalesStatus`): the same rule written
   in JPQL, so every page is filtered. **Change `SalesStatus.of` and that query
   together**; `EventSalesWindowPostgresIT` compares them for every status.
+  **Keep it flat: one branch per status, never nested brackets.** Spring Data
+  parses every `@Query` with its own ANTLR grammar at startup, and the nested
+  form allocated about 900 MiB doing so. That grew the heap to its maximum and
+  production's event-service was OOMKilled at 640Mi and at 768Mi
+  (2026-11-12). Every event read failed for about 80 minutes, until the old
+  build was put back. `RepositoryQueryParseCostTest` fails the build on any
+  `@Query` there that costs more than 400 MiB to parse.
 - **Who moved the window is on record** (`event_sales_window_changes`, V22):
   one CREATED row when an event is created with a sales start or end, one
   CHANGED row per update that moves either, old and new of both, in the same
