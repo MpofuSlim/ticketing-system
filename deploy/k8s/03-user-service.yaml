@@ -42,7 +42,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=55.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/user_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -70,7 +70,7 @@ spec:
             # under a deployment profile (their secrets guards) — remove it and rotate.
             - name: SUPPORT_ASSERTION_PRIVATE_KEY
               valueFrom: { secretKeyRef: { name: user-service-support-signing, key: SUPPORT_ASSERTION_PRIVATE_KEY, optional: true } }
-          resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
+          resources: { requests: { memory: 512Mi }, limits: { memory: 1Gi } }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8081 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8081 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           # Keep serving while the endpoint is removed from the Service, so a
