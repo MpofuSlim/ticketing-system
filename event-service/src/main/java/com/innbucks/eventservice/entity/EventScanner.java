@@ -106,6 +106,15 @@ public class EventScanner {
     @Column(name = "created_by", updatable = false)
     private String createdBy;
 
+    /**
+     * Added by InnBucks staff (SUPER_ADMIN or PRODUCT_MANAGER) for the
+     * organizer, not by the organizer (V23). Set once at the add; the
+     * organizer's list shows "Added by InnBucks".
+     */
+    @Builder.Default
+    @Column(name = "added_by_staff", nullable = false, updatable = false)
+    private boolean addedByStaff = false;
+
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 

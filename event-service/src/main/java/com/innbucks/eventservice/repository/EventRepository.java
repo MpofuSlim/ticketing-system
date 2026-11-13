@@ -326,6 +326,11 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             UUID tenantUserUuid, String title, String venue, LocalDateTime startDateTime
     );
 
+    // Whether an organizer id names an organizer with at least one event: what
+    // InnBucks staff adding a gate scanner for an organizer must name, so no
+    // team row is ever created under a mistyped or invented id.
+    boolean existsByTenantUserUuidAndDeletedFalse(UUID tenantUserUuid);
+
     // Free-text search across title, description and venue. Case-insensitive
     // substring match — typing "H" matches every event with H anywhere in
     // those fields; typing "Harare" narrows to events whose title/description/

@@ -147,7 +147,11 @@ class ScannerEndpointsSecurityTest {
 
     private static ScannerResponseDTO scanner(UUID organizer) {
         return new ScannerResponseDTO(SCANNER, organizer, "Tendai", "Moyo", "+263771234567", "INVITED",
-                true, false, List.of(), List.of(), null, null, null);
+                true, false, List.of(), List.of(), null, null, null, false);
+    }
+
+    private static ScannerService.TeamEditor asOrganizer(UUID organizer) {
+        return ScannerService.TeamEditor.organizer(organizer, "event_organizer@example.com");
     }
 
     // ------------------------------------------------------------------ gate
@@ -218,13 +222,14 @@ class ScannerEndpointsSecurityTest {
     // ------------------------------------------------------------- organizer
 
     @Test
-    void addScanner_isTheOrganizersOnly_notStaffsOrACustomers() throws Exception {
+    void addScanner_isTheOrganizersOrStaffs_notAReadOnlyOfficersOrACustomers() throws Exception {
         UUID organizer = UUID.randomUUID();
         String body = "{\"firstName\":\"Tendai\",\"lastName\":\"Moyo\",\"phoneNumber\":\"0771234567\"}";
 
         // The organizerUuid claim alone grants nothing: the role is the gate.
-        // Platform staff read an organizer's scanners but never change them.
+        // PRODUCT_OFFICER is read-only: it reads an organizer's team, never changes it.
         mvc.perform(post("/event-organizer/scanners").contentType(MediaType.APPLICATION_JSON).content(body)
+                        .param("organizerUuid", organizer.toString())
                         .header("Authorization", "Bearer " + staffToken("PRODUCT_OFFICER", UUID.randomUUID(), organizer)))
                 .andExpect(status().isForbidden());
         mvc.perform(post("/event-organizer/scanners").contentType(MediaType.APPLICATION_JSON).content(body)
@@ -232,12 +237,62 @@ class ScannerEndpointsSecurityTest {
                 .andExpect(status().isForbidden());
         verifyNoInteractions(scannerService);
 
-        when(scannerService.add(eq(organizer), eq("event_organizer@example.com"), any(CreateScannerRequestDTO.class)))
+        when(scannerService.add(eq(asOrganizer(organizer)), any(CreateScannerRequestDTO.class)))
                 .thenReturn(scanner(organizer));
         mvc.perform(post("/event-organizer/scanners").contentType(MediaType.APPLICATION_JSON).content(body)
                         .header("Authorization", "Bearer " + staffToken("EVENT_ORGANIZER", organizer, organizer)))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.status").value("INVITED"));
+                .andExpect(jsonPath("$.data.status").value("INVITED"))
+                .andExpect(jsonPath("$.data.addedByInnBucks").value(false));
+    }
+
+    @Test
+    void addScanner_staff_actForTheOrganizerNamed_withTheirOwnNameAsActor() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        String body = "{\"firstName\":\"Rudo\",\"lastName\":\"Chikwanha\",\"phoneNumber\":\"0772345678\"}";
+        when(scannerService.add(any(ScannerService.TeamEditor.class), any(CreateScannerRequestDTO.class)))
+                .thenReturn(scanner(organizer));
+
+        for (String role : List.of("SUPER_ADMIN", "PRODUCT_MANAGER")) {
+            mvc.perform(post("/event-organizer/scanners").contentType(MediaType.APPLICATION_JSON).content(body)
+                            .param("organizerUuid", organizer.toString())
+                            .header("Authorization", "Bearer " + staffToken(role, UUID.randomUUID(), null)))
+                    .andExpect(status().isCreated());
+            verify(scannerService).add(eq(ScannerService.TeamEditor.innbucksStaff(organizer,
+                    role.toLowerCase() + "@example.com")), any(CreateScannerRequestDTO.class));
+        }
+
+        // No organizer named: still reaches the service, which refuses it (organizer_required).
+        when(scannerService.add(eq(ScannerService.TeamEditor.innbucksStaff(null, "super_admin@example.com")),
+                any(CreateScannerRequestDTO.class)))
+                .thenThrow(new ApiProblemException(HttpStatus.BAD_REQUEST, ScannerService.ORGANIZER_REQUIRED,
+                        "Choose the organizer whose team this is."));
+        mvc.perform(post("/event-organizer/scanners").contentType(MediaType.APPLICATION_JSON).content(body)
+                        .header("Authorization", "Bearer " + staffToken("SUPER_ADMIN", UUID.randomUUID(), null)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.errorCode").value("organizer_required"));
+    }
+
+    @Test
+    void anOrganizer_namingAnotherOrganizer_isRefused_naming_themselves_isTheirOwnTeam() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        String auth = "Bearer " + staffToken("EVENT_ORGANIZER", organizer, organizer);
+        String body = "{\"firstName\":\"Tendai\",\"lastName\":\"Moyo\",\"phoneNumber\":\"0771234567\"}";
+
+        mvc.perform(post("/event-organizer/scanners").contentType(MediaType.APPLICATION_JSON).content(body)
+                        .param("organizerUuid", UUID.randomUUID().toString()).header("Authorization", auth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("You can only change your own team."));
+        mvc.perform(delete("/event-organizer/scanners/{s}", SCANNER)
+                        .param("organizerUuid", UUID.randomUUID().toString()).header("Authorization", auth))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(scannerService);
+
+        when(scannerService.disable(asOrganizer(organizer), SCANNER)).thenReturn(scanner(organizer));
+        mvc.perform(delete("/event-organizer/scanners/{s}", SCANNER)
+                        .param("organizerUuid", organizer.toString()).header("Authorization", auth))
+                .andExpect(status().isOk());
+        verify(scannerService).disable(asOrganizer(organizer), SCANNER);
     }
 
     @Test
@@ -253,7 +308,7 @@ class ScannerEndpointsSecurityTest {
     @Test
     void assign_clash_rendersItsErrorCode() throws Exception {
         UUID organizer = UUID.randomUUID();
-        when(scannerService.assign(organizer, "event_organizer@example.com", SCANNER, EVENT))
+        when(scannerService.assign(asOrganizer(organizer), SCANNER, EVENT))
                 .thenThrow(new ApiProblemException(HttpStatus.CONFLICT, ScannerService.SCHEDULE_CLASH,
                         "This number is already assigned to another event at that time."));
 
@@ -282,11 +337,60 @@ class ScannerEndpointsSecurityTest {
     }
 
     @Test
-    void platformStaff_cannotWrite() throws Exception {
-        mvc.perform(delete("/event-organizer/scanners/{s}", SCANNER)
-                        .header("Authorization", "Bearer " + staffToken("SUPER_ADMIN", UUID.randomUUID(), null)))
+    void aReadOnlyOfficer_cannotChangeATeam() throws Exception {
+        String auth = "Bearer " + staffToken("PRODUCT_OFFICER", UUID.randomUUID(), null);
+        mvc.perform(delete("/event-organizer/scanners/{s}", SCANNER).header("Authorization", auth))
+                .andExpect(status().isForbidden());
+        mvc.perform(patch("/event-organizer/scanners/{s}/enable", SCANNER).header("Authorization", auth))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/event-organizer/scanners/{s}/events/{e}", SCANNER, EVENT).header("Authorization", auth))
+                .andExpect(status().isForbidden());
+        mvc.perform(delete("/event-organizer/scanners/{s}/events/{e}", SCANNER, EVENT).header("Authorization", auth))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/event-organizer/scanners/{s}/reinvite", SCANNER).header("Authorization", auth))
                 .andExpect(status().isForbidden());
         verifyNoInteractions(scannerService);
+    }
+
+    @Test
+    void staff_manageAGateScanner_withoutNamingTheOrganizer() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        ScannerService.TeamEditor staff = ScannerService.TeamEditor.innbucksStaff(null, "product_manager@example.com");
+        String auth = "Bearer " + staffToken("PRODUCT_MANAGER", UUID.randomUUID(), null);
+        when(scannerService.disable(staff, SCANNER)).thenReturn(scanner(organizer));
+        when(scannerService.enable(staff, SCANNER)).thenReturn(scanner(organizer));
+        when(scannerService.assign(staff, SCANNER, EVENT)).thenReturn(scanner(organizer));
+        when(scannerService.unassign(staff, SCANNER, EVENT)).thenReturn(scanner(organizer));
+        when(scannerService.reinvite(staff, SCANNER)).thenReturn(scanner(organizer));
+
+        mvc.perform(delete("/event-organizer/scanners/{s}", SCANNER).header("Authorization", auth))
+                .andExpect(status().isOk());
+        mvc.perform(patch("/event-organizer/scanners/{s}/enable", SCANNER).header("Authorization", auth))
+                .andExpect(status().isOk());
+        mvc.perform(put("/event-organizer/scanners/{s}/events/{e}", SCANNER, EVENT).header("Authorization", auth))
+                .andExpect(status().isOk());
+        mvc.perform(delete("/event-organizer/scanners/{s}/events/{e}", SCANNER, EVENT).header("Authorization", auth))
+                .andExpect(status().isOk());
+        mvc.perform(post("/event-organizer/scanners/{s}/reinvite", SCANNER).header("Authorization", auth))
+                .andExpect(status().isOk());
+
+        verify(scannerService).disable(staff, SCANNER);
+        verify(scannerService).enable(staff, SCANNER);
+        verify(scannerService).assign(staff, SCANNER, EVENT);
+        verify(scannerService).unassign(staff, SCANNER, EVENT);
+        verify(scannerService).reinvite(staff, SCANNER);
+    }
+
+    @Test
+    void staff_onASalesAgent_rendersItsErrorCode() throws Exception {
+        ScannerService.TeamEditor staff = ScannerService.TeamEditor.innbucksStaff(null, "super_admin@example.com");
+        when(scannerService.disable(staff, SCANNER)).thenThrow(new ApiProblemException(HttpStatus.FORBIDDEN,
+                ScannerService.SALES_AGENT_ORGANIZER_ONLY, ScannerService.SALES_AGENT_ORGANIZER_ONLY_MESSAGE));
+
+        mvc.perform(delete("/event-organizer/scanners/{s}", SCANNER)
+                        .header("Authorization", "Bearer " + staffToken("SUPER_ADMIN", UUID.randomUUID(), null)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("sales_agent_organizer_only"));
     }
 
     // --------------------------------------------------------------- internal

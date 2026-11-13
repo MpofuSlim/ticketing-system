@@ -287,6 +287,143 @@ class ScannerServiceTest {
         verify(assignments).countClashesOnReturn(PHONE, s.getScannerId(), NOW);
     }
 
+    // ------------------------------------------------- InnBucks staff (V23)
+
+    private static final ScannerService.TeamEditor STAFF =
+            ScannerService.TeamEditor.innbucksStaff(ORGANIZER, "pm@innbucks.co.zw");
+    private static final ScannerService.TeamEditor STAFF_NAMING_NOBODY =
+            ScannerService.TeamEditor.innbucksStaff(null, "pm@innbucks.co.zw");
+
+    @Test
+    void staff_add_marksTheRowAddedByInnBucks_andRecordsWhoAddedIt() {
+        when(events.existsByTenantUserUuidAndDeletedFalse(ORGANIZER)).thenReturn(true);
+
+        ScannerResponseDTO created = service.add(STAFF, new CreateScannerRequestDTO("Rudo", "Chikwanha", "0772345678"));
+
+        assertThat(created.addedByInnBucks()).isTrue();
+        assertThat(created.organizerUuid()).isEqualTo(ORGANIZER);
+        assertThat(created.canScan()).isTrue();
+        assertThat(created.canSell()).isFalse();
+        ArgumentCaptor<EventScanner> saved = ArgumentCaptor.forClass(EventScanner.class);
+        verify(scanners).saveAndFlush(saved.capture());
+        assertThat(saved.getValue().isAddedByStaff()).isTrue();
+        assertThat(saved.getValue().getCreatedBy()).isEqualTo("pm@innbucks.co.zw");
+        assertThat(saved.getValue().getOrganizerUuid()).isEqualTo(ORGANIZER);
+    }
+
+    @Test
+    void organizer_add_isNotMarkedAddedByInnBucks() {
+        ScannerResponseDTO created = service.add(ORGANIZER, "org@example.com",
+                new CreateScannerRequestDTO("Tendai", "Moyo", "0771234567"));
+        assertThat(created.addedByInnBucks()).isFalse();
+        verify(events, never()).existsByTenantUserUuidAndDeletedFalse(any());
+    }
+
+    @Test
+    void staff_add_aSalesAgent_isRefused_beforeAnythingIsRead() {
+        assertProblem(catchThrowable(() -> service.add(STAFF,
+                        new CreateScannerRequestDTO("Rudo", "Chikwanha", "0772345678", true, true))),
+                HttpStatus.FORBIDDEN, ScannerService.SALES_AGENT_ORGANIZER_ONLY);
+        assertProblem(catchThrowable(() -> service.add(STAFF,
+                        new CreateScannerRequestDTO("Rudo", "Chikwanha", "0772345678", false, true))),
+                HttpStatus.FORBIDDEN, ScannerService.SALES_AGENT_ORGANIZER_ONLY);
+        verifyNoInteractions(scanners, events);
+    }
+
+    @Test
+    void staff_add_needsAnOrganizer_thatHasAnEvent() {
+        assertProblem(catchThrowable(() -> service.add(STAFF_NAMING_NOBODY,
+                        new CreateScannerRequestDTO("Rudo", "Chikwanha", "0772345678"))),
+                HttpStatus.BAD_REQUEST, ScannerService.ORGANIZER_REQUIRED);
+
+        when(events.existsByTenantUserUuidAndDeletedFalse(ORGANIZER)).thenReturn(false);
+        assertProblem(catchThrowable(() -> service.add(STAFF,
+                        new CreateScannerRequestDTO("Rudo", "Chikwanha", "0772345678"))),
+                HttpStatus.NOT_FOUND, ScannerService.ORGANIZER_NOT_FOUND);
+        verify(scanners, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void staff_add_aNumberAlreadyOnTheTeam_speaksOfTheOrganizersTeam() {
+        when(events.existsByTenantUserUuidAndDeletedFalse(ORGANIZER)).thenReturn(true);
+        when(scanners.findByOrganizerUuidAndPhoneNumber(ORGANIZER, PHONE))
+                .thenReturn(Optional.of(scanner(ORGANIZER, PHONE)));
+
+        Throwable thrown = catchThrowable(() -> service.add(STAFF, new CreateScannerRequestDTO("Tendai", "Moyo", PHONE)));
+
+        assertProblem(thrown, HttpStatus.CONFLICT, ScannerService.ALREADY_ON_TEAM);
+        assertThat(thrown.getMessage()).isEqualTo("This number is already on this organizer's team.");
+    }
+
+    @Test
+    void staff_assign_usesTheMembersOrganizersEvents_andRecordsTheStaffActor() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        Event theirs = event(OTHER_ORGANIZER, NOW.plusDays(1), NOW.plusDays(1).plusHours(4));
+        Event own = event(ORGANIZER, NOW.plusDays(2), NOW.plusDays(2).plusHours(4));
+        when(scanners.findById(s.getScannerId())).thenReturn(Optional.of(s));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+        when(events.findById(theirs.getEventId())).thenReturn(Optional.of(theirs));
+        when(events.findById(own.getEventId())).thenReturn(Optional.of(own));
+
+        // Naming no organizer: the member's own organizer is used, so another
+        // organizer's event is not found for it.
+        assertProblem(catchThrowable(() -> service.assign(STAFF_NAMING_NOBODY, s.getScannerId(), theirs.getEventId())),
+                HttpStatus.NOT_FOUND, ScannerService.EVENT_NOT_FOUND);
+
+        service.assign(STAFF_NAMING_NOBODY, s.getScannerId(), own.getEventId());
+        ArgumentCaptor<EventScannerAssignment> saved = ArgumentCaptor.forClass(EventScannerAssignment.class);
+        verify(assignments).save(saved.capture());
+        assertThat(saved.getValue().getEventId()).isEqualTo(own.getEventId());
+        assertThat(saved.getValue().getAssignedBy()).isEqualTo("pm@innbucks.co.zw");
+        verify(scanners).lockAllByPhoneNumber(PHONE);
+    }
+
+    @Test
+    void staff_namingAnotherOrganizer_isNotFound() {
+        EventScanner s = scanner(OTHER_ORGANIZER, PHONE);
+        when(scanners.findById(s.getScannerId())).thenReturn(Optional.of(s));
+
+        assertProblem(catchThrowable(() -> service.disable(STAFF, s.getScannerId())),
+                HttpStatus.NOT_FOUND, ScannerService.SCANNER_NOT_FOUND);
+        assertThat(s.getDisabledAt()).isNull();
+    }
+
+    @Test
+    void staff_onAMemberWhoSells_isRefused_forEveryAction_andNothingChanges() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        s.setCanSell(true);
+        s.setDeclinedAt(NOW.minusDays(1));
+        when(scanners.findById(s.getScannerId())).thenReturn(Optional.of(s));
+        UUID eventId = UUID.randomUUID();
+
+        for (Runnable action : List.<Runnable>of(
+                () -> service.disable(STAFF, s.getScannerId()),
+                () -> service.enable(STAFF, s.getScannerId()),
+                () -> service.reinvite(STAFF, s.getScannerId()),
+                () -> service.assign(STAFF, s.getScannerId(), eventId),
+                () -> service.unassign(STAFF, s.getScannerId(), eventId))) {
+            assertProblem(catchThrowable(action::run), HttpStatus.FORBIDDEN, ScannerService.SALES_AGENT_ORGANIZER_ONLY);
+        }
+        assertThat(s.getDisabledAt()).isNull();
+        assertThat(s.getDeclinedAt()).isNotNull();
+        verify(scanners, never()).save(any());
+        verifyNoInteractions(assignments);
+    }
+
+    @Test
+    void staff_disableEnableAndReinvite_aGateScanner() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        when(scanners.findById(s.getScannerId())).thenReturn(Optional.of(s));
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+
+        assertThat(service.disable(STAFF_NAMING_NOBODY, s.getScannerId()).status()).isEqualTo("DISABLED");
+        assertThat(service.enable(STAFF, s.getScannerId()).status()).isEqualTo("INVITED");
+
+        s.setDeclinedAt(NOW.minusDays(1));
+        assertThat(service.reinvite(STAFF, s.getScannerId()).status()).isEqualTo("INVITED");
+        assertThat(s.getDeclinedAt()).isNull();
+    }
+
     // -------------------------------------------------------- invite message
 
     private static OrganizerDTO organizer(String businessName) {
