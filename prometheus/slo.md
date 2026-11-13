@@ -642,3 +642,64 @@ patched on its own, then roll booking-service), or lower the rail's TTL back.
 Never raise it past `BOOKING_MAX_TOTAL_HOLD` (PT60M): a hold cannot outlive the
 absolute cap anyway. `reason="max_total"` is not alerted: it is a buyer who
 kept starting payments for an hour, refused by design (D26).
+
+### `PartnerHoldingLedgerMismatch`
+
+**Trigger:** InnRewards' daily partner holding reconciliation (V70) found
+`ledger_difference` other than 0 for a currency. Expected in holding (Flow 1
+sales confirmed into holding, minus uses paid out of it) is not what the unspent
+voucher balances, the uses not yet paid to their merchants and the funded sales
+with no voucher add up to. No outside event explains that: a money path wrote
+something inconsistent, or someone edited a row by hand.
+
+**Action:** read the run (InnBucks staff, SUPER_ADMIN):
+`GET /loyalty/partner-vouchers/reconciliation?limit=7` shows each run's figures,
+so the day the difference appeared narrows the search. Run it again by hand
+after a fix: `POST /loyalty/partner-vouchers/reconciliation/run`. Look for a
+voucher whose `remaining_balance` does not equal its face value minus its
+SUCCESS uses, and for a redemption whose amount differs from what the voucher
+lost. Treat it as a money incident; never "correct" a balance without finding
+the write that broke it.
+
+### `PartnerHoldingBankMismatch`
+
+**Trigger:** the funding provider's holding balance differs from what our
+records expect. Dormant until the real provider reports a balance (the
+simulator does not). A leg the bank has booked and we have not yet recorded
+(`fundingInFlight` on the run) can explain a small, short-lived difference.
+
+**Action:** compare the run's `bankDifference` with `fundingInFlight` and the
+stuck items. A difference that survives the next run is a reconciliation with
+the provider's statement.
+
+### `PartnerMoneyStuck`
+
+**Trigger:** at the last reconciliation, an item was older than the stuck
+threshold (`LOYALTY_VOUCHER_PARTNER_RECONCILIATION_STUCK_AFTER`, PT1H):
+`kind="funding"` (a sale's payment with no answer, or an InnBucks code past its
+expiry nothing closed), `settlement` (a use not paid to its merchant),
+`payment` (a Flow 2 agent payment with no answer, or confirmed with no voucher),
+`paid_without_voucher` (a funded sale whose voucher was never issued).
+
+**Action:** `GET /loyalty/partner-vouchers/reconciliation` lists them live
+(`stuckNow`, oldest first, with ids and references). The 15-second partner
+reconciler retries every one of them; one that stays is a provider that does not
+answer, or a settlement marked ATTENTION that needs an operator.
+
+### `PartnerReconciliationFailed`
+
+**Trigger:** the daily run threw (counted `outcome="failed"`). Nothing was
+stored for that run.
+
+**Action:** grep loyalty-service for `Partner holding reconciliation failed`,
+fix the cause, then run it by hand: `POST /loyalty/partner-vouchers/reconciliation/run`.
+
+### `PartnerReconciliationStale`
+
+**Trigger:** no reconciliation has completed for two days on a pod that has run
+one. The job runs at 04:17 UTC under ShedLock `partnerHoldingReconciliation`,
+only where `LOYALTY_VOUCHER_PARTNER_ENABLED=true`.
+
+**Action:** check `LOYALTY_VOUCHER_PARTNER_RECONCILIATION_ENABLED` and the
+`shedlock` row for `partnerHoldingReconciliation` (a lock held past its
+`lock_until` by a dead pod frees itself within 30 minutes).

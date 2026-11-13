@@ -714,3 +714,72 @@ groups:
           summary: "payment audit_events chain break — a row may have been deleted or reordered"
           description: "{{ $value | humanize }} payment audit chain links failed to recompute in the last hour. A money-movement row was deleted/reordered/truncated from the append-only log, or the audit.hmac-secret rotated without re-chaining. Investigate against the row_hmac (content) signal and the DB write log."
           runbook: "prometheus/slo.md#paymentauditchainbroken"
+
+  # Partner vouchers (InnRewards V70): the daily holding reconciliation. Its
+  # gauges register at the first run, so a cell with the partner API off (and
+  # every cell before its first run) has no series and none of these can fire.
+  - name: partner-vouchers
+    interval: 1m
+    rules:
+
+      # Our own records disagree: money paid into holding minus money paid out
+      # is not what the unspent vouchers, the owed uses and the unissued sales
+      # add up to. Nothing outside the service can cause that, so it is a bug
+      # in a money path. Page.
+      - alert: PartnerHoldingLedgerMismatch
+        expr: max by (currency) (abs(loyalty_partner_holding_ledger_difference)) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "Partner voucher holding does not add up ({{ $labels.currency }})"
+          description: "The last reconciliation found {{ $value | humanize }} {{ $labels.currency }} in holding that the vouchers and uses do not account for. Treat as a money incident."
+          runbook: "prometheus/slo.md#partnerholdingledgermismatch"
+
+      # The provider's holding balance differs from what our records expect.
+      # Dormant until the real funding provider reports a balance; the change
+      # that connects it decides whether this pages.
+      - alert: PartnerHoldingBankMismatch
+        expr: max by (currency) (abs(loyalty_partner_holding_bank_difference)) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Partner holding account balance differs from our records ({{ $labels.currency }})"
+          description: "Bank minus expected is {{ $value | humanize }} {{ $labels.currency }} at the last reconciliation."
+          runbook: "prometheus/slo.md#partnerholdingbankmismatch"
+
+      # Money that should have moved on by now: a payment with no answer, a use
+      # not paid to its merchant, a funded sale with no voucher.
+      - alert: PartnerMoneyStuck
+        expr: max by (currency, kind) (loyalty_partner_holding_stuck) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Partner voucher money stuck ({{ $labels.kind }}, {{ $labels.currency }})"
+          description: "{{ $value | humanize }} {{ $labels.kind }} item(s) older than the stuck threshold at the last reconciliation."
+          runbook: "prometheus/slo.md#partnermoneystuck"
+
+      - alert: PartnerReconciliationFailed
+        expr: sum(increase(loyalty_partner_reconciliation_runs_total{outcome="failed"}[1d])) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Partner holding reconciliation failed to run"
+          description: "{{ $value | humanize }} failed reconciliation run(s) in the last day."
+          runbook: "prometheus/slo.md#partnerreconciliationfailed"
+
+      # The run is daily; two days without one means the job is not running.
+      # The gauge is lost on a pod restart until the next run, so this can only
+      # miss a stale job, never invent one.
+      - alert: PartnerReconciliationStale
+        expr: time() - max(loyalty_partner_reconciliation_last_run_seconds) > 2 * 86400
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Partner holding reconciliation has not run for two days"
+          description: "The last completed run was {{ $value | humanizeDuration }} ago."
+          runbook: "prometheus/slo.md#partnerreconciliationstale"
