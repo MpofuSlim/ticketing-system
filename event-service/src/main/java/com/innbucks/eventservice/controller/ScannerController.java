@@ -39,8 +39,14 @@ import java.util.UUID;
  * (user-service accounts with a temporary password, for shared venue phones)
  * were retired on 2026-11-05; nothing in event-service reads them any more.
  *
- * <p>Writes are the owning organizer's only; platform staff read every
- * organizer's scanners and change none.
+ * <p>Platform staff read every organizer's team. Writes are the owning
+ * organizer's, with one exception (owner's decision, 2026-11-13): InnBucks
+ * staff (SUPER_ADMIN, PRODUCT_MANAGER; never the read-only PRODUCT_OFFICER)
+ * manage an organizer's GATE SCANNERS: add one (naming the organizer), assign
+ * it to the organizer's events, unassign, switch off and on, invite again.
+ * A member who sells, roles, sales terms and portal access stay the
+ * organizer's alone ({@code ScannerService.TeamEditor}). A scanner staff added
+ * carries {@code addedByInnBucks}.
  */
 @RestController
 @RequestMapping("/event-organizer/scanners")
@@ -52,6 +58,23 @@ public class ScannerController {
 
     private static final String READERS =
             "hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')";
+
+    /**
+     * Gate-scanner writes: the organizer, or InnBucks staff acting for one.
+     * The "may act on anyone's" set (SUPER_ADMIN + PRODUCT_MANAGER), never the
+     * read-only PRODUCT_OFFICER. Selling stays EVENT_ORGANIZER-only.
+     */
+    private static final String SCANNER_WRITERS = "hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_MANAGER')";
+
+    private static final String STAFF_PARAM = "InnBucks staff only (SUPER_ADMIN, PRODUCT_MANAGER): the organizer "
+            + "whose team this is. Optional here: the member's own organizer is used, and naming another is a 404. "
+            + "An organizer leaves it out.";
+
+    private static final String STAFF_NOTE = "InnBucks staff (SUPER_ADMIN, PRODUCT_MANAGER) may do this for any "
+            + "organizer's gate scanner, but not for a member who sells (403 `sales_agent_organizer_only`).";
+
+    private static final String SALES_AGENT_ORGANIZER_ONLY_EXAMPLE = """
+            { "code": "403 FORBIDDEN", "message": "Only the organizer can manage a sales agent. InnBucks staff can manage gate scanners only.", "data": { "errorCode": "sales_agent_organizer_only" } }""";
 
     static final String SCANNER_EXAMPLE = """
             {
@@ -67,7 +90,27 @@ public class ScannerController {
               "salesEvents": [],
               "portalEmail": null,
               "portalInvitedAt": null,
-              "createdAt": "2026-10-30T14:05:12+02:00"
+              "createdAt": "2026-10-30T14:05:12+02:00",
+              "addedByInnBucks": false
+            }""";
+
+    /** A gate scanner InnBucks staff added for the organizer. */
+    static final String STAFF_ADDED_EXAMPLE = """
+            {
+              "scannerId": "7d2e3f4a-5b6c-4d7e-8f90-1a2b3c4d5e6f",
+              "organizerUuid": "8f14e45f-ceea-467a-9b0e-1c2d3e4f5a6b",
+              "firstName": "Rudo",
+              "lastName": "Chikwanha",
+              "phoneNumber": "+263772345678",
+              "status": "INVITED",
+              "canScan": true,
+              "canSell": false,
+              "events": [],
+              "salesEvents": [],
+              "portalEmail": null,
+              "portalInvitedAt": null,
+              "createdAt": "2026-11-13T09:20:41+02:00",
+              "addedByInnBucks": true
             }""";
 
     static final String ASSIGNED_EXAMPLE = """
@@ -92,7 +135,8 @@ public class ScannerController {
               "salesEvents": [],
               "portalEmail": null,
               "portalInvitedAt": null,
-              "createdAt": "2026-10-30T14:05:12+02:00"
+              "createdAt": "2026-10-30T14:05:12+02:00",
+              "addedByInnBucks": false
             }""";
 
     /** The same person, also a sales agent for Jazz on the Lawn: everything up to the portal fields. */
@@ -132,14 +176,16 @@ public class ScannerController {
     static final String AGENT_EXAMPLE = AGENT_HEAD + """
               "portalEmail": null,
               "portalInvitedAt": null,
-              "createdAt": "2026-10-30T14:05:12+02:00"
+              "createdAt": "2026-10-30T14:05:12+02:00",
+              "addedByInnBucks": false
             }""";
 
     /** The same agent once the portal invite went. */
     static final String AGENT_WITH_PORTAL_EXAMPLE = AGENT_HEAD + """
               "portalEmail": "tendai.moyo@gmail.com",
               "portalInvitedAt": "2026-11-06T10:00:00+02:00",
-              "createdAt": "2026-10-30T14:05:12+02:00"
+              "createdAt": "2026-10-30T14:05:12+02:00",
+              "addedByInnBucks": false
             }""";
 
     private static final String NOT_FOUND_EXAMPLE = """
@@ -151,30 +197,50 @@ public class ScannerController {
     private final ScannerService scannerService;
 
     @PostMapping
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize(SCANNER_WRITERS)
     @Operation(summary = "Add a team member (gate scanner and/or sales agent)",
             description = "A phone number, a name, and what they do: `canScan` (default true) scans tickets at the "
                     + "gate, `canSell` (default false) sells tickets for you as a sales agent; at least one must "
                     + "be true. Every new team member is `INVITED`, whether or not the number has an InnBucks "
                     + "account: the response never says. Nothing is sent yet: the person gets a WhatsApp (SMS "
                     + "if WhatsApp fails) at their first event assignment of either kind, naming you, that event "
-                    + "and their roles. Requires **EVENT_ORGANIZER**.")
+                    + "and their roles. Requires **EVENT_ORGANIZER**, or **SUPER_ADMIN / PRODUCT_MANAGER** adding "
+                    + "a gate scanner for an organizer: they must name it with `organizerUuid` (an organizer with "
+                    + "at least one event), cannot add a seller (`canSell`), and the member is marked "
+                    + "`addedByInnBucks`.")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Added",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value =
-                            "{ \"code\": \"201 CREATED\", \"message\": \"Scanner added\", \"data\": "
-                                    + SCANNER_EXAMPLE + " }"))),
-            @ApiResponse(responseCode = "400", description = "Not a valid mobile number, a name missing, or no role",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "By the organizer", value =
+                                    "{ \"code\": \"201 CREATED\", \"message\": \"Scanner added\", \"data\": "
+                                            + SCANNER_EXAMPLE + " }"),
+                            @ExampleObject(name = "By InnBucks staff", value =
+                                    "{ \"code\": \"201 CREATED\", \"message\": \"Scanner added\", \"data\": "
+                                            + STAFF_ADDED_EXAMPLE + " }")
+                    })),
+            @ApiResponse(responseCode = "400", description = "Not a valid mobile number, a name missing, no role, "
+                    + "or (staff) no organizer named",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Invalid phone", value = """
                                     { "code": "400 BAD_REQUEST", "message": "That isn't a valid mobile number.", "data": { "errorCode": "invalid_phone", "field": "phoneNumber" } }"""),
                             @ExampleObject(name = "Missing name", value = """
                                     { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "firstName": "First name is required" } }"""),
                             @ExampleObject(name = "No role", value = """
-                                    { "code": "400 BAD_REQUEST", "message": "Choose at least one: scan tickets or sell tickets.", "data": { "errorCode": "no_role" } }""")
+                                    { "code": "400 BAD_REQUEST", "message": "Choose at least one: scan tickets or sell tickets.", "data": { "errorCode": "no_role" } }"""),
+                            @ExampleObject(name = "Staff: no organizer", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Choose the organizer whose team this is.", "data": { "errorCode": "organizer_required" } }""")
                     })),
-            @ApiResponse(responseCode = "403", description = "Not an EVENT_ORGANIZER",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = FORBIDDEN_EXAMPLE))),
+            @ApiResponse(responseCode = "403", description = "Not an organizer or SUPER_ADMIN / PRODUCT_MANAGER; "
+                    + "staff adding a seller; an organizer naming another organizer",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Role", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "Staff adding a seller", value = SALES_AGENT_ORGANIZER_ONLY_EXAMPLE),
+                            @ExampleObject(name = "Another organizer's team", value = """
+                                    { "code": "403 FORBIDDEN", "message": "You can only change your own team.", "data": null }""")
+                    })),
+            @ApiResponse(responseCode = "404", description = "Staff named an organizer with no events",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "404 NOT_FOUND", "message": "That organizer has no events. Check the organizer and try again.", "data": { "errorCode": "organizer_not_found" } }"""))),
             @ApiResponse(responseCode = "409", description = "Already on the team, or the team is full",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Already on the team", value = """
@@ -183,9 +249,13 @@ public class ScannerController {
                                     { "code": "409 CONFLICT", "message": "Your team already has 500 members. Remove one before adding another.", "data": { "errorCode": "scanner_limit_reached", "limit": 500 } }""")
                     }))
     })
-    public ResponseEntity<ApiResult<ScannerResponseDTO>> add(@Valid @RequestBody CreateScannerRequestDTO request,
-                                                             Authentication authentication) {
-        ScannerResponseDTO created = scannerService.add(organizer(authentication), authentication.getName(), request);
+    public ResponseEntity<ApiResult<ScannerResponseDTO>> add(
+            @Valid @RequestBody CreateScannerRequestDTO request,
+            @Parameter(description = "InnBucks staff only, and required for them: the organizer whose team this "
+                    + "is. An organizer leaves it out.")
+            @RequestParam(required = false) UUID organizerUuid,
+            Authentication authentication) {
+        ScannerResponseDTO created = scannerService.add(editor(authentication, organizerUuid), request);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResult.created("Scanner added", created));
     }
 
@@ -229,7 +299,7 @@ public class ScannerController {
     }
 
     @PutMapping("/{scannerId}/events/{eventId}")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize(SCANNER_WRITERS)
     @Operation(summary = "Assign a scanner to one of your events",
             description = "Idempotent. Refused when the number is already on another event at an overlapping "
                     + "time, with any organizer: a scanner is never on two overlapping events. The refusal names "
@@ -238,7 +308,7 @@ public class ScannerController {
                     + "The first assignment of an `INVITED` scanner sends the person one WhatsApp (SMS if "
                     + "WhatsApp fails) naming you and this event and saying to open InnBucks and accept; later "
                     + "assignments send nothing. Whether it was delivered is never reported. Only a team member "
-                    + "with the Scan role (`canScan`) can be assigned to scan.")
+                    + "with the Scan role (`canScan`) can be assigned to scan. " + STAFF_NOTE)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Assigned",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value =
@@ -259,56 +329,80 @@ public class ScannerController {
                                     { "code": "409 CONFLICT", "message": "That event has already ended.", "data": { "errorCode": "event_ended" } }"""),
                             @ExampleObject(name = "Not a scanner", value = """
                                     { "code": "409 CONFLICT", "message": "This person doesn't scan tickets for you. Give them the Scan role first.", "data": { "errorCode": "not_a_scanner" } }""")
+                    })),
+            @ApiResponse(responseCode = "403", description = "Not the organizer or SUPER_ADMIN / PRODUCT_MANAGER, "
+                    + "or staff acting on a member who sells",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Role", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "Staff, member sells", value = SALES_AGENT_ORGANIZER_ONLY_EXAMPLE)
                     }))
     })
     public ResponseEntity<ApiResult<ScannerResponseDTO>> assign(@PathVariable UUID scannerId,
                                                                 @PathVariable UUID eventId,
+                                                                @Parameter(description = STAFF_PARAM)
+                                                                @RequestParam(required = false) UUID organizerUuid,
                                                                 Authentication authentication) {
         return ResponseEntity.ok(ApiResult.ok("Scanner assigned", scannerService.assign(
-                organizer(authentication), authentication.getName(), scannerId, eventId)));
+                editor(authentication, organizerUuid), scannerId, eventId)));
     }
 
     @DeleteMapping("/{scannerId}/events/{eventId}")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
-    @Operation(summary = "Unassign a scanner from an event", description = "Idempotent.")
+    @PreAuthorize(SCANNER_WRITERS)
+    @Operation(summary = "Unassign a scanner from an event", description = "Idempotent. " + STAFF_NOTE)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Unassigned",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value =
                             "{ \"code\": \"200 OK\", \"message\": \"Scanner unassigned\", \"data\": "
                                     + SCANNER_EXAMPLE + " }"))),
             @ApiResponse(responseCode = "404", description = "Not your scanner",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = NOT_FOUND_EXAMPLE)))
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = NOT_FOUND_EXAMPLE))),
+            @ApiResponse(responseCode = "403", description = "Not the organizer or SUPER_ADMIN / PRODUCT_MANAGER, "
+                    + "or staff acting on a member who sells",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Role", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "Staff, member sells", value = SALES_AGENT_ORGANIZER_ONLY_EXAMPLE)
+                    }))
     })
     public ResponseEntity<ApiResult<ScannerResponseDTO>> unassign(@PathVariable UUID scannerId,
                                                                   @PathVariable UUID eventId,
+                                                                  @Parameter(description = STAFF_PARAM)
+                                                                  @RequestParam(required = false) UUID organizerUuid,
                                                                   Authentication authentication) {
         return ResponseEntity.ok(ApiResult.ok("Scanner unassigned", scannerService.unassign(
-                organizer(authentication), authentication.getName(), scannerId, eventId)));
+                editor(authentication, organizerUuid), scannerId, eventId)));
     }
 
     @DeleteMapping("/{scannerId}")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize(SCANNER_WRITERS)
     @Operation(summary = "Switch a scanner off",
             description = "Their next scan and their next sale (app or portal) are refused. The record and its "
-                    + "assignments are kept, and so are their past sales. Idempotent.")
+                    + "assignments are kept, and so are their past sales. Idempotent. " + STAFF_NOTE)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Switched off",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
-                            { "code": "200 OK", "message": "Scanner disabled", "data": { "scannerId": "4b1e2c3d-5a6f-4b7c-8d9e-0f1a2b3c4d5e", "organizerUuid": "8f14e45f-ceea-467a-9b0e-1c2d3e4f5a6b", "firstName": "Tendai", "lastName": "Moyo", "phoneNumber": "+263771234567", "status": "DISABLED", "canScan": true, "canSell": false, "events": [], "salesEvents": [], "portalEmail": null, "portalInvitedAt": null, "createdAt": "2026-10-30T14:05:12+02:00" } }"""))),
+                            { "code": "200 OK", "message": "Scanner disabled", "data": { "scannerId": "4b1e2c3d-5a6f-4b7c-8d9e-0f1a2b3c4d5e", "organizerUuid": "8f14e45f-ceea-467a-9b0e-1c2d3e4f5a6b", "firstName": "Tendai", "lastName": "Moyo", "phoneNumber": "+263771234567", "status": "DISABLED", "canScan": true, "canSell": false, "events": [], "salesEvents": [], "portalEmail": null, "portalInvitedAt": null, "createdAt": "2026-10-30T14:05:12+02:00", "addedByInnBucks": false } }"""))),
             @ApiResponse(responseCode = "404", description = "Not your scanner",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = NOT_FOUND_EXAMPLE)))
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = NOT_FOUND_EXAMPLE))),
+            @ApiResponse(responseCode = "403", description = "Not the organizer or SUPER_ADMIN / PRODUCT_MANAGER, "
+                    + "or staff acting on a member who sells",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Role", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "Staff, member sells", value = SALES_AGENT_ORGANIZER_ONLY_EXAMPLE)
+                    }))
     })
     public ResponseEntity<ApiResult<ScannerResponseDTO>> disable(@PathVariable UUID scannerId,
+                                                                 @Parameter(description = STAFF_PARAM)
+                                                                 @RequestParam(required = false) UUID organizerUuid,
                                                                  Authentication authentication) {
         return ResponseEntity.ok(ApiResult.ok("Scanner disabled", scannerService.disable(
-                organizer(authentication), authentication.getName(), scannerId)));
+                editor(authentication, organizerUuid), scannerId)));
     }
 
     @PatchMapping("/{scannerId}/enable")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize(SCANNER_WRITERS)
     @Operation(summary = "Switch a scanner back on",
             description = "Assignments are kept. Refused when one of them now overlaps an event the number took "
-                    + "on elsewhere while this scanner was off. Idempotent.")
+                    + "on elsewhere while this scanner was off. Idempotent. " + STAFF_NOTE)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Switched on",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value =
@@ -318,20 +412,29 @@ public class ScannerController {
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = NOT_FOUND_EXAMPLE))),
             @ApiResponse(responseCode = "409", description = "An assignment now overlaps",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
-                            { "code": "409 CONFLICT", "message": "This number is already assigned to another event at that time.", "data": { "errorCode": "scanner_schedule_clash" } }""")))
+                            { "code": "409 CONFLICT", "message": "This number is already assigned to another event at that time.", "data": { "errorCode": "scanner_schedule_clash" } }"""))),
+            @ApiResponse(responseCode = "403", description = "Not the organizer or SUPER_ADMIN / PRODUCT_MANAGER, "
+                    + "or staff acting on a member who sells",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Role", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "Staff, member sells", value = SALES_AGENT_ORGANIZER_ONLY_EXAMPLE)
+                    }))
     })
     public ResponseEntity<ApiResult<ScannerResponseDTO>> enable(@PathVariable UUID scannerId,
+                                                                @Parameter(description = STAFF_PARAM)
+                                                                @RequestParam(required = false) UUID organizerUuid,
                                                                 Authentication authentication) {
         return ResponseEntity.ok(ApiResult.ok("Scanner enabled", scannerService.enable(
-                organizer(authentication), authentication.getName(), scannerId)));
+                editor(authentication, organizerUuid), scannerId)));
     }
 
     @PostMapping("/{scannerId}/reinvite")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize(SCANNER_WRITERS)
     @Operation(summary = "Invite a scanner again",
             description = "Turns a `DECLINED` scanner (they declined, or left) back to `INVITED`. Refused like "
                     + "enable when an assignment now overlaps. Sends the invite message again, naming the "
-                    + "scanner's soonest assigned event; with none assigned, it goes at the next assignment.")
+                    + "scanner's soonest assigned event; with none assigned, it goes at the next assignment. "
+                    + STAFF_NOTE)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Invited again",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value =
@@ -345,12 +448,20 @@ public class ScannerController {
                                     { "code": "409 CONFLICT", "message": "Only a scanner who declined can be invited again.", "data": { "errorCode": "scanner_not_declined" } }"""),
                             @ExampleObject(name = "Clash", value = """
                                     { "code": "409 CONFLICT", "message": "This number is already assigned to another event at that time.", "data": { "errorCode": "scanner_schedule_clash" } }""")
+                    })),
+            @ApiResponse(responseCode = "403", description = "Not the organizer or SUPER_ADMIN / PRODUCT_MANAGER, "
+                    + "or staff acting on a member who sells",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Role", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "Staff, member sells", value = SALES_AGENT_ORGANIZER_ONLY_EXAMPLE)
                     }))
     })
     public ResponseEntity<ApiResult<ScannerResponseDTO>> reinvite(@PathVariable UUID scannerId,
+                                                                  @Parameter(description = STAFF_PARAM)
+                                                                  @RequestParam(required = false) UUID organizerUuid,
                                                                   Authentication authentication) {
         return ResponseEntity.ok(ApiResult.ok("Scanner invited again", scannerService.reinvite(
-                organizer(authentication), authentication.getName(), scannerId)));
+                editor(authentication, organizerUuid), scannerId)));
     }
 
     @PutMapping("/{scannerId}/roles")
@@ -447,7 +558,7 @@ public class ScannerController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Unassigned",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
-                            { "code": "200 OK", "message": "Sales event unassigned", "data": { "scannerId": "4b1e2c3d-5a6f-4b7c-8d9e-0f1a2b3c4d5e", "organizerUuid": "8f14e45f-ceea-467a-9b0e-1c2d3e4f5a6b", "firstName": "Tendai", "lastName": "Moyo", "phoneNumber": "+263771234567", "status": "ACTIVE", "canScan": true, "canSell": true, "events": [ { "eventId": "5772554b-9c1d-4e2f-a3b4-c5d6e7f8a9b0", "title": "Peterhouse Sixth Form Ball", "venue": "Peterhouse, Marondera", "startDateTime": "2026-11-07T18:00:00+02:00", "endDateTime": "2026-11-08T01:00:00+02:00" } ], "salesEvents": [], "portalEmail": null, "portalInvitedAt": null, "createdAt": "2026-10-30T14:05:12+02:00" } }"""))),
+                            { "code": "200 OK", "message": "Sales event unassigned", "data": { "scannerId": "4b1e2c3d-5a6f-4b7c-8d9e-0f1a2b3c4d5e", "organizerUuid": "8f14e45f-ceea-467a-9b0e-1c2d3e4f5a6b", "firstName": "Tendai", "lastName": "Moyo", "phoneNumber": "+263771234567", "status": "ACTIVE", "canScan": true, "canSell": true, "events": [ { "eventId": "5772554b-9c1d-4e2f-a3b4-c5d6e7f8a9b0", "title": "Peterhouse Sixth Form Ball", "venue": "Peterhouse, Marondera", "startDateTime": "2026-11-07T18:00:00+02:00", "endDateTime": "2026-11-08T01:00:00+02:00" } ], "salesEvents": [], "portalEmail": null, "portalInvitedAt": null, "createdAt": "2026-10-30T14:05:12+02:00", "addedByInnBucks": false } }"""))),
             @ApiResponse(responseCode = "403", description = "Not an EVENT_ORGANIZER",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = FORBIDDEN_EXAMPLE))),
             @ApiResponse(responseCode = "404", description = "Not your team member",
@@ -527,6 +638,32 @@ public class ScannerController {
                                                                             Authentication authentication) {
         return ResponseEntity.ok(ApiResult.ok("Portal access removed", scannerService.revokePortalAccess(
                 organizer(authentication), authentication.getName(), scannerId)));
+    }
+
+    /**
+     * Who is changing the team. An EVENT_ORGANIZER changes their own, and naming
+     * another organizer is refused unless they are also InnBucks staff. Anyone
+     * else got past {@link #SCANNER_WRITERS}, so is SUPER_ADMIN or
+     * PRODUCT_MANAGER, acting for the organizer named (or, on a member's own
+     * actions, the member's organizer). The service holds the staff rules.
+     */
+    private static ScannerService.TeamEditor editor(Authentication authentication, UUID organizerUuid) {
+        String actor = authentication.getName();
+        boolean staff = hasRole(authentication, "ROLE_SUPER_ADMIN") || hasRole(authentication, "ROLE_PRODUCT_MANAGER");
+        if (hasRole(authentication, "ROLE_EVENT_ORGANIZER")) {
+            UUID own = organizer(authentication);
+            if (organizerUuid == null || organizerUuid.equals(own)) {
+                return ScannerService.TeamEditor.organizer(own, actor);
+            }
+            if (!staff) {
+                throw new ForbiddenException("You can only change your own team.");
+            }
+        }
+        return ScannerService.TeamEditor.innbucksStaff(organizerUuid, actor);
+    }
+
+    private static boolean hasRole(Authentication authentication, String authority) {
+        return authentication.getAuthorities().stream().anyMatch(a -> authority.equals(a.getAuthority()));
     }
 
     /**

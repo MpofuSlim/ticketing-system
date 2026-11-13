@@ -1193,6 +1193,26 @@ refused, and an account created first made `/auth/exchange` refuse the number
   event-internal-deny). It returns allowed only for an accepted, switched-on
   scanner assigned to the event, on that event's organizer's team. It is read
   live, so a removal bites at the next scan.
+- **InnBucks staff can manage an organizer's GATE SCANNERS (event-service
+  V23, owner's go 2026-11-13).** SUPER_ADMIN and PRODUCT_MANAGER, never
+  PRODUCT_OFFICER (read-only), may add a scanner, assign or unassign it,
+  switch it off and on, and invite it again, on the same endpoints with an
+  optional `organizerUuid` (`ScannerService.TeamEditor`).
+  - **Adding needs the organizer named** (400 `organizer_required`), and that
+    id must own a live event (404 `organizer_not_found`): a team under an id
+    with no events could never be assigned to anything.
+  - **On a member's own actions** the member's organizer is used; a named
+    organizer that is not the member's is the same 404 as an unknown id.
+  - **A member who sells is the organizer's alone**: staff adding with
+    `canSell`, or acting on a row with `canSell`, is 403
+    `sales_agent_organizer_only`. Roles, sales events and portal access stay
+    EVENT_ORGANIZER only. A sales agent carries commission and cash
+    obligations the organizer must decide.
+  - **The organizer sees it** as `addedByInnBucks: true`
+    (`event_scanners.added_by_staff`, set once at the add). No message is sent
+    to the organizer. `created_by` / `assigned_by` hold the staff email.
+  - An organizer naming another organizer is 403 in the controller, before
+    the service.
 - **Scanning with a super-app token** is booking-service V30 (below).
 
 ## Sales agents sell for an organizer (event-service V21, user-service V56, booking-service V36)

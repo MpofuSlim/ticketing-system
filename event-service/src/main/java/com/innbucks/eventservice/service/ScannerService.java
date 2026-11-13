@@ -107,6 +107,32 @@ public class ScannerService {
     public static final String INVALID_EMAIL = "invalid_email";
     public static final String PORTAL_INVITE_UNAVAILABLE = "portal_invite_unavailable";
     public static final String ACCOUNT_REQUIRED = "account_required";
+    public static final String ORGANIZER_REQUIRED = "organizer_required";
+    public static final String ORGANIZER_NOT_FOUND = "organizer_not_found";
+    public static final String SALES_AGENT_ORGANIZER_ONLY = "sales_agent_organizer_only";
+    public static final String SALES_AGENT_ORGANIZER_ONLY_MESSAGE =
+            "Only the organizer can manage a sales agent. InnBucks staff can manage gate scanners only.";
+
+    /**
+     * Who is changing a team. The organizer edits their own; InnBucks staff
+     * (SUPER_ADMIN, PRODUCT_MANAGER; owner's decision 2026-11-13) edit an
+     * organizer's GATE SCANNERS only: add, assign to the organizer's events,
+     * unassign, switch off and on, invite again. A member who sells is the
+     * organizer's alone, and so are roles, sales terms and portal access.
+     *
+     * <p>For staff, {@code organizerUuid} is the organizer they named: required
+     * to add, and optional on a member's own actions, where the member's own
+     * organizer is used (a named one that is not the member's is a 404).
+     */
+    public record TeamEditor(UUID organizerUuid, String actor, boolean staff) {
+        public static TeamEditor organizer(UUID organizerUuid, String actor) {
+            return new TeamEditor(organizerUuid, actor, false);
+        }
+
+        public static TeamEditor innbucksStaff(UUID organizerUuidOrNull, String actor) {
+            return new TeamEditor(organizerUuidOrNull, actor, true);
+        }
+    }
 
     static final String SCHEDULE_CLASH_MESSAGE = "This number is already assigned to another event at that time.";
     static final String NO_ROLE_MESSAGE = "Choose at least one: scan tickets or sell tickets.";
@@ -194,19 +220,41 @@ public class ScannerService {
 
     @Transactional
     public ScannerResponseDTO add(UUID organizerUuid, String actor, CreateScannerRequestDTO request) {
+        return add(TeamEditor.organizer(organizerUuid, actor), request);
+    }
+
+    @Transactional
+    public ScannerResponseDTO add(TeamEditor editor, CreateScannerRequestDTO request) {
         boolean canScan = request.canScan() == null || request.canScan();
         boolean canSell = Boolean.TRUE.equals(request.canSell());
         requireARole(canScan, canSell);
+        UUID organizerUuid = editor.organizerUuid();
+        if (editor.staff()) {
+            if (canSell) {
+                throw salesAgentOrganizerOnly();
+            }
+            if (organizerUuid == null) {
+                throw new ApiProblemException(HttpStatus.BAD_REQUEST, ORGANIZER_REQUIRED,
+                        "Choose the organizer whose team this is.");
+            }
+            // Local and live: an id with no event is a typo, or not an organizer,
+            // and a team row under it could never be assigned to anything.
+            if (!eventRepository.existsByTenantUserUuidAndDeletedFalse(organizerUuid)) {
+                throw new ApiProblemException(HttpStatus.NOT_FOUND, ORGANIZER_NOT_FOUND,
+                        "That organizer has no events. Check the organizer and try again.");
+            }
+        }
         String phone = MsisdnValidator.normalizeToE164(request.phoneNumber(), deploymentCountry)
                 .orElseThrow(() -> new ApiProblemException(HttpStatus.BAD_REQUEST, INVALID_PHONE,
                         "That isn't a valid mobile number.", Map.of("field", "phoneNumber")));
         Optional<EventScanner> existing = scannerRepository.findByOrganizerUuidAndPhoneNumber(organizerUuid, phone);
         if (existing.isPresent()) {
-            throw alreadyOnTeam(existing.get());
+            throw alreadyOnTeam(existing.get(), editor.staff());
         }
         if (scannerRepository.countByOrganizerUuid(organizerUuid) >= maxPerOrganizer) {
             throw new ApiProblemException(HttpStatus.CONFLICT, LIMIT_REACHED,
-                    "Your team already has " + maxPerOrganizer + " members. Remove one before adding another.",
+                    (editor.staff() ? "This organizer's team" : "Your team") + " already has " + maxPerOrganizer
+                            + " members. Remove one before adding another.",
                     Map.of("limit", maxPerOrganizer));
         }
         EventScanner scanner = EventScanner.builder()
@@ -217,18 +265,19 @@ public class ScannerService {
                 .lastName(cleanName(request.lastName()))
                 .canScan(canScan)
                 .canSell(canSell)
-                .createdBy(actor)
+                .createdBy(editor.actor())
+                .addedByStaff(editor.staff())
                 .build();
         try {
             scannerRepository.saveAndFlush(scanner);
         } catch (DataIntegrityViolationException race) {
             // Two adds of one number at once: the unique key let one in.
             throw scannerRepository.findByOrganizerUuidAndPhoneNumber(organizerUuid, phone)
-                    .map(this::alreadyOnTeam)
+                    .map(s -> alreadyOnTeam(s, editor.staff()))
                     .orElseThrow(() -> race);
         }
-        log.info("Scanner added scannerId={} organizerUuid={} canScan={} canSell={} by={}",
-                scanner.getScannerId(), organizerUuid, canScan, canSell, actor);
+        log.info("Scanner added scannerId={} organizerUuid={} canScan={} canSell={} byStaff={} by={}",
+                scanner.getScannerId(), organizerUuid, canScan, canSell, editor.staff(), editor.actor());
         return toResponse(scanner, List.of(), List.of());
     }
 
@@ -251,11 +300,17 @@ public class ScannerService {
     }
 
     public ScannerResponseDTO assign(UUID organizerUuid, String actor, UUID scannerId, UUID eventId) {
-        return afterCommit(write(() -> assignInWrite(organizerUuid, actor, scannerId, eventId)));
+        return assign(TeamEditor.organizer(organizerUuid, actor), scannerId, eventId);
     }
 
-    private Written assignInWrite(UUID organizerUuid, String actor, UUID scannerId, UUID eventId) {
-        EventScanner scanner = owned(organizerUuid, scannerId);
+    public ScannerResponseDTO assign(TeamEditor editor, UUID scannerId, UUID eventId) {
+        return afterCommit(write(() -> assignInWrite(editor, scannerId, eventId)));
+    }
+
+    private Written assignInWrite(TeamEditor editor, UUID scannerId, UUID eventId) {
+        EventScanner scanner = target(editor, scannerId);
+        UUID organizerUuid = scanner.getOrganizerUuid();
+        String actor = editor.actor();
         if (!scanner.isCanScan()) {
             throw new ApiProblemException(HttpStatus.CONFLICT, NOT_A_SCANNER, NOT_A_SCANNER_MESSAGE);
         }
@@ -288,28 +343,45 @@ public class ScannerService {
 
     @Transactional
     public ScannerResponseDTO unassign(UUID organizerUuid, String actor, UUID scannerId, UUID eventId) {
-        owned(organizerUuid, scannerId);
+        return unassign(TeamEditor.organizer(organizerUuid, actor), scannerId, eventId);
+    }
+
+    @Transactional
+    public ScannerResponseDTO unassign(TeamEditor editor, UUID scannerId, UUID eventId) {
+        EventScanner scanner = target(editor, scannerId);
         if (assignmentRepository.deleteByScannerIdAndEventId(scannerId, eventId) > 0) {
-            log.info("Scanner unassigned scannerId={} eventId={} by={}", scannerId, eventId, actor);
+            log.info("Scanner unassigned scannerId={} eventId={} byStaff={} by={}",
+                    scannerId, eventId, editor.staff(), editor.actor());
         }
-        return get(organizerUuid, scannerId);
+        return get(scanner.getOrganizerUuid(), scannerId);
     }
 
     /** Switched off: the next scan and the next sale are refused; the record and its assignments stay. */
     @Transactional
     public ScannerResponseDTO disable(UUID organizerUuid, String actor, UUID scannerId) {
-        EventScanner scanner = owned(organizerUuid, scannerId);
+        return disable(TeamEditor.organizer(organizerUuid, actor), scannerId);
+    }
+
+    @Transactional
+    public ScannerResponseDTO disable(TeamEditor editor, UUID scannerId) {
+        EventScanner scanner = target(editor, scannerId);
         if (scanner.getDisabledAt() == null) {
             scanner.setDisabledAt(now());
             scannerRepository.save(scanner);
-            log.info("Scanner disabled scannerId={} by={}", scannerId, actor);
+            log.info("Scanner disabled scannerId={} byStaff={} by={}", scannerId, editor.staff(), editor.actor());
         }
-        return get(organizerUuid, scannerId);
+        return get(scanner.getOrganizerUuid(), scannerId);
     }
 
     public ScannerResponseDTO enable(UUID organizerUuid, String actor, UUID scannerId) {
+        return enable(TeamEditor.organizer(organizerUuid, actor), scannerId);
+    }
+
+    public ScannerResponseDTO enable(TeamEditor editor, UUID scannerId) {
         return afterCommit(write(() -> {
-            EventScanner scanner = owned(organizerUuid, scannerId);
+            EventScanner scanner = target(editor, scannerId);
+            UUID organizerUuid = scanner.getOrganizerUuid();
+            String actor = editor.actor();
             InviteNotice invite = null;
             if (scanner.getDisabledAt() != null) {
                 // Back on, its scanning events count again: they must not
@@ -328,8 +400,14 @@ public class ScannerService {
 
     /** A DECLINED team member (declined, or left) back to INVITED. */
     public ScannerResponseDTO reinvite(UUID organizerUuid, String actor, UUID scannerId) {
+        return reinvite(TeamEditor.organizer(organizerUuid, actor), scannerId);
+    }
+
+    public ScannerResponseDTO reinvite(TeamEditor editor, UUID scannerId) {
         return afterCommit(write(() -> {
-            EventScanner scanner = owned(organizerUuid, scannerId);
+            EventScanner scanner = target(editor, scannerId);
+            UUID organizerUuid = scanner.getOrganizerUuid();
+            String actor = editor.actor();
             if (scanner.getDeclinedAt() == null) {
                 throw new ApiProblemException(HttpStatus.CONFLICT, NOT_DECLINED,
                         "Only a scanner who declined can be invited again.");
@@ -770,6 +848,27 @@ public class ScannerService {
                 .orElseThrow(this::scannerNotFound);
     }
 
+    /**
+     * The member a team action is for. The organizer reaches their own only.
+     * Staff reach any organizer's member (the one named, when they name one),
+     * but never a member who sells: a sales agent is the organizer's alone,
+     * even when the action itself is about scanning. Checked in the action's
+     * own transaction.
+     */
+    private EventScanner target(TeamEditor editor, UUID scannerId) {
+        if (!editor.staff()) {
+            return owned(editor.organizerUuid(), scannerId);
+        }
+        EventScanner scanner = scannerRepository.findById(scannerId)
+                .filter(s -> editor.organizerUuid() == null || editor.organizerUuid().equals(s.getOrganizerUuid()))
+                .orElseThrow(this::scannerNotFound);
+        if (scanner.isCanSell()) {
+            log.info("Staff team action refused, member sells scannerId={} by={}", scannerId, editor.actor());
+            throw salesAgentOrganizerOnly();
+        }
+        return scanner;
+    }
+
     /** The organizer's event, not deleted and not ended: 404 otherwise, or 409 when it has ended. */
     private Event ownedLiveEvent(UUID organizerUuid, UUID eventId, LocalDateTime now) {
         Event event = eventRepository.findById(eventId)
@@ -958,7 +1057,8 @@ public class ScannerService {
                 scanner.isCanScan(), scanner.isCanSell(),
                 assigned.stream().map(ScannerService::eventView).toList(),
                 sales.stream().map(ScannerService::salesEventView).toList(),
-                scanner.getPortalEmail(), scanner.getPortalInvitedAt(), scanner.getCreatedAt());
+                scanner.getPortalEmail(), scanner.getPortalInvitedAt(), scanner.getCreatedAt(),
+                scanner.isAddedByStaff());
     }
 
     private static ScannerEventDTO eventView(Event event) {
@@ -999,9 +1099,15 @@ public class ScannerService {
         return LocalDateTime.now(clock);
     }
 
-    private ApiProblemException alreadyOnTeam(EventScanner existing) {
+    private ApiProblemException alreadyOnTeam(EventScanner existing, boolean staff) {
         return new ApiProblemException(HttpStatus.CONFLICT, ALREADY_ON_TEAM,
-                "This number is already on your team.", Map.of("scannerId", existing.getScannerId()));
+                staff ? "This number is already on this organizer's team." : "This number is already on your team.",
+                Map.of("scannerId", existing.getScannerId()));
+    }
+
+    private static ApiProblemException salesAgentOrganizerOnly() {
+        return new ApiProblemException(HttpStatus.FORBIDDEN, SALES_AGENT_ORGANIZER_ONLY,
+                SALES_AGENT_ORGANIZER_ONLY_MESSAGE);
     }
 
     private ApiProblemException scannerNotFound() {

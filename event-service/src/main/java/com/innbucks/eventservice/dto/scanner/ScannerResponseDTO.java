@@ -32,5 +32,7 @@ public record ScannerResponseDTO(
         @Schema(example = "tendai.moyo@gmail.com", nullable = true,
                 description = "Where you sent a Foundry portal invite; null = none.") String portalEmail,
         @Schema(example = "2026-11-06T10:00:00+02:00", nullable = true) LocalDateTime portalInvitedAt,
-        @Schema(example = "2026-10-30T14:05:12+02:00") LocalDateTime createdAt
+        @Schema(example = "2026-10-30T14:05:12+02:00") LocalDateTime createdAt,
+        @Schema(example = "false", description = "True when InnBucks staff added this gate scanner for you. "
+                + "Show it as \"Added by InnBucks\".") boolean addedByInnBucks
 ) { }
