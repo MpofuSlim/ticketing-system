@@ -204,7 +204,8 @@ public class RoleAdminController {
                     when it blocks granting SUPER_ADMIN directly.
 
                     **Reserved names:** `ADMIN` (never a platform role), a bare `CALL_CENTER` and any \
-                    `CALL_CENTRE…` spelling (the call-center roles are built in). The built-in names \
+                    `CALL_CENTRE…` spelling (the call-center roles are built in), and `GATE_SCANNER` \
+                    (the gate sign-in's session role, never an account's). The built-in names \
                     themselves are taken (409).
 
                     **Audited or not made:** if the `ROLE_CREATED` audit row cannot be written the \

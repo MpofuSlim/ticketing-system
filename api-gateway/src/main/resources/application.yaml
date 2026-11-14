@@ -96,6 +96,30 @@ spring:
                     key-resolver: "#{@preAuthIpKeyResolver}"
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # Gate scanners' phone sign-in for the Organizer app (user-service):
+            # /auth/gate/code texts a code to a number on an event team,
+            # /auth/gate/sign-in trades it for a gate-only session. Sends real
+            # SMS and mints a session, so it is IP-keyed and fail-safe like the
+            # OTP route. But every scanner reaches us through the Organizer app's
+            # one Cloud Function proxy, so to this limiter a whole gate team is
+            # ONE address: the burst is sized for a team signing in at shift
+            # start. The per-number quota in user-service (3 codes per 10 min,
+            # 3 wrong tries void a code) is the real brake on guessing.
+            # Exact paths, POST only. MUST precede the /auth/** catch-all below.
+            - id: auth-gate-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/gate/code,/auth/gate/sign-in
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_GATE_RATE_LIMIT_REPLENISH_PER_SECOND:2}
+                    redis-rate-limiter.burstCapacity: ${AUTH_GATE_RATE_LIMIT_BURST_CAPACITY:60}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             # OTP request/verify trigger real SMS sends, so they are the one
             # money-cost surface on the otherwise-limiter-free /auth/** family.
             # OtpService already caps a SINGLE msisdn at 3 / 10 min, but an

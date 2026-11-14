@@ -36,6 +36,14 @@ public interface EventScannerRepository extends JpaRepository<EventScanner, UUID
     List<EventScanner> lockAllByPhoneNumber(@Param("phone") String phoneNumber);
 
     /**
+     * Whether this number is a gate scanner on any organizer's team that still
+     * counts: the Scan role, not switched off, not declined (an invite still
+     * waiting counts, so the person can sign in to accept it). Asked by
+     * user-service before it texts a gate sign-in code.
+     */
+    boolean existsByPhoneNumberAndCanScanTrueAndDisabledAtIsNullAndDeclinedAtIsNull(String phoneNumber);
+
+    /**
      * One of this organizer's rows, locked FOR UPDATE (V21): the sales-event
      * upsert reads then inserts or updates, so two at once must queue.
      */

@@ -11,6 +11,7 @@ import com.innbucks.bookingservice.entity.ScanAttempt;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.ScanAttemptRepository;
 import com.innbucks.bookingservice.security.AuthenticatedCaller;
+import com.innbucks.bookingservice.security.GateSessionScope;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
@@ -417,27 +418,28 @@ public class TicketScanService {
     }
 
     /**
-     * True for a super-app scanner: a token holding CUSTOMER and not
+     * True for a phone-proved gate scanner: a token holding CUSTOMER (the Super
+     * app) or GATE_SCANNER (the Organizer app's phone sign-in), and not
      * EVENT_ORGANIZER. An organizer stays on the organizer path even if they
      * also shop; a token with no roles at all is never routed here. No other
-     * role changes the routing: whatever else a CUSTOMER token carries, its
+     * role changes the routing: whatever else such a token carries, its
      * authority to scan is event-service's membership answer and nothing else.
      */
     public static boolean isSuperAppScanner(Authentication auth) {
         if (auth == null) {
             return false;
         }
-        boolean customer = false;
+        boolean scanner = false;
         for (GrantedAuthority authority : auth.getAuthorities()) {
             String name = authority.getAuthority();
             if ("ROLE_EVENT_ORGANIZER".equals(name)) {
                 return false;
             }
-            if ("ROLE_CUSTOMER".equals(name)) {
-                customer = true;
+            if ("ROLE_CUSTOMER".equals(name) || ("ROLE_" + GateSessionScope.ROLE).equals(name)) {
+                scanner = true;
             }
         }
-        return customer;
+        return scanner;
     }
 
     /**

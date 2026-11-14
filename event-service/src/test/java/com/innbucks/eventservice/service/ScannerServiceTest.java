@@ -287,6 +287,18 @@ class ScannerServiceTest {
         verify(assignments).countClashesOnReturn(PHONE, s.getScannerId(), NOW);
     }
 
+    // ------------------------------------------- gate phone sign-in (user-service)
+
+    @Test
+    void onAGateTeam_readsAnySpellingOfTheNumber_andOnlyCountsLiveScanRows() {
+        when(scanners.existsByPhoneNumberAndCanScanTrueAndDisabledAtIsNullAndDeclinedAtIsNull(PHONE)).thenReturn(true);
+
+        assertThat(service.onAGateTeam("0771234567")).isTrue();
+        assertThat(service.onAGateTeam("+263 77 123 4567")).isTrue();
+        assertThat(service.onAGateTeam("12")).as("not a mobile number").isFalse();
+        verify(scanners, times(2)).existsByPhoneNumberAndCanScanTrueAndDisabledAtIsNullAndDeclinedAtIsNull(PHONE);
+    }
+
     // ------------------------------------------------- InnBucks staff (V23)
 
     private static final ScannerService.TeamEditor STAFF =

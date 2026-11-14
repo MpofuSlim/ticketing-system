@@ -145,6 +145,15 @@ public class JwtFilter extends OncePerRequestFilter {
                 writeUnauthorized(response, "TOKEN_REVOKED", "Token has been revoked");
                 return;
             }
+            // A gate sign-in's session (V57) reaches nothing here: it proves a
+            // phone may scan at a gate, and every user-service surface it could
+            // otherwise reach (Your devices, notifications, organizations) is
+            // the account's, not the gate's. Refused before the session read,
+            // so it costs no query.
+            if (GateSession.isGateSession(jwtUtil.extractRoles(claims))) {
+                writeGateSessionOnly(response);
+                return;
+            }
 
             String email = jwtUtil.extractEmail(claims);
 
@@ -314,6 +323,21 @@ public class JwtFilter extends OncePerRequestFilter {
         response.setContentType("application/json");
         response.getWriter().write(
                 "{\"code\":\"" + code + "\",\"message\":\"" + message + "\",\"data\":null}"
+        );
+    }
+
+    /**
+     * 403 for a gate session on any path this filter reads. Its own error code,
+     * the same one booking-service and event-service answer outside the gate
+     * endpoints, so the Organizer app has one branch for it.
+     */
+    private void writeGateSessionOnly(HttpServletResponse response) throws IOException {
+        SecurityContextHolder.clearContext();
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType("application/json");
+        response.getWriter().write(
+                "{\"code\":\"403 FORBIDDEN\",\"message\":\"This sign-in only works for gate scanning.\","
+                        + "\"data\":{\"errorCode\":\"gate_session_only\"}}"
         );
     }
 

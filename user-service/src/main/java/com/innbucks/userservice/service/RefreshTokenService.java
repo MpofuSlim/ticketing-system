@@ -60,10 +60,16 @@ public class RefreshTokenService {
      * claims from the LIVE user, and a phone-proof family must stay scoped to
      * CUSTOMER however many roles that user has since acquired.
      */
-    public record Rotation(User user, String refreshToken, boolean phoneProof, UUID organizationId) {
+    public record Rotation(User user, String refreshToken, boolean phoneProof, UUID organizationId,
+                           boolean gateOnly) {
+        /** A rotation of an ordinary family: not a gate sign-in (V57). */
+        public Rotation(User user, String refreshToken, boolean phoneProof, UUID organizationId) {
+            this(user, refreshToken, phoneProof, organizationId, false);
+        }
+
         /** A rotation that carries no organization — pre-V39 shape, kept for callers that don't need one. */
         public Rotation(User user, String refreshToken, boolean phoneProof) {
-            this(user, refreshToken, phoneProof, null);
+            this(user, refreshToken, phoneProof, null, false);
         }
     }
 
@@ -112,7 +118,18 @@ public class RefreshTokenService {
         // a phone proof, which proves a phone and not business authority.
         UUID organizationId = phoneProof || organizationService == null
                 ? null : organizationService.defaultOrganizationFor(user);
-        return mint(user, familyId, null, hashOrNull(deviceId), phoneProof, organizationId);
+        return mint(user, familyId, null, hashOrNull(deviceId), phoneProof, organizationId, false);
+    }
+
+    /**
+     * Mints the first refresh token of a GATE family (V57): the Organizer app's
+     * phone sign-in. Every mint in it carries only the {@code GATE_SCANNER} role,
+     * and it is phone-proof too, so it never acts for an organization and the
+     * refresh MFA guard treats it like any phone proof.
+     */
+    @Transactional
+    public String issueGateFamily(User user, String deviceId) {
+        return mint(user, UUID.randomUUID(), null, hashOrNull(deviceId), true, null, true);
     }
 
     /**
@@ -236,7 +253,7 @@ public class RefreshTokenService {
         // the target must be one the person belongs to.
         UUID organizationId = nextOrganization(user, row, switchTo, switching);
         String newToken = mint(user, row.getFamilyId(), row.getId(),
-                row.getDeviceIdHash(), row.isPhoneProof(), organizationId);
+                row.getDeviceIdHash(), row.isPhoneProof(), organizationId, row.isGateOnly());
 
         // Mark the consumed token as revoked and chained to its replacement.
         RefreshToken successor = refreshTokenRepository.findByTokenHash(sha256(newToken))
@@ -245,7 +262,7 @@ public class RefreshTokenService {
         row.setReplacedById(successor.getId());
         refreshTokenRepository.save(row);
 
-        return new Rotation(user, newToken, row.isPhoneProof(), organizationId);
+        return new Rotation(user, newToken, row.isPhoneProof(), organizationId, row.isGateOnly());
     }
 
     private UUID nextOrganization(User user, RefreshToken row, UUID switchTo, boolean switching) {
@@ -284,7 +301,7 @@ public class RefreshTokenService {
     }
 
     private String mint(User user, UUID familyId, UUID parentId, String deviceIdHash,
-                        boolean phoneProof, UUID organizationId) {
+                        boolean phoneProof, UUID organizationId, boolean gateOnly) {
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
         String raw = jwtUtil.generateRefreshToken(subject);
         RefreshToken row = RefreshToken.builder()
@@ -295,6 +312,7 @@ public class RefreshTokenService {
                 .parentId(parentId)
                 .deviceIdHash(deviceIdHash)
                 .phoneProof(phoneProof)
+                .gateOnly(gateOnly)
                 .organizationId(organizationId)
                 .expiresAt(jwtUtil.extractExpiration(raw).toInstant())
                 .createdAt(Instant.now())

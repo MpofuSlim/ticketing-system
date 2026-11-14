@@ -62,6 +62,10 @@ public class SecurityConfig {
                         // shadowed by the broad GET /events/** permitAll below, but kept
                         // explicit so tightening that rule can't silently 401 S2S calls.
                         .requestMatchers(HttpMethod.GET, "/events/internal/*").permitAll()
+                        // user-service's "is this number on a gate team" question
+                        // (gate phone sign-in). POST, so the GET permits above and
+                        // below never covered it; the controller checks the token.
+                        .requestMatchers(HttpMethod.POST, "/events/internal/team-phone").permitAll()
                         // Banner WRITE (replace / clear) is organizer-only. The
                         // permitAll below is GET-scoped so POST/PUT/DELETE already
                         // fall through to anyRequest().authenticated(); stated

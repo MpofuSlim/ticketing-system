@@ -6,11 +6,14 @@ import com.innbucks.userservice.config.PooledHttpClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 import java.util.Collection;
+import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -78,6 +81,48 @@ public class EventServiceClient {
             return OptionalLong.empty();
         }
     }
+
+    /**
+     * Whether this number (E.164) is a gate scanner on any organizer's team, or
+     * {@link Optional#empty()} when event-service did not answer. STRICT like
+     * {@link #liveEventCount}: every failure is "unknown", never "no", so the
+     * caller can tell an outage from a stranger's number. The number rides the
+     * body, never the URL.
+     */
+    public Optional<Boolean> onAGateTeam(String phoneNumber) {
+        if (internalToken == null || internalToken.isBlank()) {
+            log.warn("Gate team check not answered; INTERNAL_API_TOKEN is not configured");
+            return Optional.empty();
+        }
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            ResponseEntity<TeamPhoneResponse> response = http.post()
+                    .uri("/events/internal/team-phone")
+                    .header("X-Internal-Token", internalToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("phoneNumber", phoneNumber))
+                    .retrieve()
+                    .toEntity(TeamPhoneResponse.class);
+            TeamPhoneResponse body = response.getBody();
+            if (!response.getStatusCode().is2xxSuccessful() || body == null || body.data() == null
+                    || body.data().onTeam() == null) {
+                log.warn("Gate team check not answered status={}", response.getStatusCode().value());
+                return Optional.empty();
+            }
+            return Optional.of(body.data().onTeam());
+        } catch (Exception ex) {
+            log.warn("Gate team check not answered error={}", ex.getClass().getSimpleName());
+            return Optional.empty();
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record TeamPhoneResponse(String code, String message, TeamPhone data) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record TeamPhone(Boolean onTeam) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record LiveEventCountResponse(String code, String message, Count data) {}

@@ -79,6 +79,16 @@ public class RefreshToken {
     private boolean phoneProof;
 
     /**
+     * TRUE when this family was born from the Organizer app's gate sign-in
+     * ({@code POST /auth/gate/sign-in}, V57): an SMS code proved the phone and
+     * nothing else. Every mint in the family carries only the
+     * {@code GATE_SCANNER} role. Same lifecycle as {@link #phoneProof}, and
+     * always set together with it.
+     */
+    @Column(name = "gate_only", nullable = false)
+    private boolean gateOnly;
+
+    /**
      * The organization this session is acting for (V39), or null when none is
      * chosen yet. Same lifecycle as {@link #phoneProof}: carried onto every
      * successor, because {@code /auth/refresh} re-derives the claims from the

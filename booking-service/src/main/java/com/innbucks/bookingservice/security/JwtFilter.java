@@ -81,6 +81,7 @@ public class JwtFilter extends OncePerRequestFilter {
         // aud, expiry); every claim below is read from this one result instead
         // of re-parsing and re-verifying the token for each claim.
         Claims claims;
+        boolean gateSessionRefused;
         try {
             try {
                 claims = jwtUtil.parseClaims(token);
@@ -178,9 +179,18 @@ public class JwtFilter extends OncePerRequestFilter {
             // DEBUG investigation shouldn't spill identity + authz into the logs).
             log.trace("JWT authenticated subject={} roles={} services={} tier={} path={}",
                     email, roles, services, tier, RequestPaths.forLog(request.getRequestURI()));
+            // A gate-only session (the Organizer app's phone sign-in) reaches the
+            // four gate endpoints only. See GateSessionScope.
+            gateSessionRefused = GateSessionScope.isGateSession(roles) && !GateSessionScope.allows(request);
         } catch (Exception e) {
             log.warn("JWT validation error path={} message={}", RequestPaths.forLog(request.getRequestURI()), e.getMessage());
             writeUnauthorized(response, "INVALID_TOKEN", "Token is invalid or expired");
+            return;
+        }
+        if (gateSessionRefused) {
+            log.info("Gate-only session refused method={} path={}", request.getMethod(),
+                    RequestPaths.forLog(request.getRequestURI()));
+            writeGateSessionOnly(response);
             return;
         }
 
@@ -224,6 +234,15 @@ public class JwtFilter extends OncePerRequestFilter {
         response.getWriter().write(
                 "{\"code\":\"" + code + "\",\"message\":\"" + message + "\",\"data\":null}"
         );
+    }
+
+    /** 403 gate_session_only: a gate-only session asked for something beyond the gate. */
+    private void writeGateSessionOnly(HttpServletResponse response) throws IOException {
+        SecurityContextHolder.clearContext();
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType("application/json");
+        response.getWriter().write("{\"code\":\"403 FORBIDDEN\",\"message\":\"This sign-in only works for gate "
+                + "scanning.\",\"data\":{\"errorCode\":\"gate_session_only\"}}");
     }
 
     /** 403 with errorCode=password_change_required — matches user-service's

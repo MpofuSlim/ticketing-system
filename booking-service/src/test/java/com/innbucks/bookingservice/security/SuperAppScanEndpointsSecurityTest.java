@@ -235,6 +235,61 @@ class SuperAppScanEndpointsSecurityTest {
         verify(scanService, never()).scan(anyString(), any(), any());
     }
 
+    // --------------------------------- gate-only session (Organizer app phone sign-in)
+
+    @Test
+    void aGateOnlySession_reachesTheScanTheLookupAndItsOwnReports() throws Exception {
+        String gate = token("GATE_SCANNER");
+        when(scanService.scan(eq("20261030-7KQ4M-9XZ2B"), eq(eventId), any()))
+                .thenReturn(ScanTicketResponseDTO.builder().status(ScanTicketResponseDTO.Status.ALLOWED).build());
+        when(lookupService.lookup("INN-20261030-3C8849", eventId))
+                .thenReturn(GateLookupResponseDTO.builder().status(GateLookupResponseDTO.Status.WRONG_EVENT).build());
+        when(reportService.myStatsAtEvent(eq(userUuid), isNull(), isNull(), eq(eventId), isNull(), isNull()))
+                .thenReturn(new ScannerStatsDTO(userUuid, null, "Rudo Sibanda", null, null, 1,
+                        Map.of("ALLOWED", 1L), eventId));
+
+        mvc.perform(post("/tickets/scan")
+                        .header("Authorization", "Bearer " + gate)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ticketNumber\":\"20261030-7KQ4M-9XZ2B\",\"eventId\":\"" + eventId + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("ALLOWED"));
+        mvc.perform(post("/tickets/lookup")
+                        .header("Authorization", "Bearer " + gate)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"confirmationNumber\":\"INN-20261030-3C8849\",\"eventId\":\"" + eventId + "\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(get("/scans/me").param("eventId", eventId.toString())
+                        .header("Authorization", "Bearer " + gate))
+                .andExpect(status().isOk());
+        mvc.perform(get("/scans/me/stats").param("eventId", eventId.toString())
+                        .header("Authorization", "Bearer " + gate))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.scannerDisplayName").value("Rudo Sibanda"));
+    }
+
+    @Test
+    void aGateOnlySession_isRefusedEverywhereElse_beforeAnyController() throws Exception {
+        String gate = token("GATE_SCANNER");
+        // My tickets, a booking, a box-office sale, an organizer's scan report:
+        // the filter answers before routing, so none of them needs a controller here.
+        mvc.perform(get("/bookings/me/tickets").header("Authorization", "Bearer " + gate))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("gate_session_only"));
+        mvc.perform(post("/bookings").header("Authorization", "Bearer " + gate)
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("gate_session_only"));
+        mvc.perform(post("/bookings/box-office").header("Authorization", "Bearer " + gate)
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("gate_session_only"));
+        mvc.perform(get("/scans").param("eventId", eventId.toString()).header("Authorization", "Bearer " + gate))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("gate_session_only"));
+        verify(reportService, never()).listMyScansAtEvent(any(), any(), any(), any(), any(Integer.class), any(Integer.class));
+    }
+
     @Test
     void noToken_isUnauthorized() throws Exception {
         mvc.perform(post("/tickets/scan")

@@ -210,6 +210,9 @@ public class AuthService implements ApplicationEventPublisherAware {
     // gap we don't want to silently paper over.
     private static final String DEFAULT_SUPER_ADMIN_COUNTRY = "Zimbabwe";
 
+    /** The one role a gate sign-in's session carries (V57). Reserved: no account may hold it. */
+    private static final String GATE_SCANNER_ROLE = com.innbucks.userservice.security.GateSession.ROLE;
+
     /**
      * Raised by {@link #login} when the resolved account has an active
      * lockout (see {@link User#getLockedUntil()}). Carries the deadline
@@ -1169,9 +1172,11 @@ public class AuthService implements ApplicationEventPublisherAware {
             // was born. Re-deriving it from `rotated` is impossible by
             // construction — the live user's roles are exactly what a phone
             // proof declines to trust — which is why it rides the refresh row.
+            // rotation.gateOnly() likewise (V57): a gate sign-in's family stays
+            // GATE_SCANNER-only for its whole life.
             AuthResponseDTO response =
                     buildResponse(rotated, rotation.refreshToken(), rotation.phoneProof(),
-                            rotation.organizationId());
+                            rotation.organizationId(), rotation.gateOnly());
             log.info("Token refreshed subject={} roles={} tier={} verified={}",
                     rotation.user().getEmail() != null ? rotation.user().getEmail() : rotation.user().getPhoneNumber(),
                     response.getRoles(), response.getTier(), response.getVerified());
@@ -1258,7 +1263,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                 throw new MfaEnrollmentRequiredException();
             }
             AuthResponseDTO response = buildResponse(rotated, rotation.refreshToken(),
-                    rotation.phoneProof(), rotation.organizationId());
+                    rotation.phoneProof(), rotation.organizationId(), rotation.gateOnly());
             log.info("Organization context switched userId={} organizationId={}",
                     rotated.getId(), rotation.organizationId());
             auditService.recordSuccess(
@@ -1391,6 +1396,20 @@ public class AuthService implements ApplicationEventPublisherAware {
     }
 
     /**
+     * The Organizer app's gate sign-in ({@code POST /auth/gate/sign-in}): an SMS
+     * code proved the phone, and that is all it proved. The session carries ONLY
+     * the {@code GATE_SCANNER} role, with no permissions, no services and no
+     * scope claims, whatever the account holds; booking-service and
+     * event-service confine that role to the gate endpoints, and this service's
+     * JwtFilter refuses it. The scope rides the refresh family (V57), so
+     * {@code /auth/refresh} keeps it.
+     */
+    public AuthResponseDTO issueGateScannerToken(User user, String deviceId) {
+        String refreshToken = refreshTokenService.issueGateFamily(user, deviceId);
+        return buildResponse(user, refreshToken, true, null, true);
+    }
+
+    /**
      * {@code users.last_sign_in_at} (V44), by a targeted UPDATE so the sign-in
      * never writes a stale snapshot of any other column back; the entity is
      * updated in memory too.
@@ -1422,6 +1441,18 @@ public class AuthService implements ApplicationEventPublisherAware {
      */
     private AuthResponseDTO buildResponse(User user, String refreshToken, boolean phoneProof,
                                           UUID organizationId) {
+        return buildResponse(user, refreshToken, phoneProof, organizationId, false);
+    }
+
+    /**
+     * @param gateOnly when true (a gate sign-in's family, V57), the session
+     *                 carries only {@code GATE_SCANNER}: no permissions, no
+     *                 services and no scope claims. Always also phone-proof.
+     */
+    private AuthResponseDTO buildResponse(User user, String refreshToken, boolean phoneProof,
+                                          UUID organizationId, boolean gateOnly) {
+        // A gate session is a phone proof and then narrower still.
+        phoneProof = phoneProof || gateOnly;
         // The mint chokepoint: every login, MFA verify, enrolment, exchange,
         // refresh and organization switch ends here, so this is the one check
         // that no path can forget. A deactivated account is never handed a
@@ -1459,7 +1490,12 @@ public class AuthService implements ApplicationEventPublisherAware {
         String firstName = null;
         String middleName = null;
         String lastName = null;
-        if (user.hasRole(User.Role.CUSTOMER)) {
+        if (gateOnly) {
+            // A gate session reads no profile and carries no names: it is a
+            // phone that may scan, nothing more.
+            tier = 1;
+            verified = false;
+        } else if (user.hasRole(User.Role.CUSTOMER)) {
             CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
                     .orElseThrow(() -> new RuntimeException("Customer profile missing"));
             tier = profile.getRegistrationTier();
@@ -1480,7 +1516,9 @@ public class AuthService implements ApplicationEventPublisherAware {
         // could forget — and so the account itself is untouched: the same person
         // still signs in to the admin portal with a password and gets their full
         // role set there.
-        List<String> roleNames = phoneProof
+        List<String> roleNames = gateOnly
+                ? List.of(GATE_SCANNER_ROLE)
+                : phoneProof
                 ? List.of(User.Role.CUSTOMER.name())
                 : roleNames(user.getRoles());
         // A suspended service's role is not minted (V53). Before every claim
@@ -1494,7 +1532,9 @@ public class AuthService implements ApplicationEventPublisherAware {
         // SUPER_ADMIN is granted access to every microservice across every bundle, even if their
         // stored bundle list happens to be empty. Otherwise, expand the picked bundles to their
         // backing microservices for the JWT services claim.
-        Set<String> microservices = user.hasRole(User.Role.SUPER_ADMIN) && !phoneProof
+        Set<String> microservices = gateOnly
+                ? Set.of()
+                : user.hasRole(User.Role.SUPER_ADMIN) && !phoneProof
                 ? Services.expandToMicroservices(Services.ALL_BUNDLES)
                 : Services.expandToMicroservices(bundles);
 
@@ -1554,14 +1594,14 @@ public class AuthService implements ApplicationEventPublisherAware {
         // change reaches a holder on their next login or refresh — the same
         // latency the roles claim has always had, and bumping tokenVersion is
         // the same lever for forcing it sooner.
-        List<String> permissions = permissionResolver == null
+        List<String> permissions = permissionResolver == null || gateOnly
                 ? List.of()
                 : new ArrayList<>(permissionResolver.resolve(roleNames));
 
         // The mint-time eligibility filter (V44): a holder of staff authority
         // who is not staff-eligible is counted (watch) or has the PLATFORM codes
         // and NAMED staff roles withheld (enforce). Whatever wrote the grant.
-        if (staffMintFilter != null) {
+        if (staffMintFilter != null && !gateOnly) {
             StaffMintFilter.Minted minted = staffMintFilter.apply(user, roleNames, permissions);
             roleNames = minted.roles();
             permissions = new ArrayList<>(minted.permissions());
@@ -1585,7 +1625,10 @@ public class AuthService implements ApplicationEventPublisherAware {
                 new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
                 firstName, middleName, lastName, user.getTokenVersion(), country,
-                user.getUserUuid(), organizerUuid, user.isMustChangePassword(), orgScope,
+                // Never on a gate session: booking-service refuses any token
+                // carrying it before the scan runs, and a gate session has no
+                // password screen to send anyone to.
+                user.getUserUuid(), organizerUuid, user.isMustChangePassword() && !gateOnly, orgScope,
                 // The account's home cell, not its phone prefix: shop staff may
                 // hold any number (a South African till operator lives here).
                 user.getHomeCountry());
@@ -1593,14 +1636,16 @@ public class AuthService implements ApplicationEventPublisherAware {
         return AuthResponseDTO.builder()
                 .token(newToken)
                 .refreshToken(refreshToken)
-                .email(user.getEmail())
+                // A gate session's screen needs no email, and the account's may
+                // be a business owner's portal address.
+                .email(gateOnly ? null : user.getEmail())
                 .roles(roleNames)
                 // The list exactly as minted into the token's perms claim, so a
                 // client gates its menus without decoding the JWT.
                 .permissions(List.copyOf(permissions))
-                .defaultServices(bundles)
+                .defaultServices(gateOnly ? List.of() : bundles)
                 .mfaRequired(false)
-                .mustChangePassword(user.isMustChangePassword())
+                .mustChangePassword(user.isMustChangePassword() && !gateOnly)
                 .tier(tier)
                 .verified(verified)
                 .organizationId(orgScope == null ? null : orgScope.orgId())

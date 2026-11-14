@@ -85,6 +85,20 @@ public enum AuditEventType {
      * always sees the same opaque 401.
      */
     AUTH_FEDERATED_LOGIN_REJECTED,
+    /**
+     * Successful {@code POST /auth/gate/sign-in} (V57): an SMS code was traded
+     * for a GATE_SCANNER-only session in the Organizer app. Metadata
+     * {@code newAccount} says whether a customer account was created for the
+     * number on this call.
+     */
+    AUTH_GATE_SIGN_IN_SUCCESS,
+    /**
+     * {@code POST /auth/gate/sign-in} refused. {@code failure_reason}:
+     * {@code wrong_code} (wrong, expired or never sent: a number on no team is
+     * never sent one), {@code account_inactive}. The caller sees the same 401
+     * for both.
+     */
+    AUTH_GATE_SIGN_IN_REJECTED,
 
     /**
      * SUPER_ADMIN approved a system user's first activation — combines the
