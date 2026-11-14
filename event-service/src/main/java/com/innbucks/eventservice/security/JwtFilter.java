@@ -87,7 +87,7 @@ public class JwtFilter extends OncePerRequestFilter {
         // aud, expiry); every claim below is read from this one result instead
         // of re-parsing and re-verifying the token for each claim.
         Claims claims;
-        boolean gateSessionRefused = false;
+        boolean gateSessionRefused;
         try {
             try {
                 claims = jwtUtil.parseClaims(token);
