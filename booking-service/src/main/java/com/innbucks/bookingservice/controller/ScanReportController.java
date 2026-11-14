@@ -125,7 +125,7 @@ public class ScanReportController {
     private String eventInternalToken;
 
     @GetMapping("/me")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER','GATE_SCANNER')")
     @Operation(summary = "List my scan attempts",
             description = "Returns the calling user's own scan attempts in the [from, to] window, " +
                           "newest first. Page size capped at " + MAX_PAGE_SIZE + ". `to` is optional — omit it for "
@@ -232,7 +232,7 @@ public class ScanReportController {
     }
 
     @GetMapping("/me/stats")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER','GATE_SCANNER')")
     @Operation(summary = "My scan-outcome stats",
             description = "Outcome breakdown (ALLOWED, ALREADY_REDEEMED, etc.) for the calling user " +
                           "over the [from, to] window. Every Outcome enum value is present in the response " +

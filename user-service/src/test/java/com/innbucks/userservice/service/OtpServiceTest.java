@@ -461,4 +461,84 @@ class OtpServiceTest {
         assertFalse(service.verifyBusinessRegistrationCode("+263771234567", null));
         verify(otpRepo, never()).consume(eq("+263771234567"), anyString(), any());
     }
+
+    // ---- gate sign-in code (V57) ---------------------------------------------
+
+    @Test
+    void gateSignInCode_isKeyedApart_andNamesNoCustomerFlow() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class),
+                mock(PendingRegistrationRepository.class), mock(WhatsAppNotificationClient.class), sms)
+                .sendGateSignInCode("+263771234567");
+
+        // Its own row and quota: a customer OTP or a reset code can never open a
+        // gate session, and this code can never do anything else.
+        ArgumentCaptor<Otp> saved = ArgumentCaptor.forClass(Otp.class);
+        verify(otpRepo).save(saved.capture());
+        assertEquals("gate-sign-in:+263771234567", saved.getValue().getPhoneNumber());
+        verify(retryRepo, atLeastOnce()).findByPhoneNumber("gate-sign-in:+263771234567");
+        verify(retryRepo, never()).findByPhoneNumber("+263771234567");
+        verify(otpRepo, never()).deleteByPhoneNumber("+263771234567");
+        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
+        verify(sms).sendSms(eq("+263771234567"), message.capture(), anyString());
+        assertTrue(message.getValue().startsWith("Your InnBucks gate sign-in code is "));
+        assertEquals(HASHER.hash(extractCode(message.getValue())), saved.getValue().getCode());
+    }
+
+    @Test
+    void countGateSignInRequest_spendsTheQuota_andIssuesNothing() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
+
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class),
+                mock(PendingRegistrationRepository.class), whatsApp, sms)
+                .countGateSignInRequest("+263771234567");
+
+        ArgumentCaptor<OtpRetryAttempt> counted = ArgumentCaptor.forClass(OtpRetryAttempt.class);
+        verify(retryRepo).save(counted.capture());
+        assertEquals("gate-sign-in:+263771234567", counted.getValue().getPhoneNumber());
+        assertEquals(1, counted.getValue().getAttemptCount());
+        verify(otpRepo, never()).save(any());
+        verifyNoInteractions(sms, whatsApp);
+    }
+
+    @Test
+    void countGateSignInRequest_refusesTheFourthLikeARealSend() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        OtpRetryAttempt attempt = OtpRetryAttempt.builder()
+                .phoneNumber("gate-sign-in:+263771234567")
+                .attemptCount(3)
+                .windowStartsAt(Instant.now().minusSeconds(60))
+                .build();
+        when(retryRepo.findByPhoneNumber("gate-sign-in:+263771234567")).thenReturn(Optional.of(attempt));
+
+        OtpService service = newService(otpRepo, retryRepo, mock(UserRepository.class),
+                mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class));
+
+        OtpService.OtpRateLimitException ex = assertThrows(OtpService.OtpRateLimitException.class,
+                () -> service.countGateSignInRequest("+263771234567"));
+        // The same words a team number's refused send gets.
+        assertEquals("Too many OTP requests. Try again in 30 minute(s).", ex.getMessage());
+        verify(otpRepo, never()).save(any());
+    }
+
+    @Test
+    void verifyGateSignInCode_consumesTheGateRowOnly() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        when(otpRepo.consume(eq("gate-sign-in:+263771234567"), eq(HASHER.hash("482913")), any())).thenReturn(1);
+        OtpService service = newService(otpRepo, mock(OtpRetryAttemptRepository.class), mock(UserRepository.class),
+                mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class));
+
+        assertTrue(service.verifyGateSignInCode("+263771234567", "482913"));
+        assertFalse(service.verifyGateSignInCode("+263771234567", " "));
+        verify(otpRepo, never()).consume(eq("+263771234567"), anyString(), any());
+    }
 }

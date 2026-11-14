@@ -723,6 +723,18 @@ public class ScannerService {
      * event's organizer's team? Read live on every scan, so a removal bites at
      * the next scan.
      */
+    /**
+     * user-service, before it texts a gate sign-in code: is this number a gate
+     * scanner on any team (Scan role, not switched off, not declined)? An
+     * unreadable number is simply not on a team.
+     */
+    @Transactional(readOnly = true)
+    public boolean onAGateTeam(String phoneNumber) {
+        return MsisdnValidator.normalizeToE164(phoneNumber, deploymentCountry)
+                .map(scannerRepository::existsByPhoneNumberAndCanScanTrueAndDisabledAtIsNullAndDeclinedAtIsNull)
+                .orElse(false);
+    }
+
     @Transactional(readOnly = true)
     public ScannerAccessDTO access(UUID accountUserUuid, UUID eventId) {
         if (accountUserUuid == null || eventId == null) {

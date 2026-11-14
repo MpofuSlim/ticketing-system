@@ -306,6 +306,52 @@ public class GateController {
                 scannerService.sellerAccess(uuidOrNull(accountUserUuid), uuidOrNull(eventId))));
     }
 
+    /** The number user-service asks about; in the body, never the URL (URLs are logged). */
+    public record TeamPhoneRequest(String phoneNumber) {}
+
+    /** {@code onTeam}: the number is a gate scanner on a team that still counts. */
+    public record TeamPhoneDTO(boolean onTeam) {}
+
+    /**
+     * user-service, before it texts a gate sign-in code (the Organizer app's
+     * phone sign-in): is this number a gate scanner on any organizer's team? The
+     * internal trio: this token check, the exact POST permitAll in
+     * SecurityConfig, and the gateway's event-internal-deny. Always 200 once the
+     * token passes; an unreadable number is {@code onTeam: false}.
+     */
+    @PostMapping("/events/internal/team-phone")
+    @SecurityRequirements()
+    @Operation(summary = "Is this number a gate scanner on any team? (internal)",
+            description = "user-service asks before it texts a gate sign-in code. True for a team row with the Scan "
+                    + "role that is not switched off or declined, under any organizer (an invite still waiting "
+                    + "counts). Always 200 with `onTeam`. Requires the `X-Internal-Token` shared secret; the "
+                    + "gateway's `event-internal-deny` route makes `/events/internal/**` unreachable from the "
+                    + "public internet.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The answer",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "On a team", value = """
+                                    { "code": "200 OK", "message": "Team phone checked", "data": { "onTeam": true } }"""),
+                            @ExampleObject(name = "Not on a team", value = """
+                                    { "code": "200 OK", "message": "Team phone checked", "data": { "onTeam": false } }""")
+                    })),
+            @ApiResponse(responseCode = "401", description = "Missing or wrong X-Internal-Token",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "401 UNAUTHORIZED", "message": "Missing or invalid X-Internal-Token", "data": null }""")))
+    })
+    public ResponseEntity<ApiResult<TeamPhoneDTO>> teamPhone(
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken,
+            @RequestBody(required = false) TeamPhoneRequest body) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized POST /events/internal/team-phone — missing or wrong X-Internal-Token");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing or invalid X-Internal-Token"));
+        }
+        String phone = body == null ? null : body.phoneNumber();
+        boolean onTeam = phone != null && !phone.isBlank() && scannerService.onAGateTeam(phone);
+        return ResponseEntity.ok(ApiResult.ok("Team phone checked", new TeamPhoneDTO(onTeam)));
+    }
+
     private static UUID uuidOrNull(String raw) {
         if (raw == null || raw.isBlank()) {
             return null;

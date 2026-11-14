@@ -109,6 +109,11 @@ class RoleWriterInventoryTest {
                         + "requireEmailNotReserved and the case-insensitive check against every other account; "
                         + "REQUIRED audit.",
                 "new_user", 1, "set_email", 1, "mutate_roles", 1);
+        writer("service/GateSignInService.java",
+                "UNREACHABLE — creates a CUSTOMER matched by PHONE only when no account holds the number, "
+                        + "exactly as FederatedLoginService does; a profiled account has no sign-in phone. It never "
+                        + "adds a role to an existing account, and the session it mints carries GATE_SCANNER only.",
+                "new_user", 1);
         writer("service/OtpService.java",
                 "UNREACHABLE — materializeOrRefreshLocalAccount creates a CUSTOMER matched by PHONE; see "
                         + "FederatedLoginService.",

@@ -212,6 +212,51 @@ public class OtpService {
     }
 
     /**
+     * The code a gate scanner signs in to the Organizer app with
+     * ({@code GateSignInService}). Its own key, never the phone, for the
+     * business-registration reason: a customer OTP or a reset code can never
+     * open a gate session, and this code can never do anything else. Its retry
+     * quota is its own too, and is spent by every request for the number,
+     * whether or not a code is sent ({@link #countGateSignInRequest}), so a
+     * refusal on the quota says nothing about who is on a team.
+     */
+    static final String GATE_SIGN_IN_KEY_PREFIX = "gate-sign-in:";
+
+    static final String GATE_SIGN_IN_MESSAGE = "Your InnBucks gate sign-in code is %s. "
+            + "It expires in " + OTP_TTL.toMinutes() + " minutes. Do not share this code with anyone.";
+
+    /** Sends the gate sign-in code to {@code canonicalPhone} (E.164). Same quota and delivery as {@link #sendOtp}. */
+    public void sendGateSignInCode(String canonicalPhone) {
+        issueAndDeliver(GATE_SIGN_IN_KEY_PREFIX + canonicalPhone,
+                code -> dispatchMessage(canonicalPhone, String.format(GATE_SIGN_IN_MESSAGE, code)));
+    }
+
+    /**
+     * Counts a gate sign-in code request against the number's quota WITHOUT
+     * issuing or sending a code: the number is on no team. Throws
+     * {@link OtpRateLimitException} exactly as a real send would, so the two
+     * answers cannot be told apart by the quota.
+     */
+    public void countGateSignInRequest(String canonicalPhone) {
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        TransactionPhases.runInTransaction(tx,
+                () -> enforceRetryQuota(GATE_SIGN_IN_KEY_PREFIX + canonicalPhone, now));
+    }
+
+    /**
+     * Uses up the gate sign-in code for {@code canonicalPhone}. Commits on its
+     * own (see {@link #requiresNew}), so a wrong guess counts toward the three
+     * that void the code whatever the caller does next.
+     */
+    public boolean verifyGateSignInCode(String canonicalPhone, String code) {
+        if (code == null || code.isBlank()) return false;
+        String key = GATE_SIGN_IN_KEY_PREFIX + canonicalPhone;
+        boolean ok = Boolean.TRUE.equals(TransactionPhases.inTransaction(requiresNew, () -> consumeOtp(key, code)));
+        log.info("Gate sign-in code verify phone={} ok={}", MsisdnMasking.mask(canonicalPhone), ok);
+        return ok;
+    }
+
+    /**
      * Send a password-reset OTP to a PHONE (SMS, WhatsApp fallback). The OTP is
      * keyed by the phone. The existing-user gate lives in PasswordResetService
      * (which resolves the user first), so this just mints + dispatches. Same

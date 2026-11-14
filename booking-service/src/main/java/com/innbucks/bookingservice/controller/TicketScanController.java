@@ -60,7 +60,7 @@ public class TicketScanController {
     private final GateLookupService gateLookupService;
 
     @PostMapping("/scan")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER','GATE_SCANNER')")
     @Operation(
             summary = "Redeem a ticket at the gate",
             description = "Single-shot per ticket. ALLOWED on the first scan; ALREADY_REDEEMED on every " +
@@ -263,7 +263,7 @@ public class TicketScanController {
     }
 
     @PostMapping("/lookup")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','CUSTOMER','GATE_SCANNER')")
     @Operation(
             summary = "Find a booking by confirmation number (no-QR fallback)",
             description = "For a customer who cannot open the WhatsApp QR but has the confirmation number "

@@ -43,7 +43,7 @@ class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "auth-register-phone-code-route",
+            "auth-register-phone-code-route", "auth-gate-route",
             "auth-otp-route", "auth-exchange-route", "auth-pos-token-route", "auth-mfa-route", "auth-password-reset-route",
             "auth-device-security-route", "auth-staff-invite-route", "auth-sales-agent-invite-route",
             "user-auth-route", "device-security-partner-route",
@@ -96,7 +96,7 @@ class GatewayRouteTableTest {
 
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "auth-register-phone-code-route",
+            "auth-register-phone-code-route", "auth-gate-route",
             "auth-otp-route", "auth-exchange-route", "auth-pos-token-route", "auth-mfa-route", "auth-password-reset-route",
             "auth-device-security-route", "auth-staff-invite-route", "auth-sales-agent-invite-route",
             "device-security-partner-route",
@@ -127,6 +127,9 @@ class GatewayRouteTableTest {
             "auth-register-route", "auth-otp-route", "auth-password-reset-route",
             // Sends a real SMS (the code that adds a business to an app account).
             "auth-register-phone-code-route",
+            // Sends a real SMS and mints a gate-only session (the Organizer
+            // app's phone sign-in for gate scanners).
+            "auth-gate-route",
             // Unauthenticated and redeems a single-use credential (V44): its
             // per-IP cap must hold during a Redis outage.
             "auth-staff-invite-route",
@@ -623,7 +626,7 @@ class GatewayRouteTableTest {
         List<String> order = orderedIds();
         int catchAll = order.indexOf("user-auth-route");
         List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-                        "auth-register-phone-code-route", "auth-otp-route", "auth-exchange-route", "auth-pos-token-route", "auth-mfa-route", "auth-password-reset-route",
+                        "auth-register-phone-code-route", "auth-gate-route", "auth-otp-route", "auth-exchange-route", "auth-pos-token-route", "auth-mfa-route", "auth-password-reset-route",
                         "auth-device-security-route", "auth-staff-invite-route", "auth-sales-agent-invite-route")
                 .forEach(id -> assertThat(order.indexOf(id))
                         .as("%s must match before the /auth/** catch-all", id)
@@ -648,6 +651,10 @@ class GatewayRouteTableTest {
         assertThat(predicateArgs("auth-register-phone-code-route", "Path"))
                 .containsExactly("/auth/register/phone-code");
         assertThat(predicateArgs("auth-register-phone-code-route", "Method")).containsExactly("POST");
+        // The gate sign-in: two exact paths, POST only.
+        assertThat(predicateArgs("auth-gate-route", "Path"))
+                .containsExactly("/auth/gate/code", "/auth/gate/sign-in");
+        assertThat(predicateArgs("auth-gate-route", "Method")).containsExactly("POST");
         // Exact path + POST-only: anything else added under /auth later must
         // fall through to the catch-all rather than inherit a route shaped for
         // one unauthenticated session-minting call.
@@ -722,7 +729,7 @@ class GatewayRouteTableTest {
         // hardcoded-IP resolver on all three routes so a refactor that swaps
         // the resolver back fails CI instead of reopening the bypass.
         List.of("auth-otp-route", "auth-mfa-route", "auth-password-reset-route",
-                "auth-register-phone-code-route",
+                "auth-register-phone-code-route", "auth-gate-route",
                 "auth-device-security-route", "auth-staff-invite-route", "auth-sales-agent-invite-route",
                 "device-security-partner-route").forEach(id -> {
             boolean usesPreAuthIpResolver = route(id).getFilters().stream()

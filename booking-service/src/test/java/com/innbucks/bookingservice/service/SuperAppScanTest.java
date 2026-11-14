@@ -148,6 +148,13 @@ class SuperAppScanTest {
     }
 
     @Test
+    void routing_aGateOnlySession_isAPhoneProvedScanner() {
+        // The Organizer app's phone sign-in mints GATE_SCANNER alone: its
+        // authority is event-service's live team answer, like the Super app's.
+        assertThat(TicketScanService.isSuperAppScanner(auth("ROLE_GATE_SCANNER"))).isTrue();
+    }
+
+    @Test
     void routing_theRetiredTeamMemberRole_grantsNothing() {
         // Alone it is not a super-app scanner (and the organizer path refuses
         // it, TicketScanServiceTest). Beside CUSTOMER it no longer keeps the

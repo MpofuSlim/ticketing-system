@@ -1215,6 +1215,76 @@ refused, and an account created first made `/auth/exchange` refuse the number
     the service.
 - **Scanning with a super-app token** is booking-service V30 (below).
 
+## Gate scanners sign in to the Organizer app with an SMS code (user-service V57)
+
+**A gate scanner signs in to the Ticketize Organizer app with their phone
+number and an SMS code (`POST /auth/gate/code`, then `POST /auth/gate/sign-in`),
+and gets a session that can only scan.** Owner's go (2026-11-14), for scanners
+who cannot use the Super app at the gate. It is not the customer OTP
+(`/auth/otp/*`): that mints a CUSTOMER session, which books tickets and, for a
+sales agent, sells them for cash, and an SMS code proves a phone and nothing
+else.
+
+- **The session carries ONLY the `GATE_SCANNER` role**: no permissions, no
+  services, no scope claims, no names, no email, and never `mustChangePassword`
+  (booking-service refuses a token carrying it before the scan). It keeps the
+  phone, the account's `userUuid` and its token version. Minted at the one mint
+  site (`AuthService.buildResponse(..., gateOnly)`, through
+  `issueGateScannerToken`).
+- **The scope rides the refresh row** (`refresh_tokens.gate_only`, V57), like
+  `phone_proof`: `/auth/refresh` re-derives the claims from the live user, so it
+  must stay on the row. A gate family is also `phone_proof`, so the refresh MFA
+  guard skips it and an organization switch is refused.
+- **Confined in each service, keyed on the role** (`GateSessionScope` /
+  `GateSession`, 403 `gate_session_only`, checked in each JwtFilter before
+  anything else):
+  - booking-service: `POST /tickets/scan`, `POST /tickets/lookup`,
+    `GET /scans/me`, `GET /scans/me/stats`. `TicketScanService.isSuperAppScanner`
+    treats it as a phone-proved scanner, so authority is event-service's live
+    `scanner-access` answer at every scan, exactly as for a Super app scanner.
+  - event-service: `GET /events/gate`, accepting or declining an invite, and the
+    public event reads; never `/event-organizer/**` or `GET /events/sales`.
+  - user-service: nothing. Above all not `/auth/devices` (an SMS code must never
+    list or remove the number's app phones). `/auth/change-password` and
+    `/auth/mfa/disable` read their own bearer, so they refuse it themselves.
+    `/auth/refresh` and `/auth/logout` work.
+  - A new endpoint is closed to a gate session until it is added to the scope.
+- **`GATE_SCANNER` is reserved**: `POST /admin/roles` refuses it, and V57 FAILS
+  if a role or an account already holds it (checked before anything changes).
+  So a token with it is always a gate session.
+- **A code goes only to a number on a gate team.** user-service asks
+  event-service `POST /events/internal/team-phone` (internal trio: controller
+  token, exact POST permitAll, `event-internal-deny`; the number in the body),
+  with no transaction open: a live scan row (scanning on, not switched off, not
+  declined) under any organizer. **The answer is the same 200 for every number,
+  and the number's quota is spent either way** (`OtpService.countGateSignInRequest`),
+  so neither the answer nor a 429 says whether a number is on a team. No answer
+  from event-service is 503 for everyone. Residuals, stated: a request that
+  sends a code takes as long as the SMS, and an SMS outage makes only a team
+  number's request a 502.
+- **The code is its own** (`gate-sign-in:<phone>`, 5 minutes, 3 per 10 minutes,
+  3 wrong tries void it), so no other code can open a gate session and this one
+  opens nothing else. A wrong, expired or never-sent code is one 400
+  `code_invalid` (never 401: there is no session for an interceptor to refresh).
+- **The account**: the session names the InnBucks account on the number,
+  whatever it holds, because an accepted invite binds to that account and
+  booking asks about it at every scan; an invite accepted in either app works in
+  both. A number with no account gets a tier-1 customer account, shaped as
+  `/auth/exchange` creates one. A deactivated account is the same `code_invalid`.
+- **Gateway: `auth-gate-route`** (POST, the two exact paths, IP-keyed,
+  fail-safe, before `auth-otp-route`). Its burst (`AUTH_GATE_RATE_LIMIT_*`,
+  2/s, burst 60) is sized for the Organizer app's one server-side proxy address,
+  which every scanner's request comes from; the per-number quota is the real
+  limit.
+- **Switch:** `auth.gate-sign-in.enabled` (`AUTH_GATE_SIGN_IN_ENABLED`, default
+  true); false = 404 on both.
+- Metrics: `user.gate_sign_in.code{outcome=sent|not_on_team|unavailable}`,
+  `user.gate_sign_in.sign_in{outcome=signed_in|rejected}`. Audit
+  `AUTH_GATE_SIGN_IN_SUCCESS` / `_REJECTED`.
+- **Known, pre-existing:** `/auth/logout` with a gate session signs the account
+  out everywhere, the Super app included (it does that for every session).
+- **Deploy order:** event-service, booking-service, user-service, api-gateway.
+
 ## Sales agents sell for an organizer (event-service V21, user-service V56, booking-service V36)
 
 **An organizer invites a sales agent to sell tickets on their behalf, for cash

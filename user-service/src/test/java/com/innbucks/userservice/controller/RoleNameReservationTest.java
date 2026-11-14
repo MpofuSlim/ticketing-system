@@ -66,6 +66,18 @@ class RoleNameReservationTest {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"GATE_SCANNER", "gate_scanner"})
+    @DisplayName("GATE_SCANNER is reserved: it is the gate sign-in's session role, never an account's (V57)")
+    void gateScannerIsReserved(String name) throws Exception {
+        create(name)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        "The role name GATE_SCANNER is reserved: it is the gate sign-in's session, never an "
+                                + "account's role. Add gate staff as scanners on the event instead."));
+        assertThat(h.roleRows).doesNotContainKey("GATE_SCANNER");
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"CALL_CENTER_AGENT", "FRAUD_DESK"})
     @DisplayName("the built-in names themselves are taken by their rows (409)")
     void builtInNamesAreTaken(String name) throws Exception {

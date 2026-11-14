@@ -709,6 +709,9 @@ public class AuthController {
                     .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
         }
         String token = authHeader.substring(7);
+        if (isGateSession(token)) {
+            return gateSessionOnly();
+        }
         String subject = jwtUtil.extractEmail(token);
         // JwtFilter skips /auth, so hold this Bearer token to the same
         // (token_version, active) gate it applies everywhere else: a deactivated
@@ -1063,6 +1066,26 @@ public class AuthController {
      * Same X-Forwarded-For-aware IP resolution {@link #clientIp} uses,
      * so the limiter bucket and the audit row agree on attribution.
      */
+    /**
+     * A gate sign-in's session (V57) is refused by JwtFilter on every path it
+     * reads; these two handlers read their own Bearer under the {@code /auth}
+     * skip, so they refuse it themselves. Each already needs the password or the
+     * second factor, so this is the same answer everywhere rather than the only
+     * guard. An unparseable token is left to the handler's own checks.
+     */
+    private boolean isGateSession(String token) {
+        try {
+            return com.innbucks.userservice.security.GateSession.isGateSession(jwtUtil.extractRoles(token));
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static <T> ResponseEntity<ApiResult<T>> gateSessionOnly() {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResult.error(HttpStatus.FORBIDDEN, "This sign-in only works for gate scanning."));
+    }
+
     private static AuditContext auditContext(HttpServletRequest request) {
         return new AuditContext(clientIp(request), request.getHeader("User-Agent"));
     }
@@ -1166,6 +1189,9 @@ public class AuthController {
                     .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
         }
         String token = authHeader.substring(7);
+        if (isGateSession(token)) {
+            return gateSessionOnly();
+        }
         authService.changePassword(token, body, auditContext(request));
         return ResponseEntity.ok(ApiResult.ok("Password changed", null));
     }

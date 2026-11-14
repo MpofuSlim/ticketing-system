@@ -145,6 +145,22 @@ class ScannerEndpointsSecurityTest {
                 .compact();
     }
 
+    /** What user-service's gate phone sign-in mints: GATE_SCANNER only, the phone and the account. */
+    private static String gateToken(UUID userUuid, String phone) {
+        return Jwts.builder()
+                .subject(phone)
+                .issuer(JwtUtil.TOKEN_ISSUER)
+                .audience().add(JwtUtil.TOKEN_AUDIENCE).and()
+                .claim("roles", List.of("GATE_SCANNER"))
+                .claim("tier", 1)
+                .claim("userUuid", userUuid.toString())
+                .claim("phoneNumber", phone)
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 60_000))
+                .signWith(KEY, Jwts.SIG.HS256)
+                .compact();
+    }
+
     private static ScannerResponseDTO scanner(UUID organizer) {
         return new ScannerResponseDTO(SCANNER, organizer, "Tendai", "Moyo", "+263771234567", "INVITED",
                 true, false, List.of(), List.of(), null, null, null, false);
@@ -394,6 +410,73 @@ class ScannerEndpointsSecurityTest {
     }
 
     // --------------------------------------------------------------- internal
+
+    // ------------------------------------------------------- gate-only session
+
+    @Test
+    void gateSession_reachesTheGateScreen_andDecidesInvites_withTheTokensPhone() throws Exception {
+        UUID account = UUID.randomUUID();
+        String auth = "Bearer " + gateToken(account, "+263771234567");
+        when(scannerService.gate(account, "+263771234567")).thenReturn(new GateResponseDTO(List.of(), List.of()));
+        when(scannerService.accept(account, "+263771234567", SCANNER))
+                .thenReturn(new GateInviteDecisionDTO(SCANNER, "ACTIVE", "Harare Arena Events"));
+        when(scannerService.decline(account, "+263771234567", SCANNER))
+                .thenReturn(new GateInviteDecisionDTO(SCANNER, "DECLINED", "Harare Arena Events"));
+
+        mvc.perform(get("/events/gate").header("Authorization", auth)).andExpect(status().isOk());
+        mvc.perform(post("/events/gate/invites/{s}/accept", SCANNER).header("Authorization", auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("ACTIVE"));
+        mvc.perform(post("/events/gate/invites/{s}/decline", SCANNER).header("Authorization", auth))
+                .andExpect(status().isOk());
+
+        verify(scannerService).gate(account, "+263771234567");
+        verify(scannerService).accept(account, "+263771234567", SCANNER);
+    }
+
+    @Test
+    void gateSession_isRefusedEverywhereElse_beforeAnyController() throws Exception {
+        String auth = "Bearer " + gateToken(UUID.randomUUID(), "+263771234567");
+
+        mvc.perform(get("/events/sales").header("Authorization", auth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("gate_session_only"));
+        mvc.perform(get("/event-organizer/scanners").header("Authorization", auth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("gate_session_only"));
+        mvc.perform(post("/event-organizer/scanners").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"firstName\":\"A\",\"lastName\":\"B\",\"phoneNumber\":\"0771234567\"}")
+                        .header("Authorization", auth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("gate_session_only"));
+        mvc.perform(put("/event-organizer/scanners/{s}/events/{e}", SCANNER, EVENT).header("Authorization", auth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("gate_session_only"));
+        verifyNoInteractions(scannerService);
+    }
+
+    @Test
+    void teamPhone_isTokenGated_readsTheBody_andAnswersOnTeam() throws Exception {
+        String body = "{\"phoneNumber\":\"+263771234567\"}";
+        mvc.perform(post("/events/internal/team-phone").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/events/internal/team-phone").contentType(MediaType.APPLICATION_JSON).content(body)
+                        .header("X-Internal-Token", "wrong"))
+                .andExpect(status().isUnauthorized());
+        verifyNoInteractions(scannerService);
+
+        when(scannerService.onAGateTeam("+263771234567")).thenReturn(true);
+        mvc.perform(post("/events/internal/team-phone").contentType(MediaType.APPLICATION_JSON).content(body)
+                        .header("X-Internal-Token", INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.onTeam").value(true));
+
+        // No number at all is simply not on a team, never a 400.
+        mvc.perform(post("/events/internal/team-phone").contentType(MediaType.APPLICATION_JSON).content("{}")
+                        .header("X-Internal-Token", INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.onTeam").value(false));
+    }
 
     @Test
     void scannerAccess_isTokenGated_andReachesTheControllerWithoutASession() throws Exception {

@@ -66,7 +66,11 @@ public class RoleAdminService {
     static boolean isReservedName(String normalized) {
         return "ADMIN".equals(normalized)
                 || "CALL_CENTER".equals(normalized)
-                || normalized.startsWith("CALL_CENTRE");
+                || normalized.startsWith("CALL_CENTRE")
+                // The gate sign-in's token-only role (V57): booking-service and
+                // event-service confine any token carrying it to the gate, so an
+                // account holding it would be locked to the gate everywhere.
+                || com.innbucks.userservice.security.GateSession.isReservedName(normalized);
     }
 
     private final RoleRepository roleRepository;
@@ -151,6 +155,10 @@ public class RoleAdminService {
     }
 
     private static String reservedNameMessage(String normalized) {
+        if (com.innbucks.userservice.security.GateSession.isReservedName(normalized)) {
+            return "The role name GATE_SCANNER is reserved: it is the gate sign-in's session, never an "
+                    + "account's role. Add gate staff as scanners on the event instead.";
+        }
         if ("ADMIN".equals(normalized)) {
             return "The role name ADMIN is reserved: it has never been a platform role, so a role called that "
                     + "would read as authority it does not have. Use a built-in role (PRODUCT_OFFICER, "
