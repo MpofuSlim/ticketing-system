@@ -64,6 +64,23 @@ public class CategoryBookingDTO {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private BigDecimal discountAmount;
     /**
+     * The promo code that discounted THIS ticket (V27), e.g. {@code FIRST50}.
+     * Present exactly when the ticket carries a discount: a code limited to
+     * other categories is not shown on a ticket it did not reduce.
+     */
+    @io.swagger.v3.oas.annotations.media.Schema(example = "FIRST50", nullable = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String promoCode;
+    /**
+     * What the ticket cost before the promo code: {@code priceAtBooking + discountAmount}
+     * (the price tier's price when sold at a tier, else the full price). Present with
+     * {@link #promoCode}, so a guest list can show "$10.00, FIRST50 −$8.00, paid $2.00"
+     * without adding money up on the client.
+     */
+    @io.swagger.v3.oas.annotations.media.Schema(example = "10.00", nullable = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private BigDecimal priceBeforeDiscount;
+    /**
      * How the booking this ticket belongs to was paid (V29): INNBUCKS,
      * ECOCASH or CARD (a ZimSwitch-enabled bank card), from the rail
      * payment-service recorded at confirm. Absent when not recorded: an

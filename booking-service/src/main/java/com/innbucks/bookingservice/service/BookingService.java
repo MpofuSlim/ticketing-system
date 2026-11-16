@@ -1197,12 +1197,21 @@ public class BookingService {
                 .priceAtBooking(item.getPriceAtBooking())
                 .priceTierName(item.getPriceTierName())
                 .discountAmount(item.getDiscountAmount())
+                .promoCode(discounted(item) ? b.getPromoCode() : null)
+                .priceBeforeDiscount(discounted(item)
+                        ? item.getPriceAtBooking().add(item.getDiscountAmount()) : null)
                 .paymentMethod(PaymentMethods.code(b.getPaymentRail()))
                 .paymentMethodLabel(PaymentMethods.label(b.getPaymentRail()))
                 .bookedAt(b.getCreatedAt())
                 .updatedAt(b.getUpdatedAt())
                 .expiresAt(b.getExpiresAt())
                 .build();
+    }
+
+    /** Whether a promo code took money off this ticket (V27): its discount is set and above zero. */
+    private static boolean discounted(BookingItem item) {
+        return item.getDiscountAmount() != null && item.getDiscountAmount().signum() > 0
+                && item.getPriceAtBooking() != null;
     }
 
     public List<BookingResponseDTO> getMyBookings(String userEmail) {

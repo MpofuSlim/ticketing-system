@@ -146,6 +146,56 @@ class BookingPromoCodePostgresIT extends BookingStockPostgresTestBase {
     }
 
     @Test
+    void theGuestList_namesTheCodeAndThePriceBeforeIt_onlyOnTheTicketsItReduced() throws Exception {
+        UUID gaId = UUID.randomUUID();
+        category(eventId, gaId, "GA", 1_000);
+        String ends = LocalDateTime.now(ZoneOffset.UTC).plusDays(7).withNano(0) + "Z";
+        assertThat(createCode(organizer(owner), """
+                {"eventId":"%s","code":"vip80","discountType":"PERCENT","discountValue":80,
+                 "categoryIds":["%s"],"endsAt":"%s"}
+                """.formatted(eventId, categoryId, ends)).getResponse().getStatus()).isEqualTo(201);
+
+        // One booking: a VIP ticket the code reduces, a GA ticket it does not.
+        mvc.perform(post("/bookings").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"eventId":"%s","customerName":"Rufaro Moyo","phoneNumber":"+263771000011",
+                         "promoCode":"VIP80","seats":[{"categoryId":"%s"},{"categoryId":"%s"}]}
+                        """.formatted(eventId, categoryId, gaId)))
+                .andExpect(status().isCreated());
+        // Another booking, no code at all.
+        mvc.perform(post("/bookings").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"eventId":"%s","customerName":"Tariro Dube","phoneNumber":"+263771000012",
+                         "seats":[{"categoryId":"%s"}]}
+                        """.formatted(eventId, categoryId)))
+                .andExpect(status().isCreated());
+
+        String json = mvc.perform(get("/bookings/by-event/" + eventId).header("Authorization", organizer(owner)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        List<Map<String, Object>> rows = com.jayway.jsonpath.JsonPath.read(json, "$.data");
+        assertThat(rows).hasSize(3);
+
+        Map<String, Object> reduced = rows.stream()
+                .filter(r -> "Rufaro Moyo".equals(r.get("customerName")) && "VIP".equals(r.get("categoryName")))
+                .findFirst().orElseThrow();
+        assertThat(reduced.get("promoCode")).isEqualTo("VIP80");
+        assertThat(((Number) reduced.get("priceBeforeDiscount")).doubleValue()).isEqualTo(10.00);
+        assertThat(((Number) reduced.get("discountAmount")).doubleValue()).isEqualTo(8.00);
+        assertThat(((Number) reduced.get("priceAtBooking")).doubleValue()).isEqualTo(2.00);
+
+        // Same booking, but the code is limited to VIP: nothing about it on the GA ticket.
+        Map<String, Object> sameBookingOtherCategory = rows.stream()
+                .filter(r -> "Rufaro Moyo".equals(r.get("customerName")) && "GA".equals(r.get("categoryName")))
+                .findFirst().orElseThrow();
+        assertThat(sameBookingOtherCategory).doesNotContainKeys("promoCode", "priceBeforeDiscount", "discountAmount");
+        assertThat(((Number) sameBookingOtherCategory.get("priceAtBooking")).doubleValue()).isEqualTo(10.00);
+
+        Map<String, Object> noCode = rows.stream()
+                .filter(r -> "Tariro Dube".equals(r.get("customerName")))
+                .findFirst().orElseThrow();
+        assertThat(noCode).doesNotContainKeys("promoCode", "priceBeforeDiscount", "discountAmount");
+    }
+
+    @Test
     void aCancelledBooking_freesItsUse_andTheBuyersOwnLimitHolds() throws Exception {
         createCode(organizer(owner), codeBody(1));
         assertThat(book("+263771000001", "EARLY10").getResponse().getStatus()).isEqualTo(201);

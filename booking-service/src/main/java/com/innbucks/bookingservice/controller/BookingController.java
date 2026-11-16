@@ -1324,6 +1324,10 @@ public class BookingController {
                     "`paymentMethod` (V29) is how the booking was paid: INNBUCKS, ECOCASH or CARD (a ZimSwitch-enabled " +
                     "bank card), with `paymentMethodLabel` in words; both are absent when not recorded (unpaid, or " +
                     "confirmed before V29 and not backfilled).\n\n" +
+                    "**A ticket a promo code reduced** carries `promoCode`, `discountAmount` and " +
+                    "`priceBeforeDiscount` (what it cost before the code); `priceAtBooking` is what was paid. " +
+                    "All three are absent on a ticket the code did not reduce, including one in a category " +
+                    "the code does not cover.\n\n" +
                     "**Ticket numbers are the gate credential**, so `ticketNumber` here is always masked " +
                     "(`20260502-*****-**K2D`) and there is no QR. To find one " +
                     "ticket a customer reads out, send `?ticketNumber=` (any case, dashes optional): the answer is " +
@@ -1409,7 +1413,10 @@ public class BookingController {
                                           "rowLabel": "GA",
                                           "seatNumber": 1,
                                           "ticketNumber": "20260502-*****-**B3G",
-                                          "priceAtBooking": 60.00,
+                                          "priceAtBooking": 54.00,
+                                          "discountAmount": 6.00,
+                                          "promoCode": "EARLY10",
+                                          "priceBeforeDiscount": 60.00,
                                           "attendeeName": null,
                                           "attendeeEmail": null,
                                           "attendeePhone": null,
