@@ -146,6 +146,51 @@ class DeviceSecurityProvisioningCheckTest {
     }
 
     @Test
+    @DisplayName("an SMS app hash that fits: the INFO line names it, so the operator sees which build's hash the host "
+            + "sends, and nothing is an ERROR")
+    void smsAppHash_valid_isNamedAtInfo() {
+        enforce(true, true, true, true);
+        properties.getOtp().setSmsAppHash(" GcOlMYQc0Wf ");
+        check();
+
+        assertThat(at(Level.INFO)).containsExactly(
+                "Device security enforcing otp=true blocks=true bans=true singleDevice=true",
+                "Device security SMS codes end with the Super app hash GcOlMYQc0Wf (DEVICE_SECURITY_SMS_APP_HASH), "
+                        + "so Android reads the code from the SMS.");
+        assertThat(at(Level.ERROR)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("an SMS app hash the gateway or the 140-byte budget cannot carry: an ERROR says why and that codes go "
+            + "out without it; the boot itself is not stopped")
+    void smsAppHash_unusable_isAnError() {
+        enforce(true, true, true, false);
+        properties.getOtp().setSmsAppHash("GcOlMYQc0W/");
+        check();
+        assertThat(at(Level.ERROR)).containsExactly("DEVICE_SECURITY_SMS_APP_HASH is not 11 letters, digits or '+': "
+                + "SMS codes are sent WITHOUT it, so the Super app cannot read them automatically. Set the "
+                + "11-character hash of the build this host serves.");
+
+        logs.list.clear();
+        properties.getOtp().setSmsAppHash("GcOlMYQc0Wf");
+        properties.getOtp().setCodeTtl(java.time.Duration.ofMinutes(10_000_000_000L));
+        check();
+        assertThat(at(Level.ERROR)).singleElement().asString()
+                .startsWith("DEVICE_SECURITY_SMS_APP_HASH would make a code SMS 141 bytes, over 140: ");
+        assertThat(at(Level.INFO)).noneMatch(m -> m.contains("SMS_APP_HASH"));
+    }
+
+    @Test
+    @DisplayName("no SMS app hash: nothing is logged about it")
+    void smsAppHash_blank_isSilent() {
+        enforce(true, true, true, false);
+        properties.getOtp().setSmsAppHash("  ");
+        check();
+
+        assertThat(logs.list).noneMatch(e -> e.getFormattedMessage().contains("SMS_APP_HASH"));
+    }
+
+    @Test
     @DisplayName("device security switched off: the check is silent, even with one phone per number on and codes "
             + "off")
     void disabled_isSilent() {

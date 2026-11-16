@@ -189,6 +189,9 @@ device-security:
     per-device-daily: ${DEVICE_SECURITY_OTP_PER_DEVICE_DAILY:20}
     per-ip-hourly: ${DEVICE_SECURITY_OTP_PER_IP_HOURLY:30}
     default-channel: ${DEVICE_SECURITY_OTP_DEFAULT_CHANNEL:WHATSAPP}
+    # Android SMS Retriever hash of the Super app build this host serves. Set, SMS
+    # codes end with it on their own last line so the app reads them. Blank = off.
+    sms-app-hash: ${DEVICE_SECURITY_SMS_APP_HASH:}
   # Staging only: allow-listed numbers get this fixed code and no message
   # (contract §11, §14.1). Refused whenever production=true.
   test-otp:

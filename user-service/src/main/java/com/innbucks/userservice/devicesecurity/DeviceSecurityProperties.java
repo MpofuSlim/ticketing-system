@@ -125,6 +125,13 @@ public class DeviceSecurityProperties {
         private OtpChannel defaultChannel = OtpChannel.WHATSAPP;
         /** A channel whose provider just failed is left out of {@code channels} for this long. */
         private Duration channelDownFor = Duration.ofMinutes(2);
+        /**
+         * The Super app's Android SMS Retriever hash (11 characters). Set, every SMS code
+         * ends with it alone on its last line and stays within 140 bytes, so the app reads
+         * the code without the customer typing it. Blank, no hash line. Per host, because
+         * the hash depends on the key that signed the installed build.
+         */
+        private String smsAppHash;
     }
 
     /**

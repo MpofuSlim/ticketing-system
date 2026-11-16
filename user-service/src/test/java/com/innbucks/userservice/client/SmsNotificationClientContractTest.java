@@ -16,6 +16,7 @@ import org.springframework.web.client.RestClient;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -92,6 +93,23 @@ class SmsNotificationClientContractTest {
                 .withRequestBody(matchingJsonPath("$.message", equalTo("InnBucks OTP 123456")))
                 .withRequestBody(matchingJsonPath("$.destinationMsisdn", equalTo("+263782606983")))
                 .withRequestBody(matchingJsonPath("$.reference", equalTo("OTP-1"))));
+    }
+
+    @Test
+    @DisplayName("a DTX code SMS keeps its line break and the Super app's SMS Retriever hash on the wire: the "
+            + "hash must reach the phone alone on its last line, or Android never reads the code")
+    void sendSms_keepsTheAppHashLine() throws Exception {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(SMS)).willReturn(aResponse().withStatus(200)));
+        String text = "InnBucks code 482913, valid 5 minutes. Never share it, InnBucks will never ask for it.\n"
+                + "GcOlMYQc0Wf";
+
+        client(wireMock.port()).sendSms("+263782606983", text, "DTX-OTP-1");
+
+        var sent = wireMock.findAll(postRequestedFor(urlEqualTo(SMS)));
+        assertThat(sent).hasSize(1);
+        assertThat(new ObjectMapper().readTree(sent.get(0).getBodyAsString()).get("message").asText())
+                .isEqualTo(text);
     }
 
     @Test
