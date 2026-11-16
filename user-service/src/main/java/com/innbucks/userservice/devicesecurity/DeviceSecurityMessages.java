@@ -3,11 +3,13 @@ package com.innbucks.userservice.devicesecurity;
 import com.innbucks.userservice.config.MarketTimeZone;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Every word DTX puts in front of a customer: notification texts (§10), the
@@ -19,7 +21,9 @@ import java.util.Locale;
  *   <li><b>No links</b> (§10), so a real message can never be confused with a
  *       phishing one.</li>
  *   <li><b>One line</b> (§10): the WhatsApp sender wraps the whole message in one
- *       template variable and silently drops anything after a line break.</li>
+ *       template variable and silently drops anything after a line break. The one
+ *       exception is an SMS code, which may end with the Super app's SMS Retriever
+ *       hash alone on a second line ({@code DEVICE_SECURITY_SMS_APP_HASH}).</li>
  *   <li><b>SMS-safe</b>: the InnBucks SMS gateway rejects {@code ! : / ? " * ;}
  *       outright (SmsTextSanitizer). So SMS copy writes times as {@code 14.30}
  *       and the USSD code as "star 569 hash" — the sanitizer would otherwise
@@ -37,11 +41,21 @@ public class DeviceSecurityMessages {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm", Locale.ENGLISH);
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH);
 
+    /** The most an SMS may weigh for Android's SMS Retriever to read the code from it. */
+    static final int SMS_RETRIEVER_MAX_BYTES = 140;
+    /**
+     * An SMS Retriever hash: 11 base64 characters. '/' is left out because the SMS
+     * gateway refuses it, and the sanitizer would turn it into a space.
+     */
+    private static final Pattern APP_HASH = Pattern.compile("[A-Za-z0-9+]{11}");
+
     private final MarketTimeZone marketTimeZone;
+    private final DeviceSecurityProperties properties;
     private final String supportPhone;
 
     public DeviceSecurityMessages(MarketTimeZone marketTimeZone, DeviceSecurityProperties properties) {
         this.marketTimeZone = marketTimeZone;
+        this.properties = properties;
         this.supportPhone = properties.getSupportPhone() == null ? "" : properties.getSupportPhone().trim();
     }
 
@@ -57,10 +71,34 @@ public class DeviceSecurityMessages {
      * the code out to a caller "from the bank" is signing their own phone out.
      */
     public String otp(String code, long minutes, OtpChannel channel, boolean signsOutOtherPhones) {
+        if (channel == OtpChannel.SMS) {
+            String sms = smsOtp(code, minutes, signsOutOtherPhones);
+            String hash = properties.getOtp().getSmsAppHash();
+            return appHashProblem(hash, minutes) == null ? sms + "\n" + hash.trim() : sms;
+        }
         String warning = signsOutOtherPhones ? " Using it signs InnBucks out on any other phone." : "";
-        return channel == OtpChannel.SMS
-                ? "InnBucks code " + code + ". It expires in " + minutes + " minutes. Never share it, InnBucks will never ask for it." + warning
-                : "InnBucks code: " + code + ". It expires in " + minutes + " minutes. Never share it — InnBucks will never ask for it." + warning;
+        return "InnBucks code: " + code + ". It expires in " + minutes + " minutes. Never share it — InnBucks will never ask for it." + warning;
+    }
+
+    /** The SMS code without the app hash, short enough that the hash line keeps it within 140 bytes. */
+    private static String smsOtp(String code, long minutes, boolean signsOutOtherPhones) {
+        return "InnBucks code " + code + ", valid " + minutes + " minutes. Never share it, InnBucks will never ask for it."
+                + (signsOutOtherPhones ? " Using it signs out other phones." : "");
+    }
+
+    /**
+     * Why {@code hash} cannot end an SMS code, or null when it can. Judged on the longest
+     * code SMS (with the sign-out warning), so a hash is used for every code or for none.
+     */
+    static String appHashProblem(String hash, long minutes) {
+        if (hash == null || hash.isBlank()) return "is blank";
+        String h = hash.trim();
+        if (!APP_HASH.matcher(h).matches()) return "is not 11 letters, digits or '+'";
+        int bytes = (smsOtp("000000", minutes, true) + "\n" + h).getBytes(StandardCharsets.UTF_8).length;
+        if (bytes > SMS_RETRIEVER_MAX_BYTES) {
+            return "would make a code SMS " + bytes + " bytes, over " + SMS_RETRIEVER_MAX_BYTES;
+        }
+        return null;
     }
 
     /** Longest phone label PHONE_REPLACED prints, so the SMS stays one 160-character segment. */

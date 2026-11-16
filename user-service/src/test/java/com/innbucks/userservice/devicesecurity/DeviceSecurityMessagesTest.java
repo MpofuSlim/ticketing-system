@@ -5,7 +5,10 @@ import com.innbucks.userservice.util.SmsTextSanitizer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -13,7 +16,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The copy rules are load-bearing, so they are pinned: every SMS text must
  * survive the gateway sanitizer UNCHANGED (else the gateway rewrites or rejects
  * it), every message is one line (the WhatsApp sender drops everything after a
- * line break), none carries a link, and times are the market's wall clock.
+ * line break), none carries a link, and times are the market's wall clock. The
+ * one exception to one line is an SMS code carrying the Super app's SMS Retriever
+ * hash, which must end the message alone on its own line within 140 bytes.
  */
 class DeviceSecurityMessagesTest {
 
@@ -40,6 +45,11 @@ class DeviceSecurityMessagesTest {
         }
         String otp = messages.otp("482913", 5, OtpChannel.SMS);
         assertThat(SmsTextSanitizer.toGsmSafe(otp)).isEqualTo(otp);
+        props.getOtp().setSmsAppHash(HASH);
+        for (boolean warning : new boolean[]{false, true}) {
+            String withHash = messages.otp("482913", 5, OtpChannel.SMS, warning);
+            assertThat(SmsTextSanitizer.toGsmSafe(withHash)).as("warning=" + warning).isEqualTo(withHash);
+        }
     }
 
     @Test
@@ -52,6 +62,90 @@ class DeviceSecurityMessagesTest {
             }
             assertThat(messages.otp("482913", 5, channel)).doesNotContain("\n");
         }
+    }
+
+    private static final String HASH = "GcOlMYQc0Wf";
+
+    @Test
+    @DisplayName("with the app hash set, every SMS code ends with it alone on its last line, within 140 bytes, for "
+            + "both wordings and every code lifetime up to 99 minutes; the only 6-digit number is the code")
+    void smsCode_withAppHash_endsWithItAlone_within140Bytes() {
+        props.getOtp().setSmsAppHash(HASH);
+        assertThat(messages.otp("482913", 5, OtpChannel.SMS, false)).isEqualTo(
+                "InnBucks code 482913, valid 5 minutes. Never share it, InnBucks will never ask for it.\n" + HASH);
+        assertThat(messages.otp("482913", 5, OtpChannel.SMS, true)).isEqualTo(
+                "InnBucks code 482913, valid 5 minutes. Never share it, InnBucks will never ask for it. "
+                        + "Using it signs out other phones.\n" + HASH);
+        assertThat(bytes(messages.otp("482913", 5, OtpChannel.SMS, false))).isEqualTo(98);
+        assertThat(bytes(messages.otp("482913", 5, OtpChannel.SMS, true))).isEqualTo(131);
+
+        for (boolean warning : new boolean[]{false, true}) {
+            for (long minutes = 1; minutes <= 99; minutes++) {
+                String sms = messages.otp("482913", minutes, OtpChannel.SMS, warning);
+                String[] lines = sms.split("\n", -1);
+                assertThat(lines).as(sms).hasSize(2);
+                assertThat(lines[1]).isEqualTo(HASH);
+                assertThat(lines[0]).doesNotContain("\r", HASH);
+                assertThat(bytes(sms)).as(sms).isLessThanOrEqualTo(DeviceSecurityMessages.SMS_RETRIEVER_MAX_BYTES);
+                Matcher sixDigits = Pattern.compile("(?<!\\d)\\d{6}(?!\\d)").matcher(sms);
+                assertThat(sixDigits.find()).isTrue();
+                assertThat(sixDigits.group()).isEqualTo("482913");
+                assertThat(sixDigits.find()).as(sms).isFalse();
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("the app hash rides SMS only: WhatsApp codes and every notice stay one line without it")
+    void appHash_neverOnWhatsAppOrNotices() {
+        props.getOtp().setSmsAppHash(HASH);
+        for (boolean warning : new boolean[]{false, true}) {
+            assertThat(messages.otp("482913", 5, OtpChannel.WHATSAPP, warning)).doesNotContain(HASH, "\n");
+        }
+        for (OtpChannel channel : OtpChannel.values()) {
+            for (DeviceNotice.Type type : DeviceNotice.Type.values()) {
+                assertThat(messages.notice(notice(type), channel, NOW)).as(type + "/" + channel)
+                        .doesNotContain(HASH, "\n");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a hash is trimmed; one that is not 11 letters, digits or '+' (the gateway refuses '/') is left off, "
+            + "and the SMS code is the one-line text")
+    void appHash_trimmed_andUnusableOnesLeftOff() {
+        props.getOtp().setSmsAppHash("  " + HASH + " ");
+        assertThat(messages.otp("482913", 5, OtpChannel.SMS)).endsWith("\n" + HASH);
+
+        String oneLine = "InnBucks code 482913, valid 5 minutes. Never share it, InnBucks will never ask for it.";
+        for (String bad : new String[]{"", "   ", "GcOlMYQc0W", "GcOlMYQc0Wf1", "GcOlMYQc0W/", "GcOlMYQc0W-",
+                "GcOl MYQc0W", "GcOlMYQc0W=", "GcOlMYQc0W\u00e9"}) {
+            props.getOtp().setSmsAppHash(bad);
+            assertThat(messages.otp("482913", 5, OtpChannel.SMS)).as("[" + bad + "]").isEqualTo(oneLine);
+        }
+        props.getOtp().setSmsAppHash(null);
+        assertThat(messages.otp("482913", 5, OtpChannel.SMS)).isEqualTo(oneLine);
+        assertThat(DeviceSecurityMessages.appHashProblem("GcOlMYQc0W/", 5)).isEqualTo("is not 11 letters, digits or '+'");
+        assertThat(DeviceSecurityMessages.appHashProblem("Gc+lMYQc0Wf", 5)).isNull();
+    }
+
+    @Test
+    @DisplayName("a code lifetime that would push the longest SMS code past 140 bytes leaves the hash off EVERY code, "
+            + "the short wording included: a hash is used for all codes or for none")
+    void appHash_overBudget_isLeftOffEveryCode() {
+        props.getOtp().setSmsAppHash(HASH);
+        long minutes = 10_000_000_000L;
+        assertThat(DeviceSecurityMessages.appHashProblem(HASH, minutes))
+                .isEqualTo("would make a code SMS 141 bytes, over 140");
+        assertThat(DeviceSecurityMessages.appHashProblem(HASH, 99)).isNull();
+        for (boolean warning : new boolean[]{false, true}) {
+            assertThat(messages.otp("482913", minutes, OtpChannel.SMS, warning)).as("warning=" + warning)
+                    .doesNotContain("\n", HASH);
+        }
+    }
+
+    private static int bytes(String s) {
+        return s.getBytes(StandardCharsets.UTF_8).length;
     }
 
     @Test
@@ -152,8 +246,10 @@ class DeviceSecurityMessagesTest {
             + "stays one gateway-safe segment, and the 3-argument form is the code without the warning")
     void otp_withSignOutWarning() {
         String sms = messages.otp("482913", 5, OtpChannel.SMS, true);
-        assertThat(sms).isEqualTo("InnBucks code 482913. It expires in 5 minutes. Never share it, InnBucks will "
-                + "never ask for it. Using it signs InnBucks out on any other phone.");
+        assertThat(sms).isEqualTo("InnBucks code 482913, valid 5 minutes. Never share it, InnBucks will never ask "
+                + "for it. Using it signs out other phones.");
+        assertThat(messages.otp("482913", 5, OtpChannel.SMS, false)).isEqualTo("InnBucks code 482913, valid 5 "
+                + "minutes. Never share it, InnBucks will never ask for it.");
         assertThat(sms.length()).isLessThanOrEqualTo(160);
         assertThat(SmsTextSanitizer.toGsmSafe(sms)).isEqualTo(sms);
         assertThat(messages.otp("482913", 5, OtpChannel.WHATSAPP, true))
@@ -163,7 +259,7 @@ class DeviceSecurityMessagesTest {
         for (OtpChannel channel : OtpChannel.values()) {
             assertThat(messages.otp("482913", 5, channel)).as(channel.name())
                     .isEqualTo(messages.otp("482913", 5, channel, false))
-                    .doesNotContain("signs InnBucks out");
+                    .doesNotContain("signs InnBucks out", "signs out");
         }
     }
 

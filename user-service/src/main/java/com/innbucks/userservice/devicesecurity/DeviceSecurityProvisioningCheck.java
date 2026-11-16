@@ -97,6 +97,17 @@ public class DeviceSecurityProvisioningCheck {
                         t.getNumbers() == null ? 0 : t.getNumbers().size());
             }
         }
+        String appHash = properties.getOtp().getSmsAppHash();
+        if (!blank(appHash)) {
+            String problem = DeviceSecurityMessages.appHashProblem(appHash, properties.getOtp().getCodeTtl().toMinutes());
+            if (problem == null) {
+                log.info("Device security SMS codes end with the Super app hash {} (DEVICE_SECURITY_SMS_APP_HASH), so "
+                        + "Android reads the code from the SMS.", appHash.trim());
+            } else {
+                log.error("DEVICE_SECURITY_SMS_APP_HASH {}: SMS codes are sent WITHOUT it, so the Super app cannot read "
+                        + "them automatically. Set the 11-character hash of the build this host serves.", problem);
+            }
+        }
     }
 
     private static boolean blank(String s) {

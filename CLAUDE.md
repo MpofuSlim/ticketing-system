@@ -2601,8 +2601,10 @@ and blocks phones on `/device-security/ussd/**`; the call center works it from
     `NEW_DEVICE_BOUND` only when a phone that had been bound was signed out.
   - **Nothing warns before the SIM is proved.** OTP_REQUIRED keeps the neutral
     line (anything else tells whoever knows the number whether it is signed in).
-    The code itself says "Using it signs InnBucks out on any other phone." (a
-    customer reading it to a fake agent signs their own phone out), and the TOKEN
+    The code itself says so (WhatsApp: "Using it signs InnBucks out on any other
+    phone."; SMS, shorter for the 140-byte budget: "Using it signs out other
+    phones.") — a customer reading it to a fake agent signs their own phone out —
+    and the TOKEN
     after `/otp/verify`, or a PIN retry in the grace, says "Any other phone will be
     signed out of InnBucks."
   - **Only the signed-in phone manages phones.** The fleet session survives a
@@ -2675,7 +2677,40 @@ and blocks phones on `/device-security/ussd/**`; the call center works it from
 - **SMS copy**: the gateway rejects `*`, so SMS says "star 569 hash" and writes
   times as `14.30`; WhatsApp gets `*569#`. `DeviceSecurityMessagesTest` asserts
   every SMS template round-trips `SmsTextSanitizer` unchanged and every message
-  is one line with no link.
+  is one line with no link — with ONE exception, below.
+- **SMS codes can carry the Super app's SMS Retriever hash**
+  (`DEVICE_SECURITY_SMS_APP_HASH`, blank in the committed cell files, set per
+  host). Set, every SMS code ends with the 11-character hash alone on a second
+  line and stays within 140 bytes, so Android hands the code to the app without
+  the customer typing it. WhatsApp codes and every notice never carry it
+  (Android reads only SMS). Rules:
+  - **The hash belongs to a BUILD, not to the app**: it is derived from the
+    package name and the certificate that signed the installed APK, so a test
+    build (upload key) and the Play Store build (Google's Play App Signing key)
+    have different hashes. A host set to the wrong one sends codes nothing reads,
+    with no error anywhere. The same trap as the freeRASP `TAMPER` waiver: ask
+    the app team which key they hashed, and set production only with the Play
+    Store build's hash.
+  - **All codes or none.** `DeviceSecurityMessages.appHashProblem` judges the
+    LONGEST variant (the one-phone warning) at the configured code TTL; over 140
+    bytes, or a hash that is not 11 of `[A-Za-z0-9+]`, and EVERY SMS code goes
+    out one-line without it, and user-service logs an ERROR at boot naming why.
+    A usable hash is named at INFO. `/` is refused although base64 allows it:
+    the notification gateway rejects `/` in a message.
+  - **The SMS wording is short on purpose** (98 bytes, 131 with the warning, at a
+    5-minute TTL): "InnBucks code 482913, valid 5 minutes. Never share it,
+    InnBucks will never ask for it." Don't lengthen it without re-running the
+    budget test (TTL 1–99, both variants): past 140 the hash leaves every code
+    (the boot ERROR says so) and auto-read stops.
+  - **Line breaks already cross this gateway**: the account-security SMS
+    (`AccountSecurityNotificationListener`: lockout, password and 2FA alerts)
+    carry `\n\n` through the same client and path, and our client passes the
+    code's newline through (`SmsNotificationClientContractTest`). One real code
+    SMS per environment after the hash is set still proves the phone shows the
+    hash alone on the last line, which is what Android reads.
+  - **About one build in six cannot use this**: the hash is standard base64, so
+    it can contain `/`, which the gateway refuses. Such a hash gets the boot
+    ERROR and no code carries it; only a different signing key changes it.
 
 ## Customer support — one search, enforced in user-service (Ask C, V45/V46)
 
