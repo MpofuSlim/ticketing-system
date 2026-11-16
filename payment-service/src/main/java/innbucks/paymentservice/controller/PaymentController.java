@@ -552,7 +552,14 @@ public class PaymentController {
                 // dead checkout closes and a fresh one starts here.
                 boolean shopperReturned = innbucks.paymentservice.service.ZimswitchCardPaymentService
                         .isShopperReturn(request.getResourcePath(), p);
-                if (request.getResourcePath() != null && !shopperReturned) {
+                // What the caller sent, said on every card return: a result
+                // page that drops the redirect's resourcePath shows as `absent`
+                // here and in payment.payments.card_return, with no browser
+                // trace needed to tell.
+                String resourcePathKind = request.getResourcePath() == null || request.getResourcePath().isBlank()
+                        ? "absent" : shopperReturned ? "matches" : "other";
+                metrics.incCardReturn(resourcePathKind);
+                if ("other".equals(resourcePathKind)) {
                     log.info("POST /payments card resourcePath does not name the open checkout orderType={} "
                                     + "orderRef={} paymentReference={} — treated as a plain re-POST",
                             key.type(), key.ref(), p.getPaymentReference());
@@ -564,15 +571,17 @@ public class PaymentController {
                                 : innbucks.paymentservice.service.ZimswitchCardPaymentService.ReadTrigger.CUSTOMER_RETRY);
                 if (cardCheck == innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PAID) {
                     Payment resolved = paymentRepository.findById(p.getId()).orElse(p);
-                    log.info("POST /payments card instant-check PAID orderType={} orderRef={} paymentReference={}",
-                            key.type(), key.ref(), p.getPaymentReference());
+                    log.info("POST /payments card instant-check PAID orderType={} orderRef={} paymentReference={} "
+                                    + "resourcePath={}",
+                            key.type(), key.ref(), p.getPaymentReference(), resourcePathKind);
                     return toReplayResponse(resolved, key);
                 }
                 if (cardCheck == innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.EXPIRED) {
                     // Row just went terminal (EXPIRED, slot freed) — fall
                     // through and start a FRESH attempt in this same request.
-                    log.info("POST /payments card instant-check EXPIRED orderType={} orderRef={} — starting fresh",
-                            key.type(), key.ref());
+                    log.info("POST /payments card instant-check EXPIRED orderType={} orderRef={} resourcePath={} "
+                                    + "— starting fresh",
+                            key.type(), key.ref(), resourcePathKind);
                 } else {
                     // RE-READ, do not reuse `p`. A PENDING verdict does NOT
                     // mean the row is unchanged: an echo mismatch on a PAID
@@ -586,8 +595,9 @@ public class PaymentController {
                     // point the wrong way: a false "you were not charged", and
                     // an invitation to pay a second time.
                     Payment afterCheck = paymentRepository.findById(p.getId()).orElse(p);
-                    log.info("POST /payments card replay after instant check orderType={} orderRef={} paymentReference={} status={}",
-                            key.type(), key.ref(), p.getPaymentReference(), afterCheck.getStatus());
+                    log.info("POST /payments card replay after instant check orderType={} orderRef={} paymentReference={} "
+                                    + "status={} resourcePath={}",
+                            key.type(), key.ref(), p.getPaymentReference(), afterCheck.getStatus(), resourcePathKind);
                     return toReplayResponse(afterCheck, key);
                 }
             } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED

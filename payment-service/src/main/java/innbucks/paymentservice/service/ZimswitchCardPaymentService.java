@@ -475,8 +475,10 @@ public class ZimswitchCardPaymentService {
             return CardCheckOutcome.PENDING;
         }
         String answer = describe(status);
-        log.info("[zimswitch-card] status read paymentReference={} trigger={} resultCode={} pastCeiling={}",
-                p.getPaymentReference(), trigger, status.resultCode(), pastCeiling);
+        log.info("[zimswitch-card] status read paymentReference={} trigger={} resultCode={} pastCeiling={} "
+                        + "description={} parameterErrors={}",
+                p.getPaymentReference(), trigger, status.resultCode(), pastCeiling,
+                status.resultMessage(), status.parameterErrors());
 
         switch (status.outcome()) {
             case SUCCESS, SUCCESS_MANUAL_REVIEW -> {
@@ -537,10 +539,14 @@ public class ZimswitchCardPaymentService {
         return CardCheckOutcome.PENDING;
     }
 
-    /** ZimSwitch's answer as one journal fragment: {@code 200.300.404 (description)}. */
-    private static String describe(CardPaymentStatus status) {
+    /**
+     * ZimSwitch's answer as one journal fragment: {@code 200.300.404 (description)},
+     * plus {@code [parameterErrors]} when the gateway named the parameter it refused.
+     */
+    static String describe(CardPaymentStatus status) {
         String code = status.resultCode() != null ? status.resultCode() : "no result code";
-        return status.resultMessage() != null ? code + " (" + status.resultMessage() + ")" : code;
+        String answer = status.resultMessage() != null ? code + " (" + status.resultMessage() + ")" : code;
+        return status.parameterErrors() != null ? answer + " [" + status.parameterErrors() + "]" : answer;
     }
 
     /**
