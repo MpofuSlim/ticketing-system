@@ -2700,11 +2700,17 @@ and blocks phones on `/device-security/ussd/**`; the call center works it from
   - **The SMS wording is short on purpose** (98 bytes, 131 with the warning, at a
     5-minute TTL): "InnBucks code 482913, valid 5 minutes. Never share it,
     InnBucks will never ask for it." Don't lengthen it without re-running the
-    budget test (TTL 1–99, both variants); the hash is silently dropped past 140.
-  - **The newline is the one line break this fleet sends the notification API.**
-    Our client passes it through (`SmsNotificationClientContractTest`); whether
-    the gateway delivers it is proved per environment by one real code SMS
-    after the hash is set.
+    budget test (TTL 1–99, both variants): past 140 the hash leaves every code
+    (the boot ERROR says so) and auto-read stops.
+  - **Line breaks already cross this gateway**: the account-security SMS
+    (`AccountSecurityNotificationListener`: lockout, password and 2FA alerts)
+    carry `\n\n` through the same client and path, and our client passes the
+    code's newline through (`SmsNotificationClientContractTest`). One real code
+    SMS per environment after the hash is set still proves the phone shows the
+    hash alone on the last line, which is what Android reads.
+  - **About one build in six cannot use this**: the hash is standard base64, so
+    it can contain `/`, which the gateway refuses. Such a hash gets the boot
+    ERROR and no code carries it; only a different signing key changes it.
 
 ## Customer support — one search, enforced in user-service (Ask C, V45/V46)
 
