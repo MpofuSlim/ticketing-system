@@ -79,9 +79,14 @@ public class PaymentController {
     private final PaymentMetrics metrics;
     /** PENDING rows older than this with no code are crash leftovers, not in-flight requests. */
     private static final java.time.Duration PENDING_REPLAY_GRACE = java.time.Duration.ofSeconds(30);
-    /** The message beside {@code lastAttemptDeclined: true}. Also in the Swagger examples. */
+    /**
+     * The message beside {@code lastAttemptDeclined: true}. Also in the Swagger examples.
+     * It names another card only: while this checkout is open, a POST for any other
+     * rail replays it (the order holds one active payment), so another method
+     * cannot start until the checkout's ceiling.
+     */
     static final String CARD_DECLINED_MESSAGE =
-            "Your card was declined and you weren't charged. Try another card or a different payment method.";
+            "Your card was declined and you weren't charged. You can try another card.";
 
     /** This deployment's currency (cell config) — defensive fallback only; the
      *  service always stamps the outcome's currency. Per-cell, never hardcoded USD. */
@@ -306,7 +311,7 @@ public class PaymentController {
                                     @ExampleObject(name = "Booking — card declined, shopper back on the result page, checkout still open (same request as above)", value = """
                                             {
                                               "code": "200 OK",
-                                              "message": "Your card was declined and you weren't charged. Try another card or a different payment method.",
+                                              "message": "Your card was declined and you weren't charged. You can try another card.",
                                               "data": {
                                                 "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
                                                 "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
@@ -1077,7 +1082,7 @@ public class PaymentController {
                             @ExampleObject(name = "Card declined, checkout still open", value = """
                                     {
                                       "code": "200 OK",
-                                      "message": "Your card was declined and you weren't charged. Try another card or a different payment method.",
+                                      "message": "Your card was declined and you weren't charged. You can try another card.",
                                       "data": {
                                         "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
                                         "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",

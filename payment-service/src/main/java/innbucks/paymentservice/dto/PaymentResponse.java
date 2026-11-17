@@ -279,7 +279,9 @@ public class PaymentResponse {
      * Card only, stage {@code AWAITING_PAYMENT}: {@code true} when ZimSwitch
      * declined the card on this open checkout. The bank refused it and
      * nothing was taken; the checkout is still open, so the shopper can try
-     * another card or pay another way. Absent otherwise, never {@code false}:
+     * another card on it. Another payment method can start only once this
+     * checkout has ended: until then a POST for any rail returns this same
+     * checkout. Absent otherwise, never {@code false}:
      * absent means "no decline recorded", which on a shopper's return is
      * "no payment received yet".
      */
@@ -287,7 +289,9 @@ public class PaymentResponse {
     @io.swagger.v3.oas.annotations.media.Schema(nullable = true,
             description = "Card only, with stage AWAITING_PAYMENT: true when ZimSwitch declined the card on "
                     + "this open checkout. Nothing was charged; the shopper can try another card on the same "
-                    + "checkout or pay another way. Absent when no decline was recorded.",
+                    + "checkout. Another payment method can start only after this checkout ends "
+                    + "(about two minutes after checkoutExpiresAt): until then a POST for any rail returns this "
+                    + "checkout. Absent when no decline was recorded.",
             example = "true")
     private Boolean lastAttemptDeclined;
 

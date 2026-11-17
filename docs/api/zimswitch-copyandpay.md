@@ -346,7 +346,11 @@ Nuances the classifier table can't carry:
   `payment.card_declined_at` (V18), and while the row is still open
   (`AWAITING_PAYMENT`) both `POST /payments` and `GET /payments/{transactionId}`
   answer `lastAttemptDeclined: true`, with "Your card was declined and you
-  weren't charged…" as the message. Without it the answer was identical to "the
+  weren't charged. You can try another card." as the message. It names no other
+  payment method on purpose: while the checkout is open the order's one payment
+  slot is the card's, so a POST asking for EcoCash or an InnBucks code replays
+  this checkout, and another method can start only once its ceiling has passed.
+  Without the flag the answer was identical to "the
   shopper came back without paying", and the clients told a declined shopper
   "If you were charged, we'll confirm within 30 minutes" (staging, 2026-11-17,
   `800.100.100` on checkouts `4B16E70B…uat01-vm-tx03` and `D750C6DB…uat01-vm-tx01`,

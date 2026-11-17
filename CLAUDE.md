@@ -4995,7 +4995,9 @@ it pins the four wire facts that are easy to get wrong. Non-negotiables:
   read past the ceiling closes it FAILED. **The open row still says it was
   declined**: the read stamps `card_declined_at` (V18) and the response carries
   `lastAttemptDeclined: true` beside `AWAITING_PAYMENT`, on POST and GET alike
-  (one derivation, in `replayResult`). Without it a declined shopper was told
+  (one derivation, in `replayResult`). Its message offers another card only:
+  until the ceiling a POST for any rail replays the open checkout, so "pay
+  another way" cannot start yet. Without it a declined shopper was told
   "If you were charged, we'll confirm within 30 minutes". `200.300.404` ("no payment for this
   checkout") only counts as positively-unpaid once the checkout's 30-minute
   ceiling has passed.
