@@ -466,6 +466,39 @@ class PaymentControllerTest {
     }
 
     @Test
+    void anotherRail_whileADeclinedCardCheckoutIsOpen_getsTheCardCheckoutBack_andChargesNothing() {
+        // Why the declined message offers another card only: the order holds
+        // one active payment, so asking for EcoCash before the checkout's
+        // ceiling replays the card checkout instead of sending a PIN prompt.
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        Payment open = openCardRow(bookingId, CHECKOUT);
+        open.setCardDeclinedAt(java.time.Instant.now());
+        replayLookup(f, bookingId).thenReturn(Optional.of(open));
+        when(f.card().resolveOpenCheckout(any(), any(), any()))
+                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
+        when(f.payments().findById(open.getId())).thenReturn(Optional.of(open));
+        stubOpenForm(f);
+        var ecocash = (innbucks.paymentservice.service.EcocashPaymentService)
+                org.springframework.test.util.ReflectionTestUtils.getField(f.controller(), "ecocashPaymentService");
+
+        PaymentRequest ecocashPay = paymentFor(bookingId);
+        ecocashPay.setPaymentRail(innbucks.paymentservice.entity.PaymentRail.ECOCASH);
+        var body = f.controller().processPayment(ecocashPay).getBody();
+
+        assertEquals(innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD, body.getData().getPaymentRail(),
+                "the open card checkout, not an EcoCash prompt");
+        assertEquals(PaymentResponse.Stage.AWAITING_PAYMENT, body.getData().getStage());
+        assertEquals(Boolean.TRUE, body.getData().getLastAttemptDeclined());
+        assertEquals(CHECKOUT, body.getData().getCheckoutId());
+        assertEquals(PaymentController.CARD_DECLINED_MESSAGE, body.getMessage());
+        assertFalse(PaymentController.CARD_DECLINED_MESSAGE.contains("payment method"),
+                "the message must not offer a method that cannot start while this checkout is open");
+        verifyNoInteractions(ecocash);
+        verify(f.innbucks(), never()).processPayment(any(), any(), any(), any());
+    }
+
+    @Test
     void cardReturn_withNoDeclineRecorded_hasNoFlag_andTheUsualMessage() {
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
