@@ -421,6 +421,93 @@ class PaymentControllerTest {
                 triggerOf(f), "an older checkout's redirect says nothing about the open one");
     }
 
+    /** The widget artifacts the card service re-surfaces for an open checkout. */
+    private static void stubOpenForm(Fixture f) {
+        when(f.card().replayOpenCheckout(any())).thenAnswer(inv -> {
+            Payment p = inv.getArgument(0);
+            return new innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckoutOutcome(
+                    p, false, p.getCheckoutId(),
+                    "https://eu-test.oppwa.com/v1/paymentWidgets.js?checkoutId=" + p.getCheckoutId(),
+                    "sha384-abc", "PRIVATE_LABEL", "https://tickets.example.co.zw/checkout/card-result",
+                    p.getCodeExpiresAt(), null, null);
+        });
+    }
+
+    @Test
+    void cardReturn_afterADecline_saysDeclined_andKeepsTheSameForm() {
+        // Staging, 2026-11-17: the bank declined the test card (800.100.100)
+        // and the shopper was told "If you were charged, we'll confirm within
+        // 30 minutes", because the answer was identical to "no payment yet".
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        Payment open = openCardRow(bookingId, CHECKOUT);
+        replayLookup(f, bookingId).thenReturn(Optional.of(open));
+        when(f.card().resolveOpenCheckout(any(), any(), any()))
+                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
+        // The read stamped the decline in its own transaction; the controller re-reads.
+        Payment afterRead = openCardRow(bookingId, CHECKOUT);
+        afterRead.setId(open.getId());
+        afterRead.setCardDeclinedAt(java.time.Instant.now());
+        when(f.payments().findById(open.getId())).thenReturn(Optional.of(afterRead));
+        stubOpenForm(f);
+
+        PaymentRequest returned = paymentFor(bookingId);
+        returned.setResourcePath("/v1/checkouts/" + CHECKOUT + "/payment");
+        var body = f.controller().processPayment(returned).getBody();
+        PaymentResponse data = body.getData();
+
+        assertEquals(PaymentResponse.Stage.AWAITING_PAYMENT, data.getStage(),
+                "the checkout is still open: another card can pay on it");
+        assertEquals(Boolean.FALSE, data.getFundsCaptured());
+        assertEquals(Boolean.TRUE, data.getLastAttemptDeclined());
+        assertEquals(PaymentController.CARD_DECLINED_MESSAGE, body.getMessage());
+        assertEquals(CHECKOUT, data.getCheckoutId(), "the same checkout, so Try again draws the same form");
+        assertNull(data.getFailureReason(), "failureReason stays the terminal DECLINED stage's field");
+    }
+
+    @Test
+    void cardReturn_withNoDeclineRecorded_hasNoFlag_andTheUsualMessage() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        Payment open = openCardRow(bookingId, CHECKOUT);
+        replayLookup(f, bookingId).thenReturn(Optional.of(open));
+        when(f.card().resolveOpenCheckout(any(), any(), any()))
+                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
+        when(f.payments().findById(open.getId())).thenReturn(Optional.of(open));
+        stubOpenForm(f);
+
+        PaymentRequest returned = paymentFor(bookingId);
+        returned.setResourcePath("/v1/checkouts/" + CHECKOUT + "/payment");
+        var body = f.controller().processPayment(returned).getBody();
+
+        assertEquals(PaymentResponse.Stage.AWAITING_PAYMENT, body.getData().getStage());
+        assertNull(body.getData().getLastAttemptDeclined(), "absent, never false");
+        assertEquals("Enter your card details to complete your booking", body.getMessage());
+    }
+
+    @Test
+    void cardDeclinedEarlier_thenPaid_isNeverReportedAsDeclined() {
+        // A shopper declined once, then paid with another card on the same
+        // checkout: the money is in, so the old decline must not show.
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        Payment open = openCardRow(bookingId, CHECKOUT);
+        replayLookup(f, bookingId).thenReturn(Optional.of(open));
+        when(f.card().resolveOpenCheckout(any(), any(), any()))
+                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
+        Payment paid = openCardRow(bookingId, CHECKOUT);
+        paid.setId(open.getId());
+        paid.setCardDeclinedAt(java.time.Instant.now().minusSeconds(60));
+        paid.setStatus(Payment.PaymentStatus.COMPLETED_UNCONFIRMED);
+        when(f.payments().findById(open.getId())).thenReturn(Optional.of(paid));
+        stubOpenForm(f);
+
+        PaymentResponse data = f.controller().processPayment(paymentFor(bookingId)).getBody().getData();
+
+        assertEquals(PaymentResponse.Stage.PAYMENT_RECEIVED, data.getStage());
+        assertNull(data.getLastAttemptDeclined());
+    }
+
     private static double cardReturns(Fixture f, String resourcePath) {
         var registry = (io.micrometer.core.instrument.MeterRegistry)
                 org.springframework.test.util.ReflectionTestUtils.getField(f.metrics(), "registry");

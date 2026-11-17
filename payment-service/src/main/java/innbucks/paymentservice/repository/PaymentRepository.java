@@ -5,6 +5,7 @@ import innbucks.paymentservice.entity.PaymentRail;
 import innbucks.paymentservice.order.OrderType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -129,4 +130,18 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     /** The order's latest attempt on one rail — the EcoCash decline hold reads it. */
     Optional<Payment> findFirstByOrderTypeAndOrderRefAndPaymentRailOrderByCreatedAtDesc(
             OrderType orderType, String orderRef, innbucks.paymentservice.entity.PaymentRail paymentRail);
+
+    /**
+     * Stamp a card decline on this one column only. Payment carries no
+     * {@code @Version} and an entity save writes every column, so saving a
+     * row read a moment earlier could put an older status back over a
+     * payment that has just completed. Only an open row is stamped.
+     */
+    @Modifying
+    @Query("""
+            update Payment p set p.cardDeclinedAt = :at
+             where p.id = :id
+               and p.status = innbucks.paymentservice.entity.Payment.PaymentStatus.TOKEN_ISSUED
+            """)
+    int stampCardDeclined(@Param("id") UUID id, @Param("at") Instant at);
 }

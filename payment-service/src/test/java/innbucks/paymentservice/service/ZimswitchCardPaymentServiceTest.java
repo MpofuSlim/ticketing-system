@@ -165,7 +165,7 @@ class ZimswitchCardPaymentServiceTest {
     }
 
     @Test
-    @DisplayName("decline: journalled, row STAYS open — the shopper may retry another card on the same checkout")
+    @DisplayName("decline: journalled AND stamped as a decline, row STAYS open — the shopper may retry another card on the same checkout")
     void decline_keepsCheckoutOpen() {
         Payment p = openCardRow();
         when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
@@ -173,7 +173,10 @@ class ZimswitchCardPaymentServiceTest {
 
         assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PENDING);
 
-        verify(records).noteEvent(eq(p.getId()), contains("800.100.153"));
+        // The stamp is what makes the response say "declined" (lastAttemptDeclined)
+        // instead of "no payment yet"; a plain note would leave the two identical.
+        verify(records).noteCardDeclined(eq(p.getId()), contains("800.100.153"));
+        verify(records, never()).noteEvent(any(), anyString());
         verify(records, never()).markFailed(any(), any(), any());
         verify(records, never()).markExpired(any(), any());
         verifyNoInteractions(resolution);

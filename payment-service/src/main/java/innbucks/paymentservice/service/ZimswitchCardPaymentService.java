@@ -503,8 +503,10 @@ public class ZimswitchCardPaymentService {
                 // row: the documented multi-transaction reuse lets the shopper
                 // try another card. Whether the checkout survives this read is
                 // an open question for ZimSwitch (docs/api/zimswitch-copyandpay.md).
+                // The stamp is what makes the response say "declined"
+                // rather than "no payment yet" (lastAttemptDeclined).
                 metrics.incCardResolution("declined_noted");
-                paymentRecordService.noteEvent(p.getId(),
+                paymentRecordService.noteCardDeclined(p.getId(),
                         "Card status read " + trigger.journalLabel + ": declined " + answer
                                 + " — checkout stays open for a retry");
                 log.info("[zimswitch-card] attempt declined paymentReference={} resultCode={} — checkout stays open",

@@ -342,6 +342,15 @@ Nuances the classifier table can't carry:
   "checkoutId is invalid" and the order's payment slot stays held until the
   ceiling. A decline read **past** the ceiling closes the row `FAILED`
   (stage `DECLINED` on `GET /payments/{transactionId}`): no retry can follow.
+- **The open row says it was declined.** The decline read stamps
+  `payment.card_declined_at` (V18), and while the row is still open
+  (`AWAITING_PAYMENT`) both `POST /payments` and `GET /payments/{transactionId}`
+  answer `lastAttemptDeclined: true`, with "Your card was declined and you
+  weren't charged…" as the message. Without it the answer was identical to "the
+  shopper came back without paying", and the clients told a declined shopper
+  "If you were charged, we'll confirm within 30 minutes" (staging, 2026-11-17,
+  `800.100.100` on checkouts `4B16E70B…uat01-vm-tx03` and `D750C6DB…uat01-vm-tx01`,
+  ZimSwitch's test card, USD 0.30; the reason for the decline is with ZimSwitch).
 - A pending row is **never** auto-failed early — blocked slot beats double
   charge, same rule as the InnBucks rail.
 - An unmatched code classifies as a decline, never as success — the success

@@ -79,6 +79,9 @@ public class PaymentController {
     private final PaymentMetrics metrics;
     /** PENDING rows older than this with no code are crash leftovers, not in-flight requests. */
     private static final java.time.Duration PENDING_REPLAY_GRACE = java.time.Duration.ofSeconds(30);
+    /** The message beside {@code lastAttemptDeclined: true}. Also in the Swagger examples. */
+    static final String CARD_DECLINED_MESSAGE =
+            "Your card was declined and you weren't charged. Try another card or a different payment method.";
 
     /** This deployment's currency (cell config) — defensive fallback only; the
      *  service always stamps the outcome's currency. Per-cell, never hardcoded USD. */
@@ -297,6 +300,33 @@ public class PaymentController {
                                                 "confirmationNumber": "INN-20260611-AB12CD",
                                                 "processedAt": "2026-06-11T15:52:00",
                                                 "paymentRail": "ZIMSWITCH_CARD"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Booking — card declined, shopper back on the result page, checkout still open (same request as above)", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Your card was declined and you weren't charged. Try another card or a different payment method.",
+                                              "data": {
+                                                "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "PROCESSING",
+                                                "stage": "AWAITING_PAYMENT",
+                                                "fundsCaptured": false,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "confirmationNumber": null,
+                                                "processedAt": "2026-06-11T15:52:00",
+                                                "paymentRail": "ZIMSWITCH_CARD",
+                                                "lastAttemptDeclined": true,
+                                                "checkoutId": "8a82944a4cc25ebf014cc2c782423202",
+                                                "checkoutScriptUrl": "https://eu-test.oppwa.com/v1/paymentWidgets.js?checkoutId=8a82944a4cc25ebf014cc2c782423202",
+                                                "checkoutIntegrity": "sha384-3phAZzHTYFuLtHT2AzM5PIYjPLGtqcBQXAq7fbQw0QHIhJEQZUJEG52uV6uWBSQE",
+                                                "checkoutBrands": "PRIVATE_LABEL",
+                                                "shopperResultUrl": "https://tickets.example.co.zw/checkout/card-result",
+                                                "checkoutExpiresAt": "2026-06-11T16:16:00"
                                               }
                                             }
                                             """),
@@ -921,6 +951,14 @@ public class PaymentController {
             // answer and the only safe one.
             stage = PaymentResponse.Stage.VERIFYING;
         }
+        // A card the bank declined on a checkout that is still open. The row
+        // stays open (another card can still pay on that checkout), so the
+        // stage is AWAITING_PAYMENT either way; this is what tells "declined"
+        // apart from "came back without paying". Only with a live, renderable
+        // form: on any other stage the decline is history.
+        boolean cardDeclinedOnOpenCheckout = cardRow
+                && stage == PaymentResponse.Stage.AWAITING_PAYMENT
+                && p.getCardDeclinedAt() != null;
         PaymentResponse response = PaymentResponse.builder()
                 .stage(stage)
                 .transactionId(p.getId())
@@ -948,13 +986,16 @@ public class PaymentController {
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
                 .failureReason(stage == PaymentResponse.Stage.DECLINED
                         ? innbucks.paymentservice.service.EcocashPaymentService.declineReason(p) : null)
+                .lastAttemptDeclined(cardDeclinedOnOpenCheckout ? Boolean.TRUE : null)
                 .build();
         // Prose for humans, derived FROM the stage above — never the other way
         // round. Clients must branch on `stage`, never on this text: it is
         // reworded freely and will be localised.
         String message = switch (stage) {
             case COMPLETED -> "Payment processed successfully";
-            case AWAITING_PAYMENT -> cardRow
+            case AWAITING_PAYMENT -> cardDeclinedOnOpenCheckout
+                    ? CARD_DECLINED_MESSAGE
+                    : cardRow
                     ? "Enter your card details to complete your " + noun
                     : ecocashRow
                     ? "Approve the payment prompt on your phone to complete your " + noun
@@ -1003,8 +1044,11 @@ public class PaymentController {
                     + "Use it to learn how an attempt ENDED, which polling the booking cannot tell you: stage "
                     + "`DECLINED` carries EcoCash's own reason in `failureReason` (e.g. \"You have insufficient "
                     + "funds to complete this transaction.\") and, while a new EcoCash attempt for the order is "
-                    + "held back, `retryAfterSeconds`. A card attempt whose last try was declined is `DECLINED` "
-                    + "with no `failureReason`. Stage `LAPSED` means the instrument ended unpaid. Every "
+                    + "held back, `retryAfterSeconds`. A card declined while its checkout is still open is "
+                    + "`AWAITING_PAYMENT` with `lastAttemptDeclined: true`: nothing was charged and the same "
+                    + "checkout can take another card. A card attempt that ends declined (read after the "
+                    + "checkout's 30 minutes) is `DECLINED` with no `failureReason`. Stage `LAPSED` means the "
+                    + "instrument ended unpaid. Every "
                     + "other stage means what it means on `POST /payments`.\n\n"
                     + "Poll this, never `POST /payments`: a POST after an attempt has ended starts a NEW payment.")
     @ApiResponses({
@@ -1027,6 +1071,31 @@ public class PaymentController {
                                         "paymentRail": "ECOCASH",
                                         "failureReason": "You have insufficient funds to complete this transaction.",
                                         "retryAfterSeconds": 104
+                                      }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Card declined, checkout still open", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Your card was declined and you weren't charged. Try another card or a different payment method.",
+                                      "data": {
+                                        "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
+                                        "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "orderType": "BOOKING",
+                                        "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "status": "PROCESSING",
+                                        "stage": "AWAITING_PAYMENT",
+                                        "fundsCaptured": false,
+                                        "amountPaid": 100.00,
+                                        "currency": "USD",
+                                        "paymentRail": "ZIMSWITCH_CARD",
+                                        "lastAttemptDeclined": true,
+                                        "checkoutId": "8a82944a4cc25ebf014cc2c782423202",
+                                        "checkoutScriptUrl": "https://eu-test.oppwa.com/v1/paymentWidgets.js?checkoutId=8a82944a4cc25ebf014cc2c782423202",
+                                        "checkoutIntegrity": "sha384-3phAZzHTYFuLtHT2AzM5PIYjPLGtqcBQXAq7fbQw0QHIhJEQZUJEG52uV6uWBSQE",
+                                        "checkoutBrands": "PRIVATE_LABEL",
+                                        "shopperResultUrl": "https://tickets.example.co.zw/checkout/card-result",
+                                        "checkoutExpiresAt": "2026-06-11T16:16:00+02:00"
                                       }
                                     }
                                     """),

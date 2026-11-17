@@ -329,6 +329,27 @@ public class PaymentRecordService {
         recordEvent(payment, payment.getStatus(), payment.getStatus(), detail, null);
     }
 
+    /**
+     * Card flow: ZimSwitch declined a card on this row's checkout, read
+     * before the checkout's ceiling. The row stays open (another card can
+     * still be paid on that checkout), so this is a journal note, not a
+     * transition, plus the stamp the response reads to say the last try was
+     * declined. One transaction, so the two never disagree. The stamp lands
+     * only while the row is still open.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void noteCardDeclined(UUID id, String detail) {
+        Payment payment = repository.findById(id).orElse(null);
+        if (payment == null) {
+            log.error("card decline noted for missing payment id={} detail={}", id, detail);
+            return;
+        }
+        // One column, by a targeted update: a whole-row save of the row read
+        // above could put an older status back (see stampCardDeclined).
+        repository.stampCardDeclined(id, Instant.now());
+        recordEvent(payment, payment.getStatus(), payment.getStatus(), detail, null);
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markFailed(UUID id, String upstreamCode, String upstreamMessage) {
         transition(id, PaymentStatus.FAILED,

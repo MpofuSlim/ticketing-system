@@ -276,6 +276,22 @@ public class PaymentResponse {
     private Long retryAfterSeconds;
 
     /**
+     * Card only, stage {@code AWAITING_PAYMENT}: {@code true} when ZimSwitch
+     * declined the card on this open checkout. The bank refused it and
+     * nothing was taken; the checkout is still open, so the shopper can try
+     * another card or pay another way. Absent otherwise, never {@code false}:
+     * absent means "no decline recorded", which on a shopper's return is
+     * "no payment received yet".
+     */
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    @io.swagger.v3.oas.annotations.media.Schema(nullable = true,
+            description = "Card only, with stage AWAITING_PAYMENT: true when ZimSwitch declined the card on "
+                    + "this open checkout. Nothing was charged; the shopper can try another card on the same "
+                    + "checkout or pay another way. Absent when no decline was recorded.",
+            example = "true")
+    private Boolean lastAttemptDeclined;
+
+    /**
      * ZimSwitch COPYandPAY widget artifacts, present while a card checkout
      * is open ({@code status=PROCESSING}, rail {@code ZIMSWITCH_CARD}). The
      * FE renders:
