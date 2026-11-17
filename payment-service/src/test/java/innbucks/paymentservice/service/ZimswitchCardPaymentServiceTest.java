@@ -89,7 +89,7 @@ class ZimswitchCardPaymentServiceTest {
                                             String amount, String currency, String merchantRef) {
         return new CardPaymentStatus(outcome, "gw-tx-1",
                 amount == null ? null : new BigDecimal(amount), currency,
-                "VISA", "DB", merchantRef, code, "desc", "ndc-1", null);
+                "VISA", "DB", merchantRef, code, "desc", "ndc-1", null, null);
     }
 
     @Test
@@ -181,6 +181,35 @@ class ZimswitchCardPaymentServiceTest {
         verify(records, never()).markFailed(any(), any(), any());
         verify(records, never()).markExpired(any(), any());
         verifyNoInteractions(resolution);
+    }
+
+    @Test
+    @DisplayName("decline with an extended description: kept on the row and in the journal, so it is on record without asking ZimSwitch")
+    void decline_withAnExtendedDescription_isKeptOnTheRowAndInTheJournal() {
+        Payment p = openCardRow();
+        String extended = "Innbucks has not responded to the transaction request. Please contact them for further information.";
+        when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(new CardPaymentStatus(
+                ZimswitchResultCode.REJECTED, "gw-tx-1", new BigDecimal("92.00"), "USD", "PRIVATE_LABEL", "DB",
+                p.getPaymentReference(), "800.100.100", "transaction declined for unknown reason", "ndc-1",
+                null, extended));
+
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.DECLINED);
+
+        String answer = "800.100.100 (transaction declined for unknown reason): " + extended;
+        verify(records).markCardDeclined(eq(p.getId()), eq("800.100.100"), eq(answer),
+                argThat(d -> d.equals("Card declined, read on the shopper's return: " + answer + " — attempt closed")));
+    }
+
+    @Test
+    @DisplayName("describe: the explanation comes before the parameter errors, each only when present")
+    void describe_ordersTheExplanationBeforeTheParameterErrors() {
+        CardPaymentStatus both = new CardPaymentStatus(ZimswitchResultCode.CHECKOUT_NOT_FOUND, null, null, null,
+                null, null, null, "200.300.404", "invalid or missing parameter", "n", "checkoutId: gone", "why");
+        assertThat(ZimswitchCardPaymentService.describe(both))
+                .isEqualTo("200.300.404 (invalid or missing parameter): why [checkoutId: gone]");
+        CardPaymentStatus bare = new CardPaymentStatus(ZimswitchResultCode.REJECTED, null, null, null,
+                null, null, null, "800.100.100", null, "n", null, null);
+        assertThat(ZimswitchCardPaymentService.describe(bare)).isEqualTo("800.100.100");
     }
 
     @Test
@@ -556,7 +585,7 @@ class ZimswitchCardPaymentServiceTest {
         when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(new CardPaymentStatus(
                 ZimswitchResultCode.CHECKOUT_NOT_FOUND, null, null, null, null, null, null,
                 "200.300.404", "invalid or missing parameter", "ndc-1",
-                "checkoutId: no payment session found for the requested id"));
+                "checkoutId: no payment session found for the requested id", null));
 
         service.resolveOpenCheckout(p, NO_GAP, RETURN);
 

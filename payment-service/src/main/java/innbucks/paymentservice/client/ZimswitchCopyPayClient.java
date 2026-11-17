@@ -365,7 +365,45 @@ public class ZimswitchCopyPayClient {
                 resultCode,
                 resultDescriptionOf(parsed),
                 asString(parsed.get("ndc")),
-                parameterErrorsOf(parsed));
+                parameterErrorsOf(parsed),
+                resultDetailsOf(parsed, resultCode));
+    }
+
+    /** Longest rendering of {@code resultDetails} kept; the journal row holds 500 characters in all. */
+    static final int RESULT_DETAILS_MAX = 200;
+
+    /**
+     * The decline's explanation from {@code resultDetails}, as one line: its
+     * {@code ExtendedDescription}, then {@code (acquirer response X)} when the
+     * {@code AcquirerResponse} differs from the result code (equal, it adds
+     * nothing). Only those two keys are read, never the whole map: it also
+     * carries connector ids and timestamps, and what other connectors put there
+     * is not ours to store. Control and line-break characters become spaces,
+     * the line is capped at {@link #RESULT_DETAILS_MAX}, and it is null when
+     * neither key has a value.
+     *
+     * <p>Observed on staging (2026-11-17), every decline:
+     * {@code "resultDetails": {"ExtendedDescription": "Innbucks has not responded to
+     * the transaction request. Please contact them for further information.",
+     * "AcquirerResponse": "800.100.100", "ConnectorTxID1": "TKZ-…",
+     * "AcquirerTimestamp": "…"}}, behind a bare {@code 800.100.100}.
+     */
+    @SuppressWarnings("unchecked")
+    static String resultDetailsOf(Map<String, Object> parsed, String resultCode) {
+        if (!(parsed.get("resultDetails") instanceof Map<?, ?> details)) return null;
+        String extended = asString(((Map<String, Object>) details).get("ExtendedDescription"));
+        String acquirer = asString(((Map<String, Object>) details).get("AcquirerResponse"));
+        StringBuilder out = new StringBuilder();
+        if (extended != null && !extended.isBlank()) {
+            out.append(extended.strip());
+        }
+        if (acquirer != null && !acquirer.isBlank() && !acquirer.strip().equals(resultCode)) {
+            if (!out.isEmpty()) out.append(' ');
+            out.append("(acquirer response ").append(acquirer.strip()).append(')');
+        }
+        if (out.isEmpty()) return null;
+        String line = out.toString().replaceAll("\\p{Cntrl}", " ").replaceAll(" {2,}", " ").strip();
+        return line.length() <= RESULT_DETAILS_MAX ? line : line.substring(0, RESULT_DETAILS_MAX - 3) + "...";
     }
 
     /** Longest rendering of {@code result.parameterErrors} kept; the journal row holds 500 characters in all. */
