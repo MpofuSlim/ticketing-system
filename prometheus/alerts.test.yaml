@@ -1,0 +1,133 @@
+# Rule unit tests for alerts.yaml, run by `promtool test rules` (CI job
+# `monitoring`). They pin the alerts that text a phone: each must fire when it
+# should, and the crash-loop alert must stay quiet on an ordinary deploy.
+#
+#   promtool test rules prometheus/alerts.test.yaml
+
+rule_files:
+  - alerts.yaml
+
+evaluation_interval: 30s
+
+tests:
+
+  # A deploy restarts a service once; two restarts within 30 minutes pages.
+  - interval: 1m
+    input_series:
+      - series: 'process_start_time_seconds{job="payment-service",instance="payment-service:8085"}'
+        values: '1000x10 2000x10 3000x10'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ServiceCrashLooping
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ServiceCrashLooping
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: payment-service
+              instance: payment-service:8085
+            exp_annotations:
+              summary: "payment-service restarted 2 times in 30 minutes"
+              description: "payment-service keeps starting again: an OOMKill, a crash, or its liveness probe failing. A deploy followed by a rollback also counts twice."
+              runbook: "prometheus/slo.md#servicecrashlooping"
+
+  # Two deploys more than 30 minutes apart never page.
+  - interval: 1m
+    input_series:
+      - series: 'process_start_time_seconds{job="user-service",instance="user-service:8081"}'
+        values: '1000x40 2000x40 3000x10'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: ServiceCrashLooping
+        exp_alerts: []
+      - eval_time: 85m
+        alertname: ServiceCrashLooping
+        exp_alerts: []
+
+  # A running service that does not report its start time blinds the crash
+  # alert for it.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="payment-service",instance="payment-service:8085"}'
+        values: '1x40'
+      - series: 'up{job="seat-service",instance="seat-service:8083"}'
+        values: '1x40'
+      - series: 'process_start_time_seconds{job="payment-service",instance="payment-service:8085"}'
+        values: '1000x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ServiceRestartsUnmonitored
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ServiceRestartsUnmonitored
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: "A running service does not report when it started"
+              description: "Some service is up but has no process_start_time_seconds series, so ServiceCrashLooping cannot see it restart."
+              runbook: "prometheus/slo.md#servicecrashlooping"
+
+  # 10% of memory free: the warning, after 10 minutes; not the critical one.
+  - interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{job="node-clock",instance="10.42.0.5:9100"}'
+        values: '100x20'
+      - series: 'node_memory_MemTotal_bytes{job="node-clock",instance="10.42.0.5:9100"}'
+        values: '1000x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NodeMemoryLow
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: NodeMemoryLow
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              instance: 10.42.0.5:9100
+            exp_annotations:
+              summary: "Server memory low, 10% free"
+              description: "Under 15% of the server's memory has been available for 10 minutes. Next is the kernel OOM-killing a service or Postgres."
+              runbook: "prometheus/slo.md#nodememorylow"
+      - eval_time: 12m
+        alertname: NodeMemoryCritical
+        exp_alerts: []
+
+  # 4% free: the critical one after 2 minutes, before the warning's 10.
+  - interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{job="node-clock",instance="10.42.0.5:9100"}'
+        values: '40x10'
+      - series: 'node_memory_MemTotal_bytes{job="node-clock",instance="10.42.0.5:9100"}'
+        values: '1000x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: NodeMemoryCritical
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              instance: 10.42.0.5:9100
+            exp_annotations:
+              summary: "Server memory critical, 4% free"
+              description: "Under 5% of the server's memory is available. The kernel is about to OOM-kill a service or Postgres, if it has not already."
+              runbook: "prometheus/slo.md#nodememorylow"
+      - eval_time: 3m
+        alertname: NodeMemoryLow
+        exp_alerts: []
+
+  # No memory series at all (exporter down, or meminfo not collected).
+  - interval: 1m
+    input_series:
+      - series: 'node_timex_sync_status{job="node-clock",instance="10.42.0.5:9100"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: NodeMemoryUnmonitored
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: "No node is reporting its memory"
+              description: "Prometheus has no node_memory_MemAvailable_bytes series: the node-clock exporter is down, not scraped, or running without its meminfo collector, so the memory alerts are blind."
+              runbook: "prometheus/slo.md#nodememorylow"

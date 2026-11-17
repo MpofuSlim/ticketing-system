@@ -100,6 +100,56 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # The alerting path under prometheus/: the alert rules and their unit tests
+  # (alerts.test.yaml pins the alerts that text a phone), the Prometheus and
+  # Alertmanager configs (a broken alertmanager.yml means no alert reaches
+  # anyone), and the alert-notifier's own tests. promtool and amtool come from
+  # their release tarballs, pinned by version AND SHA-256 (OWASP A08), like
+  # Trivy in release.yml; take a new hash from the release's sha256sums.txt and
+  # check it against the download. Keep the versions equal to the images in
+  # deploy/k8s/monitoring/monitoring.yaml.
+  monitoring:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install promtool and amtool
+        env:
+          PROMETHEUS_VERSION: "3.5.0"
+          PROMETHEUS_SHA256: "e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a"
+          ALERTMANAGER_VERSION: "0.28.1"
+          ALERTMANAGER_SHA256: "5ac7ab5e4b8ee5ce4d8fb0988f9cb275efcc3f181b4b408179fafee121693311"
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          p="prometheus-${PROMETHEUS_VERSION}.linux-amd64"
+          a="alertmanager-${ALERTMANAGER_VERSION}.linux-amd64"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 20 -o "$p.tar.gz" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/$p.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 20 -o "$a.tar.gz" \
+            "https://github.com/prometheus/alertmanager/releases/download/v${ALERTMANAGER_VERSION}/$a.tar.gz"
+          echo "${PROMETHEUS_SHA256}  $p.tar.gz" | sha256sum -c -
+          echo "${ALERTMANAGER_SHA256}  $a.tar.gz" | sha256sum -c -
+          tar -xzf "$p.tar.gz" "$p/promtool"
+          tar -xzf "$a.tar.gz" "$a/amtool"
+          sudo install "$p/promtool" "$a/amtool" /usr/local/bin/
+          promtool --version
+          amtool --version
+
+      - name: Alert rules, and their tests
+        run: |
+          promtool check rules prometheus/alerts.yaml
+          promtool test rules prometheus/alerts.test.yaml
+
+      - name: Prometheus and Alertmanager configs
+        run: |
+          promtool check config --syntax-only prometheus/prometheus.yml
+          amtool check-config prometheus/alertmanager.yml
+
+      - name: alert-notifier tests
+        run: python3 -m unittest discover -s prometheus/alert-notifier -v
+
   # Software-supply-chain SCA gate (OWASP A08). Runs only on PRs and is
   # DIFF-SCOPED: it inspects the dependency manifest changes this PR introduces
   # (via GitHub's dependency graph) and fails only when the PR ADDS a dependency

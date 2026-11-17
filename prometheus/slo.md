@@ -49,6 +49,82 @@ Prometheus can't scrape `<service>` for 2 minutes.
 3. Restart only after capturing a heap dump if memory looked high
    beforehand (see `JvmHeapPressure`).
 
+### `ServiceCrashLooping`
+
+Also used by `ServiceRestartsUnmonitored`. The service's JVM started again at
+least twice in 30 minutes (`process_start_time_seconds` moved twice). One
+restart is a deploy, a `kubectl set env` or a `rollout restart` and never
+fires this; two in half an hour is a service that keeps dying, or a deploy
+followed straight away by a rollback.
+
+1. Was it a deploy? `kubectl -n ticketing rollout history deployment/<service>`
+   and the image it runs now:
+   `kubectl -n ticketing get deploy <service> -o jsonpath='{.spec.template.spec.containers[0].image}'`.
+2. Why did the last one die? `kubectl -n ticketing describe pod -l app=<service> | grep -A6 'Last State'`.
+   `Reason: OOMKilled` is the container passing its memory limit: check the
+   heap setting is `MaxRAMPercentage=55.0` with a 1Gi limit
+   (CLAUDE.md, "JVM memory"), and `JvmHeapPressure`. `Error` with an exit
+   code is a crash: `kubectl -n ticketing logs <pod> --previous | tail -100`.
+3. If a deploy is the cause, roll back with `set image` to the previous pin.
+
+`ServiceRestartsUnmonitored` (ticket): a running service reports no
+`process_start_time_seconds`, so this alert cannot see it restart. Find it:
+`count by (job) (process_start_time_seconds)` on the Prometheus page against
+`up == 1`.
+
+### `NodeMemoryLow`
+
+Also used by `NodeMemoryCritical` (under 5% free for 2 minutes) and
+`NodeMemoryUnmonitored`. Under 15% of the server's memory has been available
+(`MemAvailable`, which counts reclaimable cache as free) for 10 minutes. When
+it runs out, the kernel OOM-kills the largest process: a JVM or Postgres, with
+no Java error and no log line.
+
+1. What is using it: `kubectl top pods -n ticketing --sort-by=memory` (if
+   metrics-server runs) or `free -m` and `ps aux --sort=-rss | head` on the host.
+2. Has anything been killed already? `dmesg -T | grep -i 'killed process' | tail`
+   on the host, and `ServiceCrashLooping`.
+3. Every JVM has a 1Gi limit; the limits add up to more than the server holds,
+   which is fine only while they do not all fill at once. Lower load first
+   (pause a bulk job, wait out a sale burst), then restart the largest
+   service if it keeps growing (`kubectl -n ticketing rollout restart deployment/<service>`).
+4. If it comes back, the server needs more memory or fewer pods: that is a
+   capacity decision, not a restart.
+
+`NodeMemoryUnmonitored` (ticket): no `node_memory_MemAvailable_bytes` series.
+The node-clock exporter must run with `--collector.meminfo`
+(`deploy/k8s/monitoring/monitoring.yaml`); see `NodeClockUnmonitored` for
+checking the exporter itself.
+
+### How alerts reach a person
+
+Prometheus evaluates the rules and hands firing alerts to Alertmanager, which
+groups them and calls the `alert-notifier` (`prometheus/alert-notifier/`).
+That pod sends through the InnBucks notification API: an SMS for every `page`
+alert to the numbers in the `alert-notifier` Secret (production only), and an
+email for every alert. Until 2026-11-17 Alertmanager sent every alert to a
+placeholder address and nobody was told anything.
+
+If texts stop arriving:
+
+1. `kubectl -n ticketing get pods -l app=alert-notifier`: not Ready means it
+   cannot deliver. Its log says why:
+   `kubectl -n ticketing logs deploy/alert-notifier | grep -E 'NOT READY|failed'`.
+2. `kubectl -n ticketing logs deploy/alertmanager | grep 'Notify for alerts failed'`:
+   Alertmanager could not reach the notifier, or the notifier answered 502
+   (the notification API refused or was unreachable; its log names the
+   HTTP status).
+3. Send a test page through the whole path:
+   `kubectl -n ticketing exec deploy/alertmanager -- amtool alert add AlertPathTest severity=page job=test --annotation=summary='Test alert, please ignore' --alertmanager.url=http://localhost:9093`.
+   A text arrives within a minute, and a RESOLVED one about 5 minutes later.
+
+Mute a known alert for a while (silences live in Alertmanager's memory, so
+`scripts/apply-monitoring.sh`, which restarts it, clears them):
+`kubectl -n ticketing exec deploy/alertmanager -- amtool silence add alertname=<name> --duration=2h --comment='<why>' --alertmanager.url=http://localhost:9093`.
+
+This path is inside the server. If the server itself stops, nothing here can
+say so.
+
 ### `HighHttp5xxRate`
 
 A backend service is throwing > 1% 5xx for 5 minutes.

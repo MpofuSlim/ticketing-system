@@ -1,13 +1,24 @@
 # Alertmanager routing for the ticketing cell (OWASP A09).
 #
 # Prometheus (prometheus.yml `alerting:` block) forwards firing alerts here;
-# Alertmanager dedupes, groups, and fans them out to the real channels. The
-# security rules in alerts.yaml carry severity=page (wake someone) or
-# severity=ticket (queue for working hours); this splits on that label.
+# Alertmanager dedupes, groups and hands each group to a receiver. Every
+# receiver is the in-cell alert-notifier (prometheus/alert-notifier/), which
+# sends through the InnBucks notification API:
 #
-# Receivers below use webhook placeholders — set the real Slack/PagerDuty/email
-# targets per cell in a gitignored override (or via ${ENV} if you template this
-# file at deploy). Do NOT commit real webhook URLs / integration keys here.
+#   severity=page    -> /page    SMS to the alert-notifier Secret's sms_to
+#                                numbers, and email to its email_to addresses
+#   severity=ticket  -> /ticket  email only
+#   anything else    -> /default email only
+#
+# Who is told lives in the alert-notifier Secret (scripts/apply-monitoring.sh
+# creates it), never here: this file is committed and shared by every host.
+# A host with no sms_to (staging) sends email only.
+#
+# Until 2026-11-17 the receivers pointed at http://alert-sink:9099, a
+# placeholder nothing served: every alert on both hosts was dropped.
+#
+# The bearer is the alert-notifier Secret's webhook_token, mounted into this
+# pod as a file; the notifier refuses any webhook without it.
 
 global:
   resolve_timeout: 5m
@@ -19,36 +30,45 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    # Page-severity alerts (incl. RefreshTokenReuse, InternalTokenProbing,
-    # AuditIntegrityBroken) route to the wake-someone channel with a tighter
-    # repeat interval.
+    # Page-severity alerts (ServiceDown, ServiceCrashLooping, NodeMemoryLow,
+    # the payment and audit integrity pages, ...): a text and an email, again
+    # every hour while still firing.
     - matchers: [ 'severity="page"' ]
       receiver: pager
       group_wait: 10s
       repeat_interval: 1h
-    # Ticket-severity alerts queue for working-hours triage.
+    # Ticket-severity alerts: email, for working hours.
     - matchers: [ 'severity="ticket"' ]
       receiver: tickets
 
 receivers:
   - name: default
-    # Catch-all. Replace with a real integration; a bare receiver silently drops.
     webhook_configs:
-      - url: 'http://alert-sink:9099/default'
+      - url: 'http://alert-notifier:9099/default'
         send_resolved: true
+        http_config:
+          authorization: { type: Bearer, credentials_file: /etc/alertmanager/notifier/webhook_token }
 
   - name: pager
     webhook_configs:
-      - url: 'http://alert-sink:9099/page'
+      - url: 'http://alert-notifier:9099/page'
         send_resolved: true
+        http_config:
+          authorization: { type: Bearer, credentials_file: /etc/alertmanager/notifier/webhook_token }
 
   - name: tickets
     webhook_configs:
-      - url: 'http://alert-sink:9099/ticket'
+      - url: 'http://alert-notifier:9099/ticket'
         send_resolved: true
+        http_config:
+          authorization: { type: Bearer, credentials_file: /etc/alertmanager/notifier/webhook_token }
 
-# Suppress lower-severity noise for the same alertname/job while a page is firing.
 inhibit_rules:
+  # Suppress lower-severity noise for the same alertname/job while a page is firing.
   - source_matchers: [ 'severity="page"' ]
     target_matchers: [ 'severity="ticket"' ]
     equal: [ 'alertname', 'job' ]
+  # One memory text at a time: the critical one replaces the warning.
+  - source_matchers: [ 'alertname="NodeMemoryCritical"' ]
+    target_matchers: [ 'alertname="NodeMemoryLow"' ]
+    equal: [ 'instance' ]
