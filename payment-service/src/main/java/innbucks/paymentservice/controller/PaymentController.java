@@ -77,16 +77,19 @@ public class PaymentController {
 
     private final LoyaltyServiceClient loyaltyServiceClient;
     private final PaymentMetrics metrics;
+    /** Attempts that ended without taking money: what a return to a closed checkout is answered with. */
+    private static final java.util.Set<Payment.PaymentStatus> TERMINAL_UNPAID = java.util.EnumSet.of(
+            Payment.PaymentStatus.FAILED, Payment.PaymentStatus.EXPIRED, Payment.PaymentStatus.REJECTED);
     /** PENDING rows older than this with no code are crash leftovers, not in-flight requests. */
     private static final java.time.Duration PENDING_REPLAY_GRACE = java.time.Duration.ofSeconds(30);
     /**
-     * The message beside {@code lastAttemptDeclined: true}. Also in the Swagger examples.
-     * It names another card only: while this checkout is open, a POST for any other
-     * rail replays it (the order holds one active payment), so another method
-     * cannot start until the checkout's ceiling.
+     * The message for a card attempt ZimSwitch declined (stage DECLINED, the row
+     * FAILED with {@code card_declined_at}). Also in the Swagger examples. Both
+     * offers are true: the decline closed the attempt, so another card is a fresh
+     * checkout on the same order and another rail can start at once.
      */
     static final String CARD_DECLINED_MESSAGE =
-            "Your card was declined and you weren't charged. You can try another card.";
+            "Your card was declined and you weren't charged. Try another card or pay another way.";
 
     /** This deployment's currency (cell config) — defensive fallback only; the
      *  service always stamps the outcome's currency. Per-cell, never hardcoded USD. */
@@ -308,30 +311,23 @@ public class PaymentController {
                                               }
                                             }
                                             """),
-                                    @ExampleObject(name = "Booking — card declined, shopper back on the result page, checkout still open (same request as above)", value = """
+                                    @ExampleObject(name = "Booking — card declined, shopper back on the result page (same request as above). The attempt is closed: POST again for another card or another rail", value = """
                                             {
                                               "code": "200 OK",
-                                              "message": "Your card was declined and you weren't charged. You can try another card.",
+                                              "message": "Your card was declined and you weren't charged. Try another card or pay another way.",
                                               "data": {
                                                 "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
                                                 "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
                                                 "orderType": "BOOKING",
                                                 "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
-                                                "status": "PROCESSING",
-                                                "stage": "AWAITING_PAYMENT",
+                                                "status": "FAILED",
+                                                "stage": "DECLINED",
                                                 "fundsCaptured": false,
                                                 "amountPaid": 100.00,
                                                 "currency": "USD",
                                                 "confirmationNumber": null,
                                                 "processedAt": "2026-06-11T15:52:00",
-                                                "paymentRail": "ZIMSWITCH_CARD",
-                                                "lastAttemptDeclined": true,
-                                                "checkoutId": "8a82944a4cc25ebf014cc2c782423202",
-                                                "checkoutScriptUrl": "https://eu-test.oppwa.com/v1/paymentWidgets.js?checkoutId=8a82944a4cc25ebf014cc2c782423202",
-                                                "checkoutIntegrity": "sha384-3phAZzHTYFuLtHT2AzM5PIYjPLGtqcBQXAq7fbQw0QHIhJEQZUJEG52uV6uWBSQE",
-                                                "checkoutBrands": "PRIVATE_LABEL",
-                                                "shopperResultUrl": "https://tickets.example.co.zw/checkout/card-result",
-                                                "checkoutExpiresAt": "2026-06-11T16:16:00"
+                                                "paymentRail": "ZIMSWITCH_CARD"
                                               }
                                             }
                                             """),
@@ -611,6 +607,18 @@ public class PaymentController {
                             key.type(), key.ref(), p.getPaymentReference(), resourcePathKind);
                     return toReplayResponse(resolved, key);
                 }
+                if (cardCheck == innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.DECLINED) {
+                    // The card the shopper just entered was declined, and the
+                    // decline closed the attempt. Report it; starting a fresh
+                    // checkout here would hide the decline behind a new form.
+                    // Their next POST (another card, or another rail) starts
+                    // the new attempt.
+                    Payment declined = paymentRepository.findById(p.getId()).orElse(p);
+                    log.info("POST /payments card declined on return orderType={} orderRef={} paymentReference={} "
+                                    + "status={}",
+                            key.type(), key.ref(), p.getPaymentReference(), declined.getStatus());
+                    return toReplayResponse(declined, key);
+                }
                 if (cardCheck == innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.EXPIRED) {
                     // Row just went terminal (EXPIRED, slot freed) — fall
                     // through and start a FRESH attempt in this same request.
@@ -699,6 +707,28 @@ public class PaymentController {
                 }
             } else {
                 log.info("POST /payments replay orderType={} orderRef={} existing paymentReference={} status={}",
+                        key.type(), key.ref(), p.getPaymentReference(), p.getStatus());
+                return toReplayResponse(p, key);
+            }
+        }
+
+        // A return from ZimSwitch naming a checkout whose attempt has already
+        // ENDED (declined, or closed unpaid at its ceiling) is answered with
+        // how it ended, never with a new checkout. A result page that POSTs
+        // its return twice (a reload, a double callback) would otherwise open
+        // a fresh checkout and show a card form where it should show the
+        // decline.
+        if (request.getResourcePath() != null && !request.getResourcePath().isBlank()) {
+            var closedReturn = paymentRepository.findFirstByOrderTypeAndOrderRefAndPaymentRailOrderByCreatedAtDesc(
+                            key.type(), key.ref(), innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD)
+                    .filter(p -> TERMINAL_UNPAID.contains(p.getStatus()))
+                    .filter(p -> innbucks.paymentservice.service.ZimswitchCardPaymentService
+                            .isShopperReturn(request.getResourcePath(), p));
+            if (closedReturn.isPresent()) {
+                Payment p = closedReturn.get();
+                metrics.incCardReturn("closed");
+                log.info("POST /payments card return for a closed attempt orderType={} orderRef={} paymentReference={} "
+                                + "status={} — answered, nothing started",
                         key.type(), key.ref(), p.getPaymentReference(), p.getStatus());
                 return toReplayResponse(p, key);
             }
@@ -956,13 +986,11 @@ public class PaymentController {
             // answer and the only safe one.
             stage = PaymentResponse.Stage.VERIFYING;
         }
-        // A card the bank declined on a checkout that is still open. The row
-        // stays open (another card can still pay on that checkout), so the
-        // stage is AWAITING_PAYMENT either way; this is what tells "declined"
-        // apart from "came back without paying". Only with a live, renderable
-        // form: on any other stage the decline is history.
-        boolean cardDeclinedOnOpenCheckout = cardRow
-                && stage == PaymentResponse.Stage.AWAITING_PAYMENT
+        // A card attempt ZimSwitch declined: the decline closed it FAILED and
+        // stamped it, which tells it apart from a FAILED card row that never
+        // reached a card (a refused checkout prepare).
+        boolean cardDeclined = cardRow
+                && stage == PaymentResponse.Stage.DECLINED
                 && p.getCardDeclinedAt() != null;
         PaymentResponse response = PaymentResponse.builder()
                 .stage(stage)
@@ -991,16 +1019,13 @@ public class PaymentController {
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
                 .failureReason(stage == PaymentResponse.Stage.DECLINED
                         ? innbucks.paymentservice.service.EcocashPaymentService.declineReason(p) : null)
-                .lastAttemptDeclined(cardDeclinedOnOpenCheckout ? Boolean.TRUE : null)
                 .build();
         // Prose for humans, derived FROM the stage above — never the other way
         // round. Clients must branch on `stage`, never on this text: it is
         // reworded freely and will be localised.
         String message = switch (stage) {
             case COMPLETED -> "Payment processed successfully";
-            case AWAITING_PAYMENT -> cardDeclinedOnOpenCheckout
-                    ? CARD_DECLINED_MESSAGE
-                    : cardRow
+            case AWAITING_PAYMENT -> cardRow
                     ? "Enter your card details to complete your " + noun
                     : ecocashRow
                     ? "Approve the payment prompt on your phone to complete your " + noun
@@ -1019,7 +1044,9 @@ public class PaymentController {
             case PAYMENT_RECEIVED -> "Payment received; your " + noun + " is being confirmed";
             case IN_PROGRESS -> "Your payment is already being processed — please retry in a moment";
             case VERIFYING -> "Your payment is being verified — contact support if this persists";
-            case DECLINED -> response.getFailureReason() != null
+            case DECLINED -> cardDeclined
+                    ? CARD_DECLINED_MESSAGE
+                    : response.getFailureReason() != null
                     ? "EcoCash: " + response.getFailureReason()
                     : "The payment didn't go through. Nothing was charged.";
             case LAPSED -> "The payment wasn't completed in time. Nothing was charged; you can pay again.";
@@ -1049,11 +1076,11 @@ public class PaymentController {
                     + "Use it to learn how an attempt ENDED, which polling the booking cannot tell you: stage "
                     + "`DECLINED` carries EcoCash's own reason in `failureReason` (e.g. \"You have insufficient "
                     + "funds to complete this transaction.\") and, while a new EcoCash attempt for the order is "
-                    + "held back, `retryAfterSeconds`. A card declined while its checkout is still open is "
-                    + "`AWAITING_PAYMENT` with `lastAttemptDeclined: true`: nothing was charged and the same "
-                    + "checkout can take another card. A card attempt that ends declined (read after the "
-                    + "checkout's 30 minutes) is `DECLINED` with no `failureReason`. Stage `LAPSED` means the "
-                    + "instrument ended unpaid. Every "
+                    + "held back, `retryAfterSeconds`. A card ZimSwitch declined is `DECLINED` with no "
+                    + "`failureReason` and the message \"Your card was declined and you weren't charged. Try "
+                    + "another card or pay another way.\": the decline closed the attempt, so `POST /payments` "
+                    + "for the same order starts a new card checkout or another rail at once. Stage `LAPSED` "
+                    + "means the instrument ended unpaid. Every "
                     + "other stage means what it means on `POST /payments`.\n\n"
                     + "Poll this, never `POST /payments`: a POST after an attempt has ended starts a NEW payment.")
     @ApiResponses({
@@ -1079,28 +1106,21 @@ public class PaymentController {
                                       }
                                     }
                                     """),
-                            @ExampleObject(name = "Card declined, checkout still open", value = """
+                            @ExampleObject(name = "Card declined (the attempt is closed)", value = """
                                     {
                                       "code": "200 OK",
-                                      "message": "Your card was declined and you weren't charged. You can try another card.",
+                                      "message": "Your card was declined and you weren't charged. Try another card or pay another way.",
                                       "data": {
                                         "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
                                         "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
                                         "orderType": "BOOKING",
                                         "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
-                                        "status": "PROCESSING",
-                                        "stage": "AWAITING_PAYMENT",
+                                        "status": "FAILED",
+                                        "stage": "DECLINED",
                                         "fundsCaptured": false,
                                         "amountPaid": 100.00,
                                         "currency": "USD",
-                                        "paymentRail": "ZIMSWITCH_CARD",
-                                        "lastAttemptDeclined": true,
-                                        "checkoutId": "8a82944a4cc25ebf014cc2c782423202",
-                                        "checkoutScriptUrl": "https://eu-test.oppwa.com/v1/paymentWidgets.js?checkoutId=8a82944a4cc25ebf014cc2c782423202",
-                                        "checkoutIntegrity": "sha384-3phAZzHTYFuLtHT2AzM5PIYjPLGtqcBQXAq7fbQw0QHIhJEQZUJEG52uV6uWBSQE",
-                                        "checkoutBrands": "PRIVATE_LABEL",
-                                        "shopperResultUrl": "https://tickets.example.co.zw/checkout/card-result",
-                                        "checkoutExpiresAt": "2026-06-11T16:16:00+02:00"
+                                        "paymentRail": "ZIMSWITCH_CARD"
                                       }
                                     }
                                     """),

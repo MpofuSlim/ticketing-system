@@ -169,46 +169,38 @@ class PaymentDeclineAndStatusTest {
     }
 
     @Test
-    @DisplayName("GET an open card checkout whose card was declined: AWAITING_PAYMENT, lastAttemptDeclined, the same form")
-    void getOpenCardCheckoutAfterADecline() {
-        Payment open = row(UUID.randomUUID(), Payment.PaymentStatus.TOKEN_ISSUED, null, null);
-        open.setPaymentRail(PaymentRail.ZIMSWITCH_CARD);
-        open.setCompletedAt(null);
-        open.setCheckoutId("D750C6DB5A790FA78F5034D0674F995F.uat01-vm-tx01");
-        open.setCodeExpiresAt(Instant.now().plusSeconds(1200));
-        open.setCardDeclinedAt(Instant.now().minusSeconds(30));
-        when(payments.findById(open.getId())).thenReturn(Optional.of(open));
-        when(card.replayOpenCheckout(open)).thenReturn(new ZimswitchCardPaymentService.CardCheckoutOutcome(
-                open, false, open.getCheckoutId(),
-                "https://eu-test.oppwa.com/v1/paymentWidgets.js?checkoutId=" + open.getCheckoutId(),
-                "sha384-abc", "PRIVATE_LABEL", "https://tickets.example.co.zw/checkout/card-result",
-                open.getCodeExpiresAt(), null, null));
+    @DisplayName("GET a card ZimSwitch declined: DECLINED, the card message, no form, and another card or rail can start")
+    void getCardDeclined() {
+        Payment failed = row(UUID.randomUUID(), Payment.PaymentStatus.FAILED, "800.100.100",
+                "800.100.100 (transaction declined for unknown reason)");
+        failed.setPaymentRail(PaymentRail.ZIMSWITCH_CARD);
+        failed.setCheckoutId("A5B7FE0F325541E1E7CB659E5A8F8767.uat01-vm-tx02");
+        failed.setCardDeclinedAt(Instant.now().minusSeconds(30));
+        when(payments.findById(failed.getId())).thenReturn(Optional.of(failed));
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = controller.getPayment(open.getId().toString());
+        ResponseEntity<ApiResult<PaymentResponse>> resp = controller.getPayment(failed.getId().toString());
 
         PaymentResponse data = resp.getBody().getData();
-        assertThat(data.getStage()).isEqualTo(PaymentResponse.Stage.AWAITING_PAYMENT);
+        assertThat(data.getStage()).isEqualTo(PaymentResponse.Stage.DECLINED);
+        assertThat(data.getStatus()).isEqualTo(PaymentResponse.Status.FAILED);
         assertThat(data.getFundsCaptured()).isFalse();
-        assertThat(data.getLastAttemptDeclined()).isTrue();
-        assertThat(data.getCheckoutId()).isEqualTo(open.getCheckoutId());
+        assertThat(data.getCheckoutId()).isNull();
+        assertThat(data.getFailureReason()).isNull();
         assertThat(resp.getBody().getMessage()).isEqualTo(PaymentController.CARD_DECLINED_MESSAGE);
     }
 
     @Test
-    @DisplayName("GET a card attempt that ended declined: DECLINED, and no lastAttemptDeclined beside it")
-    void getCardAttemptEndedDeclined() {
-        Payment failed = row(UUID.randomUUID(), Payment.PaymentStatus.FAILED, "800.100.100",
-                "Card declined, read by the card poller past the checkout ceiling");
+    @DisplayName("GET a FAILED card attempt that never reached a card: the generic message, never 'your card was declined'")
+    void getCardAttemptRefusedBeforeAnyCard() {
+        Payment failed = row(UUID.randomUUID(), Payment.PaymentStatus.FAILED, "card_prepare_refused",
+                "ZimSwitch refused the checkout");
         failed.setPaymentRail(PaymentRail.ZIMSWITCH_CARD);
-        failed.setCheckoutId("4B16E70B7F5EF40A2BA0C9B1E5AA060C.uat01-vm-tx03");
-        failed.setCardDeclinedAt(Instant.now().minusSeconds(1800));
         when(payments.findById(failed.getId())).thenReturn(Optional.of(failed));
 
-        PaymentResponse data = controller.getPayment(failed.getId().toString()).getBody().getData();
+        ResponseEntity<ApiResult<PaymentResponse>> resp = controller.getPayment(failed.getId().toString());
 
-        assertThat(data.getStage()).isEqualTo(PaymentResponse.Stage.DECLINED);
-        assertThat(data.getLastAttemptDeclined()).isNull();
-        assertThat(data.getCheckoutId()).isNull();
+        assertThat(resp.getBody().getData().getStage()).isEqualTo(PaymentResponse.Stage.DECLINED);
+        assertThat(resp.getBody().getMessage()).isEqualTo("The payment didn't go through. Nothing was charged.");
     }
 
     @Test

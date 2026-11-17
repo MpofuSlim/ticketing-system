@@ -74,11 +74,13 @@ import java.util.UUID;
  *       {@link ReadTrigger#SHOPPER_RETURN} reads; the poller and a plain
  *       re-POST wait for the ceiling, when the checkout can no longer be paid
  *       and a read can no longer harm it.</li>
- *   <li><b>Declines before the ceiling don't close the row:</b> the decline is
- *       journalled and the row stays open, per the documented
- *       multi-transaction reuse. Whether the checkout survives the read that
- *       reported the decline is an open question for ZimSwitch. A decline read
- *       past the ceiling closes the row FAILED: no retry can follow it.</li>
+ *   <li><b>A decline closes the attempt, before the ceiling too:</b> the row
+ *       goes FAILED with {@code card_declined_at} stamped, which frees the
+ *       order's payment slot. The documented multi-transaction reuse does not
+ *       hold once the decline has been read: on staging (2026-11-17) the next
+ *       read of that checkout answered "No payment session found". So another
+ *       card is a fresh checkout on the same order, and another rail can
+ *       start at once.</li>
  *   <li><b>Every read is journalled</b> with ZimSwitch's result code and what
  *       triggered it, so a checkout that dies early can be traced to the read
  *       that preceded it.</li>
@@ -303,8 +305,8 @@ public class ZimswitchCardPaymentService {
     /**
      * Re-surface the widget artifacts for an existing open checkout (the
      * replay path). Only call for a TOKEN_ISSUED card row whose deadline has
-     * not passed — the documented checkout-reuse model: reload/back-button/
-     * declined-retry all re-render the SAME checkout.
+     * not passed: a reload or the back button re-renders the SAME checkout.
+     * A declined card never gets here, because the decline closes the row.
      */
     public CardCheckoutOutcome replayOpenCheckout(Payment p) {
         // Same rule as startCheckout, enforced on the OTHER path that emits
@@ -341,10 +343,18 @@ public class ZimswitchCardPaymentService {
 
     /**
      * Outcome of a status read (or a skipped one) on an open card checkout.
-     * {@code EXPIRED} means the row just closed unpaid and its slot is free:
-     * EXPIRED (no payment past the ceiling) or FAILED (declined past it).
+     * <ul>
+     *   <li>{@code EXPIRED}: the row just closed unpaid and its slot is free,
+     *       either EXPIRED (no payment past the ceiling) or FAILED (a card
+     *       declined, read by anything but the shopper's return). The caller
+     *       may start a fresh attempt.</li>
+     *   <li>{@code DECLINED}: the row just closed FAILED on a declined card,
+     *       read on the shopper's return. The caller reports the decline
+     *       instead of starting a fresh attempt: the shopper asked what
+     *       happened to the card they just entered.</li>
+     * </ul>
      */
-    public enum CardCheckOutcome { PAID, EXPIRED, PENDING }
+    public enum CardCheckOutcome { PAID, EXPIRED, DECLINED, PENDING }
 
     /**
      * Why a caller wants the checkout's status read. It decides whether a read
@@ -487,31 +497,24 @@ public class ZimswitchCardPaymentService {
                 return onPaidRead(p, status, trigger);
             }
             case REJECTED -> {
-                if (pastCeiling) {
-                    // No retry can follow a decline once the checkout is
-                    // past its ceiling: close the attempt and free the slot.
-                    paymentRecordService.markFailed(p.getId(),
-                            status.resultCode() != null ? status.resultCode() : "card_declined",
-                            "Card declined, read " + trigger.journalLabel + " past the checkout ceiling: "
-                                    + answer);
-                    metrics.incCardResolution("declined_closed");
-                    log.info("[zimswitch-card] attempt declined past the ceiling paymentReference={} resultCode={} — closed FAILED",
-                            p.getPaymentReference(), status.resultCode());
-                    return CardCheckOutcome.EXPIRED;
-                }
-                // Before the ceiling a decline closes the ATTEMPT, not the
-                // row: the documented multi-transaction reuse lets the shopper
-                // try another card. Whether the checkout survives this read is
-                // an open question for ZimSwitch (docs/api/zimswitch-copyandpay.md).
-                // The stamp is what makes the response say "declined"
-                // rather than "no payment yet" (lastAttemptDeclined).
-                metrics.incCardResolution("declined_noted");
-                paymentRecordService.noteCardDeclined(p.getId(),
-                        "Card status read " + trigger.journalLabel + ": declined " + answer
-                                + " — checkout stays open for a retry");
-                log.info("[zimswitch-card] attempt declined paymentReference={} resultCode={} — checkout stays open",
-                        p.getPaymentReference(), status.resultCode());
-                return CardCheckOutcome.PENDING;
+                // A decline closes the attempt at once, before the ceiling
+                // too. The checkout cannot be used again: a second read of a
+                // declined checkout answers "No payment session found"
+                // (staging, 2026-11-17, within a minute of the decline). Kept
+                // open, the row held the order's only payment slot for up to
+                // 30 minutes, so the shopper could neither try another card
+                // nor pay another way, and a website retried by booking again.
+                // Closed, a retry is a fresh checkout on the same order.
+                paymentRecordService.markCardDeclined(p.getId(),
+                        status.resultCode() != null ? status.resultCode() : "card_declined",
+                        answer,
+                        "Card declined, read " + trigger.journalLabel
+                                + (pastCeiling ? " past the checkout ceiling" : "") + ": " + answer
+                                + " — attempt closed");
+                metrics.incCardResolution("declined_closed");
+                log.info("[zimswitch-card] card declined paymentReference={} resultCode={} trigger={} — attempt closed FAILED",
+                        p.getPaymentReference(), status.resultCode(), trigger);
+                return trigger == ReadTrigger.SHOPPER_RETURN ? CardCheckOutcome.DECLINED : CardCheckOutcome.EXPIRED;
             }
             case PENDING -> {
                 metrics.incCardResolution("still_pending");

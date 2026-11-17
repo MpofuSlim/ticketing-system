@@ -185,7 +185,10 @@ Two consequences the code depends on:
 
 1. **Never mint a fresh checkout on retry** while the current one is live —
    reuse the stored `checkoutId`. Same rule as "code generation is NEVER
-   retried" on the InnBucks rail, for the same reason.
+   retried" on the InnBucks rail, for the same reason. A checkout whose card
+   was declined is not live any more (measured 2026-11-17, see "A decline
+   closes the attempt" below): the decline closes its row, and a retry then
+   prepares a new checkout.
 2. **One ledger row ≠ one gateway transaction.** A single checkout can carry
    several attempts (reload, back button, a decline then a success). The
    status response is what resolves which one counts.
@@ -334,27 +337,30 @@ Nuances the classifier table can't carry:
   grace (past the gateway's own 30-minute ceiling, when no new transaction
   can exist) it is a POSITIVE never-paid answer and the row is `EXPIRED`,
   freeing the order's payment slot.
-- **A decline before the ceiling does NOT close the row.** The documented
-  multi-transaction reuse says the shopper can try another card on the same
-  checkout, so the decline is journalled and the row stays open. **Open:**
-  whether the checkout survives the status read that reported the decline
-  (see §3 and open question 4). If it does not, the shopper's retry renders
-  "checkoutId is invalid" and the order's payment slot stays held until the
-  ceiling. A decline read **past** the ceiling closes the row `FAILED`
-  (stage `DECLINED` on `GET /payments/{transactionId}`): no retry can follow.
-- **The open row says it was declined.** The decline read stamps
-  `payment.card_declined_at` (V18), and while the row is still open
-  (`AWAITING_PAYMENT`) both `POST /payments` and `GET /payments/{transactionId}`
-  answer `lastAttemptDeclined: true`, with "Your card was declined and you
-  weren't charged. You can try another card." as the message. It names no other
-  payment method on purpose: while the checkout is open the order's one payment
-  slot is the card's, so a POST asking for EcoCash or an InnBucks code replays
-  this checkout, and another method can start only once its ceiling has passed.
-  Without the flag the answer was identical to "the
-  shopper came back without paying", and the clients told a declined shopper
-  "If you were charged, we'll confirm within 30 minutes" (staging, 2026-11-17,
-  `800.100.100` on checkouts `4B16E70B…uat01-vm-tx03` and `D750C6DB…uat01-vm-tx01`,
-  ZimSwitch's test card, USD 0.30; the reason for the decline is with ZimSwitch).
+- **A decline closes the attempt at once, before the ceiling too.** The row
+  goes `FAILED` with `payment.card_declined_at` (V18) stamped in the same
+  transition, which frees the order's payment slot. On the shopper's return the
+  answer is stage `DECLINED`, status `FAILED`, `fundsCaptured: false`, no widget
+  fields, and "Your card was declined and you weren't charged. Try another card
+  or pay another way." (`GET /payments/{transactionId}` answers the same). The
+  client's next `POST /payments` for that order starts a NEW checkout, or
+  EcoCash, or an InnBucks code, at once. A return POSTed twice for the closed
+  checkout is answered with the decline again, never with a new checkout
+  (`payment.payments.card_return{resource_path="closed"}`).
+  - **Why, measured on staging (2026-11-17):** the documented multi-transaction
+    reuse (another card on the same checkout, §2) does not survive the status
+    read that reported the decline. The next read of checkout
+    `8743CDB7…uat01-vm-tx03`, 54 seconds after its decline, answered
+    `200.300.404` "No payment session found". While the row was kept open
+    (#826, #828: `lastAttemptDeclined`, now removed) it held the order's only
+    payment slot for up to 30 minutes, so the shopper could neither try another
+    card nor pay another way, and Ticketize web retried by booking again.
+  - **Every card we tried on UAT is declined `800.100.100`**, ZimSwitch's test
+    card and a made-up number alike (2026-11-17). That is ZimSwitch's setup for
+    our entity, asked in open question 2.
+  - A decline read by anything but the shopper's return (the poller, a plain
+    re-POST past the ceiling) closes the attempt the same way and lets that
+    request start what it asked for.
 - A pending row is **never** auto-failed early — blocked slot beats double
   charge, same rule as the InnBucks rail.
 - An unmatched code classifies as a decline, never as success — the success
@@ -486,7 +492,11 @@ Tracked here so the answers land in-tree with the code they affect:
    invalid" within minutes. Is that by design? And after a status read that
    reports a DECLINE, can the shopper try another card on the same checkout
    (the documented multi-transaction reuse), or must we prepare a new one?
-   The answer decides whether a decline on return should close the row.
+   **Acted on, 2026-11-17:** the next read after a decline answered "No
+   payment session found", so a decline now closes the attempt and another
+   card is a new checkout. If ZimSwitch says a declined checkout CAN still
+   take a payment, that change must be revisited before cards go live: the
+   closed row would no longer be watched for a late payment on that checkout.
 
 (1) is answered: `ZIMSWITCH_BRANDS` is `PRIVATE_LABEL` on **every** host,
 staging included. `VISA MASTER` is not a fallback and there is no per-host

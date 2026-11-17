@@ -141,8 +141,10 @@ public class PaymentMetrics {
     /**
      * Outcome of each card-status resolution pass over a TOKEN_ISSUED card
      * row (poller or customer-triggered instant check).
-     * outcome={paid, paid_unconfirmed, declined_noted, still_pending,
-     * not_found_pending, expired, throttled_skip, echo_mismatch, error}.
+     * outcome={paid, paid_unconfirmed, declined_closed, still_pending,
+     * not_found_pending, expired, read_deferred, throttled_skip, echo_mismatch,
+     * error}. `declined_closed` is every declined card: the decline closes the
+     * attempt at once.
      * `paid` is the conversion signal; `expired` the abandon rate;
      * `echo_mismatch` is page-NOW territory (a paid read whose
      * amount/currency/reference echo disagrees with the ledger is parked
@@ -154,7 +156,9 @@ public class PaymentMetrics {
      * the request's {@code resourcePath} was: {@code absent} (none sent, a plain
      * re-POST), {@code matches} (the redirect for THIS checkout: the shopper is
      * back from ZimSwitch and the status is read) or {@code other} (a value naming
-     * another checkout, ignored). A result page that never sends it shows as
+     * another checkout, ignored), plus {@code closed}: a return naming a checkout
+     * whose attempt already ended, answered with how it ended (a result page
+     * that POSTs its return twice). A result page that never sends it shows as
      * {@code absent} only, which is how a site that drops the redirect's
      * parameter is told apart from a gateway that never sent one.
      */

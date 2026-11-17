@@ -330,24 +330,23 @@ public class PaymentRecordService {
     }
 
     /**
-     * Card flow: ZimSwitch declined a card on this row's checkout, read
-     * before the checkout's ceiling. The row stays open (another card can
-     * still be paid on that checkout), so this is a journal note, not a
-     * transition, plus the stamp the response reads to say the last try was
-     * declined. One transaction, so the two never disagree. The stamp lands
-     * only while the row is still open.
+     * Card flow: ZimSwitch declined a card on this row's checkout. Closes the
+     * attempt FAILED, which frees the order's payment slot, and stamps
+     * {@code card_declined_at} in the same transition, so the response can
+     * say "your card was declined" rather than the generic failure. One
+     * transition, so the status and the stamp never disagree. Refused like
+     * any illegal transition when the row is no longer open (a paid row stays
+     * paid and gets no stamp).
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void noteCardDeclined(UUID id, String detail) {
-        Payment payment = repository.findById(id).orElse(null);
-        if (payment == null) {
-            log.error("card decline noted for missing payment id={} detail={}", id, detail);
-            return;
-        }
-        // One column, by a targeted update: a whole-row save of the row read
-        // above could put an older status back (see stampCardDeclined).
-        repository.stampCardDeclined(id, Instant.now());
-        recordEvent(payment, payment.getStatus(), payment.getStatus(), detail, null);
+    public void markCardDeclined(UUID id, String upstreamCode, String upstreamMessage, String detail) {
+        transition(id, PaymentStatus.FAILED, detail, null, payment -> {
+            Instant now = Instant.now();
+            payment.setUpstreamErrorCode(truncate(upstreamCode, 64));
+            payment.setUpstreamErrorMessage(truncate(upstreamMessage, 500));
+            payment.setCardDeclinedAt(now);
+            payment.setCompletedAt(now);
+        });
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
