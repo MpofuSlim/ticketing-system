@@ -6,6 +6,7 @@ Run: python3 -m unittest discover -s prometheus/alert-notifier -v
 """
 
 import base64
+import http.client
 import json
 import logging
 import socket
@@ -253,6 +254,26 @@ class RelayTest(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code
 
+    def post_declaring_length(self, route, declared):
+        """POST that DECLARES a body of `declared` bytes but sends one byte.
+
+        The notifier refuses an oversized webhook on its Content-Length alone,
+        without reading the body, and closes the connection. Uploading the
+        whole body raced that early answer: on a fast runner the test was
+        still writing when the socket closed, and got "Broken pipe" instead
+        of the 413 (master, 2026-11-17)."""
+        host, port = self.server.server_address[:2]
+        conn = http.client.HTTPConnection(host, port, timeout=10)
+        try:
+            conn.putrequest("POST", "/" + route)
+            conn.putheader("Authorization", "Bearer " + TOKEN)
+            conn.putheader("Content-Type", "application/json")
+            conn.putheader("Content-Length", str(declared))
+            conn.endheaders(b"x")
+            return conn.getresponse().status
+        finally:
+            conn.close()
+
     def get(self, path):
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
@@ -341,7 +362,7 @@ class RelayTest(unittest.TestCase):
     def test_bodies_alertmanager_never_sends_are_refused(self):
         self.assertEqual(self.post("page", None, raw=b"not json"), 400)
         self.assertEqual(self.post("page", {"status": "firing"}), 400)
-        self.assertEqual(self.post("page", None, raw=b"x" * (an.MAX_BODY_BYTES + 1)), 413)
+        self.assertEqual(self.post_declaring_length("page", an.MAX_BODY_BYTES + 1), 413)
         self.assertEqual(self.post("elsewhere", webhook()), 404)
         self.assertEqual(self.gateway.requests, [])
 
