@@ -89,7 +89,7 @@ class ZimswitchCardPaymentServiceTest {
                                             String amount, String currency, String merchantRef) {
         return new CardPaymentStatus(outcome, "gw-tx-1",
                 amount == null ? null : new BigDecimal(amount), currency,
-                "VISA", "DB", merchantRef, code, "desc", "ndc-1");
+                "VISA", "DB", merchantRef, code, "desc", "ndc-1", null);
     }
 
     @Test
@@ -528,6 +528,22 @@ class ZimswitchCardPaymentServiceTest {
         verify(records).markFailed(eq(p.getId()), eq("800.100.153"), contains("past the checkout ceiling"));
         verify(records, never()).markExpired(any(), any());
         verifyNoInteractions(resolution);
+    }
+
+    @Test
+    @DisplayName("a 200.300.404 that names the refused parameter keeps it in the journal")
+    void notFound_withParameterErrors_journalsThem() {
+        Payment p = openCardRow();
+        when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(new CardPaymentStatus(
+                ZimswitchResultCode.CHECKOUT_NOT_FOUND, null, null, null, null, null, null,
+                "200.300.404", "invalid or missing parameter", "ndc-1",
+                "checkoutId: no payment session found for the requested id"));
+
+        service.resolveOpenCheckout(p, NO_GAP, RETURN);
+
+        verify(records).noteEvent(eq(p.getId()), eq("Card status read on the shopper's return: no payment yet "
+                + "200.300.404 (invalid or missing parameter) "
+                + "[checkoutId: no payment session found for the requested id]"));
     }
 
     @Test

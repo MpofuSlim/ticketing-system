@@ -29,6 +29,12 @@ import java.math.BigDecimal;
  * @param resultCode      raw {@code result.code} (journalled verbatim)
  * @param resultMessage   raw {@code result.description}
  * @param ndc             gateway correlation handle for support
+ * @param parameterErrors {@code result.parameterErrors} rendered as
+ *                        {@code name: message; name: message}: which request
+ *                        parameter the gateway refused, and why. The values are
+ *                        left out on purpose (they echo what was sent). Null
+ *                        when the reply carries none. Journalled and logged so
+ *                        a {@code 200.300.404} explains itself.
  */
 public record CardPaymentStatus(
         ZimswitchResultCode outcome,
@@ -40,5 +46,6 @@ public record CardPaymentStatus(
         String merchantTransactionId,
         String resultCode,
         String resultMessage,
-        String ndc) {
+        String ndc,
+        String parameterErrors) {
 }

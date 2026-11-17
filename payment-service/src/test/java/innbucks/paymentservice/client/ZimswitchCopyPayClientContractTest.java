@@ -386,6 +386,52 @@ class ZimswitchCopyPayClientContractTest {
     }
 
     @Test
+    @DisplayName("status 200.300.404 with parameterErrors: each refused parameter and why, never its value")
+    void status_parameterErrors_areKeptWithoutTheirValues() {
+        wireMock.stubFor(get(urlEqualTo(STATUS_PATH))
+                .willReturn(aResponse().withStatus(400)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                { "result": { "code": "200.300.404",
+                                    "description": "invalid or missing parameter",
+                                    "parameterErrors": [
+                                      { "name": "checkoutId", "value": "SECRET-ECHO-1",
+                                        "message": "no payment session found for the requested id" },
+                                      { "name": "entityId", "value": "SECRET-ECHO-2",
+                                        "message": "line one\\nline two" }
+                                    ] },
+                                  "ndc": "n" }
+                                """)));
+
+        CardPaymentStatus status = newClient("http://localhost:" + wireMock.port())
+                .getPaymentStatus(CHECKOUT_ID);
+
+        assertThat(status.outcome()).isEqualTo(ZimswitchResultCode.CHECKOUT_NOT_FOUND);
+        assertThat(status.resultMessage()).isEqualTo("invalid or missing parameter");
+        assertThat(status.parameterErrors()).isEqualTo(
+                "checkoutId: no payment session found for the requested id; entityId: line one line two");
+        assertThat(status.parameterErrors()).doesNotContain("SECRET-ECHO");
+    }
+
+    @Test
+    @DisplayName("parameterErrors: absent or empty is null, and a long list is capped")
+    void parameterErrors_absentEmptyAndCapped() {
+        assertThat(ZimswitchCopyPayClient.parameterErrorsOf(java.util.Map.of())).isNull();
+        assertThat(ZimswitchCopyPayClient.parameterErrorsOf(java.util.Map.of(
+                "result", java.util.Map.of("code", "200.300.404")))).isNull();
+        assertThat(ZimswitchCopyPayClient.parameterErrorsOf(java.util.Map.of(
+                "result", java.util.Map.of("parameterErrors", java.util.List.of())))).isNull();
+
+        java.util.List<java.util.Map<String, Object>> many = new java.util.ArrayList<>();
+        for (int i = 0; i < 40; i++) {
+            many.add(java.util.Map.of("name", "field" + i, "message", "is not valid"));
+        }
+        String capped = ZimswitchCopyPayClient.parameterErrorsOf(java.util.Map.of(
+                "result", java.util.Map.of("parameterErrors", many)));
+        assertThat(capped).hasSize(ZimswitchCopyPayClient.PARAMETER_ERRORS_MAX).endsWith("...");
+    }
+
+    @Test
     @DisplayName("status 5xx then success: the read-only call IS retried")
     void status_retriesOn5xx() {
         wireMock.stubFor(get(urlEqualTo(STATUS_PATH))
@@ -464,6 +510,7 @@ class ZimswitchCopyPayClientContractTest {
 
         assertThat(status.outcome()).isEqualTo(ZimswitchResultCode.CHECKOUT_NOT_FOUND);
         assertThat(status.resultCode()).isEqualTo("200.300.404");
+        assertThat(status.parameterErrors()).as("the observed reply carries none").isNull();
         // The dot/hyphen id must survive into the path UNESCAPED — a client
         // that percent-encoded them would 404 against a different resource.
         wireMock.verify(getRequestedFor(urlEqualTo(observedStatusPath))

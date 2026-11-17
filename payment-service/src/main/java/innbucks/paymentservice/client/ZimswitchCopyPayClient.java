@@ -21,6 +21,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -258,8 +259,10 @@ public class ZimswitchCopyPayClient {
             // result.code/description when the body carries one.
             CheckoutPreparation refused = classifyPreparation(e.getResponseBodyAsString());
             if (refused.resultCode() != null) {
-                log.warn("zimswitch refused checkout preparation merchantTransactionId={} status={} resultCode={} msg={}",
-                        merchantTransactionId, status, refused.resultCode(), refused.resultMessage());
+                log.warn("zimswitch refused checkout preparation merchantTransactionId={} status={} resultCode={} msg={} "
+                                + "parameterErrors={}",
+                        merchantTransactionId, status, refused.resultCode(), refused.resultMessage(),
+                        parameterErrorsOf(parseJson(e.getResponseBodyAsString())));
                 return refused;
             }
             log.error("zimswitch rejected checkout preparation merchantTransactionId={} status={} body={}",
@@ -363,7 +366,37 @@ public class ZimswitchCopyPayClient {
                 asString(parsed.get("merchantTransactionId")),
                 resultCode,
                 resultDescriptionOf(parsed),
-                asString(parsed.get("ndc")));
+                asString(parsed.get("ndc")),
+                parameterErrorsOf(parsed));
+    }
+
+    /** Longest rendering of {@code result.parameterErrors} kept; the journal row holds 500 characters in all. */
+    static final int PARAMETER_ERRORS_MAX = 240;
+
+    /**
+     * {@code result.parameterErrors} as one line, {@code name: message; name: message}.
+     * The gateway names the parameter it refused and why, which a bare
+     * {@code 200.300.404} ("invalid or missing parameter") does not. Each
+     * entry's {@code value} is dropped: it echoes what was sent. Control and
+     * line-break characters become spaces, and the line is capped at
+     * {@link #PARAMETER_ERRORS_MAX}. Null when there are none.
+     */
+    @SuppressWarnings("unchecked")
+    static String parameterErrorsOf(Map<String, Object> parsed) {
+        if (!(parsed.get("result") instanceof Map<?, ?> result)) return null;
+        if (!(((Map<String, Object>) result).get("parameterErrors") instanceof List<?> errors)) return null;
+        StringBuilder out = new StringBuilder();
+        for (Object entry : errors) {
+            if (!(entry instanceof Map<?, ?> error)) continue;
+            String name = asString(((Map<String, Object>) error).get("name"));
+            String message = asString(((Map<String, Object>) error).get("message"));
+            if (name == null && message == null) continue;
+            if (!out.isEmpty()) out.append("; ");
+            out.append(name != null ? name : "?").append(": ").append(message != null ? message : "refused");
+        }
+        if (out.isEmpty()) return null;
+        String line = out.toString().replaceAll("\\p{Cntrl}", " ").strip();
+        return line.length() <= PARAMETER_ERRORS_MAX ? line : line.substring(0, PARAMETER_ERRORS_MAX - 3) + "...";
     }
 
     @SuppressWarnings("unchecked")

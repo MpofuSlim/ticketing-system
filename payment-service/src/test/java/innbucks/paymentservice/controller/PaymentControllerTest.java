@@ -72,15 +72,17 @@ class PaymentControllerTest {
     private record Fixture(PaymentController controller,
                            InnbucksPaymentService innbucks, PaymentRepository payments,
                            PaymentRecordService records,
-                           innbucks.paymentservice.service.ZimswitchCardPaymentService card) {}
+                           innbucks.paymentservice.service.ZimswitchCardPaymentService card,
+                           PaymentMetrics metrics) {}
 
     private static Fixture fixture() {
         InnbucksPaymentService innbucks = mock(InnbucksPaymentService.class);
         PaymentRepository payments = mock(PaymentRepository.class);
         PaymentRecordService records = mock(PaymentRecordService.class);
         var card = mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class);
+        PaymentMetrics metrics = newMetrics();
         PaymentController controller = new PaymentController(
-                mock(LoyaltyServiceClient.class), newMetrics(),
+                mock(LoyaltyServiceClient.class), metrics,
                 innbucks, card,
                 new innbucks.paymentservice.client.ZimswitchProperties(),
                 mock(innbucks.paymentservice.service.EcocashPaymentService.class), records, payments);
@@ -89,7 +91,7 @@ class PaymentControllerTest {
         // so replay tests exercise the plain replay path unless they say otherwise.
         lenient().when(innbucks.tryResolveOpenCode(any()))
                 .thenReturn(InnbucksPaymentService.InstantCheckOutcome.PENDING);
-        return new Fixture(controller, innbucks, payments, records, card);
+        return new Fixture(controller, innbucks, payments, records, card, metrics);
     }
 
     /** Stubs the repository's replay lookup for a BOOKING order key. */
@@ -417,6 +419,37 @@ class PaymentControllerTest {
 
         assertEquals(innbucks.paymentservice.service.ZimswitchCardPaymentService.ReadTrigger.CUSTOMER_RETRY,
                 triggerOf(f), "an older checkout's redirect says nothing about the open one");
+    }
+
+    private static double cardReturns(Fixture f, String resourcePath) {
+        var registry = (io.micrometer.core.instrument.MeterRegistry)
+                org.springframework.test.util.ReflectionTestUtils.getField(f.metrics(), "registry");
+        var counter = registry.find("payment.payments.card_return").tag("resource_path", resourcePath).counter();
+        return counter == null ? 0.0 : counter.count();
+    }
+
+    @Test
+    void cardReturn_isCountedByWhatItsResourcePathWas() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        replayLookup(f, bookingId).thenReturn(Optional.of(openCardRow(bookingId, CHECKOUT)));
+        when(f.card().resolveOpenCheckout(any(), any(), any()))
+                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
+
+        f.controller().processPayment(paymentFor(bookingId));                  // none sent
+        PaymentRequest blank = paymentFor(bookingId);
+        blank.setResourcePath("  ");                                           // blank is none too
+        f.controller().processPayment(blank);
+        PaymentRequest returned = paymentFor(bookingId);
+        returned.setResourcePath("/v1/checkouts/" + CHECKOUT + "/payment");    // the redirect for THIS checkout
+        f.controller().processPayment(returned);
+        PaymentRequest stale = paymentFor(bookingId);
+        stale.setResourcePath("/v1/checkouts/43914C7C89177901A2E33EE1C6CCB1C7.uat01-vm-tx02/payment");
+        f.controller().processPayment(stale);                                  // another checkout's
+
+        assertEquals(2.0, cardReturns(f, "absent"));
+        assertEquals(1.0, cardReturns(f, "matches"));
+        assertEquals(1.0, cardReturns(f, "other"));
     }
 
     @Test

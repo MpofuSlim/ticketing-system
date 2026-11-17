@@ -149,6 +149,23 @@ public class PaymentMetrics {
      * IN_DOUBT for an operator); a sustained `error` drip means the status
      * contract broke WHILE customer money may be waiting.
      */
+    /**
+     * Card returns to {@code POST /payments} on an open ZimSwitch checkout, by what
+     * the request's {@code resourcePath} was: {@code absent} (none sent, a plain
+     * re-POST), {@code matches} (the redirect for THIS checkout: the shopper is
+     * back from ZimSwitch and the status is read) or {@code other} (a value naming
+     * another checkout, ignored). A result page that never sends it shows as
+     * {@code absent} only, which is how a site that drops the redirect's
+     * parameter is told apart from a gateway that never sent one.
+     */
+    public void incCardReturn(String resourcePath) {
+        Counter.builder("payment.payments.card_return")
+                .description("POST /payments on an open card checkout, by the resourcePath it carried")
+                .tag("resource_path", resourcePath)
+                .register(registry)
+                .increment();
+    }
+
     public void incCardResolution(String outcome) {
         Counter.builder("payment.payments.card_resolution")
                 .description("Card-status resolutions of TOKEN_ISSUED ZimSwitch payments, by outcome")
