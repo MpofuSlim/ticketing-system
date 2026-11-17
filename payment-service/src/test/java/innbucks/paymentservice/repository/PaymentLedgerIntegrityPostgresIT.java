@@ -110,6 +110,34 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
         return p;
     }
 
+    @Autowired
+    private innbucks.paymentservice.service.PaymentRecordService records;
+
+    /**
+     * A card decline on an open checkout is stamped on its one column, and
+     * only while the row is open: a row that completed in the meantime keeps
+     * its status and gets no stamp (a whole-row save could have written the
+     * older status back).
+     */
+    @Test
+    void cardDecline_stampsOnlyAnOpenRow_andNeverTouchesItsStatus() {
+        java.time.Instant now = java.time.Instant.now();
+        Payment open = payments.saveAndFlush(cardRow(PaymentStatus.TOKEN_ISSUED, now, now.plusSeconds(1500)));
+        Payment paid = payments.saveAndFlush(cardRow(PaymentStatus.COMPLETED_UNCONFIRMED, now, now.plusSeconds(1500)));
+
+        records.noteCardDeclined(open.getId(), "Card status read on the shopper's return: declined 800.100.100");
+        records.noteCardDeclined(paid.getId(), "Card status read on the shopper's return: declined 800.100.100");
+
+        Payment openAfter = payments.findById(open.getId()).orElseThrow();
+        assertEquals(PaymentStatus.TOKEN_ISSUED, openAfter.getStatus());
+        assertTrue(openAfter.getCardDeclinedAt() != null, "the open row carries the decline");
+        Payment paidAfter = payments.findById(paid.getId()).orElseThrow();
+        assertEquals(PaymentStatus.COMPLETED_UNCONFIRMED, paidAfter.getStatus());
+        assertNull(paidAfter.getCardDeclinedAt(), "a row that is no longer open is not stamped");
+        assertTrue(events.findAll().stream().anyMatch(e -> open.getId().equals(e.getPaymentId())
+                && e.getDetail().contains("800.100.100") && "TOKEN_ISSUED".equals(e.getToStatus())));
+    }
+
     @Test
     void secondActivePaymentForSameBooking_isRefusedByTheIndex() {
         UUID bookingId = UUID.randomUUID();

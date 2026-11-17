@@ -15,6 +15,8 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -287,6 +289,42 @@ class PaymentRecordServiceTest {
         assertEquals("TOKEN_ISSUED", ev.getValue().getFromStatus());
         assertEquals("TOKEN_ISSUED", ev.getValue().getToStatus());
         assertEquals("Payment code delivered via SMS", ev.getValue().getDetail());
+    }
+
+    @Test
+    void noteCardDeclined_stampsTheRowAndJournals_withoutStatusChange() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        PaymentEventRepository events = mock(PaymentEventRepository.class);
+        Payment p = payment(PaymentStatus.TOKEN_ISSUED);
+        when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        java.time.Instant before = java.time.Instant.now();
+
+        new PaymentRecordService(repo, events, mock(AuditService.class))
+                .noteCardDeclined(p.getId(), "Card status read on the shopper's return: declined 800.100.100");
+
+        assertEquals(PaymentStatus.TOKEN_ISSUED, p.getStatus(), "a decline before the ceiling keeps the row open");
+        // The stamp is what the response reads as lastAttemptDeclined, and it
+        // is ONE column: a whole-row save could put an older status back.
+        verify(repo).stampCardDeclined(eq(p.getId()), argThat(at -> !at.isBefore(before)));
+        verify(repo, never()).save(any());
+        ArgumentCaptor<PaymentEvent> ev = ArgumentCaptor.forClass(PaymentEvent.class);
+        verify(events).save(ev.capture());
+        assertEquals("TOKEN_ISSUED", ev.getValue().getFromStatus());
+        assertEquals("TOKEN_ISSUED", ev.getValue().getToStatus());
+        assertEquals("Card status read on the shopper's return: declined 800.100.100", ev.getValue().getDetail());
+    }
+
+    @Test
+    void noteCardDeclined_missingRow_writesNothing() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        PaymentEventRepository events = mock(PaymentEventRepository.class);
+        UUID id = UUID.randomUUID();
+        when(repo.findById(id)).thenReturn(Optional.empty());
+
+        new PaymentRecordService(repo, events, mock(AuditService.class)).noteCardDeclined(id, "declined");
+
+        verify(repo, never()).stampCardDeclined(any(), any());
+        verify(events, never()).save(any());
     }
 
     // -- isActiveOrderConflict ------------------------------------------------

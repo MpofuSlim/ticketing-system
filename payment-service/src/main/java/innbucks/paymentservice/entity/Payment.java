@@ -240,6 +240,16 @@ public class Payment {
     @Column(name = "card_status_checked_at")
     private Instant cardStatusCheckedAt;
 
+    /**
+     * When ZimSwitch last reported a DECLINED card on this row's checkout
+     * while it was still open (before its ceiling). The row stays open, so
+     * this is what lets the response say the last try was declined instead
+     * of "no payment yet". Written only by
+     * {@code PaymentRecordService.noteCardDeclined}.
+     */
+    @Column(name = "card_declined_at")
+    private Instant cardDeclinedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
