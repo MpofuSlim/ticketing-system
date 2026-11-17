@@ -435,15 +435,16 @@ isConfigured() gate, mirroring the `BANK_API_*` credential pattern.
   the shopper sees no form while the checkout holds the order's slot. The
   A08 cost of the fallback is an unpinned third-party script; that trade is
   deliberate and is called out in the FE brief.
-- **`shopperResultUrl` is pinned upstream at mint time but read live from
-  config on every response.** It is sent as a prepare-checkout parameter (so
-  the gateway holds its own copy for async/3DS returns) but is NOT persisted
-  on the payment row. If the value changes while a checkout is open, the
-  gateway still holds the old one while our response advertises the new one.
-  Bounded by the ≤30-minute checkout life and only reachable via a config
-  change plus restart, so it is documented rather than fixed; persisting it
-  alongside `checkout_id` / `checkout_integrity` would be the clean fix if it
-  ever bites.
+- **`shopperResultUrl` is never sent on prepare-checkout; the widget's form
+  `action` is its only source.** The widget sends it with the payment when
+  the shopper presses Pay now, and ZimSwitch refuses a payment whose checkout
+  already holds one. Measured on UAT 2026-11-17 with ZimSwitch's test card:
+  the widget redirected the shopper back with `resourcePath`, and the status
+  read answered `200.300.404` "invalid or missing parameter" with
+  `parameterErrors` `shopperResultUrl: was already set and cannot be
+  overwritten`. No payment was created. Until then we sent it on the prepare
+  too, which is why every UAT card attempt read "no payment". Our response
+  still returns it, read from config, for the form `action`.
 
 ## Not yet modelled
 

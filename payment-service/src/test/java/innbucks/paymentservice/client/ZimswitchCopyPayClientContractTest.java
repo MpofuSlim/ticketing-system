@@ -172,20 +172,46 @@ class ZimswitchCopyPayClientContractTest {
     }
 
     @Test
-    @DisplayName("prepare: shopperResultUrl rides the body so ASYNC brands (3DS) can redirect the shopper back")
-    void prepare_sendsShopperResultUrl() {
+    @DisplayName("OBSERVED 2026-11-17: prepare never sends shopperResultUrl — the widget sends it, and ZimSwitch refuses a second copy")
+    void prepare_neverSendsShopperResultUrl() {
+        // With it on the prepare, ZimSwitch refused the widget's payment:
+        // 200.300.404 "shopperResultUrl: was already set and cannot be
+        // overwritten", so no card payment was ever created on UAT.
         wireMock.stubFor(post(urlEqualTo("/v1/checkouts"))
                 .willReturn(aResponse().withStatus(200)
                         .withHeader("Content-Type", "application/json")
                         .withBody(PREPARED_OK)));
 
-        newClient("http://localhost:" + wireMock.port())
+        CheckoutPreparation prepared = newClient("http://localhost:" + wireMock.port())
                 .prepareCheckout("TKT-PMT-x", 100, "USD");
 
-        // Form-encoded, so the URL arrives percent-encoded in the body.
+        assertThat(prepared.created()).isTrue();
         wireMock.verify(postRequestedFor(urlEqualTo("/v1/checkouts"))
-                .withRequestBody(containing("shopperResultUrl=" +
-                        java.net.URLEncoder.encode(RESULT_URL, java.nio.charset.StandardCharsets.UTF_8))));
+                .withRequestBody(notContaining("shopperResultUrl")));
+    }
+
+    @Test
+    @DisplayName("OBSERVED 2026-11-17: the status reply naming shopperResultUrl as the refused parameter")
+    void status_shopperResultUrlAlreadySet_isNoPaymentWithItsReason() {
+        wireMock.stubFor(get(urlEqualTo(STATUS_PATH))
+                .willReturn(aResponse().withStatus(400)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                { "result": { "code": "200.300.404",
+                                    "description": "invalid or missing parameter",
+                                    "parameterErrors": [
+                                      { "name": "shopperResultUrl",
+                                        "value": "https://ticketize.vercel.app/checkout/card-result",
+                                        "message": "was already set and cannot be overwritten" } ] },
+                                  "ndc": "n" }
+                                """)));
+
+        CardPaymentStatus status = newClient("http://localhost:" + wireMock.port())
+                .getPaymentStatus(CHECKOUT_ID);
+
+        assertThat(status.outcome()).isEqualTo(ZimswitchResultCode.CHECKOUT_NOT_FOUND);
+        assertThat(status.parameterErrors())
+                .isEqualTo("shopperResultUrl: was already set and cannot be overwritten");
     }
 
     @Test
