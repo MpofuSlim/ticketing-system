@@ -114,28 +114,36 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
     private innbucks.paymentservice.service.PaymentRecordService records;
 
     /**
-     * A card decline on an open checkout is stamped on its one column, and
-     * only while the row is open: a row that completed in the meantime keeps
-     * its status and gets no stamp (a whole-row save could have written the
-     * older status back).
+     * A card decline closes the attempt on real Postgres: the row goes FAILED
+     * with the decline stamped, and the booking's one payment slot
+     * ({@code uq_payment_active_order}) is free at once, so another card or
+     * another rail can start without waiting for the checkout's 30 minutes.
+     * A row that completed in the meantime keeps its status and gets no stamp.
      */
     @Test
-    void cardDecline_stampsOnlyAnOpenRow_andNeverTouchesItsStatus() {
+    void cardDecline_closesTheAttempt_andFreesTheBookingsSlot() {
         java.time.Instant now = java.time.Instant.now();
         Payment open = payments.saveAndFlush(cardRow(PaymentStatus.TOKEN_ISSUED, now, now.plusSeconds(1500)));
         Payment paid = payments.saveAndFlush(cardRow(PaymentStatus.COMPLETED_UNCONFIRMED, now, now.plusSeconds(1500)));
 
-        records.noteCardDeclined(open.getId(), "Card status read on the shopper's return: declined 800.100.100");
-        records.noteCardDeclined(paid.getId(), "Card status read on the shopper's return: declined 800.100.100");
+        records.markCardDeclined(open.getId(), "800.100.100",
+                "800.100.100 (transaction declined for unknown reason)",
+                "Card declined, read on the shopper's return: 800.100.100 — attempt closed");
+        records.markCardDeclined(paid.getId(), "800.100.100", "declined", "Card declined");
 
         Payment openAfter = payments.findById(open.getId()).orElseThrow();
-        assertEquals(PaymentStatus.TOKEN_ISSUED, openAfter.getStatus());
-        assertTrue(openAfter.getCardDeclinedAt() != null, "the open row carries the decline");
+        assertEquals(PaymentStatus.FAILED, openAfter.getStatus());
+        assertTrue(openAfter.getCardDeclinedAt() != null, "the closed row says the card was declined");
+        assertEquals("800.100.100", openAfter.getUpstreamErrorCode());
         Payment paidAfter = payments.findById(paid.getId()).orElseThrow();
         assertEquals(PaymentStatus.COMPLETED_UNCONFIRMED, paidAfter.getStatus());
         assertNull(paidAfter.getCardDeclinedAt(), "a row that is no longer open is not stamped");
         assertTrue(events.findAll().stream().anyMatch(e -> open.getId().equals(e.getPaymentId())
-                && e.getDetail().contains("800.100.100") && "TOKEN_ISSUED".equals(e.getToStatus())));
+                && e.getDetail().contains("800.100.100") && "FAILED".equals(e.getToStatus())));
+
+        // The slot is free: a new attempt for the same booking can open now.
+        Payment retry = payments.saveAndFlush(row(open.getBookingId(), PaymentStatus.PENDING));
+        assertEquals(open.getOrderRef(), retry.getOrderRef());
     }
 
     @Test

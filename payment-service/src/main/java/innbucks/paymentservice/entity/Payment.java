@@ -241,11 +241,11 @@ public class Payment {
     private Instant cardStatusCheckedAt;
 
     /**
-     * When ZimSwitch last reported a DECLINED card on this row's checkout
-     * while it was still open (before its ceiling). The row stays open, so
-     * this is what lets the response say the last try was declined instead
-     * of "no payment yet". Written only by
-     * {@code PaymentRecordService.noteCardDeclined}.
+     * When ZimSwitch declined a card on this row's checkout. The same
+     * transition closes the row FAILED, so a stamped row is a declined card
+     * and the response can say so instead of the generic failure. Written
+     * only by {@code PaymentRecordService.markCardDeclined}. Rows stamped by
+     * the 2026-11-17 build (#826) stayed open; none is open any more.
      */
     @Column(name = "card_declined_at")
     private Instant cardDeclinedAt;

@@ -4988,19 +4988,22 @@ it pins the four wire facts that are easy to get wrong. Non-negotiables:
   and its trigger. Cost, accepted: a shopper who pays and never returns is
   confirmed at the ceiling (~30 min), inside the 33-minute hold. Don't add a
   caller that reads earlier; webhooks are the way to learn sooner.
-- **A decline before the ceiling does not close the row** (documented
-  multi-transaction reuse: another card on the same checkout). Whether the
-  checkout survives the read that reported the decline is open with
-  ZimSwitch (`docs/api/zimswitch-copyandpay.md`, open question 4). A decline
-  read past the ceiling closes it FAILED. **The open row still says it was
-  declined**: the read stamps `card_declined_at` (V18) and the response carries
-  `lastAttemptDeclined: true` beside `AWAITING_PAYMENT`, on POST and GET alike
-  (one derivation, in `replayResult`). Its message offers another card only:
-  until the ceiling a POST for any rail replays the open checkout, so "pay
-  another way" cannot start yet. Without it a declined shopper was told
-  "If you were charged, we'll confirm within 30 minutes". `200.300.404` ("no payment for this
-  checkout") only counts as positively-unpaid once the checkout's 30-minute
-  ceiling has passed.
+- **A decline closes the attempt at once, before the ceiling too.** The read
+  that reports it moves the row FAILED with `card_declined_at` stamped
+  (`PaymentRecordService.markCardDeclined`, one transition), freeing the
+  order's one payment slot. On the shopper's return the answer is stage
+  `DECLINED` ("Your card was declined and you weren't charged. Try another card
+  or pay another way."), no form; the next POST starts a new checkout or
+  another rail at once. A return POSTed again for that closed checkout is
+  answered with the decline, never with a new checkout. Why: on staging
+  (2026-11-17) the next read of a declined checkout answered "No payment
+  session found", so the documented multi-transaction reuse does not survive
+  the read. Kept open (#826/#828's `lastAttemptDeclined`, removed), the row
+  held the slot for 30 minutes and the website retried by booking again.
+  Open with ZimSwitch (question 4): if a declined checkout CAN still be paid,
+  revisit before cards go live, because the closed row is no longer watched.
+  `200.300.404` ("no payment for this checkout") only counts as
+  positively-unpaid once the checkout's 30-minute ceiling has passed.
 - **The order hold is sized BEFORE prepare; the ledger deadline is stamped
   AFTER it.** The hold (`OrderGateway.extendHold`) must land before any
   instrument exists, so it is sized from the call instant: checkout TTL +

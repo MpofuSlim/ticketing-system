@@ -165,21 +165,53 @@ class ZimswitchCardPaymentServiceTest {
     }
 
     @Test
-    @DisplayName("decline: journalled AND stamped as a decline, row STAYS open — the shopper may retry another card on the same checkout")
-    void decline_keepsCheckoutOpen() {
-        Payment p = openCardRow();
+    @DisplayName("decline on the shopper's return, before the ceiling: the attempt closes FAILED at once and the caller is told DECLINED")
+    void decline_onReturn_closesTheAttempt() {
+        // Staging, 2026-11-17: the next read of a declined checkout answered
+        // "No payment session found", so a declined checkout takes no other
+        // card. Kept open, it held the order's only payment slot for 30 minutes.
+        Payment p = openCardRow(); // deadline 23 minutes away
         when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
-                status(ZimswitchResultCode.REJECTED, "800.100.153", "92.00", "USD", p.getPaymentReference()));
+                status(ZimswitchResultCode.REJECTED, "800.100.100", "92.00", "USD", p.getPaymentReference()));
 
-        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.PENDING);
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, RETURN)).isEqualTo(CardCheckOutcome.DECLINED);
 
-        // The stamp is what makes the response say "declined" (lastAttemptDeclined)
-        // instead of "no payment yet"; a plain note would leave the two identical.
-        verify(records).noteCardDeclined(eq(p.getId()), contains("800.100.153"));
-        verify(records, never()).noteEvent(any(), anyString());
+        verify(records).markCardDeclined(eq(p.getId()), eq("800.100.100"), contains("800.100.100"),
+                argThat(d -> d.contains("on the shopper's return") && !d.contains("past the checkout ceiling")));
         verify(records, never()).markFailed(any(), any(), any());
         verify(records, never()).markExpired(any(), any());
         verifyNoInteractions(resolution);
+    }
+
+    @Test
+    @DisplayName("decline read by the poller past the ceiling: closed the same way, and the slot is free for a fresh attempt (EXPIRED)")
+    void decline_byThePollerPastTheCeiling_closesTheAttempt() {
+        Payment p = openCardRow();
+        p.setCodeExpiresAt(Instant.now().minus(ZimswitchCardPaymentService.CHECKOUT_EXPIRY_GRACE)
+                .minus(Duration.ofSeconds(5)));
+        when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
+                status(ZimswitchResultCode.REJECTED, "800.100.100", "92.00", "USD", p.getPaymentReference()));
+
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, ReadTrigger.POLLER)).isEqualTo(CardCheckOutcome.EXPIRED);
+
+        verify(records).markCardDeclined(eq(p.getId()), eq("800.100.100"), anyString(),
+                argThat(d -> d.contains("by the card poller past the checkout ceiling")));
+    }
+
+    @Test
+    @DisplayName("decline read on a plain re-POST past the ceiling: EXPIRED, so the re-POST starts the rail it asked for")
+    void decline_onAPlainRePostPastTheCeiling_letsTheRequestStartFresh() {
+        // A customer who comes back after 30 minutes and asks for EcoCash
+        // must get EcoCash, not a report of the old card's decline.
+        Payment p = openCardRow();
+        p.setCodeExpiresAt(Instant.now().minus(ZimswitchCardPaymentService.CHECKOUT_EXPIRY_GRACE)
+                .minus(Duration.ofSeconds(5)));
+        when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
+                status(ZimswitchResultCode.REJECTED, "800.100.100", "92.00", "USD", p.getPaymentReference()));
+
+        assertThat(service.resolveOpenCheckout(p, NO_GAP, ReadTrigger.CUSTOMER_RETRY))
+                .isEqualTo(CardCheckOutcome.EXPIRED);
+        verify(records).markCardDeclined(eq(p.getId()), any(), any(), anyString());
     }
 
     @Test
@@ -515,22 +547,6 @@ class ZimswitchCardPaymentServiceTest {
         assertThat(service.resolveOpenCheckout(p, NO_GAP, ReadTrigger.CUSTOMER_RETRY))
                 .isEqualTo(CardCheckOutcome.EXPIRED);
         verify(records).markExpired(eq(p.getId()), contains("customer re-POST"));
-    }
-
-    @Test
-    @DisplayName("a decline read past the ceiling closes the row FAILED: no retry can follow it")
-    void declinePastCeiling_closesTheRowFailed() {
-        Payment p = openCardRow();
-        p.setCodeExpiresAt(Instant.now().minus(ZimswitchCardPaymentService.CHECKOUT_EXPIRY_GRACE)
-                .minus(Duration.ofSeconds(5)));
-        when(client.getPaymentStatus(p.getCheckoutId())).thenReturn(
-                status(ZimswitchResultCode.REJECTED, "800.100.153", "92.00", "USD", p.getPaymentReference()));
-
-        assertThat(service.resolveOpenCheckout(p, NO_GAP, ReadTrigger.POLLER)).isEqualTo(CardCheckOutcome.EXPIRED);
-
-        verify(records).markFailed(eq(p.getId()), eq("800.100.153"), contains("past the checkout ceiling"));
-        verify(records, never()).markExpired(any(), any());
-        verifyNoInteractions(resolution);
     }
 
     @Test

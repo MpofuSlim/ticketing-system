@@ -99,10 +99,12 @@ public class PaymentResponse {
         /**
          * The attempt is over and the payment provider SAID no money moved:
          * EcoCash declined the charge (e.g. insufficient funds — EcoCash's own
-         * words are in {@code failureReason}) or the attempt was refused
-         * before anything was payable. Terminal. Show the reason; a new
-         * attempt is the customer's choice (and for EcoCash waits
-         * {@code retryAfterSeconds}).
+         * words are in {@code failureReason}), ZimSwitch declined the card
+         * (the message says so; a card return to {@code POST /payments}
+         * answers this stage too), or the attempt was refused before anything
+         * was payable. Terminal. Show the reason; a new attempt is the
+         * customer's choice (and for EcoCash waits {@code retryAfterSeconds}).
+         * After a card decline, another card or another rail starts at once.
          */
         DECLINED,
         /**
@@ -276,26 +278,6 @@ public class PaymentResponse {
     private Long retryAfterSeconds;
 
     /**
-     * Card only, stage {@code AWAITING_PAYMENT}: {@code true} when ZimSwitch
-     * declined the card on this open checkout. The bank refused it and
-     * nothing was taken; the checkout is still open, so the shopper can try
-     * another card on it. Another payment method can start only once this
-     * checkout has ended: until then a POST for any rail returns this same
-     * checkout. Absent otherwise, never {@code false}:
-     * absent means "no decline recorded", which on a shopper's return is
-     * "no payment received yet".
-     */
-    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-    @io.swagger.v3.oas.annotations.media.Schema(nullable = true,
-            description = "Card only, with stage AWAITING_PAYMENT: true when ZimSwitch declined the card on "
-                    + "this open checkout. Nothing was charged; the shopper can try another card on the same "
-                    + "checkout. Another payment method can start only after this checkout ends "
-                    + "(about two minutes after checkoutExpiresAt): until then a POST for any rail returns this "
-                    + "checkout. Absent when no decline was recorded.",
-            example = "true")
-    private Boolean lastAttemptDeclined;
-
-    /**
      * ZimSwitch COPYandPAY widget artifacts, present while a card checkout
      * is open ({@code status=PROCESSING}, rail {@code ZIMSWITCH_CARD}). The
      * FE renders:
@@ -310,7 +292,8 @@ public class PaymentResponse {
      * {@code /payments} once with the same order key plus the page's
      * {@code resourcePath} query parameter — the backend checks the status
      * with ZimSwitch server-side (from its own checkout id) and answers
-     * SUCCESS / PROCESSING accordingly. Without {@code resourcePath} a
+     * SUCCESS / PROCESSING accordingly, or stage DECLINED when the card was
+     * declined (the attempt is then closed). Without {@code resourcePath} a
      * re-POST never checks before the checkout's ceiling (a check kills a
      * form the shopper is still on); progress is followed with
      * {@code GET /payments/{transactionId}}.

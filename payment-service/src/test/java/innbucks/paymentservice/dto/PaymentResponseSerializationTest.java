@@ -84,18 +84,4 @@ class PaymentResponseSerializationTest {
             assertThat(mapper.readTree(json).get("stage").asText()).isEqualTo(stage.name());
         }
     }
-
-    @Test
-    @DisplayName("lastAttemptDeclined is absent unless true, whatever the mapper's default")
-    void lastAttemptDeclined_absentUnlessTrue() throws Exception {
-        // Absent, never false: an older server never sends it, so "absent"
-        // has to mean "no decline recorded" on both old and new servers.
-        String none = mapper.writeValueAsString(PaymentResponse.builder()
-                .stage(PaymentResponse.Stage.AWAITING_PAYMENT).build());
-        assertThat(mapper.readTree(none).has("lastAttemptDeclined")).isFalse();
-
-        String declined = mapper.writeValueAsString(PaymentResponse.builder()
-                .stage(PaymentResponse.Stage.AWAITING_PAYMENT).lastAttemptDeclined(true).build());
-        assertThat(mapper.readTree(declined).get("lastAttemptDeclined").asBoolean()).isTrue();
-    }
 }

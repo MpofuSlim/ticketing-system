@@ -433,73 +433,132 @@ class PaymentControllerTest {
         });
     }
 
+    /** What the card result page and "Try another card" send: the booking and the card rail. */
+    private PaymentRequest cardPaymentFor(UUID bookingId) {
+        PaymentRequest r = paymentFor(bookingId);
+        r.setPaymentRail(innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD);
+        return r;
+    }
+
+    /** The order's card attempt after a decline closed it: FAILED, stamped. */
+    private static Payment declinedCardRow(UUID bookingId, String checkoutId) {
+        Payment p = openCardRow(bookingId, checkoutId);
+        p.setStatus(Payment.PaymentStatus.FAILED);
+        p.setUpstreamErrorCode("800.100.100");
+        p.setUpstreamErrorMessage("800.100.100 (transaction declined for unknown reason)");
+        p.setCardDeclinedAt(java.time.Instant.now());
+        p.setCompletedAt(p.getCardDeclinedAt());
+        return p;
+    }
+
+    /** A new checkout for the order, as startCheckout would open it. */
+    private static void stubFreshCheckout(Fixture f, UUID bookingId, String checkoutId) {
+        when(f.card().startCheckout(any(), anyString())).thenAnswer(inv -> {
+            Payment p = openCardRow(bookingId, checkoutId);
+            return new innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckoutOutcome(
+                    p, false, checkoutId,
+                    "https://eu-test.oppwa.com/v1/paymentWidgets.js?checkoutId=" + checkoutId,
+                    "sha384-abc", "PRIVATE_LABEL", "https://tickets.example.co.zw/checkout/card-result",
+                    p.getCodeExpiresAt(), null, null);
+        });
+    }
+
     @Test
-    void cardReturn_afterADecline_saysDeclined_andKeepsTheSameForm() {
-        // Staging, 2026-11-17: the bank declined the test card (800.100.100)
-        // and the shopper was told "If you were charged, we'll confirm within
-        // 30 minutes", because the answer was identical to "no payment yet".
+    void cardReturn_declined_answersDeclined_andStartsNothing() {
+        // Staging, 2026-11-17: the bank declined the test card (800.100.100).
+        // The decline closed the attempt, so the answer says so, carries no
+        // form, and nothing new is started in this request.
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
         Payment open = openCardRow(bookingId, CHECKOUT);
         replayLookup(f, bookingId).thenReturn(Optional.of(open));
         when(f.card().resolveOpenCheckout(any(), any(), any()))
-                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
-        // The read stamped the decline in its own transaction; the controller re-reads.
-        Payment afterRead = openCardRow(bookingId, CHECKOUT);
-        afterRead.setId(open.getId());
-        afterRead.setCardDeclinedAt(java.time.Instant.now());
-        when(f.payments().findById(open.getId())).thenReturn(Optional.of(afterRead));
-        stubOpenForm(f);
+                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.DECLINED);
+        Payment closed = declinedCardRow(bookingId, CHECKOUT);
+        closed.setId(open.getId());
+        when(f.payments().findById(open.getId())).thenReturn(Optional.of(closed));
 
-        PaymentRequest returned = paymentFor(bookingId);
+        PaymentRequest returned = cardPaymentFor(bookingId);
         returned.setResourcePath("/v1/checkouts/" + CHECKOUT + "/payment");
-        var body = f.controller().processPayment(returned).getBody();
-        PaymentResponse data = body.getData();
+        var resp = f.controller().processPayment(returned);
+        PaymentResponse data = resp.getBody().getData();
 
-        assertEquals(PaymentResponse.Stage.AWAITING_PAYMENT, data.getStage(),
-                "the checkout is still open: another card can pay on it");
+        assertEquals(org.springframework.http.HttpStatus.OK, resp.getStatusCode());
+        assertEquals(PaymentResponse.Stage.DECLINED, data.getStage());
+        assertEquals(PaymentResponse.Status.FAILED, data.getStatus());
         assertEquals(Boolean.FALSE, data.getFundsCaptured());
-        assertEquals(Boolean.TRUE, data.getLastAttemptDeclined());
-        assertEquals(PaymentController.CARD_DECLINED_MESSAGE, body.getMessage());
-        assertEquals(CHECKOUT, data.getCheckoutId(), "the same checkout, so Try again draws the same form");
-        assertNull(data.getFailureReason(), "failureReason stays the terminal DECLINED stage's field");
+        assertEquals(PaymentController.CARD_DECLINED_MESSAGE, resp.getBody().getMessage());
+        assertEquals(innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD, data.getPaymentRail());
+        assertNull(data.getCheckoutId(), "the declined checkout cannot be used again");
+        assertNull(data.getFailureReason());
+        verify(f.card(), never()).startCheckout(any(), anyString());
+        verify(f.card(), never()).replayOpenCheckout(any());
     }
 
     @Test
-    void anotherRail_whileADeclinedCardCheckoutIsOpen_getsTheCardCheckoutBack_andChargesNothing() {
-        // Why the declined message offers another card only: the order holds
-        // one active payment, so asking for EcoCash before the checkout's
-        // ceiling replays the card checkout instead of sending a PIN prompt.
+    void cardReturn_namingAClosedCheckout_answersHowItEnded_andStartsNothing() {
+        // A result page that POSTs its return twice (a reload, a double
+        // callback): the first POST closed the attempt, so no active row is
+        // left. The second must report the decline, not open a new checkout.
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
-        Payment open = openCardRow(bookingId, CHECKOUT);
-        open.setCardDeclinedAt(java.time.Instant.now());
-        replayLookup(f, bookingId).thenReturn(Optional.of(open));
-        when(f.card().resolveOpenCheckout(any(), any(), any()))
-                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
-        when(f.payments().findById(open.getId())).thenReturn(Optional.of(open));
-        stubOpenForm(f);
-        var ecocash = (innbucks.paymentservice.service.EcocashPaymentService)
-                org.springframework.test.util.ReflectionTestUtils.getField(f.controller(), "ecocashPaymentService");
+        replayLookup(f, bookingId).thenReturn(Optional.empty());
+        when(f.payments().findFirstByOrderTypeAndOrderRefAndPaymentRailOrderByCreatedAtDesc(
+                OrderType.BOOKING, bookingId.toString(), innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD))
+                .thenReturn(Optional.of(declinedCardRow(bookingId, CHECKOUT)));
 
-        PaymentRequest ecocashPay = paymentFor(bookingId);
-        ecocashPay.setPaymentRail(innbucks.paymentservice.entity.PaymentRail.ECOCASH);
-        var body = f.controller().processPayment(ecocashPay).getBody();
+        PaymentRequest again = cardPaymentFor(bookingId);
+        again.setResourcePath("/v1/checkouts/" + CHECKOUT + "/payment");
+        var body = f.controller().processPayment(again).getBody();
 
-        assertEquals(innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD, body.getData().getPaymentRail(),
-                "the open card checkout, not an EcoCash prompt");
-        assertEquals(PaymentResponse.Stage.AWAITING_PAYMENT, body.getData().getStage());
-        assertEquals(Boolean.TRUE, body.getData().getLastAttemptDeclined());
-        assertEquals(CHECKOUT, body.getData().getCheckoutId());
+        assertEquals(PaymentResponse.Stage.DECLINED, body.getData().getStage());
         assertEquals(PaymentController.CARD_DECLINED_MESSAGE, body.getMessage());
-        assertFalse(PaymentController.CARD_DECLINED_MESSAGE.contains("payment method"),
-                "the message must not offer a method that cannot start while this checkout is open");
-        verifyNoInteractions(ecocash);
-        verify(f.innbucks(), never()).processPayment(any(), any(), any(), any());
+        verify(f.card(), never()).startCheckout(any(), anyString());
+        verify(f.card(), never()).resolveOpenCheckout(any(), any(), any());
+        assertEquals(1.0, cardReturns(f, "closed"));
     }
 
     @Test
-    void cardReturn_withNoDeclineRecorded_hasNoFlag_andTheUsualMessage() {
+    void afterADecline_aPlainCardPost_opensANewCheckoutOnTheSameBooking() {
+        // "Try another card": no resourcePath, the declined attempt is
+        // closed, so the POST starts a fresh checkout for the same booking.
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        replayLookup(f, bookingId).thenReturn(Optional.empty());
+        when(f.payments().findFirstByOrderTypeAndOrderRefAndPaymentRailOrderByCreatedAtDesc(
+                any(), anyString(), any())).thenReturn(Optional.of(declinedCardRow(bookingId, CHECKOUT)));
+        String fresh = "94273198FC913BBEAF583A6440BFD0F3.uat01-vm-tx03";
+        stubFreshCheckout(f, bookingId, fresh);
+
+        var body = f.controller().processPayment(cardPaymentFor(bookingId)).getBody();
+
+        verify(f.card()).startCheckout(OrderType.BOOKING, bookingId.toString());
+        assertEquals(PaymentResponse.Stage.AWAITING_PAYMENT, body.getData().getStage());
+        assertEquals(fresh, body.getData().getCheckoutId(), "a new checkout, never the declined one");
+    }
+
+    @Test
+    void afterADecline_aReturnForAnotherCheckout_isNotMistakenForTheClosedOne() {
+        // A resourcePath that names some other checkout says nothing about the
+        // closed one: the POST goes on and starts what it asked for.
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        replayLookup(f, bookingId).thenReturn(Optional.empty());
+        when(f.payments().findFirstByOrderTypeAndOrderRefAndPaymentRailOrderByCreatedAtDesc(
+                any(), anyString(), any())).thenReturn(Optional.of(declinedCardRow(bookingId, CHECKOUT)));
+        String fresh = "94273198FC913BBEAF583A6440BFD0F3.uat01-vm-tx03";
+        stubFreshCheckout(f, bookingId, fresh);
+
+        PaymentRequest other = cardPaymentFor(bookingId);
+        other.setResourcePath("/v1/checkouts/43914C7C89177901A2E33EE1C6CCB1C7.uat01-vm-tx02/payment");
+        f.controller().processPayment(other);
+
+        verify(f.card()).startCheckout(OrderType.BOOKING, bookingId.toString());
+        assertEquals(0.0, cardReturns(f, "closed"));
+    }
+
+    @Test
+    void cardReturn_withNoPaymentYet_keepsTheFormAndTheUsualMessage() {
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
         Payment open = openCardRow(bookingId, CHECKOUT);
@@ -514,31 +573,8 @@ class PaymentControllerTest {
         var body = f.controller().processPayment(returned).getBody();
 
         assertEquals(PaymentResponse.Stage.AWAITING_PAYMENT, body.getData().getStage());
-        assertNull(body.getData().getLastAttemptDeclined(), "absent, never false");
+        assertEquals(CHECKOUT, body.getData().getCheckoutId());
         assertEquals("Enter your card details to complete your booking", body.getMessage());
-    }
-
-    @Test
-    void cardDeclinedEarlier_thenPaid_isNeverReportedAsDeclined() {
-        // A shopper declined once, then paid with another card on the same
-        // checkout: the money is in, so the old decline must not show.
-        Fixture f = fixture();
-        UUID bookingId = UUID.randomUUID();
-        Payment open = openCardRow(bookingId, CHECKOUT);
-        replayLookup(f, bookingId).thenReturn(Optional.of(open));
-        when(f.card().resolveOpenCheckout(any(), any(), any()))
-                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PENDING);
-        Payment paid = openCardRow(bookingId, CHECKOUT);
-        paid.setId(open.getId());
-        paid.setCardDeclinedAt(java.time.Instant.now().minusSeconds(60));
-        paid.setStatus(Payment.PaymentStatus.COMPLETED_UNCONFIRMED);
-        when(f.payments().findById(open.getId())).thenReturn(Optional.of(paid));
-        stubOpenForm(f);
-
-        PaymentResponse data = f.controller().processPayment(paymentFor(bookingId)).getBody().getData();
-
-        assertEquals(PaymentResponse.Stage.PAYMENT_RECEIVED, data.getStage());
-        assertNull(data.getLastAttemptDeclined());
     }
 
     private static double cardReturns(Fixture f, String resourcePath) {
