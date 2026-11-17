@@ -479,7 +479,7 @@ are kept in lock-step per `docs/fleet-wiring.md` in the innbucks-loans repo.
   Deployment is `replicas: 1` + `strategy: Recreate` so two loans processes never
   overlap, not even mid-rollout; keep both when the jobs come on.
   **The Staff Grocery Loan jobs are the exception** (innbucks-loans #141): the
-  weekly offer run, the staff-message retry and voucher upkeep move no money, so
+  weekly offer run, the staff-message retry and the arrears email move no money, so
   `STAFF_LOANS_JOBS_ENABLED=true` in loans' own Secret runs them without
   `scheduled-tasks`. Turning it on starts the Monday run, which messages every
   eligible staff member. Loans' `StaffLoanJobsWiringTest` fails the build if a
