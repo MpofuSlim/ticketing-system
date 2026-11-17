@@ -729,8 +729,9 @@ user-service logged `Failed MFA attempt` for every account, and nothing alerted.
 - **chronyd runs on every host**, synced to Amazon Time Sync
   (`169.254.169.123`). Never stop it.
 - **Watched by** the `node-clock` DaemonSet (`deploy/k8s/monitoring/`:
-  node-exporter with only its timex collector, no host network, PID or mounts,
-  every capability dropped) and the `clock` alert group:
+  node-exporter with only its timex and meminfo collectors, no host network,
+  PID or mounts, every capability dropped; meminfo feeds the `node` group, see
+  "Alerts reach a person") and the `clock` alert group:
   - `NodeClockNotSynchronised`: the kernel's own sync flag. With the daemon
     stopped the kernel only declares the clock unsynchronised once its error
     bound passes 16 s, so this fires about 10 hours later. At 0.4 s of drift a
@@ -740,6 +741,57 @@ user-service logged `Failed MFA attempt` for every account, and nothing alerted.
 - Prometheus finds the pods by DNS through the headless `node-clock` Service
   (`dns_sd_configs`), one target per node, with no Kubernetes API access. The
   runbook is `prometheus/slo.md#nodeclocknotsynchronised`.
+
+## Alerts reach a person: the alert-notifier (2026-11-17)
+
+**Every Alertmanager route ends at the `alert-notifier` pod, which sends
+through the InnBucks notification API: an SMS for every `page` alert to the
+numbers in its Secret (production only), and an email for every alert.**
+Until 2026-11-17 the receivers pointed at `http://alert-sink:9099`, a
+placeholder nothing served: on both hosts every alert was dropped (staging
+logged 288 failed notifications in a day), which is why nobody heard about the
+event-service outage or the clock drift.
+
+- **Its own pod, never an endpoint in a service.** A service that crashed or
+  ran out of memory cannot report it. The notifier depends on Alertmanager in
+  the cell and the notification API outside it, nothing else. It is
+  `prometheus/alert-notifier/alert_notifier.py`, standard-library Python on
+  the official `python` image, mounted from a ConfigMap: no build, no image of
+  ours. The fleet's rules still hold in it: the notification API's SMS
+  character whitelist (`gsm_safe`, the twin of `SmsTextSanitizer`; change them
+  together), one SMS segment (160), references of at most 46 characters, no
+  redirects followed, no proxy, a token cache where a caller holding a valid
+  token never waits for a login, and a 401 that logs in once and replays once.
+- **Who is told lives in the `alert-notifier` Secret, never in the repo**:
+  `sms_to`, `email_to`, `env_label` and the `webhook_token` Alertmanager
+  presents (`credentials_file`). `scripts/apply-monitoring.sh` writes it from
+  `ALERT_SMS_TO` / `ALERT_EMAIL_TO` / `ALERT_ENV_LABEL` (unset keeps the stored
+  value, `''` clears it, numbers must be E.164) and generates the token once.
+  The pod reads the four `BANK_API_*` keys one by one, never `envFrom`.
+- **Not ready = it cannot deliver** (no credentials, no token, nobody to
+  tell); Alertmanager then logs `Notify for alerts failed`. It answers 502
+  when nothing reached the gateway, so Alertmanager retries; 200 when at least
+  one message did.
+- **Alerts that text:** every `severity: page` rule, again every hour while
+  firing (`repeat_interval: 1h`). Two added with it:
+  - `ServiceCrashLooping`: `process_start_time_seconds` moved twice in 30
+    minutes. A deploy, `set env` or `rollout restart` moves it once and never
+    fires it. `ServiceRestartsUnmonitored` (email) fires if a running service
+    stops reporting the series.
+  - `NodeMemoryLow` (under 15% `MemAvailable` for 10 min) and
+    `NodeMemoryCritical` (under 5% for 2 min, which inhibits the first), from
+    the node-clock exporter's meminfo collector; `NodeMemoryUnmonitored`
+    (email) when the series is missing.
+- **CI job `monitoring`** checks both configs, runs `promtool test rules
+  prometheus/alerts.test.yaml` (each texting alert fires when it should, and
+  one deploy never pages) and the notifier's tests. A new texting alert gets a
+  case there.
+- **Silences live in Alertmanager's memory (`emptyDir`)**: re-running
+  `apply-monitoring.sh` restarts it and clears them.
+- **Not covered, stated:** everything here runs on the server it watches. If
+  the server itself stops or the node runs out of memory entirely, nothing
+  texts. That needs a watcher outside the server (an AWS alarm on the EC2
+  status check and a health check of the public URL), not built yet.
 
 ## Swagger response examples
 
