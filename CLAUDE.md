@@ -5005,6 +5005,15 @@ it pins the four wire facts that are easy to get wrong. Non-negotiables:
   before the ceiling and orphan a payment made in between. The other two
   rails record the instant the hold was sized from. Consequence: a prepare
   that fails still leaves the order held for 33 minutes.
+- **`shopperResultUrl` goes to ZimSwitch through the widget only, never on
+  prepare-checkout.** The widget sends its `<form action>` with the payment,
+  and ZimSwitch refuses a payment whose checkout already holds one:
+  `200.300.404` with `parameterErrors` "shopperResultUrl: was already set and
+  cannot be overwritten". The payment is never created, yet the widget still
+  redirects the shopper back with `resourcePath`. That is how every UAT card
+  attempt read "no payment" until 2026-11-17. The status read keeps
+  ZimSwitch's `parameterErrors` in the journal note and the log for exactly
+  this kind of refusal; read them before asking ZimSwitch anything.
 - Credentials (`ZIMSWITCH_ENTITY_ID` / `ZIMSWITCH_ACCESS_TOKEN`) are
   env-only secrets; blank = rail disabled (503 on card attempts). The
   Bearer token can create checkouts against the merchant — same custody

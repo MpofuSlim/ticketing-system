@@ -66,9 +66,12 @@ public class ZimswitchProperties {
     private String testMode;
 
     /**
-     * The page on our FE the shopper is redirected to after paying. Sent as
-     * {@code shopperResultUrl} on prepare-checkout; the widget form posts to
-     * it. Must be an absolute URL the browser can reach.
+     * The page on our FE the shopper is redirected to after paying. Returned
+     * to the client as {@code shopperResultUrl}, which becomes the widget
+     * form's {@code action}; the widget hands it to ZimSwitch with the
+     * payment. It is never sent on prepare-checkout: ZimSwitch refuses a
+     * payment whose checkout already has one ("was already set and cannot be
+     * overwritten"). Must be an absolute URL the browser can reach.
      */
     private String shopperResultUrl;
 

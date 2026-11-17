@@ -219,17 +219,15 @@ public class ZimswitchCopyPayClient {
         if (properties.isRequestIntegrity()) {
             form.add("integrity", "true");
         }
-        // Sent for ASYNC brands (3-D Secure, wallets): those bounce the
-        // browser off-site, so the gateway needs its own copy of the return
-        // target — the widget's <form action> only covers the sync path. For
-        // sync brands this is redundant and ignored, which is the safe side of
-        // the asymmetry: an ignored parameter costs nothing, while a missing
-        // one strands a shopper who has just authenticated with their bank.
-        // UNVERIFIED against ZimSwitch's API Reference (page not reachable) —
-        // confirm during UAT with a 3DS test card.
-        if (notBlank(properties.getShopperResultUrl())) {
-            form.add("shopperResultUrl", properties.getShopperResultUrl().trim());
-        }
+        // shopperResultUrl is deliberately NOT sent here. The widget sends it
+        // itself when the shopper presses Pay now, from its <form action>,
+        // and ZimSwitch refuses a payment whose checkout already holds one:
+        // 200.300.404 "shopperResultUrl: was already set and cannot be
+        // overwritten" (measured on UAT, 2026-11-17, with ZimSwitch's test
+        // card). The payment was never created, so every card attempt read
+        // "no payment" while the widget redirected the shopper back as if it
+        // had paid. The form action is the one source; it also covers the
+        // async (3-D Secure) return, because it travels with the payment.
         if (notBlank(properties.getTestMode())) {
             form.add("testMode", properties.getTestMode());
         }
