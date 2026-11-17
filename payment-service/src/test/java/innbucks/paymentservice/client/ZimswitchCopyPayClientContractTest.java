@@ -395,6 +395,64 @@ class ZimswitchCopyPayClientContractTest {
     }
 
     @Test
+    @DisplayName("status decline with resultDetails (staging, 2026-11-17): the extended description is kept, the connector id and timestamp are not")
+    void status_declineWithResultDetails_keepsTheExtendedDescription() {
+        // Transcribed from ZimSwitch's Transaction Reports answer for checkout
+        // 3DE4AD23...uat01-vm-tx02 (the status read's resultDetails block is the
+        // same object). Every UAT decline that day carried it behind a bare
+        // 800.100.100.
+        wireMock.stubFor(get(urlEqualTo(STATUS_PATH))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                { "id": "tx-3", "paymentBrand": "PRIVATE_LABEL", "amount": "0.30",
+                                  "currency": "USD",
+                                  "result": { "code": "800.100.100",
+                                              "description": "transaction declined for unknown reason" },
+                                  "resultDetails": {
+                                    "ExtendedDescription": "Innbucks has not responded to the transaction request. Please contact them for further information.",
+                                    "AcquirerResponse": "800.100.100",
+                                    "ConnectorTxID1": "TKZ-AMA2KFESTIVA-CF604A7376B7",
+                                    "AcquirerTimestamp": "2026-11-17 12:27:55+00:00" },
+                                  "ndc": "n" }
+                                """)));
+
+        CardPaymentStatus status = newClient("http://localhost:" + wireMock.port())
+                .getPaymentStatus(CHECKOUT_ID);
+
+        assertThat(status.outcome()).isEqualTo(ZimswitchResultCode.REJECTED);
+        assertThat(status.resultDetails()).isEqualTo(
+                "Innbucks has not responded to the transaction request. Please contact them for further information.");
+        assertThat(status.resultDetails())
+                .as("the acquirer response equals the result code, so it adds nothing")
+                .doesNotContain("acquirer response")
+                .as("only the two named keys are read")
+                .doesNotContain("TKZ-").doesNotContain("2026-11-17");
+    }
+
+    @Test
+    @DisplayName("resultDetails: a differing acquirer response is kept, absent is null, line breaks flattened, long text capped")
+    void resultDetails_acquirerResponseAbsentAndCapped() {
+        assertThat(ZimswitchCopyPayClient.resultDetailsOf(java.util.Map.of(), "800.100.100")).isNull();
+        assertThat(ZimswitchCopyPayClient.resultDetailsOf(java.util.Map.of(
+                "resultDetails", java.util.Map.of("ConnectorTxID1", "TKZ-1")), "800.100.100")).isNull();
+        assertThat(ZimswitchCopyPayClient.resultDetailsOf(java.util.Map.of(
+                "resultDetails", java.util.Map.of("AcquirerResponse", "800.100.100")), "800.100.100")).isNull();
+
+        assertThat(ZimswitchCopyPayClient.resultDetailsOf(java.util.Map.of(
+                "resultDetails", java.util.Map.of("ExtendedDescription", "Do not honour\nby the issuer",
+                        "AcquirerResponse", "05")), "800.100.151"))
+                .isEqualTo("Do not honour by the issuer (acquirer response 05)");
+        assertThat(ZimswitchCopyPayClient.resultDetailsOf(java.util.Map.of(
+                "resultDetails", java.util.Map.of("AcquirerResponse", "51")), "800.100.155"))
+                .isEqualTo("(acquirer response 51)");
+
+        String capped = ZimswitchCopyPayClient.resultDetailsOf(java.util.Map.of(
+                "resultDetails", java.util.Map.of("ExtendedDescription", "x".repeat(500))), "800.100.100");
+        assertThat(capped).hasSize(ZimswitchCopyPayClient.RESULT_DETAILS_MAX).endsWith("...");
+    }
+
+    @Test
     @DisplayName("status 200.300.404 wrapped in HTTP 400: a REAL answer (no payment yet), not an error")
     void status_notFoundIsAnAnswer() {
         wireMock.stubFor(get(urlEqualTo(STATUS_PATH))

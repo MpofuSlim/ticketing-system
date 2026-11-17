@@ -5075,6 +5075,17 @@ it pins the four wire facts that are easy to get wrong. Non-negotiables:
   attempt read "no payment" until 2026-11-17. The status read keeps
   ZimSwitch's `parameterErrors` in the journal note and the log for exactly
   this kind of refusal; read them before asking ZimSwitch anything.
+- **A decline's reason is in `resultDetails`, not the result code.** Every
+  UAT decline on 2026-11-17 was a bare `800.100.100` "transaction declined
+  for unknown reason"; its `ExtendedDescription` said "Innbucks has not
+  responded to the transaction request", i.e. the InnBucks host behind
+  ZimSwitch never answered. The status read keeps that line (and the
+  `AcquirerResponse` when it differs from the code) in the journal note, the
+  row's `upstream_error_message` and the log (`resultDetailsOf`: those two
+  keys only, never the connector ids). A card row's message is never shown to
+  a customer. For an older row, the Transaction Reports lookup by our
+  `merchantTransactionId` (`docs/api/zimswitch-copyandpay.md`) works with the
+  rail's own token.
 - Credentials (`ZIMSWITCH_ENTITY_ID` / `ZIMSWITCH_ACCESS_TOKEN`) are
   env-only secrets; blank = rail disabled (503 on card attempts). The
   Bearer token can create checkouts against the merchant — same custody

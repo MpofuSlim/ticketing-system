@@ -486,9 +486,9 @@ public class ZimswitchCardPaymentService {
         }
         String answer = describe(status);
         log.info("[zimswitch-card] status read paymentReference={} trigger={} resultCode={} pastCeiling={} "
-                        + "description={} parameterErrors={}",
+                        + "description={} resultDetails={} parameterErrors={}",
                 p.getPaymentReference(), trigger, status.resultCode(), pastCeiling,
-                status.resultMessage(), status.parameterErrors());
+                status.resultMessage(), status.resultDetails(), status.parameterErrors());
 
         switch (status.outcome()) {
             case SUCCESS, SUCCESS_MANUAL_REVIEW -> {
@@ -545,12 +545,18 @@ public class ZimswitchCardPaymentService {
     }
 
     /**
-     * ZimSwitch's answer as one journal fragment: {@code 200.300.404 (description)},
-     * plus {@code [parameterErrors]} when the gateway named the parameter it refused.
+     * ZimSwitch's answer as one journal fragment: {@code 800.100.100 (description)},
+     * then {@code : extended description} when the reply explains itself
+     * ({@code resultDetails}), then {@code [parameterErrors]} when the gateway
+     * named the parameter it refused. The explanation comes before the
+     * parameter errors so the 500-character journal row keeps it.
      */
     static String describe(CardPaymentStatus status) {
         String code = status.resultCode() != null ? status.resultCode() : "no result code";
         String answer = status.resultMessage() != null ? code + " (" + status.resultMessage() + ")" : code;
+        if (status.resultDetails() != null) {
+            answer = answer + ": " + status.resultDetails();
+        }
         return status.parameterErrors() != null ? answer + " [" + status.parameterErrors() + "]" : answer;
     }
 

@@ -464,6 +464,46 @@ isConfigured() gate, mirroring the `BANK_API_*` credential pattern.
   overwritten`. No payment was created. Until then we sent it on the prepare
   too, which is why every UAT card attempt read "no payment". Our response
   still returns it, read from config, for the form `action`.
+- **A decline explains itself in `resultDetails`.** On UAT, 2026-11-17, every
+  card (ZimSwitch's test card included) was declined `800.100.100`
+  "transaction declined for unknown reason", with:
+
+  ```json
+  "resultDetails": {
+    "ExtendedDescription": "Innbucks has not responded to the transaction request. Please contact them for further information.",
+    "AcquirerResponse": "800.100.100",
+    "ConnectorTxID1": "<our merchantTransactionId>",
+    "AcquirerTimestamp": "2026-11-17 12:27:55+00:00" }
+  ```
+
+  So the decline was the InnBucks host behind ZimSwitch not answering, not
+  the card and not our integration. `ZimswitchCopyPayClient.resultDetailsOf`
+  keeps the `ExtendedDescription`, and the `AcquirerResponse` when it differs
+  from the result code, and nothing else from that map; the decline's journal
+  note and `upstream_error_message` carry it.
+- **Looking up an attempt after the fact** (the checkout id is dead after its
+  final read): Transaction Reports by our reference works with the rail's own
+  token. On the box, printing only the result and its details:
+
+  ```sh
+  REF=$(kubectl -n ticketing exec -i postgres-0 -- psql -U postgres -d payment_service -Atc \
+    "select payment_reference from payment where checkout_id = '<checkoutId>';")
+  ENTITY=$(kubectl -n ticketing exec deploy/payment-service -- printenv ZIMSWITCH_ENTITY_ID)
+  TOKEN=$(kubectl -n ticketing exec deploy/payment-service -- printenv ZIMSWITCH_ACCESS_TOKEN)
+  curl -sS -G "$ZIMSWITCH_BASE_URL/v1/query" \
+    --data-urlencode "entityId=$ENTITY" --data-urlencode "merchantTransactionId=$REF" \
+    -H "Authorization: Bearer $TOKEN" | python3 -c '
+  import json, sys
+  d = json.load(sys.stdin)
+  print("query:", d.get("result"))
+  for p in d.get("payments") or []:
+      print(p.get("timestamp"), p.get("result"), p.get("resultDetails"))'
+  unset TOKEN ENTITY REF
+  ```
+
+  Set `ZIMSWITCH_BASE_URL` to the cell's value first (`https://eu-test.oppwa.com`
+  on UAT). The token never reaches the screen, and the card block of the reply
+  is not printed.
 
 ## Not yet modelled
 

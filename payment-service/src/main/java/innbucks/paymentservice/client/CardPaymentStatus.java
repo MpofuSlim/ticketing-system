@@ -35,6 +35,15 @@ import java.math.BigDecimal;
  *                        left out on purpose (they echo what was sent). Null
  *                        when the reply carries none. Journalled and logged so
  *                        a {@code 200.300.404} explains itself.
+ * @param resultDetails   the decline's explanation from {@code resultDetails}:
+ *                        its {@code ExtendedDescription}, plus the
+ *                        {@code AcquirerResponse} when it differs from the result
+ *                        code. A bare {@code 800.100.100} ("declined for unknown
+ *                        reason") says nothing; on staging (2026-11-17) the
+ *                        extended description said who did not answer ("Innbucks
+ *                        has not responded to the transaction request"). One line,
+ *                        capped; null when the reply carries neither. Journalled
+ *                        and logged.
  */
 public record CardPaymentStatus(
         ZimswitchResultCode outcome,
@@ -47,5 +56,6 @@ public record CardPaymentStatus(
         String resultCode,
         String resultMessage,
         String ndc,
-        String parameterErrors) {
+        String parameterErrors,
+        String resultDetails) {
 }
