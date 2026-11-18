@@ -4424,6 +4424,57 @@ the same window as online.
   re-check after releasing event-service's availability leaves that display
   mirror short by the sale's tickets.
 
+## Organizer invoicing: catch-up, a billing start date, never a day twice
+
+**The scheduler invoices every closed period whose settle grace ended within
+the last `app.invoicing.catch-up-days` (28), oldest first, and nothing that
+ended before `INVOICE_BILLING_START_DATE`. Blank, it invoices nothing.**
+Organizers are billed for the events that ENDED in a period (#614), and only
+`settle-grace-days` (7) after it closes, so refunds settle first.
+
+- **Why not "the previous closed period".** That period is billable only once
+  its grace has passed. A WEEKLY period with a 7-day grace becomes billable on
+  the Monday after next, when it is no longer the previous week, so from #614
+  the scheduler never invoiced a weekly organizer. MONTHLY worked only because
+  a month stays "previous" for about 30 days. `InvoiceCalculations.billablePeriods`
+  walks back to every period whose grace has passed, whatever the grace.
+  Don't "fix" it by capping the grace below the cycle length. That leaves one
+  run a week to bill a week, and shortens the refund window the grace exists
+  for.
+- **Forward only (owner decision, 2026-11-18).** Commission has been off on the
+  ZW cell since 2026-09-22 (#613: rate 0 and scheduler off, in
+  `deploy/k8s/04-services.yaml`). Switching it on means setting three values
+  together: the rate, the scheduler, and `INVOICE_BILLING_START_DATE` = the day
+  it resumes. Without the date, the first run would invoice every period still
+  in the catch-up window, at the new rate, for weeks when commission was off,
+  and email each organizer. So a blank or unparseable date means generation
+  invoices nothing (ERROR at startup and on every run), and a typo never stops
+  booking-service starting. A period the date falls in is invoiced from that
+  day.
+- **Never a day twice** (`InvoiceService.generateScheduled`). The exact
+  `(organizer, period)` key cannot see a monthly and a weekly invoice over the
+  same days, which a cycle change produces once the scheduler looks back. So
+  the days up to the latest of the organizer's invoices overlapping the period
+  count as billed, in ANY status: a CANCELLED invoice is never re-issued. Only
+  the rest is invoiced, as a shorter period, from the events that ended in it.
+  That costs one more event-service call; if it can't be answered, the
+  organizer is skipped until the next run. An admin `POST /invoices/generate`
+  invoice covers its days too. The unique key stays the backstop for races.
+- **Costs, stated:**
+  - A commission rate set today applies to periods in the catch-up window that
+    have no invoice yet. Rates carry no effective date, as before; the reach is
+    now up to 28 days.
+  - An invoice can cover part of a week or month: the first one after the start
+    date, and the first one after a cycle change. `periodStart`/`periodEnd` say
+    which days.
+  - A period that leaves the window unbilled is never billed by the scheduler,
+    and nothing alerts on invoicing.
+- Pinned by `InvoiceSchedulerTest`, `InvoiceCalculationsTest`,
+  `InvoiceServiceTest` and `InvoiceAggregationIT`. `InvoiceSchedulerTest` runs
+  the scheduler daily over a quarter on the shipped defaults: every week is
+  first tried on the Monday after next, and each month from the 8th, one month
+  per run. `InvoiceAggregationIT` checks the overlap query on Postgres.
+
 ## Cloudflare blocks `PUT` + multipart — uploads take `POST`
 
 **The banner upload accepts BOTH `POST` and `PUT` on `/events/{id}/banner`, and

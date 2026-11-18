@@ -20,6 +20,27 @@ public interface EventInvoiceRepository extends JpaRepository<EventInvoice, UUID
                                                             LocalDate periodStart,
                                                             LocalDate periodEnd);
 
+    /**
+     * The last day already on one of this organizer's invoices among those that
+     * overlap {@code [periodStart, periodEnd]}, in ANY status; empty when none
+     * overlaps.
+     *
+     * <p>Feeds the scheduled path's "never bill a day twice" rule: the exact
+     * (organizer, period) key cannot see a monthly invoice and a weekly one
+     * covering the same days. A CANCELLED invoice counts as covering its days,
+     * as it does for the unique key, so the scheduler never re-issues what an
+     * admin cancelled.
+     */
+    @Query("""
+        SELECT MAX(i.periodEnd) FROM EventInvoice i
+        WHERE i.organizerUuid = :organizerUuid
+          AND i.periodStart <= :periodEnd
+          AND i.periodEnd >= :periodStart
+    """)
+    Optional<LocalDate> findLatestOverlappingPeriodEnd(@Param("organizerUuid") UUID organizerUuid,
+                                                       @Param("periodStart") LocalDate periodStart,
+                                                       @Param("periodEnd") LocalDate periodEnd);
+
     /** Scoped fetch for the organizer-facing GET — an organizer can only read their own. */
     Optional<EventInvoice> findByIdAndOrganizerUuid(UUID id, UUID organizerUuid);
 

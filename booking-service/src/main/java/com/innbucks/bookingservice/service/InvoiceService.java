@@ -16,6 +16,7 @@ import com.innbucks.bookingservice.repository.InvoiceAggregationRepository;
 import com.innbucks.bookingservice.repository.projection.InvoiceStatusAggregate;
 import com.innbucks.bookingservice.repository.projection.OrganizerEventRevenueRow;
 import com.innbucks.bookingservice.repository.projection.OrganizerEventTicketRow;
+import com.innbucks.bookingservice.service.InvoiceCalculations.BillingPeriod;
 import com.innbucks.bookingservice.service.InvoiceGenerator.EventRevenueLine;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -107,8 +108,8 @@ public class InvoiceService {
      * ended". Collapsing the two would let one failed S2S call issue a period's
      * invoices with its completed events missing — and because an invoice is
      * idempotency-keyed on (organizer, period), that under-billing could never
-     * be corrected by a later run. Skipping costs a day; the scheduler runs
-     * daily and the period is still the previous closed one tomorrow.
+     * be corrected by a later run. Skipping costs a day: the scheduler tries
+     * the period again daily for {@code app.invoicing.catch-up-days}.
      *
      * <p>Note there is NO date filter on the bookings themselves: a ticket sold
      * in July for a November event belongs to November's invoice. Filtering by
@@ -238,6 +239,60 @@ public class InvoiceService {
             metrics.incSchedulerError();
             return Optional.empty();
         }
+    }
+
+    /**
+     * The scheduler's step for one organizer and one billing period: invoice
+     * the days of the period that none of the organizer's invoices already
+     * covers, and never a day twice.
+     *
+     * <p>The exact (organizer, period) key is not enough on its own once the
+     * scheduler looks back over several periods. An organizer moved from
+     * MONTHLY to WEEKLY has October on a monthly invoice, and the weekly pass
+     * still holds the week of 26 Oct to 1 Nov: a different key, the same
+     * events. Moved the other way, November's monthly invoice would repeat the
+     * weekly ones for 1 to 8 Nov. So the days up to the latest invoice that
+     * overlaps the period count as billed (whatever its status, as with the
+     * unique key), and only the rest is invoiced, as a shorter period, from the
+     * events that ended in it. That needs one more call to event-service, made
+     * only for an organizer whose period is partly covered; when it cannot be
+     * answered the organizer is skipped and the scheduler tries again on its
+     * next run.
+     *
+     * <p>Only the LATEST overlapping invoice is read, so uninvoiced days before
+     * it inside the period count as billed too (an invoice for 9 to 15 Nov and
+     * none for 1 to 8 Nov leaves November invoiced from the 16th). Under-billing
+     * an unusual history is the safe side; the other side is charging an
+     * organizer twice.
+     *
+     * <p>{@code lines} are the organizer's lines for the whole period, from the
+     * scheduler's one aggregation of it.
+     */
+    public Optional<EventInvoice> generateScheduled(UUID organizerUuid, BillingPeriod period,
+                                                    List<EventRevenueLine> lines) {
+        LocalDate periodStart = period.start();
+        LocalDate periodEnd = period.endInclusive();
+        Optional<LocalDate> coveredThrough =
+                invoices.findLatestOverlappingPeriodEnd(organizerUuid, periodStart, periodEnd);
+        if (coveredThrough.isEmpty()) {
+            return generateOne(organizerUuid, periodStart, periodEnd, lines);
+        }
+        if (!coveredThrough.get().isBefore(periodEnd)) {
+            log.debug("Organizer={} already invoiced through {}: {}..{} skipped",
+                    organizerUuid, coveredThrough.get(), periodStart, periodEnd);
+            metrics.incGenerationSkipped();
+            return Optional.empty();
+        }
+        LocalDate from = coveredThrough.get().plusDays(1);
+        Optional<Map<UUID, List<EventRevenueLine>>> rest = aggregateLinesForEndedEvents(organizerUuid, from, periodEnd);
+        if (rest.isEmpty()) {
+            log.warn("Organizer={} already invoiced through {}; could not resolve the events that ended in {}..{}, "
+                    + "skipped until the next run", organizerUuid, coveredThrough.get(), from, periodEnd);
+            return Optional.empty();
+        }
+        log.info("Organizer={} already invoiced through {}: invoicing {}..{} only",
+                organizerUuid, coveredThrough.get(), from, periodEnd);
+        return generateOne(organizerUuid, from, periodEnd, rest.get().getOrDefault(organizerUuid, List.of()));
     }
 
     // ------------------------------------------------------------------

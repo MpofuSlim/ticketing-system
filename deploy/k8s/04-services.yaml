@@ -193,9 +193,14 @@ spec:
             #   rate 0     -> InvoiceGenerator skips ("don't issue a $0 invoice"),
             #                 so even a manual POST /invoices/generate bills nothing.
             #   scheduler  -> no daily generation, no overdue/due-soon dunning mail.
-            # Turning either back on resumes billing on the NEXT closed period; it
-            # does not back-bill, and issued invoices snapshot the rate they were
-            # billed at, so existing ones are unaffected either way.
+            # Turning commission back on is THREE values, set together: the rate,
+            # the scheduler, and INVOICE_BILLING_START_DATE (below) = the day it
+            # resumes. The scheduler never invoices an event that ended before
+            # that date, and with it blank it invoices nothing at all (ERROR at
+            # startup), so switching it on cannot back-bill the months commission
+            # was off (owner decision, 2026-11-18: forward only). Issued invoices
+            # snapshot the rate they were billed at, so existing ones are
+            # unaffected either way.
             # NOTE: a per-organizer row in organizer_billing_config overrides this
             # rate. Zeroing here does NOT clear those — check that table before
             # assuming nobody is billed.
@@ -206,6 +211,8 @@ spec:
             - { name: INVOICE_DEFAULT_BILLING_CYCLE, value: "MONTHLY" }
             - { name: INVOICE_DUE_DAYS, value: "14" }
             - { name: INVOICE_SCHEDULER_ENABLED, value: "false" }
+            # yyyy-MM-dd (UTC). Blank while commission is off; see above.
+            - { name: INVOICE_BILLING_START_DATE, value: "" }
             # Days after a period closes before the events that ended in it are
             # invoiced — organizers are billed AFTER an event runs, and this lets
             # post-event refunds land before the invoice snapshots its numbers.
