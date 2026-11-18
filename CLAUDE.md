@@ -1417,6 +1417,21 @@ codes for agents; voids stay the organizer's; cash handovers are recorded.
   stays with the agent once paid, so **switch agents on in a cell only once its
   id links are `legacy` or `closed`**. Don't add a booking or item id back to
   anything an agent reads.
+- **Nor through the gate lookup (owner's decision, 2026-11-18).** A team row
+  may scan AND sell for one event (V21), and the agent holds every sale's
+  `confirmationNumber`, which `POST /tickets/lookup` answered with every
+  ticket's whole number and item id (proven end to end, then fixed). On the
+  team-member path the lookup now answers a booking the caller's ACCOUNT sold
+  as an agent (`sold_by_agent_id` set and `sold_by_user_uuid` = the session's
+  `userUuid`) `SOLD_BY_YOU`, with nothing listed
+  (`GateLookupService.soldByCaller`). The account is the key, never the team
+  row: the Super app, the agent's Foundry sign-in and the Organizer app's gate
+  sign-in all carry it, and a recycled number's next owner sold nothing. The
+  organizer's lookup and their own box-office sales (no agent id) are
+  unchanged; any other scanner still finds the booking. **The scan is
+  unchanged, deliberately**: it only echoes the number the scanner sent, and a
+  person who sells and checks at one door must still admit the QR the buyer
+  shows. Don't extend the refusal to `/tickets/scan`. `AgentGateLookupPostgresIT`.
 - **Reports**: the agent's `GET /bookings/box-office/my-sales`; the organizer's
   `GET /event-organizer/reports/sales-agents` (per agent: sold, cash taken and
   voided, online, commission owed, handed over, cash owed = taken − voided −
@@ -1922,7 +1937,8 @@ before the real holder.
   number: number masked, `qrCode` null), the scan reports (`/scans/**`, where a
   refused scan's number can still get in), and the attendee edit's answer.
 - **Whole**: the buyer's own reads and wallet, the magic-link and holder pages,
-  every message we send, the gate's scan and lookup, and
+  every message we send, the gate's scan and lookup (the lookup never to the
+  sales agent who sold the booking: `SOLD_BY_YOU`, see "Sales agents"), and
   `GET /bookings/internal/{id}` (`getBookingForService`: a service is not a
   person, and siblings read the number they act on).
 - **What replaced the full number in the console:** `bookingItemId` on every

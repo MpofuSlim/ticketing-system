@@ -41,7 +41,11 @@ import java.util.UUID;
  * <p><b>Authorization is the scan's own</b>
  * ({@link TicketScanService#authorizationRefusal}): a scanner who could not
  * redeem this booking's tickets cannot list them. Every refusal carries only
- * the echoed confirmation number.
+ * the echoed confirmation number. One refusal is the lookup's alone: a team
+ * member never gets the tickets of a booking it sold as a sales agent listed
+ * ({@code SOLD_BY_YOU}, owner's decision 2026-11-18), because the agent holds
+ * that booking's confirmation number and a ticket number is the gate
+ * credential. The scan has no twin for it: it only echoes the number sent.
  *
  * <p><b>A confirmation number is a weaker credential than the QR.</b> It is
  * short, sent in plain SMS and easy to share, so the response carries the
@@ -142,7 +146,15 @@ public class GateLookupService {
      * so a phone that is not on the event's team learns nothing about any
      * booking, not even whether a confirmation number exists. Then another
      * event's or another organizer's booking is {@code WRONG_EVENT}, the same
-     * answer for both.
+     * answer for both, and an unpaid one {@code BOOKING_NOT_CONFIRMED}.
+     *
+     * <p>Last, a booking the caller sold as a sales agent is
+     * {@code SOLD_BY_YOU}, with no tickets. A team row may both scan and sell
+     * for one event (event-service V21), and an agent holds the confirmation
+     * number of every sale it made (the sale's answer, {@code my-sales}), so
+     * listing those tickets would hand the agent the whole ticket numbers, the
+     * gate credential its own sale answer withholds. The holder's QR still
+     * scans for the agent: a scan only echoes the number already in hand.
      */
     private GateLookupResponseDTO lookupForSuperApp(String confirmationNumber, UUID eventId, Authentication auth) {
         if (eventId == null) {
@@ -176,7 +188,30 @@ public class GateLookupService {
                     confirmationNumber, booking.getStatus(), scanner);
             return refusal(GateLookupResponseDTO.Status.BOOKING_NOT_CONFIRMED, confirmationNumber);
         }
+        if (soldByCaller(booking, userUuid)) {
+            log.info("Gate lookup refused, the caller sold this booking as a sales agent confirmationNumber={} "
+                    + "eventId={} scanner={}", confirmationNumber, eventId, scanner);
+            return refusal(GateLookupResponseDTO.Status.SOLD_BY_YOU, confirmationNumber);
+        }
         return found(booking, confirmationNumber, scanner);
+    }
+
+    /**
+     * True when the caller's account sold {@code booking} as a sales agent.
+     *
+     * <p>The account, not the team row: the Super app, the agent's own Foundry
+     * sign-in and the Organizer app's gate sign-in all carry the same account
+     * id, and it is what the sale stamped ({@code sold_by_user_uuid}). A row
+     * id would miss an agent scanning under a second row of the same account,
+     * and would refuse the next owner of a recycled number, who sold nothing.
+     * Only a sales agent's sale counts ({@code sold_by_agent_id} is set on
+     * those alone): the organizer's own box-office sales stay the organizer's
+     * to look up, on any path.
+     */
+    static boolean soldByCaller(Booking booking, UUID callerUserUuid) {
+        return booking.getSoldByAgentId() != null
+                && callerUserUuid != null
+                && callerUserUuid.equals(booking.getSoldByUserUuid());
     }
 
     private GateLookupResponseDTO found(Booking booking, String confirmationNumber, String scanner) {
