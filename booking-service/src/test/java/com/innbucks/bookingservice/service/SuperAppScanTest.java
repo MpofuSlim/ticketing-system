@@ -425,4 +425,151 @@ class SuperAppScanTest {
         assertThat(lookup.lookup(CONFIRMATION, null).getStatus())
                 .isEqualTo(GateLookupResponseDTO.Status.FOUND);
     }
+
+    // ------------------------------------------------------------------ a sales agent's own sales
+
+    /**
+     * A ticket of a box-office sale: {@code soldByAccount} stamped as the
+     * seller, and {@code agentRow} as the team row it was sold under (null =
+     * the organizer's own sale), paid and with a buyer's phone on it.
+     */
+    private BookingItem sale(UUID soldByAccount, UUID agentRow, Booking.BookingStatus status) {
+        BookingItem item = ticket(eventId, organizerUuid, status);
+        item.getBooking().setSoldByUserUuid(soldByAccount);
+        item.getBooking().setSoldByAgentId(agentRow);
+        item.getBooking().setSoldByName("Rudo Sibanda");
+        item.getBooking().setPhoneNumber("+263772004567");
+        return item;
+    }
+
+    @Test
+    void lookup_aBookingTheCallerSoldAsAnAgent_isSoldByYou_andListsNothing() {
+        // A row may scan AND sell for one event (event-service V21), and the
+        // agent holds every sale's confirmation number (the sale's answer,
+        // my-sales). Listing the tickets would hand it the whole ticket
+        // numbers, the gate credential its own sale answer withholds.
+        signInOnTheSuperApp();
+        onTheTeam();
+        BookingItem item = sale(scannerUserUuid, UUID.randomUUID(), Booking.BookingStatus.CONFIRMED);
+        when(bookingRepository.findByConfirmationNumberWithItems(CONFIRMATION))
+                .thenReturn(Optional.of(item.getBooking()));
+
+        GateLookupResponseDTO result = lookup.lookup(CONFIRMATION, eventId);
+
+        assertThat(result.getStatus()).isEqualTo(GateLookupResponseDTO.Status.SOLD_BY_YOU);
+        assertThat(result.getConfirmationNumber()).isEqualTo(CONFIRMATION);
+        assertThat(result.getTickets()).isNull();
+        assertThat(result.getCustomerName()).isNull();
+        assertThat(result.getCustomerPhoneLast4()).isNull();
+        assertThat(meters.counter("tickets.gate_lookup", "outcome", "SOLD_BY_YOU").count()).isEqualTo(1.0);
+        verify(scanAttemptRepository, never()).save(any());
+    }
+
+    @Test
+    void lookup_aSaleByTheSameAccountUnderAnotherRow_isSoldByYouToo() {
+        // The account is the key, not the row it scans with: the same person
+        // can hold a second row (a second number on the team).
+        signInOnTheSuperApp();
+        accessIs(ScannerAccessDTO.builder().allowed(true).scannerId(UUID.randomUUID())
+                .organizerUuid(organizerUuid).displayName("Rudo Sibanda").build());
+        BookingItem item = sale(scannerUserUuid, UUID.randomUUID(), Booking.BookingStatus.CONFIRMED);
+        when(bookingRepository.findByConfirmationNumberWithItems(CONFIRMATION))
+                .thenReturn(Optional.of(item.getBooking()));
+
+        assertThat(lookup.lookup(CONFIRMATION, eventId).getStatus())
+                .isEqualTo(GateLookupResponseDTO.Status.SOLD_BY_YOU);
+    }
+
+    @Test
+    void lookup_anotherAgentsSale_isFound_forTheRestOfTheTeam() {
+        // Every other scanner learns a confirmation number only from the
+        // holder in front of them: the gate keeps working for them.
+        signInOnTheSuperApp();
+        onTheTeam();
+        BookingItem item = sale(UUID.randomUUID(), UUID.randomUUID(), Booking.BookingStatus.CONFIRMED);
+        when(bookingRepository.findByConfirmationNumberWithItems(CONFIRMATION))
+                .thenReturn(Optional.of(item.getBooking()));
+
+        GateLookupResponseDTO result = lookup.lookup(CONFIRMATION, eventId);
+
+        assertThat(result.getStatus()).isEqualTo(GateLookupResponseDTO.Status.FOUND);
+        assertThat(result.getTickets()).extracting(GateLookupResponseDTO.Ticket::getTicketNumber)
+                .containsExactly(TICKET);
+    }
+
+    @Test
+    void lookup_theOrganizersOwnBoxOfficeSale_isNeverSoldByYou() {
+        // An organizer on their own team in the Super app: their box-office
+        // sale carries their account but no agent row. The organizer may hold
+        // every ticket number of their own event.
+        signInOnTheSuperApp();
+        onTheTeam();
+        BookingItem item = sale(scannerUserUuid, null, Booking.BookingStatus.CONFIRMED);
+        when(bookingRepository.findByConfirmationNumberWithItems(CONFIRMATION))
+                .thenReturn(Optional.of(item.getBooking()));
+
+        assertThat(lookup.lookup(CONFIRMATION, eventId).getStatus())
+                .isEqualTo(GateLookupResponseDTO.Status.FOUND);
+    }
+
+    @Test
+    void lookup_anUnpaidSaleOfTheCaller_isNotConfirmed_likeAnyoneElses() {
+        // SOLD_BY_YOU replaces FOUND and nothing else: an online sale still
+        // awaiting payment is refused as unpaid, for its seller as for anyone.
+        signInOnTheSuperApp();
+        onTheTeam();
+        BookingItem item = sale(scannerUserUuid, UUID.randomUUID(), Booking.BookingStatus.PENDING);
+        when(bookingRepository.findByConfirmationNumberWithItems(CONFIRMATION))
+                .thenReturn(Optional.of(item.getBooking()));
+
+        assertThat(lookup.lookup(CONFIRMATION, eventId).getStatus())
+                .isEqualTo(GateLookupResponseDTO.Status.BOOKING_NOT_CONFIRMED);
+    }
+
+    @Test
+    void lookup_byTheOrganizer_listsAnAgentsSale_asBefore() {
+        var auth = new UsernamePasswordAuthenticationToken("org@harare-arena.co.zw", null,
+                List.of(new SimpleGrantedAuthority("ROLE_EVENT_ORGANIZER")));
+        auth.setDetails(new JwtAuthDetails("org@harare-arena.co.zw", null, organizerUuid, organizerUuid, null, null));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+        BookingItem item = sale(UUID.randomUUID(), UUID.randomUUID(), Booking.BookingStatus.CONFIRMED);
+        when(bookingRepository.findByConfirmationNumberWithItems(CONFIRMATION))
+                .thenReturn(Optional.of(item.getBooking()));
+
+        GateLookupResponseDTO result = lookup.lookup(CONFIRMATION, eventId);
+
+        assertThat(result.getStatus()).isEqualTo(GateLookupResponseDTO.Status.FOUND);
+        assertThat(result.getTickets()).extracting(GateLookupResponseDTO.Ticket::getTicketNumber)
+                .containsExactly(TICKET);
+    }
+
+    @Test
+    void scan_aTicketTheCallerSold_stillScans_whenTheHolderShowsIt() {
+        // Owner's decision (2026-11-18): only the lookup refuses an agent's own
+        // sales. A scan echoes the number the scanner already sent, so it gives
+        // the agent nothing, and a person who sells and checks at one door must
+        // still admit the QR the buyer shows. Do not extend the refusal here.
+        signInOnTheSuperApp();
+        onTheTeam();
+        BookingItem item = sale(scannerUserUuid, UUID.randomUUID(), Booking.BookingStatus.CONFIRMED);
+        when(bookingItemRepository.findByTicketNumberWithBooking(TICKET)).thenReturn(Optional.of(item));
+        when(bookingItemRepository.claimRedemption(eq(item.getId()), any(LocalDateTime.class),
+                eq(scannerUserUuid), eq("Rudo Sibanda"))).thenReturn(1);
+
+        assertThat(scan.scan(TICKET, eventId, null).getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+    }
+
+    @Test
+    void soldByCaller_needsAnAgentSaleAndTheSameAccount() {
+        UUID account = UUID.randomUUID();
+        Booking agentSale = Booking.builder().soldByUserUuid(account).soldByAgentId(UUID.randomUUID()).build();
+        Booking organizerSale = Booking.builder().soldByUserUuid(account).build();
+        Booking online = Booking.builder().build();
+
+        assertThat(GateLookupService.soldByCaller(agentSale, account)).isTrue();
+        assertThat(GateLookupService.soldByCaller(agentSale, UUID.randomUUID())).isFalse();
+        assertThat(GateLookupService.soldByCaller(agentSale, null)).isFalse();
+        assertThat(GateLookupService.soldByCaller(organizerSale, account)).isFalse();
+        assertThat(GateLookupService.soldByCaller(online, account)).isFalse();
+    }
 }

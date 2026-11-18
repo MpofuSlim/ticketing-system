@@ -56,6 +56,18 @@ import org.springframework.web.bind.annotation.RestController;
 @SecurityRequirement(name = "bearerAuth")
 public class TicketScanController {
 
+    /**
+     * The lookup's answer to a sales agent looking up a booking it sold
+     * ({@code GateLookupResponseDTO.Status.SOLD_BY_YOU}). A constant so the
+     * Postgres IT compares the real response with it strictly.
+     */
+    static final String EXAMPLE_LOOKUP_SOLD_BY_YOU = """
+            { "code": "200 OK", "message": "Lookup result", "data": { "status": "SOLD_BY_YOU", "confirmationNumber": "INN-20260901-3C8849" } }""";
+
+    /** A super-app or Organizer-app gate session's lookup without {@code eventId}. */
+    static final String EXAMPLE_EVENT_ID_REQUIRED = """
+            { "code": "400 BAD_REQUEST", "message": "eventId is required", "data": null }""";
+
     private final TicketScanService ticketScanService;
     private final GateLookupService gateLookupService;
 
@@ -283,8 +295,13 @@ public class TicketScanController {
                           + "**super-app scanners** must send it, and their access to the event is checked "
                           + "before the booking is read (NOT_ASSIGNED_TO_EVENT when their number is not on "
                           + "the event's team, or 503 when it cannot be checked). "
-                          + "Requires **EVENT_ORGANIZER** or **CUSTOMER** role; the retired TEAM_MEMBER role "
-                          + "is refused (403)."
+                          + "**A booking you sold as a sales agent is SOLD_BY_YOU** (super-app and Organizer-app "
+                          + "gate sessions): its tickets are not listed to you, because a ticket number is the "
+                          + "gate credential and a seller never holds one. Ask another scanner on the team or the "
+                          + "organizer to look it up; the holder's own QR still scans for you. The organizer's "
+                          + "lookup is unchanged, and their own box-office sales are never SOLD_BY_YOU. "
+                          + "Requires **EVENT_ORGANIZER**, **CUSTOMER** or **GATE_SCANNER** role; the retired "
+                          + "TEAM_MEMBER role is refused (403)."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -370,21 +387,27 @@ public class TicketScanController {
                                                 "confirmationNumber": "INN-20260901-3C8849"
                                               }
                                             }
-                                            """)
+                                            """),
+                                    @ExampleObject(name = "SOLD_BY_YOU", value = EXAMPLE_LOOKUP_SOLD_BY_YOU)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "confirmationNumber missing, blank or too long",
+                    responseCode = "400", description = "confirmationNumber missing, blank or too long; or a "
+                            + "super-app or Organizer-app gate scanner sent no eventId",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
+                            examples = {
+                                    @ExampleObject(name = "confirmationNumber missing", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Validation failed",
                                       "data": { "confirmationNumber": "confirmationNumber is required" }
                                     }
-                                    """))),
+                                    """),
+                                    @ExampleObject(name = "eventId missing (gate scanner)",
+                                            value = EXAMPLE_EVENT_ID_REQUIRED)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Caller is neither an EVENT_ORGANIZER nor a CUSTOMER "
-                            + "(a token carrying only the retired TEAM_MEMBER role included)",
+                    responseCode = "403", description = "Caller holds none of EVENT_ORGANIZER, CUSTOMER and "
+                            + "GATE_SCANNER (a token carrying only the retired TEAM_MEMBER role included)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {

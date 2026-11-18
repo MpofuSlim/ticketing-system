@@ -22,7 +22,8 @@ import java.util.UUID;
  *
  * <p>Statuses mirror the scan's: anything other than {@code FOUND} carries
  * only the echoed confirmation number, so a refusal discloses nothing about
- * the booking.
+ * the booking. {@code SOLD_BY_YOU} is the lookup's own: the scan has no twin
+ * for it, because a scan only echoes the number the scanner already sent.
  */
 @Data
 @Builder
@@ -98,6 +99,13 @@ public class GateLookupResponseDTO {
         WRONG_ORGANIZER,
         NOT_ASSIGNED_TO_EVENT,
         /** The booking is for another event than the one the scanner is scanning for. */
-        WRONG_EVENT
+        WRONG_EVENT,
+        /**
+         * The caller's account sold this booking as a sales agent, so its
+         * tickets are not listed to them: a sales agent never holds an entry
+         * credential. Another scanner on the team, or the organizer, looks it
+         * up instead. The holder's own QR still scans.
+         */
+        SOLD_BY_YOU
     }
 }
