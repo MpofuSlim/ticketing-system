@@ -14,6 +14,8 @@ import com.innbucks.bookingservice.repository.InvoiceAggregationRepository;
 import com.innbucks.bookingservice.repository.projection.InvoiceStatusAggregate;
 import com.innbucks.bookingservice.repository.projection.OrganizerEventRevenueRow;
 import com.innbucks.bookingservice.repository.projection.OrganizerEventTicketRow;
+import com.innbucks.bookingservice.service.InvoiceCalculations.BillingPeriod;
+import com.innbucks.bookingservice.service.InvoiceGenerator.EventRevenueLine;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -234,6 +236,100 @@ class InvoiceServiceTest {
 
         assertThat(result).hasSize(1);
         verify(metrics).incGenerated(any());
+    }
+
+    // -- Scheduled generation: never a day twice ------------------------------
+    // The exact (organizer, period) key cannot see a monthly invoice and a
+    // weekly one covering the same days, which is what an organizer whose
+    // cycle changes would otherwise get once the scheduler looks back over
+    // several periods.
+
+    private static final LocalDate OCT_31 = LocalDate.of(2026, 10, 31);
+    private static final BillingPeriod WEEK_26_OCT = new BillingPeriod(LocalDate.of(2026, 10, 26), LocalDate.of(2026, 11, 1));
+    private static final BillingPeriod NOVEMBER = new BillingPeriod(LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 30));
+
+    private final List<EventRevenueLine> wholePeriodLines =
+            List.of(new EventRevenueLine(UUID.randomUUID(), 3, 3, new BigDecimal("300.00")));
+
+    @Test
+    void generateScheduled_noInvoiceOverlaps_billsTheWholePeriod_withTheSchedulersLines() {
+        BillingPeriod week = new BillingPeriod(LocalDate.of(2026, 11, 2), LocalDate.of(2026, 11, 8));
+        EventInvoice invoice = issued(UUID.randomUUID());
+        when(invoices.findLatestOverlappingPeriodEnd(organizer, week.start(), week.endInclusive()))
+                .thenReturn(Optional.empty());
+        when(generator.generate(organizer, week.start(), week.endInclusive(), wholePeriodLines))
+                .thenReturn(Optional.of(invoice));
+
+        assertThat(service.generateScheduled(organizer, week, wholePeriodLines)).contains(invoice);
+        verify(eventServiceClient, never()).eventIdsEndedBetween(any(), any(), any());
+    }
+
+    @Test
+    void generateScheduled_alreadyInvoicedThroughThePeriodEnd_isSkipped_withoutAskingEventService() {
+        // November is on a monthly invoice; the organizer has since moved to WEEKLY.
+        when(invoices.findLatestOverlappingPeriodEnd(organizer, WEEK_26_OCT.start(), WEEK_26_OCT.endInclusive()))
+                .thenReturn(Optional.of(LocalDate.of(2026, 11, 30)));
+
+        assertThat(service.generateScheduled(organizer, WEEK_26_OCT, wholePeriodLines)).isEmpty();
+
+        verify(generator, never()).generate(any(), any(), any(), any());
+        verify(eventServiceClient, never()).eventIdsEndedBetween(any(), any(), any());
+        verify(metrics).incGenerationSkipped();
+    }
+
+    @Test
+    void generateScheduled_movedFromMonthlyToWeekly_billsOnlyTheDaysAfterTheMonthlyInvoice() {
+        // October is on a monthly invoice, so of the week 26 Oct - 1 Nov only
+        // 1 Nov is unbilled, and only the events that ended that day count.
+        UUID endedOn1Nov = UUID.randomUUID();
+        when(invoices.findLatestOverlappingPeriodEnd(organizer, WEEK_26_OCT.start(), WEEK_26_OCT.endInclusive()))
+                .thenReturn(Optional.of(OCT_31));
+        when(eventServiceClient.eventIdsEndedBetween("2026-11-01T00:00", "2026-11-02T00:00", "tok"))
+                .thenReturn(endedEvents(List.of(endedOn1Nov)));
+        OrganizerEventRevenueRow revenue = revenueRow(organizer, endedOn1Nov, 1, "40.00");
+        OrganizerEventTicketRow tickets = ticketRow(organizer, endedOn1Nov, 2);
+        when(aggregation.aggregateConfirmedRevenueForEvents(organizer, List.of(endedOn1Nov))).thenReturn(List.of(revenue));
+        when(aggregation.aggregateTicketCountsForEvents(organizer, List.of(endedOn1Nov))).thenReturn(List.of(tickets));
+        List<EventRevenueLine> rest = List.of(new EventRevenueLine(endedOn1Nov, 1, 2, new BigDecimal("40.00")));
+        EventInvoice invoice = issued(UUID.randomUUID());
+        when(generator.generate(organizer, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 1), rest))
+                .thenReturn(Optional.of(invoice));
+
+        assertThat(service.generateScheduled(organizer, WEEK_26_OCT, wholePeriodLines)).contains(invoice);
+        verify(generator, never()).generate(organizer, WEEK_26_OCT.start(), WEEK_26_OCT.endInclusive(), wholePeriodLines);
+    }
+
+    @Test
+    void generateScheduled_movedFromWeeklyToMonthly_billsTheMonthFromTheDayAfterTheLastWeeklyInvoice() {
+        UUID endedLater = UUID.randomUUID();
+        when(invoices.findLatestOverlappingPeriodEnd(organizer, NOVEMBER.start(), NOVEMBER.endInclusive()))
+                .thenReturn(Optional.of(LocalDate.of(2026, 11, 8))); // weekly invoices up to 2-8 Nov
+        when(eventServiceClient.eventIdsEndedBetween("2026-11-09T00:00", "2026-12-01T00:00", "tok"))
+                .thenReturn(endedEvents(List.of(endedLater)));
+        OrganizerEventRevenueRow revenue = revenueRow(organizer, endedLater, 2, "120.00");
+        OrganizerEventTicketRow tickets = ticketRow(organizer, endedLater, 2);
+        when(aggregation.aggregateConfirmedRevenueForEvents(organizer, List.of(endedLater))).thenReturn(List.of(revenue));
+        when(aggregation.aggregateTicketCountsForEvents(organizer, List.of(endedLater))).thenReturn(List.of(tickets));
+        EventInvoice invoice = issued(UUID.randomUUID());
+        when(generator.generate(eq(organizer), eq(LocalDate.of(2026, 11, 9)), eq(NOVEMBER.endInclusive()), any()))
+                .thenReturn(Optional.of(invoice));
+
+        assertThat(service.generateScheduled(organizer, NOVEMBER, wholePeriodLines)).contains(invoice);
+        verify(generator).generate(organizer, LocalDate.of(2026, 11, 9), NOVEMBER.endInclusive(),
+                List.of(new EventRevenueLine(endedLater, 2, 2, new BigDecimal("120.00"))));
+    }
+
+    @Test
+    void generateScheduled_partlyInvoiced_butEventServiceCannotBeAsked_isSkippedUntilTheNextRun() {
+        when(invoices.findLatestOverlappingPeriodEnd(organizer, WEEK_26_OCT.start(), WEEK_26_OCT.endInclusive()))
+                .thenReturn(Optional.of(OCT_31));
+        when(eventServiceClient.eventIdsEndedBetween(any(), any(), any()))
+                .thenThrow(new RuntimeException("event-service unreachable"));
+
+        assertThat(service.generateScheduled(organizer, WEEK_26_OCT, wholePeriodLines)).isEmpty();
+
+        // Never the whole week: that would bill 26-31 Oct a second time.
+        verify(generator, never()).generate(any(), any(), any(), any());
     }
 
     private EventInvoice issued(UUID id) {

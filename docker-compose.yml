@@ -273,6 +273,8 @@ services:
       INVOICE_DEFAULT_BILLING_CYCLE: ${INVOICE_DEFAULT_BILLING_CYCLE:-MONTHLY}
       INVOICE_DUE_DAYS: ${INVOICE_DUE_DAYS:-14}
       INVOICE_SCHEDULER_ENABLED: ${INVOICE_SCHEDULER_ENABLED:-true}
+      # Blank = the scheduler invoices nothing (see application.yaml).
+      INVOICE_BILLING_START_DATE: ${INVOICE_BILLING_START_DATE:-}
       # InnBucks notification API (booking-confirm email). Same creds as payment-service.
       # Optional: blank → email no-ops and the WhatsApp QR remains the delivery channel.
       BANK_API_URL: ${BANK_API_URL:-https://staging.innbucks.co.zw}

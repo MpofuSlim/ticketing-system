@@ -253,6 +253,14 @@ app:
     # post-event refunds land before the invoice snapshots its numbers, since
     # there is no credit note to correct one afterwards.
     settle-grace-days: ${INVOICE_SETTLE_GRACE_DAYS:7}
+    # Days the scheduler keeps retrying a closed period, once a day, after its
+    # settle grace ends (InvoiceProperties.catchUpDays).
+    catch-up-days: ${INVOICE_CATCH_UP_DAYS:28}
+    # The first day commission is billed (yyyy-MM-dd, UTC): no event that ended
+    # before it is ever invoiced by the scheduler. Blank = the scheduler invoices
+    # NOTHING (ERROR at startup), so switching it on can never back-bill the
+    # weeks commission was off. Set it to the day commission resumes.
+    billing-start-date: ${INVOICE_BILLING_START_DATE:}
     generation-cron: ${INVOICE_GENERATION_CRON:0 30 1 * * *}
     overdue-cron: ${INVOICE_OVERDUE_CRON:0 0 2 * * *}
 

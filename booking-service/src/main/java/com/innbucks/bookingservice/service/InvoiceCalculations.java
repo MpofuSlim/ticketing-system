@@ -8,6 +8,9 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.TemporalAdjusters;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.List;
 
 /**
  * Pure invoicing arithmetic + billing-period math — no Spring, no DB, so it can
@@ -70,6 +73,62 @@ public final class InvoiceCalculations {
      */
     public static LocalDate billableFrom(BillingPeriod period, int settleGraceDays) {
         return period.endInclusive().plusDays(Math.max(0, settleGraceDays) + 1L);
+    }
+
+    /**
+     * The periods of {@code cycle} the scheduler bills on {@code today}, oldest
+     * first: every closed period whose settle grace ended within the last
+     * {@code catchUpDays} days (its {@link #billableFrom} is on or before today,
+     * and no more than {@code catchUpDays - 1} days before it), that ended on or
+     * after {@code billingStart}. A period that began before {@code billingStart}
+     * is cut to start on it.
+     *
+     * <p><b>Why not just {@link #previousClosed}.</b> The previous closed period
+     * is billable only once its grace has passed, and with a grace of a cycle
+     * or more that never happens while it is still the previous one. WEEKLY with
+     * the default 7-day grace: last week becomes billable on Monday next week,
+     * by which time it is no longer last week, so no weekly period was ever
+     * billed. Walking back to the periods whose grace has passed works for any
+     * grace, and keeping each one for {@code catchUpDays} gives a period that
+     * could not be billed on its first day (event-service unreachable, a missed
+     * run) that many more daily tries.
+     *
+     * <p>With the default 28 days a WEEKLY run holds the last four billable
+     * weeks, and a MONTHLY run never more than one month (months are 28 days or
+     * longer), so MONTHLY bills the previous month from the 8th exactly as
+     * before, and keeps trying it until a few days into the next month instead
+     * of stopping at the month end.
+     *
+     * <p>{@code billingStart} is the floor below which nothing is billed
+     * (owner decision, 2026-11-18: when commission is switched on, bill forward
+     * only). Without it, the first run after the scheduler is switched on would
+     * bill every period still in the catch-up window, at whatever rate applies
+     * on that day, for weeks in which commission was off.
+     */
+    public static List<BillingPeriod> billablePeriods(BillingCycle cycle, LocalDate today, int settleGraceDays,
+                                                      int catchUpDays, LocalDate billingStart) {
+        LocalDate oldestBillableFrom = today.minusDays(Math.max(1, catchUpDays) - 1L);
+        BillingPeriod period = previousClosed(cycle, today);
+        while (billableFrom(period, settleGraceDays).isAfter(today)) {
+            period = periodBefore(cycle, period);
+        }
+        Deque<BillingPeriod> billable = new ArrayDeque<>();
+        while (!billableFrom(period, settleGraceDays).isBefore(oldestBillableFrom)
+                && !period.endInclusive().isBefore(billingStart)) {
+            billable.addFirst(period.start().isBefore(billingStart)
+                    ? new BillingPeriod(billingStart, period.endInclusive())
+                    : period);
+            period = periodBefore(cycle, period);
+        }
+        return List.copyOf(billable);
+    }
+
+    /** The whole period of {@code cycle} just before {@code period}, which must be a whole period itself. */
+    private static BillingPeriod periodBefore(BillingCycle cycle, BillingPeriod period) {
+        LocalDate start = cycle == BillingCycle.WEEKLY
+                ? period.start().minusWeeks(1)
+                : period.start().minusMonths(1);
+        return new BillingPeriod(start, period.start().minusDays(1));
     }
 
     /**

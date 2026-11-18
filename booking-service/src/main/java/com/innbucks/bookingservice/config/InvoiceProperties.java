@@ -48,8 +48,38 @@ public class InvoiceProperties {
      *
      * <p>Zero is legal and means "invoice as soon as the period closes", which
      * reinstates that race. Raising it only delays revenue; it never loses any,
-     * because generation is idempotent on (organizer, period) and the scheduler
-     * runs daily until the period is billed.
+     * because the scheduler bills every period whose grace has passed (see
+     * {@link #catchUpDays}), whatever the grace is and whatever the cycle.
      */
     private int settleGraceDays = 7;
+
+    /**
+     * How many days the scheduler keeps trying a closed period, once a day,
+     * after its settle grace ends. Values below 1 count as 1.
+     *
+     * <p>A period that cannot be billed on its first day (event-service
+     * unreachable, a run missed during a deploy) is billed on a later run
+     * inside this window; past it, it is never billed by the scheduler. 28
+     * days keeps the last four weekly periods and one monthly period in each
+     * run. Raising it widens how far back a commission rate set today can
+     * reach into periods that were not invoiced at the old rate.
+     */
+    private int catchUpDays = 28;
+
+    /**
+     * The first day commission is billed on this deployment ({@code yyyy-MM-dd},
+     * UTC): the scheduler never invoices an event that ended before it, and a
+     * period that began earlier is invoiced from this day.
+     *
+     * <p>Blank (the default) or not a date: the scheduler invoices nothing and
+     * logs an ERROR at startup and on every run. That is deliberate (owner
+     * decision, 2026-11-18: bill forward only). Without a floor, switching the
+     * scheduler on would invoice every period still in the catch-up window, at
+     * the rate in force that day, for weeks in which commission was off, and
+     * email each organizer the invoice. Set it to the day commission resumes.
+     *
+     * <p>Read as text and parsed by the scheduler, so a typo stops invoicing
+     * rather than booking-service starting up.
+     */
+    private String billingStartDate = "";
 }
