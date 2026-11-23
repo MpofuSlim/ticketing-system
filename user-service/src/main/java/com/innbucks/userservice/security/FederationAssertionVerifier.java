@@ -16,7 +16,9 @@ import java.security.KeyFactory;
 import java.security.PublicKey;
 import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -54,7 +56,11 @@ import java.util.Set;
  * </ul>
  *
  * <p>A second, "previous" public key can be configured so a key rotation has an
- * overlap window instead of a cliff: both are tried, newest first.
+ * overlap window instead of a cliff: both are tried, current first. Only a
+ * SIGNATURE mismatch moves on to the previous key. A token the current key
+ * signed but whose claims fail (expired, wrong audience) is refused outright,
+ * and so is one neither key signed. The assertion carries no {@code kid}, so
+ * trying each key is the only way to tell which one signed it.
  */
 @Component
 @Slf4j
@@ -120,18 +126,24 @@ public class FederationAssertionVerifier {
         if (!isConfigured()) {
             throw new AssertionInvalidException("no verification key configured");
         }
-        Claims claims;
-        try {
-            claims = Jwts.parser()
-                    .keyLocator(allowListedKeyLocator())
-                    .requireIssuer(issuer)
-                    .requireAudience(audience)
-                    .clockSkewSeconds(30)
-                    .build()
-                    .parseSignedClaims(compactJws)
-                    .getPayload();
-        } catch (Exception e) {
-            throw new AssertionInvalidException("signature or claims rejected: " + e.getClass().getSimpleName());
+        Claims claims = null;
+        Exception refusal = null;
+        for (PublicKey key : keysCurrentFirst()) {
+            try {
+                claims = parse(compactJws, key);
+                break;
+            } catch (SignatureException e) {
+                // Not this key's signature (or not an allowed algorithm): try the next one.
+                refusal = e;
+            } catch (Exception e) {
+                // This key verified the signature, so the claims are what failed.
+                // Another key cannot change that.
+                throw new AssertionInvalidException("signature or claims rejected: " + e.getClass().getSimpleName());
+            }
+        }
+        if (claims == null) {
+            throw new AssertionInvalidException("signature or claims rejected: "
+                    + (refusal == null ? "no key" : refusal.getClass().getSimpleName()));
         }
 
         String subject = claims.getSubject();
@@ -169,6 +181,25 @@ public class FederationAssertionVerifier {
         }
     }
 
+    private Claims parse(String compactJws, PublicKey key) {
+        return Jwts.parser()
+                .keyLocator(allowListedKeyLocator(key))
+                .requireIssuer(issuer)
+                .requireAudience(audience)
+                .clockSkewSeconds(30)
+                .build()
+                .parseSignedClaims(compactJws)
+                .getPayload();
+    }
+
+    /** The configured keys, current first. Never empty once {@link #isConfigured()} holds. */
+    private List<PublicKey> keysCurrentFirst() {
+        List<PublicKey> keys = new ArrayList<>(2);
+        if (currentKey != null) keys.add(currentKey);
+        if (previousKey != null) keys.add(previousKey);
+        return keys;
+    }
+
     /**
      * Returns the verification key only for an allow-listed asymmetric
      * algorithm. Same lambda shape as {@code JwtUtil}'s locator.
@@ -177,7 +208,7 @@ public class FederationAssertionVerifier {
      * means a symmetric or unsigned token never reaches a comparison against key
      * material at all.
      */
-    private Locator<Key> allowListedKeyLocator() {
+    private static Locator<Key> allowListedKeyLocator(PublicKey key) {
         return (Header header) -> {
             if (!(header instanceof ProtectedHeader ph)) {
                 throw new SignatureException("unsigned assertion");
@@ -186,7 +217,7 @@ public class FederationAssertionVerifier {
             if (alg == null || !ALLOWED_ALGS.contains(alg)) {
                 throw new SignatureException("unsupported assertion algorithm: " + alg);
             }
-            return currentKey != null ? currentKey : previousKey;
+            return key;
         };
     }
 

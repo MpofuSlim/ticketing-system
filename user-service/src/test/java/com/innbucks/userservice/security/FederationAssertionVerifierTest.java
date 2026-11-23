@@ -33,6 +33,7 @@ public class FederationAssertionVerifierTest {
 
     private static KeyPair keyPair;
     private static KeyPair otherKeyPair;
+    private static KeyPair thirdKeyPair;
 
     @BeforeAll
     static void generateKeys() throws Exception {
@@ -40,6 +41,7 @@ public class FederationAssertionVerifierTest {
         gen.initialize(2048);
         keyPair = gen.generateKeyPair();
         otherKeyPair = gen.generateKeyPair();
+        thirdKeyPair = gen.generateKeyPair();
     }
 
     public static String pem(java.security.PublicKey key) {
@@ -219,6 +221,61 @@ public class FederationAssertionVerifierTest {
 
         assertThat(v.isConfigured()).isTrue();
         assertThat(v.verify(validAssertion()).phoneNumber()).isEqualTo(PHONE);
+    }
+
+    @Test
+    @DisplayName("with BOTH keys set, a token signed by either is accepted: a real overlap, not only a fallback for a blank current key")
+    void bothKeys_acceptTokensSignedByEither() {
+        FederationAssertionVerifier v = bothKeys();
+        String byNew = assertion(otherKeyPair.getPrivate(), PHONE, ISSUER, AUDIENCE, Instant.now(), 120, "jti-new");
+        String byOld = assertion(keyPair.getPrivate(), PHONE, ISSUER, AUDIENCE, Instant.now(), 120, "jti-old");
+
+        assertThat(v.verify(byNew).jti()).isEqualTo("jti-new");
+        assertThat(v.verify(byOld).jti()).isEqualTo("jti-old");
+    }
+
+    @Test
+    @DisplayName("with both keys set, a token neither signed is still refused")
+    void bothKeys_refuseAThirdKey() {
+        String forged = assertion(thirdKeyPair.getPrivate(), PHONE, ISSUER, AUDIENCE, Instant.now(), 120, "jti-x");
+
+        assertThatThrownBy(() -> bothKeys().verify(forged))
+                .isInstanceOf(FederationAssertionVerifier.AssertionInvalidException.class);
+    }
+
+    @Test
+    @DisplayName("with both keys set, every claim check still applies to a token the PREVIOUS key signed")
+    void bothKeys_previousKeyToken_stillHasItsClaimsChecked() {
+        FederationAssertionVerifier v = bothKeys();
+        String expired = assertion(keyPair.getPrivate(), PHONE, ISSUER, AUDIENCE,
+                Instant.now().minusSeconds(3600), 120, "jti-1");
+        String wrongAudience = assertion(keyPair.getPrivate(), PHONE, ISSUER, "innbucks-loyalty",
+                Instant.now(), 120, "jti-2");
+        String overlong = assertion(keyPair.getPrivate(), PHONE, ISSUER, AUDIENCE, Instant.now(), 3600, "jti-3");
+
+        for (String token : new String[] {expired, wrongAudience, overlong}) {
+            assertThatThrownBy(() -> v.verify(token))
+                    .isInstanceOf(FederationAssertionVerifier.AssertionInvalidException.class);
+        }
+    }
+
+    @Test
+    @DisplayName("a token the CURRENT key signed but whose claims fail is refused for its claims, not retried")
+    void bothKeys_currentKeyClaimFailure_isRefused() {
+        String expired = assertion(otherKeyPair.getPrivate(), PHONE, ISSUER, AUDIENCE,
+                Instant.now().minusSeconds(3600), 120, "jti-1");
+
+        assertThatThrownBy(() -> bothKeys().verify(expired))
+                .isInstanceOf(FederationAssertionVerifier.AssertionInvalidException.class)
+                .hasMessageContaining("ExpiredJwtException");
+    }
+
+    /** Mid-rotation: the new key current, the old one previous. */
+    private static FederationAssertionVerifier bothKeys() {
+        FederationAssertionVerifier v = new FederationAssertionVerifier(
+                pem(otherKeyPair.getPublic()), pem(keyPair.getPublic()), ISSUER, AUDIENCE, 300);
+        v.parseKeys();
+        return v;
     }
 
     @Test
