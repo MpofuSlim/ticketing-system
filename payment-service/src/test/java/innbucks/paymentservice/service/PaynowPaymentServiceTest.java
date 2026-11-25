@@ -4,6 +4,7 @@ import innbucks.paymentservice.client.PaynowApiException;
 import innbucks.paymentservice.client.PaynowApiTransientException;
 import innbucks.paymentservice.client.PaynowClient;
 import innbucks.paymentservice.client.PaynowInitiation;
+import innbucks.paymentservice.client.PaynowNotSentException;
 import innbucks.paymentservice.client.PaynowProperties;
 import innbucks.paymentservice.client.PaynowStatus;
 import innbucks.paymentservice.config.PaymentMetrics;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -41,6 +43,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -83,6 +86,10 @@ class PaynowPaymentServiceTest {
         when(client.isConfigured("USD")).thenReturn(true);
         when(client.canStartWeb("USD")).thenReturn(true);
         when(client.canStartExpress("USD")).thenReturn(true);
+        // The ledger's guarded writes apply unless a case says otherwise.
+        when(records.claimPaid(any(), any(), anyString())).thenReturn(true);
+        when(records.flagPaynowOperatorCase(any())).thenReturn(true);
+        when(records.parkUnconfirmedInDoubt(any(), anyString())).thenReturn(true);
     }
 
     private OrderGateway payableBooking(String phone) {
@@ -113,6 +120,21 @@ class PaynowPaymentServiceTest {
 
     private static PaynowStatus status(PaynowStatus.Outcome outcome, String raw, String amount, String reference) {
         return new PaynowStatus(outcome, raw, reference, "123456", amount == null ? null : new BigDecimal(amount), POLL);
+    }
+
+    private double starts(String rail, String outcome) {
+        var c = registry.find("payment.payments.paynow_start").tag("rail", rail).tag("outcome", outcome).counter();
+        return c == null ? 0 : c.count();
+    }
+
+    /** {@code p} as the database holds it now, with another status. */
+    private static Payment asStored(Payment p, Payment.PaymentStatus status) {
+        Payment copy = open(p.getPaymentRail(), p.getCodeExpiresAt());
+        copy.setId(p.getId());
+        copy.setStatus(status);
+        copy.setPaynowPollUrl(p.getPaynowPollUrl());
+        copy.setCompletedAt(Instant.now().minusSeconds(60));
+        return copy;
     }
 
     private double resolutions(String outcome) {
@@ -179,7 +201,7 @@ class PaynowPaymentServiceTest {
     @Test
     @DisplayName("a wallet refused at the start (insufficient balance): FAILED with Paynow's words, slot freed")
     void startExpress_declined() {
-        payableBooking("+263774444444");
+        payableBooking("+263712345678");
         when(client.initiateExpress(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString()))
                 .thenThrow(new PaynowApiException("Paynow refused the payment: Insufficient balance", "Insufficient balance"));
 
@@ -194,7 +216,7 @@ class PaynowPaymentServiceTest {
     @Test
     @DisplayName("no answer to a card start: closed at once (no page to pay on); to a OneMoney start: left open")
     void start_noAnswer() {
-        payableBooking("+263771111111");
+        payableBooking("+263712345678");
         when(client.initiateWeb(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
                 .thenThrow(new PaynowApiTransientException("read timed out"));
         var card = service.start(PaymentRail.PAYNOW_CARD, OrderType.BOOKING, UUID.randomUUID().toString());
@@ -228,7 +250,7 @@ class PaynowPaymentServiceTest {
     @Test
     @DisplayName("five OneMoney/O'mari requests to one number in the window: the sixth is a 429, nothing held")
     void start_promptCap() {
-        OrderGateway gateway = payableBooking("+263771111111");
+        OrderGateway gateway = payableBooking("+263712345678");
         when(records.recentCharges(any(), any(), any()))
                 .thenReturn(new PaymentRecordService.RecentCharges(5, Instant.now().minus(Duration.ofMinutes(5))));
 
@@ -257,7 +279,12 @@ class PaynowPaymentServiceTest {
         when(resolution.confirmOrder(p)).thenReturn(ConfirmOutcome.confirmed("INN-20261125-941C78"));
 
         assertThat(service.resolveOpen(p, Trigger.SWEEP)).isEqualTo(CheckOutcome.PAID);
-        verify(records).markSucceeded(p.getId(), "123456", "INN-20261125-941C78");
+        InOrder order = inOrder(records, resolution);
+        order.verify(records).claimPaid(eq(p.getId()), eq("123456"), anyString());
+        order.verify(resolution).confirmOrder(p);
+        order.verify(records).resolveUnconfirmed(eq(p.getId()), eq("INN-20261125-941C78"), anyString());
+        verify(records, never()).markSucceeded(any(), any(), any());
+        assertThat(resolutions("paid")).isEqualTo(1);
     }
 
     @Test
@@ -427,21 +454,320 @@ class PaynowPaymentServiceTest {
         when(resolution.confirmOrder(p)).thenReturn(ConfirmOutcome.confirmed("INN-1"));
         assertThat(service.submitOtp(p.getId(), " 482914 ").httpStatus()).isEqualTo(200);
         verify(client).poll("USD", POLL);
-        verify(records).markSucceeded(p.getId(), "123456", "INN-1");
+        verify(records).resolveUnconfirmed(eq(p.getId()), eq("INN-1"), anyString());
     }
 
     @Test
-    @DisplayName("O'mari code on another rail is a 404; on a payment no longer waiting, a 409")
+    @DisplayName("O'mari code on another rail is a 404; on a paid payment, that payment (200); on one that is over, a 409")
     void otp_wrongRailOrClosed() {
         Payment card = open(PaymentRail.PAYNOW_CARD, Instant.now().plusSeconds(600));
         when(repository.findById(card.getId())).thenReturn(Optional.of(card));
         assertThat(service.submitOtp(card.getId(), "482913").httpStatus()).isEqualTo(404);
 
-        Payment done = open(PaymentRail.OMARI, Instant.now().plusSeconds(600));
-        done.setPaynowOtpUrl("https://www.paynow.co.zw/interface/remoteotp/1");
-        done.setStatus(Payment.PaymentStatus.SUCCEEDED);
-        when(repository.findById(done.getId())).thenReturn(Optional.of(done));
-        assertThat(service.submitOtp(done.getId(), "482913").httpStatus()).isEqualTo(409);
+        for (Payment.PaymentStatus paid : new Payment.PaymentStatus[] {Payment.PaymentStatus.SUCCEEDED,
+                Payment.PaymentStatus.COMPLETED_UNCONFIRMED, Payment.PaymentStatus.IN_DOUBT}) {
+            Payment done = open(PaymentRail.OMARI, Instant.now().plusSeconds(600));
+            done.setPaynowOtpUrl("https://www.paynow.co.zw/interface/remoteotp/1");
+            done.setStatus(paid);
+            when(repository.findById(done.getId())).thenReturn(Optional.of(done));
+            var outcome = service.submitOtp(done.getId(), "482913");
+            assertThat(outcome.httpStatus()).as(paid.name()).isEqualTo(200);
+            assertThat(outcome.payment()).isSameAs(done);
+        }
+        for (Payment.PaymentStatus over : new Payment.PaymentStatus[] {Payment.PaymentStatus.FAILED,
+                Payment.PaymentStatus.EXPIRED}) {
+            Payment ended = open(PaymentRail.OMARI, Instant.now().plusSeconds(600));
+            ended.setPaynowOtpUrl("https://www.paynow.co.zw/interface/remoteotp/1");
+            ended.setStatus(over);
+            when(repository.findById(ended.getId())).thenReturn(Optional.of(ended));
+            assertThat(service.submitOtp(ended.getId(), "482913").httpStatus()).as(over.name()).isEqualTo(409);
+        }
         verify(client, never()).submitOtp(anyString(), anyString(), anyString());
+    }
+
+    // -- review fixes (2026-11-25) ---------------------------------------------
+
+    @Test
+    @DisplayName("Paynow's OneMoney test numbers are refused unless the host allows them: test mode pays them with no money")
+    void start_testNumbers() {
+        OrderGateway gateway = payableBooking("+263771111111");
+        assertThatThrownBy(() -> service.start(PaymentRail.ONEMONEY, OrderType.BOOKING, UUID.randomUUID().toString()))
+                .isInstanceOfSatisfying(InvalidPaymentRequestException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(400);
+                    assertThat(e.getMessage()).isEqualTo("OneMoney cannot be used with this number — please pay another way");
+                });
+        verify(gateway, never()).extendHold(anyString(), any());
+        verify(records, never()).openPending(any());
+        assertThat(starts("ONEMONEY", "test_number")).isEqualTo(1);
+
+        properties.setTestNumbersAllowed(true);
+        when(client.initiateExpress(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(new PaynowInitiation(null, POLL, "9513", null, null, null));
+        assertThat(service.start(PaymentRail.ONEMONEY, OrderType.BOOKING, UUID.randomUUID().toString()).failed()).isFalse();
+        verify(client).initiateExpress(eq("USD"), anyString(), eq(1250L), anyString(), anyString(), eq("onemoney"),
+                eq("0771111111"));
+    }
+
+    @Test
+    @DisplayName("a start that never reached Paynow (breaker open, no connection) is closed at once on every rail, OneMoney too")
+    void start_notSent() {
+        payableBooking("+263712345678");
+        when(client.initiateWeb(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
+                .thenThrow(new PaynowNotSentException("Paynow is temporarily unavailable (circuit open)", null));
+        var card = service.start(PaymentRail.PAYNOW_CARD, OrderType.BOOKING, UUID.randomUUID().toString());
+        assertThat(card.failed()).isTrue();
+        assertThat(card.failureStatus()).isEqualTo(502);
+        verify(records).markFailed(eq(card.payment().getId()), eq(PaynowPaymentService.UNREACHABLE_CODE), anyString());
+
+        when(client.initiateExpress(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString()))
+                .thenThrow(new PaynowNotSentException("Paynow could not be reached: Connection refused", null));
+        var oneMoney = service.start(PaymentRail.ONEMONEY, OrderType.BOOKING, UUID.randomUUID().toString());
+        assertThat(oneMoney.failed()).as("nothing was sent, so no prompt can be live").isTrue();
+        assertThat(oneMoney.failureStatus()).isEqualTo(502);
+        assertThat(oneMoney.failureMessage())
+                .isEqualTo("OneMoney could not be started — please try again in a moment or pay another way");
+        verify(records).markFailed(eq(oneMoney.payment().getId()), eq(PaynowPaymentService.UNREACHABLE_CODE), anyString());
+        assertThat(starts("ONEMONEY", "not_sent")).isEqualTo(1);
+        assertThat(starts("PAYNOW_CARD", "not_sent")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("an attempt cancelled or declined moments ago holds a new one on that option: refused with it, nothing held or sent")
+    void start_declineHold() {
+        OrderGateway gateway = payableBooking("+263712345678");
+        String ref = UUID.randomUUID().toString();
+        Payment last = open(PaymentRail.ONEMONEY, Instant.now().minusSeconds(60));
+        last.setStatus(Payment.PaymentStatus.FAILED);
+        last.setUpstreamErrorCode(PaynowPaymentService.CANCELLED_CODE);
+        last.setUpstreamErrorMessage("Paynow reports the payment Cancelled");
+        last.setCompletedAt(Instant.now().minusSeconds(10));
+        when(records.latestOnRail(OrderType.BOOKING, ref, PaymentRail.ONEMONEY)).thenReturn(Optional.of(last));
+
+        assertThatThrownBy(() -> service.start(PaymentRail.ONEMONEY, OrderType.BOOKING, ref))
+                .isInstanceOfSatisfying(PaynowPaymentService.PaynowDeclinedException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(400);
+                    assertThat(e.declined()).isSameAs(last);
+                    assertThat(e.retryAfterSeconds()).isBetween(100L, 111L);
+                    assertThat(e.getMessage())
+                            .isEqualTo("OneMoney: the payment didn't go through. Try again in 2 minutes, or pay another way.");
+                });
+        verify(gateway, never()).fetch(anyString());
+        verify(records, never()).openPending(any());
+        verify(client, never()).initiateExpress(anyString(), anyString(), anyLong(), anyString(), anyString(),
+                anyString(), anyString());
+        assertThat(starts("ONEMONEY", "decline_held")).isEqualTo(1);
+        assertThat(service.declineHoldRemaining(last)).isBetween(100L, 111L);
+
+        // A wallet refusal holds too, in Paynow's words.
+        last.setUpstreamErrorCode(PaynowPaymentService.DECLINED_CODE);
+        last.setUpstreamErrorMessage("Insufficient balance");
+        assertThatThrownBy(() -> service.start(PaymentRail.ONEMONEY, OrderType.BOOKING, ref))
+                .hasMessage("OneMoney: Insufficient balance. Try again in 2 minutes, or pay another way.");
+
+        // Another option is not held.
+        when(client.initiateExpress(anyString(), anyString(), anyLong(), anyString(), anyString(), eq("omari"), anyString()))
+                .thenReturn(new PaynowInitiation(null, POLL, "9514", "OTP-1",
+                        "https://www.paynow.co.zw/interface/remoteotp/9514", null));
+        assertThat(service.start(PaymentRail.OMARI, OrderType.BOOKING, ref).failed()).isFalse();
+
+        // Past the hold, or after an attempt that merely lapsed, OneMoney starts.
+        when(client.initiateExpress(anyString(), anyString(), anyLong(), anyString(), anyString(), eq("onemoney"), anyString()))
+                .thenReturn(new PaynowInitiation(null, POLL, "9515", null, null, null));
+        last.setCompletedAt(Instant.now().minus(Duration.ofMinutes(3)));
+        assertThat(service.start(PaymentRail.ONEMONEY, OrderType.BOOKING, ref).failed()).isFalse();
+        last.setCompletedAt(Instant.now());
+        last.setStatus(Payment.PaymentStatus.EXPIRED);
+        assertThat(service.declineHoldRemaining(last)).isNull();
+        assertThat(service.start(PaymentRail.ONEMONEY, OrderType.BOOKING, ref).failed()).isFalse();
+
+        // 0 switches it off.
+        last.setStatus(Payment.PaymentStatus.FAILED);
+        properties.setDeclineHold(Duration.ZERO);
+        assertThat(service.declineHoldRemaining(last)).isNull();
+    }
+
+    @Test
+    @DisplayName("the copy in hand is stale and the row has closed since: nothing is polled or written")
+    void resolve_staleCopy() {
+        Payment stale = open(PaymentRail.PAYNOW_CARD, Instant.now().plusSeconds(600));
+        when(repository.findById(stale.getId()))
+                .thenReturn(Optional.of(asStored(stale, Payment.PaymentStatus.EXPIRED)));
+
+        assertThat(service.resolveOpen(stale, Trigger.SWEEP)).isEqualTo(CheckOutcome.OPEN);
+        verify(client, never()).poll(anyString(), anyString());
+        verify(records, never()).stampPaynowChecked(any());
+    }
+
+    @Test
+    @DisplayName("Paid, but the row closed between our read and our write: the booking is NOT confirmed; an operator's case")
+    void resolve_paidOnARowClosedMeanwhile() {
+        Payment p = open(PaymentRail.PAYNOW_CARD, Instant.now().minusSeconds(60));
+        when(repository.findById(p.getId()))
+                .thenReturn(Optional.of(p), Optional.of(asStored(p, Payment.PaymentStatus.EXPIRED)));
+        when(records.claimPaid(eq(p.getId()), any(), anyString())).thenReturn(false);
+        when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
+
+        assertThat(service.resolveOpen(p, Trigger.SWEEP)).isEqualTo(CheckOutcome.CLOSED);
+        verify(resolution, never()).confirmOrder(any());
+        verify(records, never()).resolveUnconfirmed(any(), any(), anyString());
+        verify(records).flagPaynowOperatorCase(p.getId());
+        assertThat(resolutions("paid_after_close")).isEqualTo(1);
+        assertThat(resolutions("paid")).isZero();
+    }
+
+    @Test
+    @DisplayName("Paid, and another trigger recorded it first: PAID, no second confirm, no operator case")
+    void resolve_paidAlreadyRecorded() {
+        Payment p = open(PaymentRail.ONEMONEY, Instant.now().plusSeconds(600));
+        when(repository.findById(p.getId()))
+                .thenReturn(Optional.of(p), Optional.of(asStored(p, Payment.PaymentStatus.COMPLETED_UNCONFIRMED)));
+        when(records.claimPaid(eq(p.getId()), any(), anyString())).thenReturn(false);
+        when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
+
+        assertThat(service.resolveOpen(p, Trigger.RESULT_UPDATE)).isEqualTo(CheckOutcome.PAID);
+        verify(resolution, never()).confirmOrder(any());
+        verify(records, never()).flagPaynowOperatorCase(any());
+        assertThat(resolutions("paid")).isZero();
+    }
+
+    @Test
+    @DisplayName("Paid, booking confirm fails: left COMPLETED_UNCONFIRMED for the confirm-retry, never promoted")
+    void resolve_paidButConfirmFails() {
+        Payment p = open(PaymentRail.PAYNOW_CARD, Instant.now().plusSeconds(600));
+        when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
+        when(resolution.confirmOrder(p)).thenReturn(ConfirmOutcome.unreachable("booking-service down"));
+
+        assertThat(service.resolveOpen(p, Trigger.SWEEP)).isEqualTo(CheckOutcome.PAID);
+        verify(records).claimPaid(eq(p.getId()), eq("123456"), anyString());
+        verify(records, never()).resolveUnconfirmed(any(), any(), anyString());
+        verify(records).noteEvent(eq(p.getId()), anyString());
+        assertThat(resolutions("paid_unconfirmed")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("refunded before the booking was confirmed: parked IN_DOUBT so the confirm-retry issues no tickets")
+    void update_refundBeforeConfirm() {
+        Payment p = open(PaymentRail.ONEMONEY, Instant.now().minusSeconds(600));
+        p.setStatus(Payment.PaymentStatus.COMPLETED_UNCONFIRMED);
+        when(repository.findByPaymentReference(REFERENCE)).thenReturn(Optional.of(p));
+        when(client.verifiedUpdate(eq("USD"), any()))
+                .thenReturn(Optional.of(status(PaynowStatus.Outcome.REVERSED, "Refunded", "12.50", REFERENCE)));
+        when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.REVERSED, "Refunded", "12.50", REFERENCE));
+
+        assertThat(service.onResultUpdate("reference=" + REFERENCE)).isEqualTo(UpdateAck.OK);
+        verify(records).parkUnconfirmedInDoubt(eq(p.getId()), anyString());
+        assertThat(resolutions("reversed_before_paid")).isEqualTo(1);
+        assertThat(resolutions("reversed_after_paid")).isZero();
+
+        // The confirm-retry promoted it first: the tickets exist, so it is the after-paid case.
+        Payment q = open(PaymentRail.ONEMONEY, Instant.now().minusSeconds(600));
+        q.setStatus(Payment.PaymentStatus.COMPLETED_UNCONFIRMED);
+        when(repository.findByPaymentReference(REFERENCE)).thenReturn(Optional.of(q));
+        when(records.parkUnconfirmedInDoubt(eq(q.getId()), anyString())).thenReturn(false);
+        service.onResultUpdate("reference=" + REFERENCE);
+        assertThat(resolutions("reversed_after_paid")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("an operator case is raised once: a repeat finds the flag and journals, logs and counts nothing")
+    void operatorCase_raisedOnce() {
+        Payment p = open(PaymentRail.PAYNOW_CARD, Instant.now().minusSeconds(600));
+        p.setStatus(Payment.PaymentStatus.EXPIRED);
+        when(repository.findByPaymentReference(REFERENCE)).thenReturn(Optional.of(p));
+        when(client.verifiedUpdate(eq("USD"), any()))
+                .thenReturn(Optional.of(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE)));
+        when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
+        when(records.flagPaynowOperatorCase(p.getId())).thenReturn(false);
+
+        assertThat(service.onResultUpdate("reference=" + REFERENCE)).isEqualTo(UpdateAck.OK);
+        verify(records, never()).noteEvent(any(), anyString());
+        assertThat(resolutions("paid_after_close")).isZero();
+
+        // Once flagged, an update is not even checked.
+        p.setPaynowFlaggedAt(Instant.now());
+        service.onResultUpdate("reference=" + REFERENCE);
+        verify(client, times(1)).poll("USD", POLL);
+    }
+
+    @Test
+    @DisplayName("a payment we closed unpaid is looked at again: paid late is an operator's case; anything else changes nothing")
+    void recheckClosed() {
+        Payment p = open(PaymentRail.PAYNOW_CARD, Instant.now().minus(Duration.ofMinutes(40)));
+        p.setStatus(Payment.PaymentStatus.EXPIRED);
+        when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.OPEN, "Sent", null, null));
+        assertThat(service.recheckClosed(p)).isEqualTo(CheckOutcome.CLOSED);
+        verify(records).stampPaynowChecked(p.getId());
+        assertThat(resolutions("paid_after_close")).isZero();
+
+        when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
+        assertThat(service.recheckClosed(p)).isEqualTo(CheckOutcome.CLOSED);
+        verify(records).flagPaynowOperatorCase(p.getId());
+        verify(records).noteEvent(eq(p.getId()), anyString());
+        assertThat(resolutions("paid_after_close")).isEqualTo(1);
+        verify(resolution, never()).confirmOrder(any());
+        verify(records, never()).claimPaid(any(), any(), anyString());
+
+        p.setPaynowFlaggedAt(Instant.now());
+        service.recheckClosed(p);
+        verify(client, times(2)).poll("USD", POLL);
+
+        Payment q = open(PaymentRail.ONEMONEY, Instant.now().minus(Duration.ofMinutes(40)));
+        q.setStatus(Payment.PaymentStatus.EXPIRED);
+        q.setPaynowPollUrl("https://www.paynow.co.zw/Interface/CheckPayment/?guid=g2");
+        when(client.poll("USD", q.getPaynowPollUrl())).thenThrow(new PaynowApiTransientException("down"));
+        assertThat(service.recheckClosed(q)).isEqualTo(CheckOutcome.ERROR);
+    }
+
+    @Test
+    @DisplayName("the sweep's queries: open payments due a check, closed ones due a late-payment look, cut-offs from the settings")
+    void sweepQueries() {
+        Instant now = Instant.parse("2026-11-25T10:00:00Z");
+        service.openPaymentsDue(now, 100);
+        verify(repository).findPaynowDue(Payment.PaymentStatus.TOKEN_ISSUED, PaynowPaymentService.RAILS,
+                now.minusSeconds(30), now.minus(Duration.ofMinutes(2)), now.minus(Duration.ofMinutes(32)),
+                now.minus(Duration.ofMinutes(2)), PageRequest.of(0, 100));
+
+        service.closedPaymentsDue(now, 50);
+        verify(repository).findPaynowClosedDue(Payment.PaymentStatus.EXPIRED, PaynowPaymentService.RAILS,
+                now.minus(Duration.ofHours(24)), now.minus(Duration.ofHours(1)), now.minus(Duration.ofMinutes(15)),
+                now.minus(Duration.ofHours(3)), PageRequest.of(0, 50));
+        assertThat(service.sweepRunBudget()).isEqualTo(Duration.ofSeconds(25));
+    }
+
+
+    @Test
+    @DisplayName("a card or O'mari start is 'in flight' while armed with no page or code yet and younger than the start's bound")
+    void startInFlight() {
+        Payment card = open(PaymentRail.PAYNOW_CARD, Instant.now().plusSeconds(1800));
+        card.setPaynowPollUrl(null);
+        card.setCreatedAt(Instant.now());
+        assertThat(service.startInFlight(card)).isTrue();
+
+        card.setPaynowBrowserUrl("https://www.paynow.co.zw/Payment/ConfirmPayment/9510");
+        assertThat(service.startInFlight(card)).as("the page is there: AWAITING_PAYMENT, not in flight").isFalse();
+
+        Payment omari = open(PaymentRail.OMARI, Instant.now().plusSeconds(600));
+        omari.setCreatedAt(Instant.now());
+        assertThat(service.startInFlight(omari)).isTrue();
+        omari.setCreatedAt(Instant.now().minus(Duration.ofSeconds(60)));
+        assertThat(service.startInFlight(omari)).as("older than connect + read + margin: a crash leftover").isFalse();
+
+        Payment oneMoney = open(PaymentRail.ONEMONEY, Instant.now().plusSeconds(600));
+        oneMoney.setCreatedAt(Instant.now());
+        assertThat(service.startInFlight(oneMoney)).as("OneMoney has nothing to show: its prompt is on the phone").isFalse();
+    }
+
+
+    @Test
+    @DisplayName("Refunded or Disputed on a payment still open: parked IN_DOUBT and raised once, like every operator case")
+    void resolve_reversedWhileOpen() {
+        Payment p = open(PaymentRail.ONEMONEY, Instant.now().plusSeconds(600));
+        when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.REVERSED, "Refunded", "12.50", REFERENCE));
+
+        assertThat(service.resolveOpen(p, Trigger.SWEEP)).isEqualTo(CheckOutcome.OPEN);
+        verify(records).markInDoubt(eq(p.getId()), anyString());
+        verify(records).flagPaynowOperatorCase(p.getId());
+        verify(resolution, never()).confirmOrder(any());
+        assertThat(resolutions("reversed_before_paid")).isEqualTo(1);
     }
 }

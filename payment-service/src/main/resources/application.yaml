@@ -333,8 +333,22 @@ paynow:
   mobile-ttl: ${PAYNOW_MOBILE_TTL:PT10M}
   check-min-gap: ${PAYNOW_CHECK_MIN_GAP:PT15S}
   recheck-every: ${PAYNOW_RECHECK_EVERY:PT2M}
+  # A OneMoney/O'mari attempt declined or cancelled moments ago holds a new
+  # one for the same order on that rail (EcoCash's decline hold). 0 = off.
+  decline-hold: ${PAYNOW_DECLINE_HOLD:PT2M}
   max-prompts-per-number: ${PAYNOW_MAX_PROMPTS_PER_NUMBER:5}
   prompts-per-number-window: ${PAYNOW_PROMPTS_PER_NUMBER_WINDOW:PT15M}
+  # Paynow's OneMoney test numbers (0771111111 to 0774444444) are refused
+  # unless this is true. While an integration is in test mode Paynow reports
+  # them PAID with no money moved, so only a staging host sets it.
+  test-numbers-allowed: ${PAYNOW_TEST_NUMBERS_ALLOWED:false}
+  # After we close a payment unpaid, keep checking it for a late payment.
+  closed-recheck-for: ${PAYNOW_CLOSED_RECHECK_FOR:PT24H}
+  closed-recheck-first-hour-every: ${PAYNOW_CLOSED_RECHECK_FIRST_HOUR_EVERY:PT15M}
+  closed-recheck-later-every: ${PAYNOW_CLOSED_RECHECK_LATER_EVERY:PT3H}
+  # One sweep run stops starting checks after this; the scheduler thread is
+  # shared with every other rail's poller.
+  sweep-run-budget: ${PAYNOW_SWEEP_RUN_BUDGET:PT25S}
 
 payments:
   innbucks:

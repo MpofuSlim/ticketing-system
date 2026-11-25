@@ -1056,17 +1056,38 @@ class PaymentControllerTest {
                         "Paynow refused the payment", "Insufficient balance"));
         when(paynow.initiateWeb(eq("USD"), anyString(), anyLong(), anyString(), anyString(), anyString()))
                 .thenThrow(new innbucks.paymentservice.client.PaynowApiTransientException("read timed out"));
-        recordSent(sent, paynowController(paynow, "+263774444444")
+        recordSent(sent, paynowController(paynow, "+263712345678")
                 .processPayment(paynowPayment(paymentFor(bookingId), "ONEMONEY")));
-        recordSent(sent, paynowController(paynow, "+263774444444")
+        recordSent(sent, paynowController(paynow, "+263712345678")
                 .processPayment(paynowPayment(marketplacePayment("MKT-4F9A1C22B7D3"), "ONEMONEY")));
         recordSent(sent, paynowController(paynow, "+27821234567")
                 .processPayment(paynowPayment(paymentFor(bookingId), "OMARI")));
-        recordSent(sent, paynowController(paynow, "+263774444444")
+        recordSent(sent, paynowController(paynow, "+263771111111")
+                .processPayment(paynowPayment(paymentFor(bookingId), "ONEMONEY")));
+        recordSent(sent, paynowController(paynow, "+263712345678")
                 .processPayment(paynowPayment(paymentFor(bookingId), "PAYNOW_CARD")));
         var unconfigured = mock(innbucks.paymentservice.client.PaynowClient.class);
-        recordSent(sent, paynowController(unconfigured, "+263774444444")
+        recordSent(sent, paynowController(unconfigured, "+263712345678")
                 .processPayment(paynowPayment(paymentFor(bookingId), "PAYNOW_CARD")));
+        // The decline hold: the order's last OneMoney attempt was cancelled a
+        // moment ago, so the answer is that attempt (data), not a new prompt.
+        Payment cancelled = Payment.builder()
+                .id(UUID.randomUUID())
+                .paymentRail(innbucks.paymentservice.entity.PaymentRail.ONEMONEY)
+                .orderType(OrderType.BOOKING).orderRef(bookingId.toString()).bookingId(bookingId)
+                .status(Payment.PaymentStatus.FAILED)
+                .upstreamErrorCode(innbucks.paymentservice.service.PaynowPaymentService.CANCELLED_CODE)
+                .upstreamErrorMessage("Paynow reports the payment Cancelled")
+                .completedAt(java.time.Instant.now())
+                .amount(new BigDecimal("100.00")).currency("USD")
+                .build();
+        ResponseEntity<ApiResult<PaymentResponse>> held = paynowController(paynow, "+263712345678", cancelled)
+                .processPayment(paynowPayment(paymentFor(bookingId), "ONEMONEY"));
+        assertNotNull(held.getBody().getData());
+        assertEquals(PaymentResponse.Stage.DECLINED, held.getBody().getData().getStage());
+        assertNotNull(held.getBody().getData().getRetryAfterSeconds());
+        sent.computeIfAbsent(held.getStatusCode().value(), s -> new HashSet<>())
+                .add(held.getBody().getCode() + " | " + held.getBody().getMessage());
 
         assertEquals(Set.of(400, 409, 502, 503), sent.keySet(), "every failure above is a 400, 409, 502 or 503");
         assertTrue(sent.get(400).containsAll(documented.get(400)),
@@ -1086,8 +1107,17 @@ class PaymentControllerTest {
     /** A controller whose Paynow options run the real PaynowPaymentService, for a USD 100.00 booking. */
     private static PaymentController paynowController(innbucks.paymentservice.client.PaynowClient client,
                                                       String bookingPhone) {
+        return paynowController(client, bookingPhone, null);
+    }
+
+    /** As above, with {@code lastOnRail} as the order's latest attempt on the requested Paynow option. */
+    private static PaymentController paynowController(innbucks.paymentservice.client.PaynowClient client,
+                                                      String bookingPhone, Payment lastOnRail) {
         PaymentRecordService records = mock(PaymentRecordService.class);
         when(records.recentCharges(any(), any(), any())).thenReturn(new PaymentRecordService.RecentCharges(0, null));
+        if (lastOnRail != null) {
+            when(records.latestOnRail(any(), anyString(), any())).thenReturn(java.util.Optional.of(lastOnRail));
+        }
         when(records.openPending(any())).thenAnswer(inv -> {
             Payment p = inv.getArgument(0);
             p.setId(UUID.randomUUID());

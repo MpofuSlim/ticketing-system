@@ -48,6 +48,12 @@ import java.util.UUID;
 @AllArgsConstructor
 @Entity
 @Table(name = "payment")
+// An UPDATE writes only the columns that changed. Without it every save wrote
+// every column, so an informational write (a status-check stamp, a recorded
+// reference) made from a copy read before a concurrent status change wrote the
+// OLD status back over the new one. Status changes themselves are serialised by
+// the row lock in PaymentRecordService.transitionFrom.
+@org.hibernate.annotations.DynamicUpdate
 public class Payment {
 
     @Id
@@ -281,6 +287,20 @@ public class Payment {
     /** Paynow: when we last read this payment's status (spaces the checks). */
     @Column(name = "paynow_checked_at")
     private Instant paynowCheckedAt;
+
+    /**
+     * Paynow: when this payment was handed to an operator because money moved
+     * after we closed or confirmed it (paid after close, refunded or disputed).
+     * Set once, by {@code PaymentRecordService.flagPaynowOperatorCase}, so a
+     * second update or re-check does not raise the same case again, and the
+     * closed-payment re-check stops reading it. On a row we closed (FAILED or
+     * EXPIRED) the only case is a payment made after we closed it, so the
+     * payment's answer reads it as "the customer paid" (stage VERIFYING, never
+     * "nothing was charged"). A new operator case on a closed row must keep
+     * that true, or get its own column.
+     */
+    @Column(name = "paynow_flagged_at")
+    private Instant paynowFlaggedAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

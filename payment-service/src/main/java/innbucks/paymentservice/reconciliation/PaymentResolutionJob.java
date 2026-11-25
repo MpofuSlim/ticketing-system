@@ -281,11 +281,21 @@ public class PaymentResolutionJob {
      * The Paynow sweep (PAYNOW_CARD, ONEMONEY, OMARI). Paynow's status update
      * to our result URL is the usual path, and Paynow asks merchants not to
      * poll for no reason, so this checks only the payments that need it
-     * ({@link innbucks.paymentservice.service.PaynowPaymentService#dueForSweep}):
+     * ({@link innbucks.paymentservice.service.PaynowPaymentService#openPaymentsDue}):
      * one whose initiate reply was lost (looked up by its trace), one past its
      * deadline (before it is closed), and any open one not checked for
-     * {@code paynow.recheck-every}, in case an update was lost. Money rules
-     * live in {@link innbucks.paymentservice.service.PaynowPaymentService#resolveOpen}.
+     * {@code paynow.recheck-every}, in case an update was lost. Then it looks
+     * again at payments closed unpaid in the last day, in case one was paid
+     * late and its update lost
+     * ({@link innbucks.paymentservice.service.PaynowPaymentService#recheckClosed}).
+     * Money rules live in
+     * {@link innbucks.paymentservice.service.PaynowPaymentService#resolveOpen}.
+     *
+     * <p>A run stops starting checks after {@code paynow.sweep-run-budget}:
+     * this job shares the scheduler's one thread with every other rail's
+     * poller, so a Paynow that hangs must not hold it for a whole page. Each
+     * check stamps the payment before asking Paynow, so the next run carries on
+     * from the least recently checked.
      */
     @Scheduled(fixedDelayString = "${payment-service.paynow-poll.interval:PT30S}")
     @SchedulerLock(name = "PaymentResolutionJob.pollPaynowPayments", lockAtMostFor = "PT2M", lockAtLeastFor = "PT15S")
@@ -293,19 +303,26 @@ public class PaymentResolutionJob {
         if (paynowPaymentService == null) {
             return;
         }
-        List<Payment> open = paymentRepository.findByStatusAndPaymentRailIn(PaymentStatus.TOKEN_ISSUED,
-                EnumSet.of(PaymentRail.PAYNOW_CARD, PaymentRail.ONEMONEY, PaymentRail.OMARI),
-                PageRequest.of(0, batchSize));
-        if (open.isEmpty()) {
+        Instant now = Instant.now();
+        List<Payment> open = paynowPaymentService.openPaymentsDue(now, batchSize);
+        List<Payment> closed = paynowPaymentService.closedPaymentsDue(now, batchSize);
+        if (open.isEmpty() && closed.isEmpty()) {
             return;
         }
         if (!paynowPaymentService.isRailConfigured()) {
-            log.warn("Paynow poll: {} open Paynow payments but Paynow is not configured — cannot resolve", open.size());
+            log.warn("Paynow poll: {} open and {} closed Paynow payments due a check, but Paynow is not configured"
+                    + " — cannot check them", open.size(), closed.size());
             return;
         }
-        Instant now = Instant.now();
+        if (open.size() >= batchSize) {
+            log.warn("Paynow poll: a full page of {} open payments is due a check — the rest wait for the next run",
+                    open.size());
+        }
+        Instant stopAt = now.plus(paynowPaymentService.sweepRunBudget());
+        int left = 0;
         for (Payment p : open) {
-            if (!paynowPaymentService.dueForSweep(p, now)) {
+            if (Instant.now().isAfter(stopAt)) {
+                left++;
                 continue;
             }
             try {
@@ -316,6 +333,23 @@ public class PaymentResolutionJob {
                 log.warn("Paynow poll failed for paymentReference={} — leaving it for the next pass: {}",
                         p.getPaymentReference(), e.getMessage());
             }
+        }
+        for (Payment p : closed) {
+            if (Instant.now().isAfter(stopAt)) {
+                left++;
+                continue;
+            }
+            try {
+                paynowPaymentService.recheckClosed(p);
+            } catch (RuntimeException e) {
+                metrics.incPaynowResolution("error");
+                log.warn("Paynow late-payment check failed for paymentReference={} — leaving it for the next pass: {}",
+                        p.getPaymentReference(), e.getMessage());
+            }
+        }
+        if (left > 0) {
+            log.warn("Paynow poll: run budget {} spent with {} payments still due — they wait for the next run",
+                    paynowPaymentService.sweepRunBudget(), left);
         }
     }
 
@@ -406,6 +440,15 @@ public class PaymentResolutionJob {
             // transitions are no-throw by contract; the catch is the last
             // line against a repository/DB blip mid-row.
             try {
+                // Re-read just before the confirm: the page can be minutes old
+                // by this row's turn, and a Paynow refund parks a row IN_DOUBT
+                // precisely so that no tickets are issued for it.
+                Payment current = paymentRepository.findById(p.getId()).orElse(p);
+                if (current.getStatus() != PaymentStatus.COMPLETED_UNCONFIRMED) {
+                    log.info("Reconciler skipped paymentId={} paymentReference={}: it is {} now",
+                            p.getId(), p.getPaymentReference(), current.getStatus());
+                    continue;
+                }
                 ConfirmOutcome outcome = resolutionService.confirmOrder(p);
                 if (outcome.succeeded()) {
                     paymentRecordService.resolveUnconfirmed(p.getId(), outcome.confirmationNumber());

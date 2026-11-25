@@ -295,12 +295,17 @@ get per-request balancing; the mesh is where that lives.
 **Replicas also need every `@Scheduled` job to be safe on N pods at once** —
 the full per-service checklist is `deploy/k8s/LINKERD_RUNBOOK.md` §8. The rule:
 a job either carries `@SchedulerLock` or has a written reason it is
-idempotent. payment-service locks all six of its jobs over a
+idempotent. payment-service locks all seven of its jobs over a
 `KeepAliveLockProvider` (a slow resolution pass keeps its lock for as long as
 it runs; a dead holder frees it within `lockAtMostFor`), and
 `SchedulerLockTest` fails the build on an unlocked `@Scheduled` method, a
 duplicate lock name or a `lockAtMostFor` under 30s — the keep-alive throws on
-those at LOCK time, every tick, so the sweep would silently never run. Never
+those at LOCK time, every tick, so the sweep would silently never run. The
+jobs run on their own pool (`SchedulingConfig.taskScheduler`, 8 threads;
+`SchedulingPoolTest` keeps it at least one per job). Until 2026-11-25 they all
+ran on the keep-alive's single thread, the only `ScheduledExecutorService` in
+the context: one hanging upstream stalled every rail's poller, and the
+keep-alive could not renew the lock of the job holding its thread. Never
 lock a job that tends per-pod memory (`LoginRateLimiter.purgeFallbackWindows`):
 it has to run on every replica.
 
@@ -5329,6 +5334,20 @@ our own rails: never route them through Paynow (its fee, one more hop).
   call (EcoCash's order). No answer: ONEMONEY stays open (a prompt may be
   live); PAYNOW_CARD and OMARI close FAILED at once — without the reply the
   customer has no page and nowhere to send the code, so nothing can be paid.
+  **Never sent** (`PaynowNotSentException`: our breaker was open, or no
+  connection opened — refused, unknown host, connect timeout, no pooled
+  connection) closes FAILED on every rail, OneMoney too. A read timeout or a
+  reset can follow the write, so it stays "no answer". A second tap while a card
+  or O'mari start waits for the reply is IN_PROGRESS (`startInFlight`), never
+  "expired".
+- **Paid is recorded before the booking is confirmed** (`claimPaid`): TOKEN_ISSUED
+  → COMPLETED_UNCONFIRMED only while the row is still open, then the confirm,
+  then `resolveUnconfirmed` (strict: only from COMPLETED_UNCONFIRMED). Every
+  transition reads its row `FOR UPDATE` (`findByIdForUpdate`) and `Payment` is
+  `@DynamicUpdate`, so an informational write never puts back a status it read
+  before. A paid status for a row another trigger closed is the
+  `paid_after_close` case, never a confirm; the resolver re-reads the row
+  before it acts, because the sweep's copy can be minutes old.
 - **The result URL is a trigger, the poll is the answer** (Paynow's own
   advice). `POST /payments/paynow/result` acts only on an update whose hash
   verifies under the payment's own integration, then polls; 200 when handled or
@@ -5340,12 +5359,45 @@ our own rails: never route them through Paynow (its fee, one more hop).
   (`pollPaynowPayments`, 30 s) checks only payments whose reply was lost, past
   their deadline (card 30 min, phone 10 min, + 2 min grace), or not checked for
   `PAYNOW_RECHECK_EVERY` (2 min); a customer re-POST checks at most every 15 s.
+  The query does the filtering (`findPaynowDue`, least recently checked first),
+  and a run stops starting checks after `PAYNOW_SWEEP_RUN_BUDGET` (25 s).
+  Payments closed EXPIRED are looked at again for a late payment for
+  `PAYNOW_CLOSED_RECHECK_FOR` (24 h: every 15 min in the first hour, then every
+  3 h; `findPaynowClosedDue`, index `idx_payment_paynow_closed`).
+- **A decline holds that option for 2 minutes** (`PAYNOW_DECLINE_HOLD`, EcoCash's
+  rule): after a OneMoney or O'mari attempt the customer cancelled or their
+  wallet refused, `POST /payments` on that option for the same order is a 400
+  carrying the declined attempt (stage DECLINED, `retryAfterSeconds`;
+  `PaynowDeclinedException`), and `GET /payments/{id}` carries the wait.
+  Ticketize web re-sends `POST /payments` every few seconds: without the hold
+  each re-send after a cancel prompted (or texted) the customer again. Another
+  option works at once.
+- **Paynow's OneMoney test numbers are refused** (400) unless
+  `PAYNOW_TEST_NUMBERS_ALLOWED=true`: a test-mode integration reports them paid
+  with no money moved, so on a host selling real tickets they are free tickets.
+  Only a staging host sets it (boot WARN while on). Never run a test-mode
+  integration on a cell that sells real tickets.
 - **Operator cases change nothing** (`payment.payments.paynow_resolution`
   `paid_after_close`, `reversed_after_paid`, `reversed_before_paid`,
   `echo_mismatch`, registered at 0; alert `PaynowPaymentNeedsOperator`): a
   payment paid after we closed it (the card page outlived our deadline), or
   refunded/disputed after the booking was confirmed. Journalled on the payment;
   the runbook says what to do. There is no Paynow refund or cancel API.
+  - Raised ONCE per payment: `payment.paynow_flagged_at`, set by one
+    conditional UPDATE (`flagPaynowOperatorCase`).
+  - A closed (FAILED/EXPIRED) row with the flag is answered stage VERIFYING,
+    "don't pay again: support will confirm or refund", never "nothing was
+    charged". The flag means "paid" only because a late payment is the only
+    case on a closed row: a new case there needs its own column.
+  - Refunded/disputed while the booking is still unconfirmed
+    (COMPLETED_UNCONFIRMED) parks the row IN_DOUBT (the new legal transition),
+    so the confirm-retry issues no tickets for money that went back. The retry
+    (all rails) re-reads each row just before its confirm and skips one that
+    has moved. Residual, stated: an earlier confirm that timed out on our side
+    may still have reached booking-service, so the operator checks the booking.
+- **The O'mari code endpoint answers with the payment**: a code sent again for a
+  paid (or being-confirmed) payment is 200 with it, O'mari not asked again; a
+  payment that is over is a 409 whose `data` says how it ended.
 - **Paynow's URLs are pinned** to `PAYNOW_ALLOWED_HOSTS` (https; a plain-http
   base URL allows only itself, for tests): we POST to the poll and O'mari URLs
   server-side and redirect browsers to the page URL, so any other host is
@@ -5360,7 +5412,8 @@ our own rails: never route them through Paynow (its fee, one more hop).
 - **Config** (`cell.zw.env`, IDs/keys/email per host): `PAYNOW_BASE_URL`,
   `PAYNOW_ALLOWED_HOSTS`, `PAYNOW_{USD,ZWG}_INTEGRATION_{ID,KEY}`,
   `PAYNOW_RESULT_URL` (absolute, with `/foundry`; production's value committed,
-  staging overrides), `PAYNOW_RETURN_URL`, `PAYNOW_AUTH_EMAIL`. Gateway routes
+  staging overrides), `PAYNOW_RETURN_URL`, `PAYNOW_AUTH_EMAIL`, and staging's
+  `PAYNOW_TEST_NUMBERS_ALLOWED=true` (local file only). Gateway routes
   `paynow-result-write-route` and `payment-otp-write-route` (IP-keyed,
   fail-safe, before the write catch-all; `GatewayRouteTableTest`).
 - booking-service shows them as "Bank card (Paynow)", "OneMoney", "O'mari"

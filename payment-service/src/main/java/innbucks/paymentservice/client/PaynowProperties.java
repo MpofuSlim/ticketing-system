@@ -74,9 +74,44 @@ public class PaynowProperties {
     /** How often the sweep re-checks an open payment whose status update may have been lost. */
     private Duration recheckEvery = Duration.ofMinutes(2);
 
+    /**
+     * After a OneMoney or O'mari attempt is declined or cancelled, how long a
+     * new one for the same order on the same rail is refused with that decline
+     * (EcoCash's decline hold). 0 = off.
+     */
+    private Duration declineHold = Duration.ofMinutes(2);
+
     /** Per-number cap on OneMoney prompts / O'mari codes, like EcoCash's. 0 = off. */
     private int maxPromptsPerNumber = 5;
     private Duration promptsPerNumberWindow = Duration.ofMinutes(15);
+
+    /**
+     * Whether OneMoney may be started with Paynow's published test numbers
+     * (0771111111 to 0774444444). False everywhere but a staging host: while an
+     * integration is in test mode Paynow reports those numbers PAID with no
+     * money moved, so on a cell that sells real tickets they would be free
+     * tickets. On a live integration they are Econet numbers, never OneMoney
+     * wallets, so refusing them costs nothing.
+     */
+    private boolean testNumbersAllowed = false;
+
+    /**
+     * How long after we close a Paynow payment unpaid we keep looking for a
+     * late payment (a card page can outlive our deadline, and Paynow's update
+     * about it can be lost). Checked every {@link #closedRecheckFirstHourEvery}
+     * in the first hour, then every {@link #closedRecheckLaterEvery}.
+     */
+    private Duration closedRecheckFor = Duration.ofHours(24);
+    private Duration closedRecheckFirstHourEvery = Duration.ofMinutes(15);
+    private Duration closedRecheckLaterEvery = Duration.ofHours(3);
+
+    /**
+     * How long one sweep run keeps starting checks; the rest wait for the next
+     * run. The scheduler has one thread for every rail's poller, so a Paynow
+     * that hangs (each check up to three reads at the read timeout) must not
+     * hold it for the whole page.
+     */
+    private Duration sweepRunBudget = Duration.ofSeconds(25);
 
     /** One integration's credentials. */
     public record Integration(String id, String key) {}

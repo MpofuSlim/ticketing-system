@@ -67,7 +67,7 @@ import java.util.regex.Pattern;
 @Component
 public class PaynowClient {
 
-    private static final String RESILIENCE_INSTANCE_NAME = "paynow";
+    static final String RESILIENCE_INSTANCE_NAME = "paynow";
     static final String INITIATE_PATH = "/interface/initiatetransaction";
     static final String EXPRESS_PATH = "/interface/remotetransaction";
     static final String TRACE_PATH = "/interface/trace";
@@ -124,6 +124,11 @@ public class PaynowClient {
         if (properties.getAuthEmail() == null || properties.getAuthEmail().isBlank()) {
             log.error("Paynow is HALF-PROVISIONED: PAYNOW_AUTH_EMAIL is blank. OneMoney and O'mari payments "
                     + "through Paynow will be REFUSED (503): Paynow requires authemail on express checkout.");
+        }
+        if (properties.isTestNumbersAllowed()) {
+            log.warn("Paynow TEST NUMBERS ARE ALLOWED (PAYNOW_TEST_NUMBERS_ALLOWED=true): OneMoney starts for "
+                    + "0771111111 to 0774444444, which a test-mode integration reports PAID with no money moved. "
+                    + "Staging only: never on a host that sells real tickets.");
         }
         log.info("Paynow configured: usd={} zwg={}", properties.integrationFor("USD").isPresent(),
                 properties.integrationFor("ZWG").isPresent());
@@ -249,7 +254,7 @@ public class PaynowClient {
         try {
             return CircuitBreaker.decorateSupplier(circuitBreaker, call).get();
         } catch (CallNotPermittedException e) {
-            throw new PaynowApiTransientException("Paynow is temporarily unavailable (circuit open)", e);
+            throw new PaynowNotSentException("Paynow is temporarily unavailable (circuit open)", e);
         }
     }
 
@@ -323,7 +328,7 @@ public class PaynowClient {
         try {
             return CircuitBreaker.decorateSupplier(circuitBreaker, call).get();
         } catch (CallNotPermittedException e) {
-            throw new PaynowApiTransientException("Paynow is temporarily unavailable (circuit open)", e);
+            throw new PaynowNotSentException("Paynow is temporarily unavailable (circuit open)", e);
         }
     }
 
@@ -347,7 +352,7 @@ public class PaynowClient {
         try {
             return decorated.get();
         } catch (CallNotPermittedException e) {
-            throw new PaynowApiTransientException("Paynow is temporarily unavailable (circuit open)", e);
+            throw new PaynowNotSentException("Paynow is temporarily unavailable (circuit open)", e);
         }
     }
 
@@ -393,8 +398,30 @@ public class PaynowClient {
             throw e;
         } catch (RuntimeException e) {
             log.warn("paynow {} errored cause={}", op, e.toString());
+            if (neverSent(e)) {
+                throw new PaynowNotSentException("Paynow could not be reached: " + e.getMessage(), e);
+            }
             throw new PaynowApiTransientException("Unable to reach Paynow: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Whether a failure happened before any byte of the request left: no
+     * connection could be opened, or no pooled connection was free. A read
+     * timeout or a reset connection can come after the request was written,
+     * so they are not on this list.
+     */
+    static boolean neverSent(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof java.net.ConnectException
+                    || t instanceof java.net.UnknownHostException
+                    || t instanceof java.net.NoRouteToHostException
+                    || t instanceof org.apache.hc.client5.http.ConnectTimeoutException
+                    || t instanceof org.apache.hc.core5.http.ConnectionRequestTimeoutException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static String formOf(Map<String, String> fields) {

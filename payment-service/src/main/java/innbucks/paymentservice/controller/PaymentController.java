@@ -148,11 +148,14 @@ public class PaymentController {
                     "page with `transactionId` on the URL; the return itself proves nothing, so that page " +
                     "follows `GET /payments/{transactionId}` until `stage` is COMPLETED or DECLINED. " +
                     "`checkoutExpiresAt` is when we stop waiting. Send `paymentRail=ONEMONEY` for a OneMoney " +
-                    "prompt on the booking's phone: nothing to render, `promptExpiresAt` drives the countdown " +
-                    "(as for EcoCash). Send `paymentRail=OMARI` and O'mari texts the booking's phone a code: " +
+                    "prompt on the booking's phone: nothing to render, `promptExpiresAt` drives the countdown. " +
+                    "Send `paymentRail=OMARI` and O'mari texts the booking's phone a code: " +
                     "show a code box with `otpReference` beside it and send the code to " +
-                    "`POST /payments/{transactionId}/otp`. A marketplace or voucher order on these options " +
-                    "is a 400. " +
+                    "`POST /payments/{transactionId}/otp`. Follow both with `GET /payments/{transactionId}`, " +
+                    "not by re-POSTing. A OneMoney or O'mari attempt the customer cancelled or their wallet " +
+                    "declined holds a new one on that option for 2 minutes: a POST meanwhile is a 400 with " +
+                    "the declined attempt (stage `DECLINED`, `retryAfterSeconds`); another payment option " +
+                    "works at once. A marketplace or voucher order on these options is a 400. " +
                     "\n\nOne active payment per order across ALL rails: while an attempt is open on one rail, " +
                     "POSTing with the other returns the open attempt unchanged; switch rails once it lapses. " +
                     "Amount and currency are read server-side from the order. An InnBucks PAYMENT code is " +
@@ -505,10 +508,36 @@ public class PaymentController {
                                               }
                                             }
                                             """),
-                                    @ExampleObject(name = "ONEMONEY / OMARI: the wallet refused at the start — nothing charged, POST again or pay another way", value = """
+                                    @ExampleObject(name = "ONEMONEY / OMARI: the wallet refused at the start — nothing charged; that option is held for 2 minutes, another works at once", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
                                               "message": "OneMoney: Insufficient balance.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "ONEMONEY / OMARI: this order's last attempt on that option was cancelled or declined moments ago — the declined attempt, nothing started", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "OneMoney: the payment didn't go through. Try again in 2 minutes, or pay another way.",
+                                              "data": {
+                                                "transactionId": "e2f3a4b5-6789-4abc-8def-0123456789ab",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "FAILED",
+                                                "stage": "DECLINED",
+                                                "fundsCaptured": false,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "paymentRail": "ONEMONEY",
+                                                "retryAfterSeconds": 118
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "ONEMONEY: one of Paynow's test numbers, on a host that does not allow them", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "OneMoney cannot be used with this number — please pay another way",
                                               "data": null
                                             }
                                             """),
@@ -820,12 +849,19 @@ public class PaymentController {
                     && paynowPaymentService != null) {
                 // Paynow twin of the instant checks: a status check (spaced by
                 // paynow.check-min-gap) instead of a blind replay. Same
-                // resolver as the result URL and the sweep.
-                var paynowCheck = paynowPaymentService.resolveOpen(p,
-                        innbucks.paymentservice.service.PaynowPaymentService.Trigger.CUSTOMER);
+                // resolver as the result URL and the sweep. A start still
+                // waiting for Paynow's reply is not checked: it replays "in
+                // progress".
+                var paynowCheck = paynowPaymentService.startInFlight(p)
+                        ? innbucks.paymentservice.service.PaynowPaymentService.CheckOutcome.OPEN
+                        : paynowPaymentService.resolveOpen(p,
+                                innbucks.paymentservice.service.PaynowPaymentService.Trigger.CUSTOMER);
                 if (paynowCheck == innbucks.paymentservice.service.PaynowPaymentService.CheckOutcome.CLOSED) {
-                    // Closed unpaid just now (slot freed): start a fresh attempt here.
-                    log.info("POST /payments paynow instant-check closed orderType={} orderRef={} — starting fresh",
+                    // Closed unpaid just now (slot freed): fall through to the
+                    // start. A prompt that lapsed starts fresh; one the customer
+                    // cancelled or their wallet declined is answered by the
+                    // start's decline hold with that decline, never a new prompt.
+                    log.info("POST /payments paynow instant-check closed orderType={} orderRef={} — to the start",
                             key.type(), key.ref());
                 } else {
                     // Re-read: a check can park the row IN_DOUBT and still answer OPEN.
@@ -929,6 +965,16 @@ public class PaymentController {
         } catch (innbucks.paymentservice.service.EcocashPaymentService.EcocashDeclinedException e) {
             // EcoCash just declined this order's charge: answer with that
             // decline and its reason instead of charging (and texting) again.
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
+                    ApiResult.<PaymentResponse>builder()
+                            .code(HttpStatus.BAD_REQUEST.value() + " " + HttpStatus.BAD_REQUEST.name())
+                            .message(e.getMessage())
+                            .data(terminalResponse(e.declined(), key, e.retryAfterSeconds()))
+                            .build());
+        } catch (innbucks.paymentservice.service.PaynowPaymentService.PaynowDeclinedException e) {
+            // The customer cancelled (or their wallet declined) this order's
+            // OneMoney prompt or O'mari code moments ago: answer with that,
+            // the same shape as an EcoCash decline, instead of prompting again.
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
                     ApiResult.<PaymentResponse>builder()
                             .code(HttpStatus.BAD_REQUEST.value() + " " + HttpStatus.BAD_REQUEST.name())
@@ -1131,7 +1177,15 @@ public class PaymentController {
 
     /** The replay receipt and its prose, for {@link #toReplayResponse} and the reads built on it. */
     private ApiResult<PaymentResponse> replayResult(Payment p, OrderKey key) {
-        PaymentResponse.Status status = switch (p.getStatus()) {
+        // A Paynow attempt we closed unpaid that Paynow then reported PAID
+        // (the card page outlived our deadline): handed to an operator, its
+        // status left as it was. On a closed row that is the only operator
+        // case, so the flag means "the customer paid". Never answer it with
+        // "nothing was charged; you can pay again".
+        boolean paidAfterClose = p.getPaymentRail() != null && p.getPaymentRail().isPaynow()
+                && p.getPaynowFlaggedAt() != null
+                && (p.getStatus() == Payment.PaymentStatus.FAILED || p.getStatus() == Payment.PaymentStatus.EXPIRED);
+        PaymentResponse.Status status = paidAfterClose ? PaymentResponse.Status.PROCESSING : switch (p.getStatus()) {
             case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
             // Terminal unpaid attempts — read by GET /payments/{id} only.
             case FAILED, EXPIRED, REJECTED -> PaymentResponse.Status.FAILED;
@@ -1182,6 +1236,10 @@ public class PaymentController {
         } else if (cardRow && hasOpenInstrument) {
             // Live checkout we cannot render on this cell.
             stage = PaymentResponse.Stage.PAYMENT_UNAVAILABLE;
+        } else if (paynowRow && paynowPaymentService != null && paynowPaymentService.startInFlight(p)) {
+            // A card or O'mari start still waiting for Paynow's reply (a
+            // second tap, a reload): no page or code yet, nothing expired.
+            stage = PaymentResponse.Stage.IN_PROGRESS;
         } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED) {
             stage = PaymentResponse.Stage.INSTRUMENT_EXPIRED;
         } else if (p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED) {
@@ -1193,6 +1251,9 @@ public class PaymentController {
             // either rail without customer action (code approval / card
             // entry), so "not captured" is safe here.
             stage = PaymentResponse.Stage.IN_PROGRESS;
+        } else if (paidAfterClose) {
+            // Money moved after we closed the attempt; an operator decides.
+            stage = PaymentResponse.Stage.VERIFYING;
         } else if (p.getStatus() == Payment.PaymentStatus.FAILED) {
             // Terminal, provider said no money moved. Only GET /payments/{id}
             // and the EcoCash decline answer reach here: POST replays active
@@ -1274,7 +1335,10 @@ public class PaymentController {
                     : "Your previous payment code expired — tap Pay again in a moment to get a fresh one";
             case PAYMENT_RECEIVED -> "Payment received; your " + noun + " is being confirmed";
             case IN_PROGRESS -> "Your payment is already being processed — please retry in a moment";
-            case VERIFYING -> "Your payment is being verified — contact support if this persists";
+            case VERIFYING -> paidAfterClose
+                    ? "We received your payment after this attempt had timed out. Don't pay again: support will "
+                            + "confirm your " + noun + " or refund you."
+                    : "Your payment is being verified — contact support if this persists";
             case DECLINED -> cardDeclined
                     ? CARD_DECLINED_MESSAGE
                     : response.getFailureReason() != null
@@ -1418,7 +1482,10 @@ public class PaymentController {
             return error(HttpStatus.NOT_FOUND, "Payment not found");
         }
         ApiResult<PaymentResponse> answer = replayResult(p, new OrderKey(p.getOrderType(), p.getOrderRef()));
-        Long hold = ecocashPaymentService.declineHoldRemaining(p);
+        // Each rail's own decline hold answers for its own attempts.
+        Long hold = p.getPaymentRail() != null && p.getPaymentRail().isPaynow()
+                ? (paynowPaymentService != null ? paynowPaymentService.declineHoldRemaining(p) : null)
+                : ecocashPaymentService.declineHoldRemaining(p);
         if (hold != null) {
             answer.getData().setRetryAfterSeconds(hold);
         }
@@ -1433,8 +1500,10 @@ public class PaymentController {
                     + "the `transactionId` from that response is the key.\n\n"
                     + "The answer is the payment as it now stands (the same body as `GET /payments/{transactionId}`): "
                     + "`stage` COMPLETED when the payment went through, AWAITING_PAYMENT while O'mari is still "
-                    + "confirming. A wrong code is a 400 and the customer can try again; O'mari cancels the "
-                    + "payment after 5 wrong codes (stage DECLINED), and a new payment is needed.")
+                    + "confirming. A code sent again for a payment that already went through answers 200 with "
+                    + "that payment; O'mari is not asked again. A wrong code is a 400 and the customer can try "
+                    + "again; O'mari cancels the payment after 5 wrong codes (stage DECLINED), and a new payment "
+                    + "is needed.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Code accepted",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -1483,12 +1552,23 @@ public class PaymentController {
                             }
                             """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
-                    description = "The payment is no longer waiting for a code (paid, cancelled or lapsed)",
+                    description = "The payment is over (declined, cancelled or lapsed); `data` says how it ended",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             {
                               "code": "409 CONFLICT",
                               "message": "This payment is no longer waiting for a code — start a new payment",
-                              "data": null
+                              "data": {
+                                "transactionId": "c4d5e6f7-8901-2345-6789-abcdef012345",
+                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                "orderType": "BOOKING",
+                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                "status": "FAILED",
+                                "stage": "DECLINED",
+                                "fundsCaptured": false,
+                                "amountPaid": 100.00,
+                                "currency": "USD",
+                                "paymentRail": "OMARI"
+                              }
                             }
                             """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502",
@@ -1514,6 +1594,17 @@ public class PaymentController {
             return error(HttpStatus.NOT_FOUND, "Payment not found");
         }
         var outcome = paynowPaymentService.submitOtp(id, request.getOtp());
+        if (outcome.httpStatus() == 409 && outcome.payment() != null) {
+            // Over (declined, cancelled or lapsed): say how it ended, so the
+            // checkout branches on `stage` rather than on the prose.
+            Payment over = outcome.payment();
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                    ApiResult.<PaymentResponse>builder()
+                            .code(HttpStatus.CONFLICT.value() + " " + HttpStatus.CONFLICT.name())
+                            .message(outcome.message())
+                            .data(replayResult(over, new OrderKey(over.getOrderType(), over.getOrderRef())).getData())
+                            .build());
+        }
         if (outcome.httpStatus() != 200 || outcome.payment() == null) {
             HttpStatus status = HttpStatus.resolve(outcome.httpStatus());
             return error(status == null ? HttpStatus.BAD_REQUEST : status, outcome.message());

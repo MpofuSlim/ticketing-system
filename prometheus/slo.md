@@ -639,16 +639,22 @@ outcomes that change nothing automatically (`docs/api/paynow.md`):
 
 - `paid_after_close` — Paynow reports a payment Paid that we had already
   closed (FAILED or EXPIRED): the customer paid, usually on Paynow's page after
-  our deadline, and has no ticket from it.
+  our deadline, and has no ticket from it. Found by Paynow's update or by the
+  sweep's re-check of closed payments (24 h). The payment's answer to the
+  customer is "don't pay again; support will confirm or refund".
 - `reversed_after_paid` — Paynow reports Refunded or Disputed after the booking
   was confirmed: the customer has tickets and the money has gone back or is held.
-- `reversed_before_paid` — Refunded or Disputed on a payment we never
-  confirmed; parked IN_DOUBT.
+- `reversed_before_paid` — Refunded or Disputed on a payment whose booking we
+  never confirmed (open, or paid but its confirm still failing); parked IN_DOUBT,
+  so the confirm-retry issues no tickets.
 - `echo_mismatch` — a paid status whose amount or reference is not the
   payment's; parked IN_DOUBT, never confirmed.
 
-**Action:** grep payment-service for `[paynow] OPERATOR CASE` or `ECHO MISMATCH`;
-each line names the payment reference and the order. The payment's journal
+**Action:** grep payment-service for `[paynow] OPERATOR CASE` (every case:
+`paid_after_close`, `reversed_after_paid`, `reversed_before_paid`) or
+`ECHO MISMATCH`; each line names the payment reference and the order. A case is
+raised once per payment (`payment.paynow_flagged_at`); a repeat update logs
+`already raised` at INFO. The payment's journal
 (`payment_event`, database `payment_service`) carries the same note. Check the
 transaction in the merchant's Paynow account by Paynow's reference, then:
 

@@ -182,4 +182,125 @@ class PaynowPaymentControllerTest {
         assertThat(resp.getBody().getData().getFailureReason()).isEqualTo("Insufficient balance");
         assertThat(resp.getBody().getData().getStage()).isEqualTo(PaymentResponse.Stage.DECLINED);
     }
+
+    @Test
+    @DisplayName("a code sent again for a paid O'mari payment answers with the receipt; one that is over says how it ended")
+    void otp_paidOrOver() {
+        Payment paid = row(PaymentRail.OMARI, UUID.randomUUID());
+        paid.setStatus(Payment.PaymentStatus.SUCCEEDED);
+        paid.setConfirmationNumber("INN-20261125-941C78");
+        when(paynow.submitOtp(paid.getId(), "482913")).thenReturn(new PaynowPaymentService.OtpOutcome(paid, 200, null));
+        ResponseEntity<ApiResult<PaymentResponse>> again =
+                controller.submitOtp(paid.getId().toString(), new PaymentOtpRequest("482913"));
+        assertThat(again.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(again.getBody().getData().getStage()).isEqualTo(PaymentResponse.Stage.COMPLETED);
+        assertThat(again.getBody().getData().getConfirmationNumber()).isEqualTo("INN-20261125-941C78");
+
+        Payment declined = row(PaymentRail.OMARI, UUID.randomUUID());
+        declined.setStatus(Payment.PaymentStatus.FAILED);
+        declined.setUpstreamErrorCode(PaynowPaymentService.CANCELLED_CODE);
+        when(paynow.submitOtp(declined.getId(), "482913")).thenReturn(new PaynowPaymentService.OtpOutcome(declined, 409,
+                "This payment is no longer waiting for a code — start a new payment"));
+        ResponseEntity<ApiResult<PaymentResponse>> over =
+                controller.submitOtp(declined.getId().toString(), new PaymentOtpRequest("482913"));
+        assertThat(over.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(over.getBody().getData().getStage()).isEqualTo(PaymentResponse.Stage.DECLINED);
+        assertThat(over.getBody().getData().getFundsCaptured()).isFalse();
+    }
+
+    @Test
+    @DisplayName("a re-POST after the customer cancelled the OneMoney prompt: 400 with that decline, never a new prompt")
+    void cancelledThenRePosted_answersTheDecline() {
+        UUID bookingId = UUID.randomUUID();
+        Payment open = row(PaymentRail.ONEMONEY, bookingId);
+        when(payments.findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(eq(OrderType.BOOKING),
+                eq(bookingId.toString()), any())).thenReturn(Optional.of(open));
+        when(paynow.resolveOpen(open, PaynowPaymentService.Trigger.CUSTOMER))
+                .thenReturn(PaynowPaymentService.CheckOutcome.CLOSED);
+        Payment cancelled = row(PaymentRail.ONEMONEY, bookingId);
+        cancelled.setId(open.getId());
+        cancelled.setStatus(Payment.PaymentStatus.FAILED);
+        cancelled.setUpstreamErrorCode(PaynowPaymentService.CANCELLED_CODE);
+        cancelled.setCompletedAt(Instant.now());
+        when(paynow.start(PaymentRail.ONEMONEY, OrderType.BOOKING, bookingId.toString()))
+                .thenThrow(new PaynowPaymentService.PaynowDeclinedException(cancelled, 118));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = controller.processPayment(request(bookingId, PaymentRail.ONEMONEY));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(resp.getBody().getMessage())
+                .isEqualTo("OneMoney: the payment didn't go through. Try again in 2 minutes, or pay another way.");
+        PaymentResponse data = resp.getBody().getData();
+        assertThat(data.getStage()).isEqualTo(PaymentResponse.Stage.DECLINED);
+        assertThat(data.getTransactionId()).isEqualTo(open.getId());
+        assertThat(data.getRetryAfterSeconds()).isEqualTo(118L);
+    }
+
+    @Test
+    @DisplayName("GET of a held OneMoney decline carries retryAfterSeconds from the Paynow hold")
+    void getPayment_heldDecline() {
+        Payment p = row(PaymentRail.ONEMONEY, UUID.randomUUID());
+        p.setStatus(Payment.PaymentStatus.FAILED);
+        p.setUpstreamErrorCode(PaynowPaymentService.CANCELLED_CODE);
+        when(payments.findById(p.getId())).thenReturn(Optional.of(p));
+        when(paynow.declineHoldRemaining(p)).thenReturn(90L);
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = controller.getPayment(p.getId().toString());
+
+        assertThat(resp.getBody().getData().getStage()).isEqualTo(PaymentResponse.Stage.DECLINED);
+        assertThat(resp.getBody().getData().getRetryAfterSeconds()).isEqualTo(90L);
+    }
+
+    @Test
+    @DisplayName("a card attempt we closed that Paynow then reported paid: VERIFYING and 'don't pay again', never 'nothing was charged'")
+    void getPayment_paidAfterClose() {
+        Payment p = row(PaymentRail.PAYNOW_CARD, UUID.randomUUID());
+        p.setStatus(Payment.PaymentStatus.EXPIRED);
+        p.setPaynowFlaggedAt(Instant.now());
+        when(payments.findById(p.getId())).thenReturn(Optional.of(p));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = controller.getPayment(p.getId().toString());
+
+        PaymentResponse data = resp.getBody().getData();
+        assertThat(data.getStage()).isEqualTo(PaymentResponse.Stage.VERIFYING);
+        assertThat(data.getFundsCaptured()).isNull();
+        assertThat(data.getStatus()).isEqualTo(PaymentResponse.Status.PROCESSING);
+        assertThat(resp.getBody().getMessage())
+                .isEqualTo("We received your payment after this attempt had timed out. Don't pay again: support will "
+                        + "confirm your booking or refund you.")
+                .doesNotContain("Nothing was charged");
+
+        Payment lapsed = row(PaymentRail.PAYNOW_CARD, UUID.randomUUID());
+        lapsed.setStatus(Payment.PaymentStatus.EXPIRED);
+        when(payments.findById(lapsed.getId())).thenReturn(Optional.of(lapsed));
+        assertThat(controller.getPayment(lapsed.getId().toString()).getBody().getData().getStage())
+                .isEqualTo(PaymentResponse.Stage.LAPSED);
+    }
+
+
+    @Test
+    @DisplayName("a second tap while the card start waits on Paynow: IN_PROGRESS (retry in a moment), never 'expired', no status check")
+    void startInFlight_isInProgress() {
+        UUID bookingId = UUID.randomUUID();
+        Payment armed = row(PaymentRail.PAYNOW_CARD, bookingId);
+        when(payments.findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(eq(OrderType.BOOKING),
+                eq(bookingId.toString()), any())).thenReturn(Optional.of(armed));
+        when(payments.findById(armed.getId())).thenReturn(Optional.of(armed));
+        when(paynow.startInFlight(armed)).thenReturn(true);
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = controller.processPayment(request(bookingId, PaymentRail.PAYNOW_CARD));
+
+        PaymentResponse data = resp.getBody().getData();
+        assertThat(data.getStage()).isEqualTo(PaymentResponse.Stage.IN_PROGRESS);
+        assertThat(data.getFundsCaptured()).isFalse();
+        assertThat(data.getRedirectUrl()).isNull();
+        assertThat(resp.getBody().getMessage()).isEqualTo("Your payment is already being processed — please retry in a moment");
+        verify(paynow, never()).resolveOpen(any(), any());
+        verify(paynow, never()).start(any(), any(), anyString());
+
+        // Once it is no longer in flight (a crash leftover past the bound), the old answer stands.
+        when(paynow.startInFlight(armed)).thenReturn(false);
+        assertThat(controller.getPayment(armed.getId().toString()).getBody().getData().getStage())
+                .isEqualTo(PaymentResponse.Stage.INSTRUMENT_EXPIRED);
+    }
 }

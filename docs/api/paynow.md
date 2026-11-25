@@ -111,12 +111,26 @@ Statuses:
 Paynow asks merchants to poll only to confirm an update or before discarding an
 old payment, so our sweep checks only payments whose reply was lost, payments
 past their deadline, and ones not checked for `paynow.recheck-every` (2 min).
+The query picks them, least recently checked first, so a page of payments that
+are not due never hides one that is. A run stops starting checks after
+`paynow.sweep-run-budget` (25 s): every rail's poller shares the scheduler, and
+a Paynow that hangs costs up to three reads at the read timeout per check.
+
+**After we close a payment unpaid** (EXPIRED), the sweep looks at it again for
+`paynow.closed-recheck-for` (24 h): every 15 minutes in the first hour, then
+every 3 hours. Paynow's card page can outlive our deadline, and its update
+about a late payment can be lost. A paid status there is an operator's case
+(below).
 
 ## O'mari code
 
 POST to `remoteotpurl`: `id`, `otp`, `status=Message`, `hash`. A status update
 back on success; `status=Error&error=Invalid+OTP` on a wrong code. **Five wrong
 codes cancel the payment.** Never retried (each try spends an attempt).
+
+A code sent again for a payment that already went through (or is being
+confirmed) answers 200 with that payment, and O'mari is not asked again. A code
+for a payment that is over is a 409 whose `data` says how it ended.
 
 ## Our rules (PaynowPaymentService)
 
@@ -128,11 +142,45 @@ codes cancel the payment.** Never retried (each try spends an attempt).
 - No answer to a start: OneMoney stays open (the trace resolves it). A card or
   O'mari start closes FAILED at once: without Paynow's reply the customer has no
   page to pay on and nowhere to send the code.
+- A start that never reached Paynow (our circuit breaker was open, or no
+  connection could be opened) closes FAILED on every rail, OneMoney included:
+  nothing was sent, so no prompt can be live. A read timeout or a reset
+  connection can come after the request was written, and stays "no answer".
+- A second tap while a card or O'mari start waits for Paynow's reply is
+  answered IN_PROGRESS ("retry in a moment"), never "expired".
 - A paid status must echo our amount and reference, or the payment is parked
   IN_DOUBT.
+- **Paid is recorded before the booking is confirmed**, and only while the row
+  is still open, under the row's lock: TOKEN_ISSUED becomes
+  COMPLETED_UNCONFIRMED, then the booking is confirmed, then the payment is
+  SUCCEEDED. A row another trigger closed meanwhile is never confirmed (it is
+  an operator's case), and a failed confirm is left COMPLETED_UNCONFIRMED for
+  the confirm-retry.
 - An unknown status never closes a payment.
+- **A decline holds that option for 2 minutes** (`paynow.decline-hold`, EcoCash's
+  rule): after a OneMoney or O'mari attempt the customer cancelled or their
+  wallet refused, a new attempt for the same order on the same option is a 400
+  carrying the declined attempt (stage DECLINED, `retryAfterSeconds`). The
+  website re-sends `POST /payments` every few seconds; without the hold each
+  re-send after a cancel started a new prompt or texted a new code. Another
+  option works at once.
+- **Paynow's OneMoney test numbers** (below) are refused unless
+  `PAYNOW_TEST_NUMBERS_ALLOWED=true`. While an integration is in test mode
+  Paynow reports them paid with no money moved, so on a host that sells real
+  tickets they would be free tickets. On a live integration they are Econet
+  numbers, never OneMoney wallets. Only a staging host allows them.
 - Money that moves after we closed or confirmed a payment changes nothing
-  automatically: it is journalled and counted (alert `PaynowPaymentNeedsOperator`).
+  automatically: it is journalled and counted (alert `PaynowPaymentNeedsOperator`),
+  once per payment (`paynow_flagged_at`):
+  - paid after we closed it: the payment stays closed, and its answer is stage
+    VERIFYING ("we received your payment … don't pay again"), never "nothing
+    was charged";
+  - refunded or disputed before its booking was confirmed: parked IN_DOUBT, so
+    the confirm-retry (which re-reads each row before its confirm) issues no
+    tickets for money that went back; an earlier confirm that timed out may
+    still have reached the booking, so the operator checks it;
+  - refunded or disputed after the booking was confirmed: the tickets are the
+    operator's call.
 - Paynow's URLs are pinned to `PAYNOW_ALLOWED_HOSTS`; we never call or redirect
   to any other host.
 
@@ -153,6 +201,8 @@ least one successful test payment.
   | 0773333333 | User cancelled (FAILED) after 30 s |
   | 0774444444 | Refused at initiate: Insufficient balance |
 
+  We refuse these four numbers for OneMoney unless the host sets
+  `PAYNOW_TEST_NUMBERS_ALLOWED=true` (staging only; see "Our rules").
 - **O'mari:** the test page lists no numbers.
 - Express card tokens (not used by us): `vmc` and `zimswitch` test tokens are on
   Paynow's test-mode page.

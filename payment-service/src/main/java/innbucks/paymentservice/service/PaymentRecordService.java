@@ -94,8 +94,14 @@ public class PaymentRecordService {
             PaymentStatus.IN_DOUBT, EnumSet.of(
                     PaymentStatus.SUCCEEDED, PaymentStatus.FAILED,
                     PaymentStatus.COMPLETED_UNCONFIRMED),
+            // COMPLETED_UNCONFIRMED -> IN_DOUBT is Paynow's refund-before-
+            // confirm parking: the money came in, the booking was never
+            // confirmed, and Paynow now reports the payment refunded or
+            // disputed. Left COMPLETED_UNCONFIRMED, the confirm-retry sweep
+            // would still confirm the booking and issue tickets for money that
+            // went back; IN_DOUBT has no auto-resolver.
             PaymentStatus.COMPLETED_UNCONFIRMED, EnumSet.of(
-                    PaymentStatus.SUCCEEDED)
+                    PaymentStatus.SUCCEEDED, PaymentStatus.IN_DOUBT)
     );
 
     private final PaymentRepository repository;
@@ -462,33 +468,99 @@ public class PaymentRecordService {
 
     /**
      * Reconciler resolution of {@link PaymentStatus#COMPLETED_UNCONFIRMED}:
-     * the booking confirm finally went through, promote to SUCCEEDED.
+     * the booking confirm finally went through, promote to SUCCEEDED. Only
+     * from COMPLETED_UNCONFIRMED: a row an operator's case parked IN_DOUBT
+     * meanwhile stays parked.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void resolveUnconfirmed(UUID id, String confirmationNumber) {
-        transition(id, PaymentStatus.SUCCEEDED,
-                "Reconciler confirmed booking after earlier failure", null, payment -> {
+        resolveUnconfirmed(id, confirmationNumber, "Reconciler confirmed booking after earlier failure");
+    }
+
+    /** {@link #resolveUnconfirmed(UUID, String)} with the journal line of the caller's choosing. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean resolveUnconfirmed(UUID id, String confirmationNumber, String detail) {
+        return transitionFrom(id, EnumSet.of(PaymentStatus.COMPLETED_UNCONFIRMED), PaymentStatus.SUCCEEDED,
+                detail, null, payment -> {
                     payment.setConfirmationNumber(confirmationNumber);
                     payment.setCompletedAt(Instant.now());
                 });
     }
 
+    /**
+     * Paynow: the payment is paid. Records that FIRST, and only while the row
+     * is still open (TOKEN_ISSUED), under the row lock: returns false when
+     * another writer already closed it or recorded the payment, and the caller
+     * must then not confirm the order. On true the caller confirms the order
+     * and promotes the row with {@link #resolveUnconfirmed(UUID, String, String)};
+     * a failed confirm leaves it COMPLETED_UNCONFIRMED for the confirm-retry.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean claimPaid(UUID id, String upstreamRef, String detail) {
+        return transitionFrom(id, EnumSet.of(PaymentStatus.TOKEN_ISSUED), PaymentStatus.COMPLETED_UNCONFIRMED,
+                detail, upstreamRef, payment -> {
+                    if (upstreamRef != null && !upstreamRef.isBlank()) {
+                        payment.setVeenguTransactionId(truncate(upstreamRef, 64));
+                    }
+                });
+    }
+
+    /**
+     * Paynow: money came in but the booking was never confirmed, and Paynow
+     * now reports the payment refunded or disputed. Parks the row IN_DOUBT so
+     * the confirm-retry stops; false when the row is no longer
+     * COMPLETED_UNCONFIRMED (the retry confirmed it first).
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean parkUnconfirmedInDoubt(UUID id, String reason) {
+        return transitionFrom(id, EnumSet.of(PaymentStatus.COMPLETED_UNCONFIRMED), PaymentStatus.IN_DOUBT,
+                reason, null, payment -> { });
+    }
+
+    /**
+     * Paynow: hand this payment to an operator, once. True for the one caller
+     * that set the mark; false when it was already set, so the same case is
+     * not raised twice by a repeated update or a re-check.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean flagPaynowOperatorCase(UUID id) {
+        return repository.flagPaynowOperatorCase(id, Instant.now()) == 1;
+    }
+
     private void transition(UUID id, PaymentStatus target, String detail,
                             String upstreamRef, java.util.function.Consumer<Payment> mutator) {
-        Payment payment = repository.findById(id).orElse(null);
+        transitionFrom(id, null, target, detail, upstreamRef, mutator);
+    }
+
+    /**
+     * The one path between states. Reads the row LOCKED, so two writers that
+     * both saw it open queue here and the second sees the first one's result:
+     * a close and a paid read can no longer both apply. With
+     * {@code expectedFrom} set, the move happens only from one of those
+     * states. Returns whether it applied (an idempotent replay counts as not
+     * applied).
+     */
+    private boolean transitionFrom(UUID id, Set<PaymentStatus> expectedFrom, PaymentStatus target, String detail,
+                                   String upstreamRef, java.util.function.Consumer<Payment> mutator) {
+        Payment payment = repository.findByIdForUpdate(id).orElse(null);
         if (payment == null) {
             // Defensive no-op: the row should exist (we just opened it). If it
             // doesn't, something deleted it out from under us — log loudly but
             // don't throw and mask the upstream outcome from the caller.
             log.error("payment transition to {} requested for missing payment id={}", target, id);
-            return;
+            return false;
         }
         PaymentStatus from = payment.getStatus();
         if (from == target) {
             // Idempotent replay (e.g. reconciler and request thread racing to
             // record the same outcome) — nothing to do, nothing to journal.
             log.debug("payment transition no-op id={} already {}", id, target);
-            return;
+            return false;
+        }
+        if (expectedFrom != null && !expectedFrom.contains(from)) {
+            log.info("payment transition to {} skipped id={} paymentReference={}: the row is {} now, not {} — detail={}",
+                    target, id, payment.getPaymentReference(), from, expectedFrom, detail);
+            return false;
         }
         Set<PaymentStatus> allowed = LEGAL_TRANSITIONS.getOrDefault(from, Set.of());
         if (!allowed.contains(target)) {
@@ -498,7 +570,7 @@ public class PaymentRecordService {
             // an operator must look, not a best-effort overwrite.)
             log.error("ILLEGAL payment transition refused id={} paymentReference={} {} -> {} detail={}",
                     id, payment.getPaymentReference(), from, target, detail);
-            return;
+            return false;
         }
         mutator.accept(payment);
         payment.setStatus(target);
@@ -511,6 +583,7 @@ public class PaymentRecordService {
         auditTransition(payment, from, target, detail, upstreamRef);
         log.info("payment {} -> {} id={} paymentReference={} upstreamRef={}",
                 from, target, payment.getId(), payment.getPaymentReference(), upstreamRef);
+        return true;
     }
 
     /**

@@ -5,6 +5,7 @@ import innbucks.paymentservice.client.PaynowApiTransientException;
 import innbucks.paymentservice.client.PaynowClient;
 import innbucks.paymentservice.client.PaynowInitiation;
 import innbucks.paymentservice.client.PaynowMessage;
+import innbucks.paymentservice.client.PaynowNotSentException;
 import innbucks.paymentservice.client.PaynowProperties;
 import innbucks.paymentservice.client.PaynowStatus;
 import innbucks.paymentservice.config.PaymentMetrics;
@@ -21,12 +22,14 @@ import innbucks.paymentservice.util.MsisdnMasking;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
@@ -94,6 +97,18 @@ public class PaynowPaymentService {
     static final String UNREACHABLE_CODE = "paynow_unreachable";
 
     static final Set<PaymentRail> PHONE_RAILS = EnumSet.of(PaymentRail.ONEMONEY, PaymentRail.OMARI);
+
+    /** Every Paynow rail. */
+    static final Set<PaymentRail> RAILS = EnumSet.of(PaymentRail.PAYNOW_CARD, PaymentRail.ONEMONEY, PaymentRail.OMARI);
+
+    /** How long the sweep leaves a payment whose initiate reply was lost before looking it up by its trace. */
+    static final Duration NO_REPLY_GRACE = Duration.ofSeconds(30);
+
+    /** Past connect + read timeout, what a start can still spend waiting: a pooled lease and the TLS handshake. */
+    static final Duration START_REPLY_MARGIN = Duration.ofSeconds(15);
+
+    /** Paynow's published test-mode numbers ({@code docs/api/paynow.md}), in the local form we send. */
+    static final Set<String> PAYNOW_TEST_NUMBERS = Set.of("0771111111", "0772222222", "0773333333", "0774444444");
 
     private final PaymentRecordService paymentRecordService;
     private final PaynowClient paynowClient;
@@ -175,6 +190,9 @@ public class PaynowPaymentService {
             throw new InvalidPaymentRequestException(
                     "A payment for this booking is already in progress or completed", 409);
         }
+        if (PHONE_RAILS.contains(rail)) {
+            requireNoRecentDecline(rail, orderType, orderRef);
+        }
 
         OrderGateway gateway = orderGatewayRegistry.forType(orderType);
         OrderSnapshot snapshot = gateway.fetch(orderRef);
@@ -211,6 +229,15 @@ public class PaynowPaymentService {
             if (phone == null) {
                 throw new InvalidPaymentRequestException(
                         label + " needs a Zimbabwean phone number on the booking", 400);
+            }
+            if (rail == PaymentRail.ONEMONEY && PAYNOW_TEST_NUMBERS.contains(phone)
+                    && !properties.isTestNumbersAllowed()) {
+                // A test-mode integration reports these PAID with no money
+                // moved; on a live one they are Econet numbers, never OneMoney.
+                metrics.incPaynowStart(rail.name(), "test_number");
+                log.warn("[paynow] OneMoney refused for one of Paynow's test numbers orderRef={}", orderRef);
+                throw new InvalidPaymentRequestException(
+                        label + " cannot be used with this number — please pay another way", 400);
             }
             requirePromptRoomFor(rail, msisdn);
         }
@@ -280,6 +307,18 @@ public class PaynowPaymentService {
                     ? label + ": " + sentence(e.paynowError())
                     : label + " could not start this payment — please try again or pay another way";
             return StartOutcome.failed(opened, 400, message);
+        } catch (PaynowNotSentException e) {
+            // Nothing reached Paynow (our circuit breaker refused, or no
+            // connection opened), so nothing exists there on any rail: close
+            // at once and free the booking, rather than wait on a prompt that
+            // was never sent.
+            metrics.incPaynowStart(rail.name(), "not_sent");
+            paymentRecordService.markFailed(opened.getId(), UNREACHABLE_CODE,
+                    "Paynow was not reached, nothing was sent (" + e.getMessage() + ")");
+            log.warn("[paynow] {} start never reached Paynow paymentReference={} — closed: {}",
+                    rail, paymentReference, e.getMessage());
+            return StartOutcome.failed(opened, 502,
+                    label + " could not be started — please try again in a moment or pay another way");
         } catch (PaynowApiTransientException e) {
             metrics.incPaynowStart(rail.name(), "ambiguous");
             if (rail == PaymentRail.ONEMONEY) {
@@ -326,7 +365,10 @@ public class PaynowPaymentService {
      * the result-URL update, the O'mari code reply, the customer's re-POST
      * and the sweep, so the money rules cannot drift between them.
      */
-    public CheckOutcome resolveOpen(Payment p, Trigger trigger) {
+    public CheckOutcome resolveOpen(Payment stale, Trigger trigger) {
+        // The copy in hand can be minutes old (the sweep reads a page, then
+        // checks each in turn): decide on the row as it is now.
+        Payment p = paymentRepository.findById(stale.getId()).orElse(stale);
         if (p.getStatus() != Payment.PaymentStatus.TOKEN_ISSUED || p.getPaymentRail() == null
                 || !p.getPaymentRail().isPaynow()) {
             return CheckOutcome.OPEN;
@@ -381,9 +423,9 @@ public class PaynowPaymentService {
                 paymentRecordService.markInDoubt(p.getId(), "Paynow reports " + status.rawStatus()
                         + " on a payment we never confirmed (Paynow ref " + status.paynowReference()
                         + "). Operator: check Paynow's records before any confirm or refund.");
-                metrics.incPaynowResolution("reversed_before_paid");
-                log.error("[paynow] {} on an open payment paymentReference={} — parked IN_DOUBT",
-                        status.rawStatus(), p.getPaymentReference());
+                operatorCase(p, "reversed_before_paid", "Paynow reports " + status.rawStatus()
+                        + " on an open payment (Paynow ref " + status.paynowReference() + "). Parked IN_DOUBT;"
+                        + " no tickets were issued.");
                 yield CheckOutcome.OPEN;
             }
             case UNKNOWN -> {
@@ -408,20 +450,48 @@ public class PaynowPaymentService {
                     + ". Operator must reconcile against Paynow's records before any confirm or refund.");
             return CheckOutcome.OPEN;
         }
+        // The money fact FIRST, and only while the row is still open: the
+        // copy in hand can be older than the row (the sweep reads a page, then
+        // polls each in turn), and a row another trigger closed meanwhile
+        // must not get its booking confirmed. That is the operator's case.
+        if (!paymentRecordService.claimPaid(p.getId(), paynowRef,
+                "Paynow reports the payment " + status.rawStatus() + "; confirming the booking")) {
+            return onPaidButNotClaimed(p, status, paynowRef);
+        }
         ConfirmOutcome outcome = resolutionService.confirmOrder(p);
         if (outcome.succeeded()) {
-            paymentRecordService.markSucceeded(p.getId(), paynowRef, outcome.confirmationNumber());
+            paymentRecordService.resolveUnconfirmed(p.getId(), outcome.confirmationNumber(),
+                    "Paynow payment confirmed the booking");
             metrics.incPaynowResolution("paid");
             log.info("[paynow] paid + booking confirmed paymentReference={} paynowReference={} status={} confirmation={}",
                     p.getPaymentReference(), paynowRef, status.rawStatus(), outcome.confirmationNumber());
         } else {
-            paymentRecordService.markCompletedUnconfirmed(p.getId(), paynowRef,
+            paymentRecordService.noteEvent(p.getId(),
                     "Customer paid through Paynow but the booking confirm failed: " + outcome.reason());
             metrics.incPaynowResolution("paid_unconfirmed");
             log.error("PAYNOW PAID BUT BOOKING CONFIRM FAILED — confirm-retry will keep trying paymentReference={} "
                     + "paynowReference={} reason={}", p.getPaymentReference(), paynowRef, outcome.reason());
         }
         return CheckOutcome.PAID;
+    }
+
+    /** A paid status for a row this call did not move: read the row as it is now. */
+    private CheckOutcome onPaidButNotClaimed(Payment stale, PaynowStatus status, String paynowRef) {
+        Payment now = paymentRepository.findById(stale.getId()).orElse(stale);
+        Payment.PaymentStatus current = now.getStatus();
+        if (current == Payment.PaymentStatus.SUCCEEDED || current == Payment.PaymentStatus.COMPLETED_UNCONFIRMED) {
+            // Another trigger recorded the same payment first: nothing to add.
+            return CheckOutcome.PAID;
+        }
+        if (current == Payment.PaymentStatus.FAILED || current == Payment.PaymentStatus.EXPIRED) {
+            operatorCase(now, "paid_after_close", "Paynow reports " + status.rawStatus()
+                    + " on a payment we had closed " + current + " (Paynow ref " + paynowRef
+                    + "). The customer paid; confirm the booking by hand or refund.");
+            return CheckOutcome.CLOSED;
+        }
+        log.warn("[paynow] paid status for paymentReference={} left alone: the row is {}",
+                now.getPaymentReference(), current);
+        return CheckOutcome.OPEN;
     }
 
     /** A paid status must echo our amount and our reference; absent echoes are not evidence. */
@@ -494,7 +564,7 @@ public class PaynowPaymentService {
                 || p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED;
         boolean worthChecking = (closedUnpaid && update.outcome() == PaynowStatus.Outcome.PAID)
                 || (paid && update.outcome() == PaynowStatus.Outcome.REVERSED);
-        if (!worthChecking) {
+        if (!worthChecking || p.getPaynowFlaggedAt() != null) {
             metrics.incPaynowResultUpdate("ignored");
             return UpdateAck.OK;
         }
@@ -511,18 +581,53 @@ public class PaynowPaymentService {
         }
         metrics.incPaynowResultUpdate("applied");
         if (closedUnpaid && confirmed.outcome() == PaynowStatus.Outcome.PAID) {
+            String mismatch = echoMismatch(p, confirmed);
             operatorCase(p, "paid_after_close", "Paynow reports " + confirmed.rawStatus()
-                    + " on a payment we had closed " + p.getStatus() + " (Paynow ref " + confirmed.paynowReference()
-                    + "). The customer paid; confirm the booking by hand or refund.");
+                    + " on a payment we had closed " + p.getStatus() + " (Paynow ref " + confirmed.paynowReference() + ")"
+                    + (mismatch != null ? "; the echo does not match the ledger (" + mismatch + ")" : "")
+                    + ". The customer paid; confirm the booking by hand or refund.");
         } else if (paid && confirmed.outcome() == PaynowStatus.Outcome.REVERSED) {
-            operatorCase(p, "reversed_after_paid", "Paynow reports " + confirmed.rawStatus()
-                    + " after the booking was confirmed (Paynow ref " + confirmed.paynowReference()
-                    + "). Decide what happens to the tickets.");
+            onReversedAfterPaid(p, confirmed);
         }
         return UpdateAck.OK;
     }
 
+    /**
+     * Paynow reports a payment we recorded as paid refunded or disputed. While
+     * its booking is still unconfirmed (COMPLETED_UNCONFIRMED), the row is
+     * parked IN_DOUBT so the confirm-retry does not issue tickets for money that
+     * went back. Once the booking is confirmed, the tickets are the operator's
+     * call.
+     */
+    private void onReversedAfterPaid(Payment p, PaynowStatus confirmed) {
+        String paynowRef = confirmed.paynowReference() != null ? confirmed.paynowReference() : p.getPaynowReference();
+        if (p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED
+                && paymentRecordService.parkUnconfirmedInDoubt(p.getId(), "Paynow reports " + confirmed.rawStatus()
+                        + " on a payment whose booking we never confirmed (Paynow ref " + paynowRef
+                        + "); parked IN_DOUBT so the confirm-retry stops. Operator: check Paynow's records before"
+                        + " any confirm or refund.")) {
+            operatorCase(p, "reversed_before_paid", "Paynow reports " + confirmed.rawStatus()
+                    + " before the booking was confirmed (Paynow ref " + paynowRef + "). Parked IN_DOUBT, so the"
+                    + " confirm-retry stops. Check the booking: an earlier confirm that timed out may still have"
+                    + " reached it.");
+            return;
+        }
+        operatorCase(p, "reversed_after_paid", "Paynow reports " + confirmed.rawStatus()
+                + " after the booking was confirmed (Paynow ref " + paynowRef
+                + "). Decide what happens to the tickets.");
+    }
+
+    /**
+     * Hand a payment to an operator: journal, an ERROR log line and the
+     * outcome's counter (alert PaynowPaymentNeedsOperator). Once per payment:
+     * a repeated update or a re-check does not raise the same case again.
+     */
     private void operatorCase(Payment p, String outcome, String detail) {
+        if (!paymentRecordService.flagPaynowOperatorCase(p.getId())) {
+            log.info("[paynow] operator case {} already raised for paymentReference={} — not raised again",
+                    outcome, p.getPaymentReference());
+            return;
+        }
         paymentRecordService.noteEvent(p.getId(), detail);
         log.error("[paynow] OPERATOR CASE {} paymentReference={} orderRef={}: {}",
                 outcome, p.getPaymentReference(), p.getOrderRef(), detail);
@@ -547,6 +652,14 @@ public class PaynowPaymentService {
         Payment p = paymentRepository.findById(paymentId).orElse(null);
         if (p == null || p.getPaymentRail() != PaymentRail.OMARI) {
             return new OtpOutcome(null, 404, "Payment not found");
+        }
+        if (p.getStatus() == Payment.PaymentStatus.SUCCEEDED
+                || p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED
+                || p.getStatus() == Payment.PaymentStatus.IN_DOUBT) {
+            // Paid (or being checked): a repeated or late code changes nothing.
+            // Answer with the payment as it stands, never "start a new payment",
+            // which invites a second charge. O'mari is not asked again.
+            return new OtpOutcome(p, 200, null);
         }
         if (p.getStatus() != Payment.PaymentStatus.TOKEN_ISSUED || p.getPaynowOtpUrl() == null
                 || (p.getCodeExpiresAt() != null && p.getCodeExpiresAt().isBefore(Instant.now()))) {
@@ -579,16 +692,106 @@ public class PaynowPaymentService {
     // Helpers
     // ---------------------------------------------------------------------
 
-    /** Whether the sweep should check {@code p} now: its reply was lost, its deadline passed, or it is due a re-check. */
-    public boolean dueForSweep(Payment p, Instant now) {
-        if (p.getPaynowPollUrl() == null) {
-            return p.getCreatedAt() == null || p.getCreatedAt().plus(Duration.ofSeconds(30)).isBefore(now);
+    /**
+     * A card or O'mari start still waiting for Paynow's reply: the row is armed
+     * (TOKEN_ISSUED before the call, like OneMoney's) but has no page or code
+     * URL yet, and is younger than the longest the start can take. A second
+     * tap in that window is answered "in progress", never "expired".
+     */
+    public boolean startInFlight(Payment p) {
+        if (p == null || p.getStatus() != Payment.PaymentStatus.TOKEN_ISSUED || p.getCreatedAt() == null) {
+            return false;
         }
-        if (pastDeadline(p)) {
-            return true;
+        boolean nothingYet = (p.getPaymentRail() == PaymentRail.PAYNOW_CARD && p.getPaynowBrowserUrl() == null)
+                || (p.getPaymentRail() == PaymentRail.OMARI && p.getPaynowOtpUrl() == null);
+        if (!nothingYet) {
+            return false;
         }
-        Instant last = p.getPaynowCheckedAt() != null ? p.getPaynowCheckedAt() : p.getCreatedAt();
-        return last == null || last.plus(properties.getRecheckEvery()).isBefore(now);
+        Duration bound = Duration.ofMillis((long) properties.getConnectTimeoutMs() + properties.getReadTimeoutMs())
+                .plus(START_REPLY_MARGIN);
+        return p.getCreatedAt().plus(bound).isAfter(Instant.now());
+    }
+
+    // ---------------------------------------------------------------------
+    // The sweep (PaymentResolutionJob.pollPaynowPayments)
+    // ---------------------------------------------------------------------
+
+    /**
+     * The open Paynow payments the sweep should check now, least recently
+     * checked first: one whose initiate reply was lost (no poll URL) for
+     * {@link #NO_REPLY_GRACE}, one past its deadline plus grace, and any not
+     * checked for {@code paynow.recheck-every} (Paynow's update may have been
+     * lost). Filtered in the query, so a page of payments that are not due
+     * never hides one that is.
+     */
+    public List<Payment> openPaymentsDue(Instant now, int limit) {
+        return paymentRepository.findPaynowDue(Payment.PaymentStatus.TOKEN_ISSUED, RAILS,
+                now.minus(NO_REPLY_GRACE),
+                now.minus(EXPIRY_GRACE),
+                // Only a row with no deadline uses this; none is written without one.
+                now.minus(properties.getCardTtl()).minus(EXPIRY_GRACE),
+                now.minus(properties.getRecheckEvery()),
+                PageRequest.of(0, limit));
+    }
+
+    /**
+     * Payments we closed unpaid (EXPIRED) in the last
+     * {@code paynow.closed-recheck-for} that are due a look for a late
+     * payment: every {@code closed-recheck-first-hour-every} in the first hour
+     * after closing, then every {@code closed-recheck-later-every}. One already
+     * handed to an operator is never read again.
+     */
+    public List<Payment> closedPaymentsDue(Instant now, int limit) {
+        return paymentRepository.findPaynowClosedDue(Payment.PaymentStatus.EXPIRED, RAILS,
+                now.minus(properties.getClosedRecheckFor()),
+                now.minus(Duration.ofHours(1)),
+                now.minus(properties.getClosedRecheckFirstHourEvery()),
+                now.minus(properties.getClosedRecheckLaterEvery()),
+                PageRequest.of(0, limit));
+    }
+
+    /** How long one sweep run may keep starting checks: the scheduler thread is shared with every other rail's poller. */
+    public Duration sweepRunBudget() {
+        Duration budget = properties.getSweepRunBudget();
+        return budget == null || budget.isNegative() || budget.isZero() ? Duration.ofSeconds(25) : budget;
+    }
+
+    /**
+     * Look again at a payment we closed unpaid, in case the customer paid
+     * after all (a card page can outlive our deadline) and Paynow's update
+     * about it was lost. Paid is an operator's case, raised once; nothing
+     * changes automatically.
+     */
+    public CheckOutcome recheckClosed(Payment stale) {
+        Payment p = paymentRepository.findById(stale.getId()).orElse(stale);
+        if (p.getStatus() != Payment.PaymentStatus.EXPIRED || p.getPaymentRail() == null
+                || !p.getPaymentRail().isPaynow() || p.getPaynowFlaggedAt() != null
+                || (p.getPaynowPollUrl() == null && p.getPaynowTrace() == null)) {
+            return CheckOutcome.CLOSED;
+        }
+        paymentRecordService.stampPaynowChecked(p.getId());
+        PaynowStatus status;
+        try {
+            status = p.getPaynowPollUrl() != null
+                    ? paynowClient.poll(p.getCurrency(), p.getPaynowPollUrl())
+                    : paynowClient.trace(p.getCurrency(), p.getPaynowTrace());
+        } catch (RuntimeException e) {
+            metrics.incPaynowResolution("error");
+            log.warn("[paynow] late-payment check unavailable paymentReference={} cause={}",
+                    p.getPaymentReference(), e.getMessage());
+            return CheckOutcome.ERROR;
+        }
+        paymentRecordService.recordPaynowSeen(p.getId(), status.paynowReference(), status.pollUrl());
+        if (status.outcome() != PaynowStatus.Outcome.PAID) {
+            return CheckOutcome.CLOSED;
+        }
+        String paynowRef = status.paynowReference() != null ? status.paynowReference() : p.getPaynowReference();
+        String mismatch = echoMismatch(p, status);
+        operatorCase(p, "paid_after_close", "Paynow reports " + status.rawStatus()
+                + " on a payment we had closed " + p.getStatus() + " (Paynow ref " + paynowRef + ")"
+                + (mismatch != null ? "; the echo does not match the ledger (" + mismatch + ")" : "")
+                + ". The customer paid; confirm the booking by hand or refund.");
+        return CheckOutcome.CLOSED;
     }
 
     private boolean pastDeadline(Payment p) {
@@ -596,6 +799,77 @@ public class PaynowPaymentService {
                 : p.getCreatedAt().plus(p.getPaymentRail() == PaymentRail.PAYNOW_CARD
                         ? properties.getCardTtl() : properties.getMobileTtl());
         return Instant.now().isAfter(deadline.plus(EXPIRY_GRACE));
+    }
+
+    /**
+     * The decline hold, EcoCash's rule on the phone rails: while this order's
+     * latest attempt on {@code rail} was declined or cancelled moments ago, a
+     * new one is refused with that decline. The website re-sends
+     * {@code POST /payments} every few seconds, and without the hold each
+     * re-send after the customer cancelled the prompt (or after O'mari voided
+     * the code) started a new prompt or texted a new code.
+     */
+    private void requireNoRecentDecline(PaymentRail rail, OrderType orderType, String orderRef) {
+        Payment last = paymentRecordService.latestOnRail(orderType, orderRef, rail).orElse(null);
+        Long seconds = declineHoldRemaining(last);
+        if (seconds == null) {
+            return;
+        }
+        metrics.incPaynowStart(rail.name(), "decline_held");
+        log.info("[paynow] {} start refused: order {} {} was declined moments ago (paymentReference={}); hold {}s more",
+                rail, orderType, orderRef, last.getPaymentReference(), seconds);
+        throw new PaynowDeclinedException(last, seconds);
+    }
+
+    /**
+     * Seconds until a new attempt on {@code p}'s rail is accepted, when
+     * {@code p} is a OneMoney or O'mari attempt the customer's wallet refused
+     * or Paynow reports cancelled, inside {@code paynow.decline-hold}; else
+     * null. Only the order's latest attempt on the rail holds it, so the
+     * start passes that one.
+     */
+    public Long declineHoldRemaining(Payment p) {
+        Duration hold = properties.getDeclineHold();
+        if (p == null || hold == null || hold.isZero() || hold.isNegative()
+                || p.getPaymentRail() == null || !PHONE_RAILS.contains(p.getPaymentRail())
+                || p.getStatus() != Payment.PaymentStatus.FAILED || p.getCompletedAt() == null
+                || !(DECLINED_CODE.equals(p.getUpstreamErrorCode()) || CANCELLED_CODE.equals(p.getUpstreamErrorCode()))) {
+            return null;
+        }
+        Instant now = Instant.now();
+        Instant until = p.getCompletedAt().plus(hold);
+        if (!now.isBefore(until)) {
+            return null;
+        }
+        return Math.max(1, (Duration.between(now, until).toMillis() + 999) / 1000);
+    }
+
+    /**
+     * A new OneMoney or O'mari attempt refused because the order's last one on
+     * that rail was declined or cancelled moments ago. Carries that attempt, so
+     * the answer is the decline itself.
+     */
+    public static class PaynowDeclinedException extends InvalidPaymentRequestException {
+        private final transient Payment declined;
+        private final long retryAfterSeconds;
+
+        public PaynowDeclinedException(Payment declined, long retryAfterSeconds) {
+            super(message(declined, retryAfterSeconds), 400);
+            this.declined = declined;
+            this.retryAfterSeconds = retryAfterSeconds;
+        }
+
+        static String message(Payment declined, long retryAfterSeconds) {
+            long minutes = Math.max(1, (retryAfterSeconds + 59) / 60);
+            String reason = declineReason(declined);
+            String said = methodLabel(declined.getPaymentRail()) + ": "
+                    + (reason != null ? sentence(reason) : "the payment didn't go through.");
+            return said + " Try again in " + minutes + (minutes == 1 ? " minute" : " minutes")
+                    + ", or pay another way.";
+        }
+
+        public Payment declined() { return declined; }
+        public long retryAfterSeconds() { return retryAfterSeconds; }
     }
 
     private void requirePromptRoomFor(PaymentRail rail, String msisdn) {

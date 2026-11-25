@@ -14,6 +14,9 @@
 --   paynow_otp_url       OMARI: where we POST the code the customer types
 --   paynow_otp_reference OMARI: the reference of the texted code (shown)
 --   paynow_checked_at    when we last read the status (spacing the checks)
+--   paynow_flagged_at    when the payment went to an operator because money
+--                        moved after we closed or confirmed it; set once, so
+--                        the same case is not raised twice
 --
 -- code_expires_at is reused as the local deadline, as on every other rail.
 -- Every column is nullable with no default: a catalogue change, no rewrite,
@@ -30,6 +33,7 @@ ALTER TABLE payment ADD COLUMN paynow_reference VARCHAR(64);
 ALTER TABLE payment ADD COLUMN paynow_otp_url VARCHAR(512);
 ALTER TABLE payment ADD COLUMN paynow_otp_reference VARCHAR(64);
 ALTER TABLE payment ADD COLUMN paynow_checked_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE payment ADD COLUMN paynow_flagged_at TIMESTAMP WITH TIME ZONE;
 
 -- Same vocabulary discipline as every rail before: a new rail enters the
 -- ledger only through a migration (LedgerVocabularyMigrationTest).
@@ -40,3 +44,10 @@ ALTER TABLE payment ADD CONSTRAINT chk_payment_rail
 CREATE UNIQUE INDEX uq_payment_paynow_trace
     ON payment (paynow_trace)
     WHERE paynow_trace IS NOT NULL;
+
+-- The re-check of recently closed Paynow payments (a card page can outlive our
+-- deadline, and Paynow's update about the late payment can be lost) reads only
+-- these rows, by when they closed. No existing row matches.
+CREATE INDEX idx_payment_paynow_closed
+    ON payment (completed_at)
+    WHERE status = 'EXPIRED' AND payment_rail IN ('PAYNOW_CARD', 'ONEMONEY', 'OMARI');

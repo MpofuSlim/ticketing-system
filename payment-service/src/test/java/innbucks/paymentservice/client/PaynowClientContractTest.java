@@ -70,6 +70,10 @@ class PaynowClientContractTest {
     }
 
     static PaynowClient newClient(String baseUrl) {
+        return newClient(baseUrl, CircuitBreakerRegistry.ofDefaults());
+    }
+
+    static PaynowClient newClient(String baseUrl, CircuitBreakerRegistry breakers) {
         PaynowProperties props = new PaynowProperties();
         props.setBaseUrl(baseUrl);
         props.setUsdIntegrationId("1201");
@@ -84,7 +88,7 @@ class PaynowClientContractTest {
                 .waitDuration(Duration.ofMillis(10))
                 .retryExceptions(PaynowApiTransientException.class)
                 .build());
-        return new PaynowClient(props, retries, CircuitBreakerRegistry.ofDefaults(), POOL);
+        return new PaynowClient(props, retries, breakers, POOL);
     }
 
     /** A Paynow reply signed with {@link #KEY}, the way Paynow signs. */
@@ -196,6 +200,29 @@ class PaynowClientContractTest {
         PaynowClient dead = newClient("http://127.0.0.1:1");
         assertThatThrownBy(() -> dead.initiateWeb("USD", REFERENCE, 1250, "x", "https://w.example/r", TRACE))
                 .isInstanceOf(PaynowApiTransientException.class);
+    }
+
+    @Test
+    @DisplayName("NotSent only when nothing left us: a refused connection or an open breaker; a 5xx after the write never is")
+    void notSent_onlyWhenNothingWasSent() {
+        PaynowClient dead = newClient("http://127.0.0.1:1");
+        assertThatThrownBy(() -> dead.initiateWeb("USD", REFERENCE, 1250, "x", "https://w.example/r", TRACE))
+                .as("connection refused").isInstanceOf(PaynowNotSentException.class);
+
+        CircuitBreakerRegistry breakers = CircuitBreakerRegistry.ofDefaults();
+        PaynowClient guarded = newClient(wireMock.baseUrl(), breakers);
+        breakers.circuitBreaker(PaynowClient.RESILIENCE_INSTANCE_NAME).transitionToOpenState();
+        assertThatThrownBy(() -> guarded.initiateWeb("USD", REFERENCE, 1250, "x", "https://w.example/r", TRACE))
+                .as("breaker open").isInstanceOf(PaynowNotSentException.class);
+        assertThatThrownBy(() -> guarded.poll("USD", pollUrl())).isInstanceOf(PaynowNotSentException.class);
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo(PaynowClient.INITIATE_PATH)));
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/Interface/CheckPayment/")));
+
+        stubPost(PaynowClient.INITIATE_PATH, 503, "Service Unavailable");
+        assertThatThrownBy(() -> client.initiateWeb("USD", REFERENCE, 1250, "x", "https://w.example/r", TRACE))
+                .as("the request was written: ambiguous, never 'not sent'")
+                .isInstanceOf(PaynowApiTransientException.class)
+                .isNotInstanceOf(PaynowNotSentException.class);
     }
 
     @Test
