@@ -24,9 +24,19 @@ class PaymentMethodsTest {
     }
 
     @Test
-    void aRailAddedLater_isShownByItsOwnName_neverHidden() {
+    void thePaynowRails_keepTheirOwnCodes_withWords() {
+        assertThat(PaymentMethods.code("PAYNOW_CARD")).isEqualTo("PAYNOW_CARD");
+        assertThat(PaymentMethods.label("PAYNOW_CARD")).isEqualTo("Bank card (Paynow)");
         assertThat(PaymentMethods.code("ONEMONEY")).isEqualTo("ONEMONEY");
-        assertThat(PaymentMethods.label("ONEMONEY")).isEqualTo("ONEMONEY");
+        assertThat(PaymentMethods.label("ONEMONEY")).isEqualTo("OneMoney");
+        assertThat(PaymentMethods.code("OMARI")).isEqualTo("OMARI");
+        assertThat(PaymentMethods.label("OMARI")).isEqualTo("O'mari");
+    }
+
+    @Test
+    void aRailAddedLater_isShownByItsOwnName_neverHidden() {
+        assertThat(PaymentMethods.code("TELECASH")).isEqualTo("TELECASH");
+        assertThat(PaymentMethods.label("TELECASH")).isEqualTo("TELECASH");
     }
 
     @Test

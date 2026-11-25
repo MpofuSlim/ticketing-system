@@ -15,6 +15,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -67,6 +68,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.PENDING);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
         when(repo.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
 
         new PaymentRecordService(repo, events, mock(AuditService.class)).markSucceeded(p.getId(), "VEENGU-1", "INN-CONF-1");
@@ -90,6 +92,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.SUCCEEDED);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
 
         new PaymentRecordService(repo, events, mock(AuditService.class)).markFailed(p.getId(), "late_code", "late message");
 
@@ -105,6 +108,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.PENDING);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
         when(repo.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
 
         new PaymentRecordService(repo, events, mock(AuditService.class)).markInDoubt(p.getId(), "gateway timeout");
@@ -126,6 +130,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.PENDING);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
         when(repo.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
 
         new PaymentRecordService(repo, events, mock(AuditService.class))
@@ -142,6 +147,7 @@ class PaymentRecordServiceTest {
         Payment p = payment(PaymentStatus.COMPLETED_UNCONFIRMED);
         p.setVeenguTransactionId("VEENGU-9");
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
         when(repo.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
 
         new PaymentRecordService(repo, events, mock(AuditService.class)).resolveUnconfirmed(p.getId(), "INN-CONF-9");
@@ -160,6 +166,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.PENDING);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
 
         // PENDING -> SUCCEEDED is legal via markSucceeded, but this asserts the
         // resolveUnconfirmed-specific journey: it shares the same transition
@@ -167,6 +174,7 @@ class PaymentRecordServiceTest {
         // FAILED -> SUCCEEDED:
         Payment failed = payment(PaymentStatus.FAILED);
         when(repo.findById(failed.getId())).thenReturn(Optional.of(failed));
+        when(repo.findByIdForUpdate(failed.getId())).thenReturn(Optional.of(failed));
 
         new PaymentRecordService(repo, events, mock(AuditService.class)).resolveUnconfirmed(failed.getId(), "INN-X");
 
@@ -180,6 +188,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.IN_DOUBT);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
 
         new PaymentRecordService(repo, events, mock(AuditService.class)).markInDoubt(p.getId(), "duplicate signal");
 
@@ -193,6 +202,7 @@ class PaymentRecordServiceTest {
         PaymentRepository repo = mock(PaymentRepository.class);
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         when(repo.findById(any())).thenReturn(Optional.empty());
+        when(repo.findByIdForUpdate(any())).thenReturn(Optional.empty());
 
         assertDoesNotThrow(() ->
                 new PaymentRecordService(repo, events, mock(AuditService.class)).markSucceeded(UUID.randomUUID(), "V", "C"));
@@ -205,6 +215,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.PENDING);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
         java.time.Instant deadline = java.time.Instant.now().plusSeconds(600);
 
         new PaymentRecordService(repo, events, mock(AuditService.class)).markTokenIssued(
@@ -229,6 +240,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.TOKEN_ISSUED);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
 
         PaymentRecordService service = new PaymentRecordService(repo, events, mock(AuditService.class));
         service.markExpired(p.getId(), "code lapsed unpaid");
@@ -246,6 +258,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.TOKEN_ISSUED);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
 
         new PaymentRecordService(repo, events, mock(AuditService.class)).markSucceeded(p.getId(), "1616800", "INN-CONF-1");
 
@@ -260,6 +273,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.SUCCEEDED);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
 
         // No public API even attempts SUCCEEDED -> TOKEN_ISSUED; pin the
         // nearest expressible guard: a terminal row refuses markTokenIssued.
@@ -277,6 +291,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.TOKEN_ISSUED);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
 
         new PaymentRecordService(repo, events, mock(AuditService.class)).noteEvent(p.getId(), "Payment code delivered via SMS");
 
@@ -295,6 +310,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.TOKEN_ISSUED);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
         java.time.Instant before = java.time.Instant.now();
 
         new PaymentRecordService(repo, events, mock(AuditService.class)).markCardDeclined(p.getId(),
@@ -324,6 +340,7 @@ class PaymentRecordServiceTest {
         PaymentEventRepository events = mock(PaymentEventRepository.class);
         Payment p = payment(PaymentStatus.SUCCEEDED);
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
 
         new PaymentRecordService(repo, events, mock(AuditService.class))
                 .markCardDeclined(p.getId(), "800.100.100", "declined", "Card declined");
@@ -366,5 +383,101 @@ class PaymentRecordServiceTest {
                 "chk_payment_order_type");
         assertFalse(PaymentRecordService.isActiveOrderConflict(
                 new org.springframework.dao.DataIntegrityViolationException("wrapped", hibernate)));
+    }
+
+
+    // -- Paynow's guarded writes (review fixes, 2026-11-25) ---------------------
+
+    private static PaymentRecordService service(PaymentRepository repo, PaymentEventRepository events) {
+        when(repo.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
+        return new PaymentRecordService(repo, events, mock(AuditService.class));
+    }
+
+    @Test
+    void claimPaid_movesAnOpenRow_underTheRowLock_andRecordsTheUpstreamRef() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        PaymentEventRepository events = mock(PaymentEventRepository.class);
+        Payment p = payment(PaymentStatus.TOKEN_ISSUED);
+        when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
+
+        assertTrue(service(repo, events).claimPaid(p.getId(), "PAYNOW-9510", "Paynow reports the payment Paid"));
+
+        assertEquals(PaymentStatus.COMPLETED_UNCONFIRMED, p.getStatus());
+        assertEquals("PAYNOW-9510", p.getVeenguTransactionId());
+        verify(repo).findByIdForUpdate(p.getId());
+        verify(repo, never()).findById(any());
+        verify(events, times(1)).save(any(PaymentEvent.class));
+    }
+
+    @Test
+    void claimPaid_refusesARowAnotherWriterClosedOrRecorded_andWritesNothing() {
+        for (PaymentStatus now : new PaymentStatus[] {PaymentStatus.EXPIRED, PaymentStatus.FAILED,
+                PaymentStatus.COMPLETED_UNCONFIRMED, PaymentStatus.SUCCEEDED, PaymentStatus.IN_DOUBT}) {
+            PaymentRepository repo = mock(PaymentRepository.class);
+            PaymentEventRepository events = mock(PaymentEventRepository.class);
+            Payment p = payment(now);
+            when(repo.findByIdForUpdate(p.getId())).thenReturn(Optional.of(p));
+
+            assertFalse(service(repo, events).claimPaid(p.getId(), "PAYNOW-9510", "paid"), now.name());
+
+            assertEquals(now, p.getStatus(), now.name());
+            verify(events, never()).save(any(PaymentEvent.class));
+            verify(repo, never()).save(any(Payment.class));
+        }
+    }
+
+    @Test
+    void resolveUnconfirmed_promotesOnlyFromCompletedUnconfirmed() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        PaymentEventRepository events = mock(PaymentEventRepository.class);
+        Payment parked = payment(PaymentStatus.IN_DOUBT);
+        when(repo.findByIdForUpdate(parked.getId())).thenReturn(Optional.of(parked));
+        // An operator's refund parking must not be undone by a late confirm.
+        assertFalse(service(repo, events).resolveUnconfirmed(parked.getId(), "INN-1", "confirmed"));
+        assertEquals(PaymentStatus.IN_DOUBT, parked.getStatus());
+
+        Payment unconfirmed = payment(PaymentStatus.COMPLETED_UNCONFIRMED);
+        when(repo.findByIdForUpdate(unconfirmed.getId())).thenReturn(Optional.of(unconfirmed));
+        assertTrue(service(repo, events).resolveUnconfirmed(unconfirmed.getId(), "INN-1", "confirmed"));
+        assertEquals(PaymentStatus.SUCCEEDED, unconfirmed.getStatus());
+        assertEquals("INN-1", unconfirmed.getConfirmationNumber());
+        assertNotNull(unconfirmed.getCompletedAt());
+    }
+
+    @Test
+    void parkUnconfirmedInDoubt_onlyFromCompletedUnconfirmed() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        PaymentEventRepository events = mock(PaymentEventRepository.class);
+        Payment unconfirmed = payment(PaymentStatus.COMPLETED_UNCONFIRMED);
+        when(repo.findByIdForUpdate(unconfirmed.getId())).thenReturn(Optional.of(unconfirmed));
+        assertTrue(service(repo, events).parkUnconfirmedInDoubt(unconfirmed.getId(), "refunded"));
+        assertEquals(PaymentStatus.IN_DOUBT, unconfirmed.getStatus());
+
+        Payment confirmed = payment(PaymentStatus.SUCCEEDED);
+        when(repo.findByIdForUpdate(confirmed.getId())).thenReturn(Optional.of(confirmed));
+        assertFalse(service(repo, events).parkUnconfirmedInDoubt(confirmed.getId(), "refunded"));
+        assertEquals(PaymentStatus.SUCCEEDED, confirmed.getStatus());
+    }
+
+    @Test
+    void flagPaynowOperatorCase_isTrueOnlyForTheCallerThatSetIt() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        UUID id = UUID.randomUUID();
+        when(repo.flagPaynowOperatorCase(eq(id), any())).thenReturn(1, 0);
+        PaymentRecordService records = service(repo, mock(PaymentEventRepository.class));
+        assertTrue(records.flagPaynowOperatorCase(id));
+        assertFalse(records.flagPaynowOperatorCase(id));
+    }
+
+    /**
+     * Informational writes (Paynow's checked-at stamp and references) read a
+     * row and save it in their own transaction. Hibernate's default UPDATE
+     * writes every column, so one landing after a status change on another
+     * thread wrote the status it had read back: a closed row reopened, a paid
+     * one unpaid. {@code @DynamicUpdate} writes only the columns that changed.
+     */
+    @Test
+    void paymentWritesOnlyItsChangedColumns() {
+        assertTrue(Payment.class.isAnnotationPresent(org.hibernate.annotations.DynamicUpdate.class));
     }
 }

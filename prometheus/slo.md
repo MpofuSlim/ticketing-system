@@ -632,6 +632,37 @@ bookings failing at once points at the database (connectivity, pool,
 paying customer is never blocked by it: confirm honours a lapsed hold that is
 still PENDING.
 
+### `PaynowPaymentNeedsOperator`
+
+**Trigger:** `payment_payments_paynow_resolution_total` moved with one of the
+outcomes that change nothing automatically (`docs/api/paynow.md`):
+
+- `paid_after_close` — Paynow reports a payment Paid that we had already
+  closed (FAILED or EXPIRED): the customer paid, usually on Paynow's page after
+  our deadline, and has no ticket from it. Found by Paynow's update or by the
+  sweep's re-check of closed payments (24 h). The payment's answer to the
+  customer is "don't pay again; support will confirm or refund".
+- `reversed_after_paid` — Paynow reports Refunded or Disputed after the booking
+  was confirmed: the customer has tickets and the money has gone back or is held.
+- `reversed_before_paid` — Refunded or Disputed on a payment whose booking we
+  never confirmed (open, or paid but its confirm still failing); parked IN_DOUBT,
+  so the confirm-retry issues no tickets.
+- `echo_mismatch` — a paid status whose amount or reference is not the
+  payment's; parked IN_DOUBT, never confirmed.
+
+**Action:** grep payment-service for `[paynow] OPERATOR CASE`: every one of the
+four outcomes logs it, with the outcome, the payment reference and the order. A
+case is raised once per payment (`payment.paynow_flagged_at`); a repeat update
+logs `already raised` at INFO. The payment's journal
+(`payment_event`, database `payment_service`) carries the same note. Check the
+transaction in the merchant's Paynow account by Paynow's reference, then:
+
+- paid after close: confirm the booking by hand if tickets are still available
+  and the customer still wants them, or refund through Paynow;
+- refunded or disputed after paid: decide with the organizer what happens to
+  the tickets (a disputed payment's funds are held by Paynow until resolved);
+- IN_DOUBT rows: resolve from Paynow's records before any confirm or refund.
+
 ### `ResurrectFailed`
 
 **Trigger:** `booking_confirm_resurrected_total{outcome="failed"}` moved. A

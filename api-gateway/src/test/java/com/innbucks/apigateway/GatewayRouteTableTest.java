@@ -60,6 +60,7 @@ class GatewayRouteTableTest {
             "scans-route", "brand-assets-route",
             "payment-internal-deny", "payment-service-read-route",
             "payments-innbucks-write-route", "ecocash-notify-write-route",
+            "paynow-result-write-route", "payment-otp-write-route",
             "payment-service-write-route",
             "loyalty-internal-deny", "loyalty-partner-registration-route",
             "loyalty-session-refresh-route", "loyalty-voucher-partner-route", "loyalty-service-route",
@@ -109,7 +110,8 @@ class GatewayRouteTableTest {
             "booking-service-route", "booking-invoices-route", "booking-tickets-route",
             "scans-route", "brand-assets-route",
             "payment-service-read-route", "payments-innbucks-write-route",
-            "ecocash-notify-write-route", "payment-service-write-route",
+            "ecocash-notify-write-route", "paynow-result-write-route", "payment-otp-write-route",
+            "payment-service-write-route",
             "loyalty-partner-registration-route", "loyalty-session-refresh-route",
             "loyalty-voucher-partner-route",
             "loyalty-service-route", "marketplace-service-route", "loans-service-route");
@@ -143,7 +145,8 @@ class GatewayRouteTableTest {
             // per-IP cap is the only brake on guessing keys.
             "auth-pos-token-route",
             "payment-service-read-route", "payments-innbucks-write-route",
-            "ecocash-notify-write-route", "payment-service-write-route",
+            "ecocash-notify-write-route", "paynow-result-write-route", "payment-otp-write-route",
+            "payment-service-write-route",
             // Not SMS-cost or payment, but the same fail-open hazard: this route
             // is unauthenticated and enumerable, so its limiter is the only
             // access control it has.
@@ -270,6 +273,15 @@ class GatewayRouteTableTest {
         assertThat(order.indexOf("ecocash-notify-write-route"))
                 .as("ecocash-notify-write-route must match before the /payments/** write catch-all")
                 .isBetween(0, order.indexOf("payment-service-write-route") - 1);
+        // And for Paynow's result URL and O'mari's code: both are posted with
+        // no bearer, so under the catch-all every forged Authorization header
+        // would be a fresh bucket.
+        assertThat(order.indexOf("paynow-result-write-route"))
+                .as("paynow-result-write-route must match before the /payments/** write catch-all")
+                .isBetween(0, order.indexOf("payment-service-write-route") - 1);
+        assertThat(order.indexOf("payment-otp-write-route"))
+                .as("payment-otp-write-route must match before the /payments/** write catch-all")
+                .isBetween(0, order.indexOf("payment-service-write-route") - 1);
         // The public ticket-wallet route is UNAUTHENTICATED and keyed on a
         // low-entropy phone number, so its tight per-IP bucket is the only thing
         // standing between a caller and a full scrape of confirmed tickets — QR
@@ -291,6 +303,14 @@ class GatewayRouteTableTest {
         assertThat(order.indexOf("booking-create-route"))
                 .as("booking-create-route must match before the /bookings/** catch-all")
                 .isBetween(0, order.indexOf("booking-service-route") - 1);
+    }
+
+    @Test
+    void paynowRoutesArePostOnlyExactPaths() {
+        assertThat(predicateArgs("paynow-result-write-route", "Method")).containsExactly("POST");
+        assertThat(predicateArgs("paynow-result-write-route", "Path")).containsExactly("/payments/paynow/result");
+        assertThat(predicateArgs("payment-otp-write-route", "Method")).containsExactly("POST");
+        assertThat(predicateArgs("payment-otp-write-route", "Path")).containsExactly("/payments/{transactionId}/otp");
     }
 
     @Test

@@ -88,7 +88,7 @@ public class CategoryBookingDTO {
      * reach. A rail added later appears under its own name.
      */
     @io.swagger.v3.oas.annotations.media.Schema(example = "ECOCASH", nullable = true,
-            allowableValues = {"INNBUCKS", "ECOCASH", "CARD"})
+            allowableValues = {"INNBUCKS", "ECOCASH", "CARD", "PAYNOW_CARD", "ONEMONEY", "OMARI"})
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String paymentMethod;
     /** {@link #paymentMethod} in words, ready to print: "InnBucks", "EcoCash" or "Bank card (ZimSwitch)". */

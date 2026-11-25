@@ -113,6 +113,167 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
     @Autowired
     private innbucks.paymentservice.service.PaymentRecordService records;
 
+    // -- Paynow (review fixes, 2026-11-25) ----------------------------------------
+
+    private static final String PAYNOW_POLL = "https://www.paynow.co.zw/Interface/CheckPayment/?guid=it";
+
+    private static Payment paynowRow(innbucks.paymentservice.entity.PaymentRail rail, PaymentStatus status,
+                                     java.time.Instant createdAt, java.time.Instant deadline,
+                                     String pollUrl, java.time.Instant checkedAt) {
+        Payment p = row(UUID.randomUUID(), status);
+        p.setPaymentRail(rail);
+        p.setPaynowTrace(UUID.randomUUID().toString().replace("-", ""));
+        p.setPaynowPollUrl(pollUrl);
+        p.setCreatedAt(createdAt);
+        p.setCodeExpiresAt(deadline);
+        p.setPaynowCheckedAt(checkedAt);
+        return p;
+    }
+
+    /**
+     * The Paynow sweep's query on real Postgres: it returns exactly the open
+     * Paynow payments that need a check (reply lost, past the deadline, or not
+     * checked for the re-check interval), least recently checked first. The
+     * sweep used to read a page of every open payment and skip the ones not due
+     * in Java, so on a busy sale a page of young payments hid the due ones.
+     */
+    @Test
+    void paynowSweepQuery_returnsOnlyTheOpenPaymentsDueACheck() {
+        java.time.Instant now = java.time.Instant.now();
+        var card = innbucks.paymentservice.entity.PaymentRail.PAYNOW_CARD;
+        var oneMoney = innbucks.paymentservice.entity.PaymentRail.ONEMONEY;
+        var omari = innbucks.paymentservice.entity.PaymentRail.OMARI;
+        Payment lostReply = paynowRow(oneMoney, PaymentStatus.TOKEN_ISSUED, now.minusSeconds(60),
+                now.plusSeconds(540), null, null);
+        Payment youngNoReply = paynowRow(oneMoney, PaymentStatus.TOKEN_ISSUED, now.minusSeconds(10),
+                now.plusSeconds(590), null, null);
+        Payment pastDeadline = paynowRow(card, PaymentStatus.TOKEN_ISSUED, now.minusSeconds(2400),
+                now.minusSeconds(180), PAYNOW_POLL, now.minusSeconds(10));
+        Payment fresh = paynowRow(omari, PaymentStatus.TOKEN_ISSUED, now.minusSeconds(60),
+                now.plusSeconds(540), PAYNOW_POLL, now.minusSeconds(10));
+        Payment staleCheck = paynowRow(card, PaymentStatus.TOKEN_ISSUED, now.minusSeconds(600),
+                now.plusSeconds(1200), PAYNOW_POLL, now.minusSeconds(180));
+        Payment neverChecked = paynowRow(card, PaymentStatus.TOKEN_ISSUED, now.minusSeconds(170),
+                now.plusSeconds(1630), PAYNOW_POLL, null);
+        Payment closed = paynowRow(card, PaymentStatus.EXPIRED, now.minusSeconds(4000),
+                now.minusSeconds(2000), PAYNOW_POLL, null);
+        Payment ecocash = row(UUID.randomUUID(), PaymentStatus.TOKEN_ISSUED);
+        ecocash.setPaymentRail(innbucks.paymentservice.entity.PaymentRail.ECOCASH);
+        ecocash.setCreatedAt(now.minusSeconds(2400));
+        for (Payment p : java.util.List.of(lostReply, youngNoReply, pastDeadline, fresh, staleCheck, neverChecked,
+                closed, ecocash)) {
+            payments.saveAndFlush(p);
+        }
+
+        java.util.List<UUID> due = payments.findPaynowDue(PaymentStatus.TOKEN_ISSUED,
+                        java.util.EnumSet.of(card, oneMoney, omari),
+                        now.minusSeconds(30), now.minusSeconds(120), now.minusSeconds(32 * 60), now.minusSeconds(120),
+                        org.springframework.data.domain.PageRequest.of(0, 1000))
+                .stream().map(Payment::getId).toList();
+
+        assertTrue(due.contains(lostReply.getId()), "initiate reply lost for over 30 s: looked up by trace");
+        assertTrue(due.contains(pastDeadline.getId()), "past deadline + grace: closed or confirmed");
+        assertTrue(due.contains(staleCheck.getId()), "not checked for the re-check interval");
+        assertTrue(due.contains(neverChecked.getId()), "never checked, older than the re-check interval");
+        assertFalse(due.contains(youngNoReply.getId()), "the start may still be waiting for its reply");
+        assertFalse(due.contains(fresh.getId()), "checked moments ago, deadline ahead");
+        assertFalse(due.contains(closed.getId()), "only open payments");
+        assertFalse(due.contains(ecocash.getId()), "only the Paynow rails");
+        assertTrue(due.indexOf(staleCheck.getId()) < due.indexOf(pastDeadline.getId()),
+                "least recently checked first");
+    }
+
+    /**
+     * Closed-unpaid Paynow payments due a look for a late payment: in the first
+     * hour after closing once every 15 minutes, then every 3 hours, for a day;
+     * never one already handed to an operator.
+     */
+    @Test
+    void paynowClosedQuery_returnsClosedPaymentsDueALateLook() {
+        java.time.Instant now = java.time.Instant.now();
+        var card = innbucks.paymentservice.entity.PaymentRail.PAYNOW_CARD;
+        java.util.function.BiFunction<Long, Long, Payment> closedAgo = (closedSecondsAgo, checkedSecondsAgo) -> {
+            Payment p = paynowRow(card, PaymentStatus.EXPIRED, now.minusSeconds(closedSecondsAgo + 1800),
+                    now.minusSeconds(closedSecondsAgo + 120), PAYNOW_POLL, now.minusSeconds(checkedSecondsAgo));
+            p.setCompletedAt(now.minusSeconds(closedSecondsAgo));
+            return p;
+        };
+        Payment firstHourDue = closedAgo.apply(1200L, 1200L);
+        Payment firstHourChecked = closedAgo.apply(1200L, 300L);
+        Payment laterDue = closedAgo.apply(5 * 3600L, 4 * 3600L);
+        Payment laterChecked = closedAgo.apply(5 * 3600L, 3600L);
+        Payment pastTheDay = closedAgo.apply(30 * 3600L, 29 * 3600L);
+        Payment flagged = closedAgo.apply(1200L, 1200L);
+        flagged.setPaynowFlaggedAt(now.minusSeconds(600));
+        Payment failed = closedAgo.apply(1200L, 1200L);
+        failed.setStatus(PaymentStatus.FAILED);
+        for (Payment p : java.util.List.of(firstHourDue, firstHourChecked, laterDue, laterChecked, pastTheDay,
+                flagged, failed)) {
+            payments.saveAndFlush(p);
+        }
+
+        java.util.Set<UUID> due = payments.findPaynowClosedDue(PaymentStatus.EXPIRED,
+                        java.util.EnumSet.of(card, innbucks.paymentservice.entity.PaymentRail.ONEMONEY,
+                                innbucks.paymentservice.entity.PaymentRail.OMARI),
+                        now.minusSeconds(24 * 3600), now.minusSeconds(3600), now.minusSeconds(900),
+                        now.minusSeconds(3 * 3600), org.springframework.data.domain.PageRequest.of(0, 1000))
+                .stream().map(Payment::getId).collect(java.util.stream.Collectors.toSet());
+
+        assertTrue(due.contains(firstHourDue.getId()), "first hour, not looked at for 15 minutes");
+        assertTrue(due.contains(laterDue.getId()), "later in the day, not looked at for 3 hours");
+        assertFalse(due.contains(firstHourChecked.getId()));
+        assertFalse(due.contains(laterChecked.getId()));
+        assertFalse(due.contains(pastTheDay.getId()), "closed more than a day ago");
+        assertFalse(due.contains(flagged.getId()), "already an operator's case");
+        assertFalse(due.contains(failed.getId()), "only payments closed EXPIRED");
+    }
+
+    /**
+     * "Paid" and "expired" racing on one Paynow payment: exactly one applies,
+     * and claimPaid says which. Each reads the row FOR UPDATE, so the second
+     * waits and then sees the first one's result; before the lock both could
+     * read it open and both write.
+     */
+    @Test
+    void paynowClaimPaid_racingAnExpiry_appliesExactlyOne() throws Exception {
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 10; round++) {
+                java.time.Instant now = java.time.Instant.now();
+                Payment p = payments.saveAndFlush(paynowRow(innbucks.paymentservice.entity.PaymentRail.ONEMONEY,
+                        PaymentStatus.TOKEN_ISSUED, now, now.plusSeconds(600), PAYNOW_POLL, null));
+                var barrier = new java.util.concurrent.CyclicBarrier(2);
+                var claim = pool.submit(() -> {
+                    barrier.await();
+                    return records.claimPaid(p.getId(), "PAYNOW-IT", "Paynow reports the payment Paid");
+                });
+                var expire = pool.submit(() -> {
+                    barrier.await();
+                    records.markExpired(p.getId(), "Deadline passed — closing unpaid");
+                    return null;
+                });
+                boolean claimed = claim.get(30, java.util.concurrent.TimeUnit.SECONDS);
+                expire.get(30, java.util.concurrent.TimeUnit.SECONDS);
+                PaymentStatus after = payments.findById(p.getId()).orElseThrow().getStatus();
+                assertEquals(claimed ? PaymentStatus.COMPLETED_UNCONFIRMED : PaymentStatus.EXPIRED, after,
+                        "round " + round + ": claimed=" + claimed);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void paynowOperatorCase_isFlaggedOnce() {
+        java.time.Instant now = java.time.Instant.now();
+        Payment p = payments.saveAndFlush(paynowRow(innbucks.paymentservice.entity.PaymentRail.PAYNOW_CARD,
+                PaymentStatus.EXPIRED, now.minusSeconds(3000), now.minusSeconds(1000), PAYNOW_POLL, null));
+
+        assertTrue(records.flagPaynowOperatorCase(p.getId()), "the first caller raises the case");
+        assertFalse(records.flagPaynowOperatorCase(p.getId()), "every caller after finds it raised");
+        assertTrue(payments.findById(p.getId()).orElseThrow().getPaynowFlaggedAt() != null);
+    }
+
     /**
      * A card decline closes the attempt on real Postgres: the row goes FAILED
      * with the decline stamped, and the booking's one payment slot

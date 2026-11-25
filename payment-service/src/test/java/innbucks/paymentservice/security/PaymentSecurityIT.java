@@ -116,6 +116,27 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void paynowResultUrl_withoutJwt_isOpen_andAnUnsignedUpdateIsIgnoredWith200() throws Exception {
+        // Paynow posts status updates without our JWTs. 200 (not 401) proves
+        // the chain let it through; an update naming no payment of ours is
+        // ignored.
+        mockMvc.perform(post("/payments/paynow/result")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .content("reference=TKZ-NOPE-000000000000&status=Paid&hash=00"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void omariCode_withoutJwt_isOpen_andAnUnknownPaymentIs404() throws Exception {
+        // The payer sends O'mari's code with the transactionId as the key, no
+        // login, like POST /payments. 404 (not 401) proves the permit.
+        mockMvc.perform(post("/payments/" + UUID.randomUUID() + "/otp")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"otp\":\"482913\"}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     void getUnderPayments_deeperThanOneSegment_stillNeedsAJwt() throws Exception {
         // The permit is one path segment only; nothing else under /payments opens.
         mockMvc.perform(get("/payments/" + UUID.randomUUID() + "/anything"))

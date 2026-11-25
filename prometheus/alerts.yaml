@@ -740,6 +740,22 @@ groups:
           description: "{{ $value | humanize }} payment rows past the reconciliation threshold in IN_DOUBT over 15m — the upstream outcome is unclassifiable and money MAY have left the customer."
           runbook: "prometheus/slo.md#paymentstaleindoubt"
 
+      # payment.payments.paynow_resolution: Paynow money that moved where no
+      # automatic step may follow it (owner's decision, 2026-11-25). Paid on a
+      # payment we had already closed; refunded or disputed after the booking
+      # was confirmed (or before we confirmed it); or a paid status whose
+      # amount or reference is not ours (parked IN_DOUBT). Each is journalled
+      # on the payment. Registered at 0, so the first one fires.
+      - alert: PaynowPaymentNeedsOperator
+        expr: sum(increase(payment_payments_paynow_resolution_total{outcome=~"paid_after_close|reversed_after_paid|reversed_before_paid|echo_mismatch"}[15m])) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "A Paynow payment needs an operator"
+          description: "{{ $value | humanize }} Paynow payments in 15m moved money after we closed or confirmed them, or echoed an amount or reference that is not ours. Nothing was changed automatically."
+          runbook: "prometheus/slo.md#paynowpaymentneedsoperator"
+
       - alert: PaymentCodeResolutionUnknown
         expr: sum(increase(payment_payments_code_resolution_total{outcome=~"unknown|error"}[15m])) > 0
         for: 10m

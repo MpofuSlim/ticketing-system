@@ -103,9 +103,21 @@ public class PaymentController {
     private final PaymentRecordService paymentRecordService;
     private final PaymentRepository paymentRepository;
 
+    /**
+     * The Paynow rails (PAYNOW_CARD, ONEMONEY, OMARI). Setter-injected so the
+     * many hand-built controllers in the tests keep compiling; the context
+     * always injects it.
+     */
+    private innbucks.paymentservice.service.PaynowPaymentService paynowPaymentService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setPaynowPaymentService(innbucks.paymentservice.service.PaynowPaymentService paynowPaymentService) {
+        this.paynowPaymentService = paynowPaymentService;
+    }
+
     @PostMapping
     @Operation(
-            summary = "Pay for an order — InnBucks 2D-code (default), ZimSwitch card, or EcoCash",
+            summary = "Pay for an order — InnBucks 2D-code (default), ZimSwitch card, EcoCash, or Paynow (tickets)",
             description = "Public endpoint (no login required — guest checkout). Identify the order EXACTLY " +
                     "one way: `bookingId` (ticket bookings — the historical contract, unchanged) OR " +
                     "`orderType` + `orderRef` (additive; `MARKETPLACE` + the `MKT-...` order reference, or " +
@@ -130,7 +142,21 @@ public class PaymentController {
                     "`resourcePath` never checks a card payment before its checkout's 30 minutes are up — " +
                     "a check while the shopper is still on the card form kills the form — so follow progress " +
                     "with `GET /payments/{transactionId}`, not by re-POSTing. " +
-                    "One active payment per order across BOTH rails: while an attempt is open on one rail, " +
+                    "\n\n**Paynow (ticket bookings only, additive):** send `paymentRail=PAYNOW_CARD` to pay on " +
+                    "Paynow's own card page: the response carries `redirectUrl`; send the browser there (a " +
+                    "full redirect, not a frame). Paynow brings the customer back to the website's return " +
+                    "page with `transactionId` on the URL; the return itself proves nothing, so that page " +
+                    "follows `GET /payments/{transactionId}` until `stage` is COMPLETED or DECLINED. " +
+                    "`checkoutExpiresAt` is when we stop waiting. Send `paymentRail=ONEMONEY` for a OneMoney " +
+                    "prompt on the booking's phone: nothing to render, `promptExpiresAt` drives the countdown. " +
+                    "Send `paymentRail=OMARI` and O'mari texts the booking's phone a code: " +
+                    "show a code box with `otpReference` beside it and send the code to " +
+                    "`POST /payments/{transactionId}/otp`. Follow both with `GET /payments/{transactionId}`, " +
+                    "not by re-POSTing. A OneMoney or O'mari attempt the customer cancelled or their wallet " +
+                    "declined holds a new one on that option for 2 minutes: a POST meanwhile is a 400 with " +
+                    "the declined attempt (stage `DECLINED`, `retryAfterSeconds`); another payment option " +
+                    "works at once. A marketplace or voucher order on these options is a 400. " +
+                    "\n\nOne active payment per order across ALL rails: while an attempt is open on one rail, " +
                     "POSTing with the other returns the open attempt unchanged; switch rails once it lapses. " +
                     "Amount and currency are read server-side from the order. An InnBucks PAYMENT code is " +
                     "issued for the order's total; the customer approves it in their own InnBucks app " +
@@ -352,6 +378,71 @@ public class PaymentController {
                                               }
                                             }
                                             """),
+                                    @ExampleObject(name = "Booking — Paynow card page (request: {\"bookingId\":\"a3b9c1d2-...\",\"paymentRail\":\"PAYNOW_CARD\"}). Redirect the browser to redirectUrl", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Pay on the Paynow page to complete your booking",
+                                              "data": {
+                                                "transactionId": "d1e2f3a4-5678-90ab-cdef-0123456789ab",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "PROCESSING",
+                                                "stage": "AWAITING_PAYMENT",
+                                                "fundsCaptured": false,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "confirmationNumber": null,
+                                                "processedAt": "2026-06-11T17:48:00+02:00",
+                                                "paymentRail": "PAYNOW_CARD",
+                                                "redirectUrl": "https://www.paynow.co.zw/Payment/ConfirmPayment/9510",
+                                                "checkoutExpiresAt": "2026-06-11T18:18:00+02:00"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Booking — OneMoney prompt sent (request: {\"bookingId\":\"a3b9c1d2-...\",\"paymentRail\":\"ONEMONEY\"})", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Approve the OneMoney prompt on your phone to complete your booking",
+                                              "data": {
+                                                "transactionId": "e2f3a4b5-6789-0abc-def0-123456789abc",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "PROCESSING",
+                                                "stage": "AWAITING_PAYMENT",
+                                                "fundsCaptured": false,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "confirmationNumber": null,
+                                                "processedAt": "2026-06-11T17:48:00+02:00",
+                                                "paymentRail": "ONEMONEY",
+                                                "promptExpiresAt": "2026-06-11T17:58:00+02:00"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Booking — O'mari code texted (request: {\"bookingId\":\"a3b9c1d2-...\",\"paymentRail\":\"OMARI\"}). Send the code to POST /payments/{transactionId}/otp", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Enter the code O'mari sent to your phone to complete your booking",
+                                              "data": {
+                                                "transactionId": "f3a4b5c6-7890-abcd-ef01-23456789abcd",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "PROCESSING",
+                                                "stage": "AWAITING_PAYMENT",
+                                                "fundsCaptured": false,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "confirmationNumber": null,
+                                                "processedAt": "2026-06-11T17:48:00+02:00",
+                                                "paymentRail": "OMARI",
+                                                "promptExpiresAt": "2026-06-11T17:58:00+02:00",
+                                                "otpReference": "OTP-7731"
+                                              }
+                                            }
+                                            """),
                                     @ExampleObject(name = "Marketplace order — code issued (request: {\"orderType\":\"MARKETPLACE\",\"orderRef\":\"MKT-4F9A1C22B7D3\"})", value = """
                                             {
                                               "code": "200 OK",
@@ -415,6 +506,53 @@ public class PaymentController {
                                                 "failureReason": "You have insufficient funds to complete this transaction.",
                                                 "retryAfterSeconds": 104
                                               }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "ONEMONEY / OMARI: the wallet refused at the start — nothing charged; that option is held for 2 minutes, another works at once", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "OneMoney: Insufficient balance.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "ONEMONEY / OMARI: this order's last attempt on that option was cancelled or declined moments ago — the declined attempt, nothing started", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "OneMoney: the payment didn't go through. Try again in 2 minutes, or pay another way.",
+                                              "data": {
+                                                "transactionId": "e2f3a4b5-6789-4abc-8def-0123456789ab",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "FAILED",
+                                                "stage": "DECLINED",
+                                                "fundsCaptured": false,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "paymentRail": "ONEMONEY",
+                                                "retryAfterSeconds": 118
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "ONEMONEY: one of Paynow's test numbers, on a host that does not allow them", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "OneMoney cannot be used with this number — please pay another way",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "PAYNOW_CARD / ONEMONEY / OMARI on a marketplace or voucher order", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "OneMoney is only available for tickets for now — please use another payment method",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "ONEMONEY / OMARI: the booking's phone is not a Zimbabwean number", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "O'mari needs a Zimbabwean phone number on the booking",
+                                              "data": null
                                             }
                                             """)
                             })),
@@ -491,22 +629,49 @@ public class PaymentController {
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429",
-                    description = "ECOCASH only: the payer's number has had 5 EcoCash payment requests in the last "
-                            + "15 minutes (every spelling of the number counts). Nothing was held or charged and "
-                            + "no prompt was sent; the message says when to try again. Offer the InnBucks code "
-                            + "instead. The gateway's own per-caller 429 on POST /payments has an empty body.",
+                    description = "ECOCASH: the payer's number has had 5 EcoCash payment requests in the last "
+                            + "15 minutes (every spelling of the number counts). ONEMONEY / OMARI: the same "
+                            + "limit, counted over OneMoney and O'mari requests together. Nothing was held or "
+                            + "charged and no prompt was sent; the message says when to try again. Offer "
+                            + "another payment method instead. The gateway's own per-caller 429 on "
+                            + "POST /payments has an empty body.",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Too many EcoCash prompts to this number", value = """
+                            examples = {
+                                    @ExampleObject(name = "Too many EcoCash prompts to this number", value = """
+                                            {
+                                              "code": "429 TOO_MANY_REQUESTS",
+                                              "message": "Too many EcoCash payment requests to this number. Try again in 12 minutes, or pay with an InnBucks code.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Too many OneMoney / O'mari requests to this number", value = """
+                                            {
+                                              "code": "429 TOO_MANY_REQUESTS",
+                                              "message": "Too many payment requests to this number. Try again in 12 minutes, or pay another way.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502",
+                    description = "PAYNOW_CARD / OMARI: Paynow gave no usable answer, or no page or code "
+                            + "address, so there is nothing to pay with. The attempt is closed and nothing "
+                            + "was charged: POST again in a moment, or pay another way. (A OneMoney start "
+                            + "with no answer is never a 502: the prompt may be on the phone, so it answers "
+                            + "200 and the payment is followed up.)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Paynow could not be reached for a card payment", value = """
                                     {
-                                      "code": "429 TOO_MANY_REQUESTS",
-                                      "message": "Too many EcoCash payment requests to this number. Try again in 12 minutes, or pay with an InnBucks code.",
+                                      "code": "502 BAD_GATEWAY",
+                                      "message": "Card payment could not be started — please try again in a moment or pay another way",
                                       "data": null
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
                     description = "The product service (booking-service / marketplace-service / "
                             + "loyalty-service) could not be read, or could not extend the hold before "
-                            + "anything was minted. Nothing was charged; retry the same request",
+                            + "anything was minted. Nothing was charged; retry the same request. Or the "
+                            + "chosen Paynow option is not set up on this deployment: do not retry, offer "
+                            + "another payment method",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "booking-service unreachable", value = """
@@ -534,6 +699,13 @@ public class PaymentController {
                                             {
                                               "code": "503 SERVICE_UNAVAILABLE",
                                               "message": "We could not secure your order right now; please try again shortly",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "PAYNOW_CARD / ONEMONEY / OMARI not set up on this deployment — offer another method", value = """
+                                            {
+                                              "code": "503 SERVICE_UNAVAILABLE",
+                                              "message": "Card payment is not available on this deployment",
                                               "data": null
                                             }
                                             """)
@@ -673,6 +845,32 @@ public class PaymentController {
                     return toReplayResponse(afterCheck, key);
                 }
             } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
+                    && p.getPaymentRail() != null && p.getPaymentRail().isPaynow()
+                    && paynowPaymentService != null) {
+                // Paynow twin of the instant checks: a status check (spaced by
+                // paynow.check-min-gap) instead of a blind replay. Same
+                // resolver as the result URL and the sweep. A start still
+                // waiting for Paynow's reply is not checked: it replays "in
+                // progress".
+                var paynowCheck = paynowPaymentService.startInFlight(p)
+                        ? innbucks.paymentservice.service.PaynowPaymentService.CheckOutcome.OPEN
+                        : paynowPaymentService.resolveOpen(p,
+                                innbucks.paymentservice.service.PaynowPaymentService.Trigger.CUSTOMER);
+                if (paynowCheck == innbucks.paymentservice.service.PaynowPaymentService.CheckOutcome.CLOSED) {
+                    // Closed unpaid just now (slot freed): fall through to the
+                    // start. A prompt that lapsed starts fresh; one the customer
+                    // cancelled or their wallet declined is answered by the
+                    // start's decline hold with that decline, never a new prompt.
+                    log.info("POST /payments paynow instant-check closed orderType={} orderRef={} — to the start",
+                            key.type(), key.ref());
+                } else {
+                    // Re-read: a check can park the row IN_DOUBT and still answer OPEN.
+                    Payment afterCheck = paymentRepository.findById(p.getId()).orElse(p);
+                    log.info("POST /payments paynow replay orderType={} orderRef={} paymentReference={} status={}",
+                            key.type(), key.ref(), p.getPaymentReference(), afterCheck.getStatus());
+                    return toReplayResponse(afterCheck, key);
+                }
+            } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
                     && p.getInnbucksCode() != null) {
                 // Customer-triggered instant check ("I've paid" / page refresh):
                 // ask InnBucks NOW instead of replaying blindly — confirmation
@@ -753,6 +951,12 @@ public class PaymentController {
                 return toEcocashResponse(
                         ecocashPaymentService.startCharge(key.type(), key.ref()), key);
             }
+            if (rail.isPaynow()) {
+                if (paynowPaymentService == null) {
+                    return error(HttpStatus.SERVICE_UNAVAILABLE, "This payment method is not available on this deployment");
+                }
+                return toPaynowResponse(paynowPaymentService.start(rail, key.type(), key.ref()), key);
+            }
             outcome = innbucksPaymentService.processPayment(key.type(), key.ref(), null, null);
         } catch (BookingConfirmationException e) {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
@@ -761,6 +965,16 @@ public class PaymentController {
         } catch (innbucks.paymentservice.service.EcocashPaymentService.EcocashDeclinedException e) {
             // EcoCash just declined this order's charge: answer with that
             // decline and its reason instead of charging (and texting) again.
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
+                    ApiResult.<PaymentResponse>builder()
+                            .code(HttpStatus.BAD_REQUEST.value() + " " + HttpStatus.BAD_REQUEST.name())
+                            .message(e.getMessage())
+                            .data(terminalResponse(e.declined(), key, e.retryAfterSeconds()))
+                            .build());
+        } catch (innbucks.paymentservice.service.PaynowPaymentService.PaynowDeclinedException e) {
+            // The customer cancelled (or their wallet declined) this order's
+            // OneMoney prompt or O'mari code moments ago: answer with that,
+            // the same shape as an EcoCash decline, instead of prompting again.
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
                     ApiResult.<PaymentResponse>builder()
                             .code(HttpStatus.BAD_REQUEST.value() + " " + HttpStatus.BAD_REQUEST.name())
@@ -912,13 +1126,66 @@ public class PaymentController {
                 "Approve the payment prompt on your phone to complete your " + noun, response));
     }
 
+    /** Map a fresh Paynow start onto the stub's response contract. */
+    private ResponseEntity<ApiResult<PaymentResponse>> toPaynowResponse(
+            innbucks.paymentservice.service.PaynowPaymentService.StartOutcome outcome, OrderKey key) {
+        if (outcome.failed()) {
+            HttpStatus status = HttpStatus.resolve(outcome.failureStatus());
+            return error(status == null ? HttpStatus.BAD_REQUEST : status,
+                    outcome.failureMessage() != null ? outcome.failureMessage() : "Payment was rejected");
+        }
+        Payment p = outcome.payment();
+        innbucks.paymentservice.entity.PaymentRail rail = p.getPaymentRail();
+        boolean card = rail == innbucks.paymentservice.entity.PaymentRail.PAYNOW_CARD;
+        LocalDateTime expires = outcome.expiresAt() == null ? null
+                : LocalDateTime.ofInstant(outcome.expiresAt(), ZoneOffset.UTC);
+        PaymentResponse response = PaymentResponse.builder()
+                .transactionId(p.getId())
+                .bookingId(p.getBookingId())
+                .orderType(key.type())
+                .orderRef(key.ref())
+                .status(PaymentResponse.Status.PROCESSING)
+                .amountPaid(p.getAmount())
+                .currency(p.getCurrency() != null ? p.getCurrency() : cellCurrency)
+                .processedAt(LocalDateTime.now(ZoneOffset.UTC))
+                .paymentRail(rail)
+                .stage(PaymentResponse.Stage.AWAITING_PAYMENT)
+                .redirectUrl(card ? outcome.redirectUrl() : null)
+                .checkoutExpiresAt(card ? expires : null)
+                .promptExpiresAt(card ? null : expires)
+                .otpReference(outcome.otpReference())
+                .build();
+        log.info("Paynow payment started transactionId={} rail={} orderType={} orderRef={}",
+                response.getTransactionId(), rail, key.type(), key.ref());
+        return ResponseEntity.ok(ApiResult.ok(paynowAwaitingMessage(rail, key), response));
+    }
+
+    /** What a customer is told while a Paynow payment waits on them. */
+    private static String paynowAwaitingMessage(innbucks.paymentservice.entity.PaymentRail rail, OrderKey key) {
+        String noun = key.type() == OrderType.BOOKING ? "booking" : "order";
+        return switch (rail) {
+            case PAYNOW_CARD -> "Pay on the Paynow page to complete your " + noun;
+            case ONEMONEY -> "Approve the OneMoney prompt on your phone to complete your " + noun;
+            case OMARI -> "Enter the code O'mari sent to your phone to complete your " + noun;
+            default -> "Complete the payment to complete your " + noun;
+        };
+    }
+
     private ResponseEntity<ApiResult<PaymentResponse>> toReplayResponse(Payment p, OrderKey key) {
         return ResponseEntity.ok(replayResult(p, key));
     }
 
     /** The replay receipt and its prose, for {@link #toReplayResponse} and the reads built on it. */
     private ApiResult<PaymentResponse> replayResult(Payment p, OrderKey key) {
-        PaymentResponse.Status status = switch (p.getStatus()) {
+        // A Paynow attempt we closed unpaid that Paynow then reported PAID
+        // (the card page outlived our deadline): handed to an operator, its
+        // status left as it was. On a closed row that is the only operator
+        // case, so the flag means "the customer paid". Never answer it with
+        // "nothing was charged; you can pay again".
+        boolean paidAfterClose = p.getPaymentRail() != null && p.getPaymentRail().isPaynow()
+                && p.getPaynowFlaggedAt() != null
+                && (p.getStatus() == Payment.PaymentStatus.FAILED || p.getStatus() == Payment.PaymentStatus.EXPIRED);
+        PaymentResponse.Status status = paidAfterClose ? PaymentResponse.Status.PROCESSING : switch (p.getStatus()) {
             case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
             // Terminal unpaid attempts — read by GET /payments/{id} only.
             case FAILED, EXPIRED, REJECTED -> PaymentResponse.Status.FAILED;
@@ -933,12 +1200,20 @@ public class PaymentController {
         // unconfirmed rows keep their code hidden too: that code is spent.
         boolean cardRow = p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD;
         boolean ecocashRow = p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.ECOCASH;
+        boolean paynowRow = p.getPaymentRail() != null && p.getPaymentRail().isPaynow();
+        boolean paynowCard = p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.PAYNOW_CARD;
+        boolean omariRow = p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.OMARI;
+        // The InnBucks code fields belong to the code rail alone.
+        boolean codeRow = !cardRow && !ecocashRow && !paynowRow;
         boolean codeStillLive = p.getCodeExpiresAt() == null
                 || p.getCodeExpiresAt().isAfter(java.time.Instant.now());
         boolean hasOpenInstrument = p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
                 && codeStillLive
                 && (cardRow ? p.getCheckoutId() != null
                         : ecocashRow ? p.getEcocashClientCorrelator() != null
+                        : paynowCard ? p.getPaynowBrowserUrl() != null
+                        : omariRow ? p.getPaynowOtpUrl() != null
+                        : paynowRow ? p.getPaynowTrace() != null
                         : p.getInnbucksCode() != null);
         // Card rows re-surface the SAME open checkout (the gateway's
         // documented reuse model — reload/back-button/declined-retry all
@@ -961,6 +1236,10 @@ public class PaymentController {
         } else if (cardRow && hasOpenInstrument) {
             // Live checkout we cannot render on this cell.
             stage = PaymentResponse.Stage.PAYMENT_UNAVAILABLE;
+        } else if (paynowRow && paynowPaymentService != null && paynowPaymentService.startInFlight(p)) {
+            // A card or O'mari start still waiting for Paynow's reply (a
+            // second tap, a reload): no page or code yet, nothing expired.
+            stage = PaymentResponse.Stage.IN_PROGRESS;
         } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED) {
             stage = PaymentResponse.Stage.INSTRUMENT_EXPIRED;
         } else if (p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED) {
@@ -972,6 +1251,9 @@ public class PaymentController {
             // either rail without customer action (code approval / card
             // entry), so "not captured" is safe here.
             stage = PaymentResponse.Stage.IN_PROGRESS;
+        } else if (paidAfterClose) {
+            // Money moved after we closed the attempt; an operator decides.
+            stage = PaymentResponse.Stage.VERIFYING;
         } else if (p.getStatus() == Payment.PaymentStatus.FAILED) {
             // Terminal, provider said no money moved. Only GET /payments/{id}
             // and the EcoCash decline answer reach here: POST replays active
@@ -1004,28 +1286,36 @@ public class PaymentController {
                 .confirmationNumber(p.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .paymentRail(p.getPaymentRail())
-                .paymentCode(!cardRow && !ecocashRow && awaitingApproval ? p.getInnbucksCode() : null)
-                .paymentCodeExpiresAt(!cardRow && !ecocashRow && awaitingApproval && p.getCodeExpiresAt() != null
+                .paymentCode(codeRow && awaitingApproval ? p.getInnbucksCode() : null)
+                .paymentCodeExpiresAt(codeRow && awaitingApproval && p.getCodeExpiresAt() != null
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
-                .paymentQrCode(!cardRow && !ecocashRow && awaitingApproval ? p.getCodeQrBase64() : null)
-                .promptExpiresAt(ecocashRow && awaitingApproval && p.getCodeExpiresAt() != null
+                .paymentQrCode(codeRow && awaitingApproval ? p.getCodeQrBase64() : null)
+                .promptExpiresAt((ecocashRow || (paynowRow && !paynowCard)) && awaitingApproval
+                        && p.getCodeExpiresAt() != null
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
+                .redirectUrl(paynowCard && awaitingApproval ? p.getPaynowBrowserUrl() : null)
+                .otpReference(omariRow && awaitingApproval ? p.getPaynowOtpReference() : null)
                 .checkoutId(cardArtifacts != null ? cardArtifacts.checkoutId() : null)
                 .checkoutScriptUrl(cardArtifacts != null ? cardArtifacts.widgetScriptUrl() : null)
                 .checkoutIntegrity(cardArtifacts != null ? cardArtifacts.checkoutIntegrity() : null)
                 .checkoutBrands(cardArtifacts != null ? cardArtifacts.brands() : null)
                 .shopperResultUrl(cardArtifacts != null ? cardArtifacts.shopperResultUrl() : null)
-                .checkoutExpiresAt(cardArtifacts != null && p.getCodeExpiresAt() != null
+                .checkoutExpiresAt((cardArtifacts != null || (paynowCard && awaitingApproval))
+                        && p.getCodeExpiresAt() != null
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
                 .failureReason(stage == PaymentResponse.Stage.DECLINED
-                        ? innbucks.paymentservice.service.EcocashPaymentService.declineReason(p) : null)
+                        ? (paynowRow ? innbucks.paymentservice.service.PaynowPaymentService.declineReason(p)
+                                : innbucks.paymentservice.service.EcocashPaymentService.declineReason(p))
+                        : null)
                 .build();
         // Prose for humans, derived FROM the stage above — never the other way
         // round. Clients must branch on `stage`, never on this text: it is
         // reworded freely and will be localised.
         String message = switch (stage) {
             case COMPLETED -> "Payment processed successfully";
-            case AWAITING_PAYMENT -> cardRow
+            case AWAITING_PAYMENT -> paynowRow
+                    ? paynowAwaitingMessage(p.getPaymentRail(), key)
+                    : cardRow
                     ? "Enter your card details to complete your " + noun
                     : ecocashRow
                     ? "Approve the payment prompt on your phone to complete your " + noun
@@ -1036,18 +1326,24 @@ public class PaymentController {
             // counter are what actually get an operator to fix the config.
             case PAYMENT_UNAVAILABLE -> "Card payment is temporarily unavailable — please try again shortly "
                     + "or contact support if this persists";
-            case INSTRUMENT_EXPIRED -> cardRow
+            case INSTRUMENT_EXPIRED -> paynowRow
+                    ? "Your previous payment expired — tap Pay again to start a new one"
+                    : cardRow
                     ? "Your previous card checkout expired — tap Pay again to start a new one"
                     : ecocashRow
                     ? "Your previous payment prompt expired — tap Pay again to get a fresh one"
                     : "Your previous payment code expired — tap Pay again in a moment to get a fresh one";
             case PAYMENT_RECEIVED -> "Payment received; your " + noun + " is being confirmed";
             case IN_PROGRESS -> "Your payment is already being processed — please retry in a moment";
-            case VERIFYING -> "Your payment is being verified — contact support if this persists";
+            case VERIFYING -> paidAfterClose
+                    ? "We received your payment after this attempt had timed out. Don't pay again: support will "
+                            + "confirm your " + noun + " or refund you."
+                    : "Your payment is being verified — contact support if this persists";
             case DECLINED -> cardDeclined
                     ? CARD_DECLINED_MESSAGE
                     : response.getFailureReason() != null
-                    ? "EcoCash: " + response.getFailureReason()
+                    ? (paynowRow ? innbucks.paymentservice.service.PaynowPaymentService.methodLabel(p.getPaymentRail())
+                            : "EcoCash") + ": " + response.getFailureReason()
                     : "The payment didn't go through. Nothing was charged.";
             case LAPSED -> "The payment wasn't completed in time. Nothing was charged; you can pay again.";
         };
@@ -1186,11 +1482,135 @@ public class PaymentController {
             return error(HttpStatus.NOT_FOUND, "Payment not found");
         }
         ApiResult<PaymentResponse> answer = replayResult(p, new OrderKey(p.getOrderType(), p.getOrderRef()));
-        Long hold = ecocashPaymentService.declineHoldRemaining(p);
+        // Each rail's own decline hold answers for its own attempts.
+        Long hold = p.getPaymentRail() != null && p.getPaymentRail().isPaynow()
+                ? (paynowPaymentService != null ? paynowPaymentService.declineHoldRemaining(p) : null)
+                : ecocashPaymentService.declineHoldRemaining(p);
         if (hold != null) {
             answer.getData().setRetryAfterSeconds(hold);
         }
         return ResponseEntity.ok(answer);
+    }
+
+    @PostMapping("/{transactionId}/otp")
+    @Operation(
+            summary = "Send the code O'mari texted the customer (OMARI payments; no login required)",
+            description = "For a payment started with `paymentRail=OMARI`: O'mari texts the booking's phone a code, "
+                    + "the customer types it into the checkout, and this sends it on. Public like `POST /payments`: "
+                    + "the `transactionId` from that response is the key.\n\n"
+                    + "The answer is the payment as it now stands (the same body as `GET /payments/{transactionId}`): "
+                    + "`stage` COMPLETED when the payment went through, AWAITING_PAYMENT while O'mari is still "
+                    + "confirming. A code sent again for a payment that already went through answers 200 with "
+                    + "that payment; O'mari is not asked again. A wrong code is a 400 and the customer can try "
+                    + "again; O'mari cancels the payment after 5 wrong codes (stage DECLINED), and a new payment "
+                    + "is needed.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Code accepted",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Payment processed successfully",
+                              "data": {
+                                "transactionId": "c4d5e6f7-8901-2345-6789-abcdef012345",
+                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                "orderType": "BOOKING",
+                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                "status": "SUCCESS",
+                                "stage": "COMPLETED",
+                                "fundsCaptured": true,
+                                "amountPaid": 100.00,
+                                "currency": "USD",
+                                "confirmationNumber": "INN-20261125-941C78",
+                                "paymentRail": "OMARI"
+                              }
+                            }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "The code was not accepted, or is not a code",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Wrong code", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "That code was not accepted. Check the SMS from O'mari and try again.",
+                                      "data": null
+                                    }
+                                    """),
+                            @ExampleObject(name = "Not digits", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Enter the code from the SMS O'mari sent you",
+                                      "data": null
+                                    }
+                                    """)})),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No O'mari payment has this id",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "404 NOT_FOUND",
+                              "message": "Payment not found",
+                              "data": null
+                            }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "The payment is over (declined, cancelled or lapsed); `data` says how it ended",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "409 CONFLICT",
+                              "message": "This payment is no longer waiting for a code — start a new payment",
+                              "data": {
+                                "transactionId": "c4d5e6f7-8901-2345-6789-abcdef012345",
+                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                "orderType": "BOOKING",
+                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                "status": "FAILED",
+                                "stage": "DECLINED",
+                                "fundsCaptured": false,
+                                "amountPaid": 100.00,
+                                "currency": "USD",
+                                "paymentRail": "OMARI"
+                              }
+                            }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502",
+                    description = "O'mari could not be reached; follow the payment with GET /payments/{transactionId}",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "502 BAD_GATEWAY",
+                              "message": "We could not reach O'mari. Wait a moment, then check your payment.",
+                              "data": null
+                            }
+                            """)))
+    })
+    public ResponseEntity<ApiResult<PaymentResponse>> submitOtp(
+            @org.springframework.web.bind.annotation.PathVariable String transactionId,
+            @Valid @RequestBody innbucks.paymentservice.dto.PaymentOtpRequest request) {
+        UUID id;
+        try {
+            id = UUID.fromString(transactionId);
+        } catch (IllegalArgumentException e) {
+            return error(HttpStatus.NOT_FOUND, "Payment not found");
+        }
+        if (paynowPaymentService == null) {
+            return error(HttpStatus.NOT_FOUND, "Payment not found");
+        }
+        var outcome = paynowPaymentService.submitOtp(id, request.getOtp());
+        if (outcome.httpStatus() == 409 && outcome.payment() != null) {
+            // Over (declined, cancelled or lapsed): say how it ended, so the
+            // checkout branches on `stage` rather than on the prose.
+            Payment over = outcome.payment();
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                    ApiResult.<PaymentResponse>builder()
+                            .code(HttpStatus.CONFLICT.value() + " " + HttpStatus.CONFLICT.name())
+                            .message(outcome.message())
+                            .data(replayResult(over, new OrderKey(over.getOrderType(), over.getOrderRef())).getData())
+                            .build());
+        }
+        if (outcome.httpStatus() != 200 || outcome.payment() == null) {
+            HttpStatus status = HttpStatus.resolve(outcome.httpStatus());
+            return error(status == null ? HttpStatus.BAD_REQUEST : status, outcome.message());
+        }
+        Payment p = outcome.payment();
+        return ResponseEntity.ok(replayResult(p, new OrderKey(p.getOrderType(), p.getOrderRef())));
     }
 
     /**

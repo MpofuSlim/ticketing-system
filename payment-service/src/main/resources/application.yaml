@@ -128,6 +128,11 @@ payment-service:
   # webhook only fast-paths into the same resolver).
   ecocash-poll:
     interval: ${ECOCASH_POLL_INTERVAL:PT20S}
+  # Paynow sweep cadence. Paynow's result-URL update is the usual path and
+  # Paynow asks merchants not to poll for no reason, so the sweep only checks
+  # payments that need it (see PaymentResolutionJob.pollPaynowPayments).
+  paynow-poll:
+    interval: ${PAYNOW_POLL_INTERVAL:PT30S}
   recon:
     cron: ${RECON_CRON:0 30 2 * * *}
 
@@ -180,6 +185,15 @@ resilience4j:
         exponential-backoff-multiplier: 2
         retry-exceptions:
           - innbucks.paymentservice.client.EcocashApiTransientException
+      # Retries apply to the read-only poll and trace only — initiate and the
+      # O'mari code are invoked outside the retry decorator (never retried).
+      paynow:
+        max-attempts: 3
+        wait-duration: 500ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - innbucks.paymentservice.client.PaynowApiTransientException
   circuitbreaker:
     instances:
       innbucks-api:
@@ -215,6 +229,17 @@ resilience4j:
         automatic-transition-from-open-to-half-open-enabled: true
         record-exceptions:
           - innbucks.paymentservice.client.EcocashApiTransientException
+      paynow:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - innbucks.paymentservice.client.PaynowApiTransientException
 
 innbucks-api:
   base-url: ${BANK_API_URL:https://staging.innbucks.co.zw}
@@ -284,6 +309,46 @@ ecocash:
   # EcoCash charge for that order is refused for this long, with EcoCash's
   # reason, instead of sending the customer another SMS. 0 switches it off.
   decline-hold: ${ECOCASH_DECLINE_HOLD:PT2M}
+
+# Paynow — PAYNOW_CARD (card on Paynow's page), ONEMONEY and OMARI (express
+# checkout); tickets only (docs/api/paynow.md). One integration per currency:
+# blank id/key = no Paynow in that currency (a clean 503 / 422), the other
+# rails unaffected. The keys are SECRETS: set them only in a host's local env.
+# result-url must be the ABSOLUTE public edge URL (prefix included): Paynow
+# posts status updates to it from the public internet. auth-email is required
+# for OneMoney/O'mari, and in TEST MODE must be a login email of the merchant.
+paynow:
+  base-url: ${PAYNOW_BASE_URL:https://www.paynow.co.zw}
+  allowed-hosts: ${PAYNOW_ALLOWED_HOSTS:www.paynow.co.zw}
+  usd-integration-id: ${PAYNOW_USD_INTEGRATION_ID:}
+  usd-integration-key: ${PAYNOW_USD_INTEGRATION_KEY:}
+  zwg-integration-id: ${PAYNOW_ZWG_INTEGRATION_ID:}
+  zwg-integration-key: ${PAYNOW_ZWG_INTEGRATION_KEY:}
+  result-url: ${PAYNOW_RESULT_URL:}
+  return-url: ${PAYNOW_RETURN_URL:}
+  auth-email: ${PAYNOW_AUTH_EMAIL:}
+  connect-timeout-ms: ${PAYNOW_CONNECT_TIMEOUT_MS:3000}
+  read-timeout-ms: ${PAYNOW_READ_TIMEOUT_MS:20000}
+  card-ttl: ${PAYNOW_CARD_TTL:PT30M}
+  mobile-ttl: ${PAYNOW_MOBILE_TTL:PT10M}
+  check-min-gap: ${PAYNOW_CHECK_MIN_GAP:PT15S}
+  recheck-every: ${PAYNOW_RECHECK_EVERY:PT2M}
+  # A OneMoney/O'mari attempt declined or cancelled moments ago holds a new
+  # one for the same order on that rail (EcoCash's decline hold). 0 = off.
+  decline-hold: ${PAYNOW_DECLINE_HOLD:PT2M}
+  max-prompts-per-number: ${PAYNOW_MAX_PROMPTS_PER_NUMBER:5}
+  prompts-per-number-window: ${PAYNOW_PROMPTS_PER_NUMBER_WINDOW:PT15M}
+  # Paynow's OneMoney test numbers (0771111111 to 0774444444) are refused
+  # unless this is true. While an integration is in test mode Paynow reports
+  # them PAID with no money moved, so only a staging host sets it.
+  test-numbers-allowed: ${PAYNOW_TEST_NUMBERS_ALLOWED:false}
+  # After we close a payment unpaid, keep checking it for a late payment.
+  closed-recheck-for: ${PAYNOW_CLOSED_RECHECK_FOR:PT24H}
+  closed-recheck-first-hour-every: ${PAYNOW_CLOSED_RECHECK_FIRST_HOUR_EVERY:PT15M}
+  closed-recheck-later-every: ${PAYNOW_CLOSED_RECHECK_LATER_EVERY:PT3H}
+  # One sweep run stops starting checks after this; the scheduler thread is
+  # shared with every other rail's poller.
+  sweep-run-budget: ${PAYNOW_SWEEP_RUN_BUDGET:PT25S}
 
 payments:
   innbucks:

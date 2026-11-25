@@ -249,15 +249,17 @@ public class PaymentResponse {
      * COPYandPAY widget from the checkout fields below; {@code ECOCASH} —
      * nothing to render: tell the customer to approve the PIN prompt on
      * their phone and poll, with {@code promptExpiresAt} driving the
-     * countdown).
+     * countdown; {@code PAYNOW_CARD} — send the browser to
+     * {@code redirectUrl}; {@code ONEMONEY} — like ECOCASH; {@code OMARI} —
+     * ask for the code O'mari texted, beside {@code otpReference}).
      */
     private innbucks.paymentservice.entity.PaymentRail paymentRail;
 
     /**
-     * ECOCASH only: when the customer's wallet PIN prompt lapses locally.
+     * ECOCASH, ONEMONEY and OMARI: when the prompt (or O'mari's code) lapses locally.
      * Present while {@code stage=AWAITING_PAYMENT}; after it passes, a fresh
-     * Pay tap starts a new charge. UTC with the {@code Z} designator like
-     * every other timestamp.
+     * Pay tap starts a new charge. Rendered at the market's offset, like every
+     * customer-facing timestamp.
      */
     private LocalDateTime promptExpiresAt;
 
@@ -276,6 +278,27 @@ public class PaymentResponse {
      */
     @io.swagger.v3.oas.annotations.media.Schema(nullable = true, example = "104")
     private Long retryAfterSeconds;
+
+    /**
+     * PAYNOW_CARD only, while {@code stage=AWAITING_PAYMENT}: Paynow's page for
+     * this payment. Send the customer's browser there (a full redirect, not a
+     * frame); Paynow sends them back to the website's return page with
+     * {@code transactionId} on the URL, and the page follows
+     * {@code GET /payments/{transactionId}}. {@code checkoutExpiresAt} is when
+     * we stop waiting. Always a Paynow URL: we refuse any other host.
+     */
+    @io.swagger.v3.oas.annotations.media.Schema(nullable = true,
+            example = "https://www.paynow.co.zw/Payment/ConfirmPayment/9510")
+    private String redirectUrl;
+
+    /**
+     * OMARI only, while {@code stage=AWAITING_PAYMENT}: the reference of the
+     * code O'mari texted the customer, to show beside the box they type it
+     * into (so they pick the right SMS). The code itself goes to
+     * {@code POST /payments/{transactionId}/otp}.
+     */
+    @io.swagger.v3.oas.annotations.media.Schema(nullable = true, example = "OTP-7731")
+    private String otpReference;
 
     /**
      * ZimSwitch COPYandPAY widget artifacts, present while a card checkout

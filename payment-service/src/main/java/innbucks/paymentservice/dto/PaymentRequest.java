@@ -40,7 +40,11 @@ public class PaymentRequest {
                     + "ZIMSWITCH_CARD returns COPYandPAY widget artifacts (checkoutId + script URL + "
                     + "integrity) for card entry instead. ECOCASH pushes a wallet PIN prompt to the "
                     + "order's phone number — nothing to render; show 'approve on your phone' and poll "
-                    + "(promptExpiresAt drives the countdown). One active payment per order across ALL "
+                    + "(promptExpiresAt drives the countdown). Tickets only, through Paynow: PAYNOW_CARD "
+                    + "returns redirectUrl, Paynow's page for a card payment (Visa/Mastercard or ZimSwitch); "
+                    + "ONEMONEY pushes a OneMoney prompt to the booking's phone, like ECOCASH; OMARI makes "
+                    + "O'mari text the customer a code, sent back with POST /payments/{transactionId}/otp. "
+                    + "One active payment per order across ALL "
                     + "rails: while an attempt is open on one rail, POSTing with another returns "
                     + "the open attempt's receipt unchanged (switch rails after it lapses).")
     private innbucks.paymentservice.entity.PaymentRail paymentRail;

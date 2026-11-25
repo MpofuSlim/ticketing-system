@@ -77,9 +77,10 @@ public class BookingResponseDTO {
     // at confirm. Absent when not recorded (an unpaid booking, or one
     // confirmed before V29 that the backfill did not reach).
     @io.swagger.v3.oas.annotations.media.Schema(example = "ECOCASH", nullable = true,
-            allowableValues = {"INNBUCKS", "ECOCASH", "CARD"},
-            description = "How the booking was paid: INNBUCKS (an InnBucks code), ECOCASH, or CARD "
-                    + "(a ZimSwitch-enabled bank card). Absent when not recorded. A rail added later "
+            allowableValues = {"INNBUCKS", "ECOCASH", "CARD", "PAYNOW_CARD", "ONEMONEY", "OMARI"},
+            description = "How the booking was paid: INNBUCKS (an InnBucks code), ECOCASH, CARD "
+                    + "(a ZimSwitch-enabled bank card), or through Paynow: PAYNOW_CARD (a bank card on "
+                    + "Paynow's page), ONEMONEY, OMARI. Absent when not recorded. A rail added later "
                     + "appears under its own name, so treat an unknown value as a label, not an error.")
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     private String paymentMethod;

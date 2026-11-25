@@ -12,6 +12,10 @@ import java.util.regex.Pattern;
  *   <li>{@code ZIMSWITCH_CARD} → {@code CARD}, "Bank card (ZimSwitch)". Not
  *       "Visa/Mastercard": ZimSwitch takes ZimSwitch-enabled cards only on our
  *       channel ({@code docs/api/zimswitch-copyandpay.md}).</li>
+ *   <li>Through Paynow ({@code docs/api/paynow.md}), each under its own name:
+ *       {@code PAYNOW_CARD}, "Bank card (Paynow)" (Visa/Mastercard or a
+ *       ZimSwitch card on Paynow's page); {@code ONEMONEY}, "OneMoney";
+ *       {@code OMARI}, "O'mari".</li>
  * </ul>
  * A rail this class does not know yet is shown by its own name, so a rail
  * payment-service adds later is never hidden. No rail = null (not recorded).
@@ -39,7 +43,10 @@ public final class PaymentMethods {
      */
     public static final String CASH = "CASH";
 
-    /** The method code for a stored rail: INNBUCKS, ECOCASH, CARD, CASH, the rail itself, or null. */
+    /**
+     * The method code for a stored rail: INNBUCKS, ECOCASH, CARD, CASH, the rail
+     * itself (PAYNOW_CARD, ONEMONEY, OMARI, or one added later), or null.
+     */
     public static String code(String rail) {
         if (rail == null) return null;
         return switch (rail) {
@@ -58,6 +65,9 @@ public final class PaymentMethods {
             case "INNBUCKS_CODE" -> "InnBucks";
             case "ECOCASH" -> "EcoCash";
             case "ZIMSWITCH_CARD" -> "Bank card (ZimSwitch)";
+            case "PAYNOW_CARD" -> "Bank card (Paynow)";
+            case "ONEMONEY" -> "OneMoney";
+            case "OMARI" -> "O'mari";
             case CASH -> "Cash (box office)";
             default -> rail;
         };

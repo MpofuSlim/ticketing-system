@@ -222,6 +222,28 @@ class PaymentResolutionJobTest {
     }
 
     @Test
+    void scanPayments_unconfirmedRetry_skipsARowParkedSinceThePageWasRead() {
+        // A Paynow refund parks a paid-but-unconfirmed row IN_DOUBT so no
+        // tickets are issued for it; the retry's page can be older than that.
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        BookingServiceClient bookings = mock(BookingServiceClient.class);
+        PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
+        Payment unconfirmed = paymentRow(Payment.PaymentStatus.COMPLETED_UNCONFIRMED,
+                Instant.now().minus(Duration.ofMinutes(3)));
+        when(payments.findByStatus(eq(Payment.PaymentStatus.COMPLETED_UNCONFIRMED), any(Pageable.class)))
+                .thenReturn(List.of(unconfirmed));
+        Payment parked = paymentRow(Payment.PaymentStatus.IN_DOUBT, unconfirmed.getCreatedAt());
+        parked.setId(unconfirmed.getId());
+        when(payments.findById(unconfirmed.getId())).thenReturn(java.util.Optional.of(parked));
+
+        newPaymentJob(payments, records, bookings, metrics).scanPayments();
+
+        verify(bookings, never()).confirmBooking(any(), any());
+        verify(records, never()).resolveUnconfirmed(any(), any());
+    }
+
+    @Test
     void scanPayments_unconfirmedRetryFailures_areIsolatedPerRow() {
         // One booking's persistent rejection must not stop the rest of the
         // queue from healing.
@@ -456,5 +478,73 @@ class PaymentResolutionJobTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+
+    // -- Paynow sweep --------------------------------------------------------------
+
+    private static PaymentResolutionJob paynowJob(innbucks.paymentservice.service.PaynowPaymentService paynow) {
+        PaymentResolutionJob job = new PaymentResolutionJob(mock(PaymentRepository.class),
+                mock(PaymentRecordService.class), mock(InnbucksApiClient.class),
+                new PaymentMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                mock(CodePaymentResolutionService.class), mock(ZimswitchCardPaymentService.class),
+                mock(innbucks.paymentservice.service.EcocashPaymentService.class),
+                mock(UnconfirmedPaymentAlerter.class), new ZimswitchProperties(), FIVE_MINUTES, 100);
+        job.setPaynowPaymentService(paynow);
+        return job;
+    }
+
+    @Test
+    void paynowSweep_checksTheDueOpenPayments_thenLooksAgainAtTheClosedOnes() {
+        var paynow = mock(innbucks.paymentservice.service.PaynowPaymentService.class);
+        Payment a = paymentRow(Payment.PaymentStatus.TOKEN_ISSUED, Instant.now());
+        Payment b = paymentRow(Payment.PaymentStatus.TOKEN_ISSUED, Instant.now());
+        Payment closed = paymentRow(Payment.PaymentStatus.EXPIRED, Instant.now());
+        when(paynow.openPaymentsDue(any(Instant.class), eq(100))).thenReturn(List.of(a, b));
+        when(paynow.closedPaymentsDue(any(Instant.class), eq(100))).thenReturn(List.of(closed));
+        when(paynow.isRailConfigured()).thenReturn(true);
+        when(paynow.sweepRunBudget()).thenReturn(Duration.ofSeconds(25));
+
+        paynowJob(paynow).pollPaynowPayments();
+
+        var sweep = innbucks.paymentservice.service.PaynowPaymentService.Trigger.SWEEP;
+        verify(paynow).resolveOpen(a, sweep);
+        verify(paynow).resolveOpen(b, sweep);
+        verify(paynow).recheckClosed(closed);
+    }
+
+    @Test
+    void paynowSweep_stopsStartingChecksOnceItsBudgetIsSpent() {
+        var paynow = mock(innbucks.paymentservice.service.PaynowPaymentService.class);
+        Payment slow = paymentRow(Payment.PaymentStatus.TOKEN_ISSUED, Instant.now());
+        Payment next = paymentRow(Payment.PaymentStatus.TOKEN_ISSUED, Instant.now());
+        Payment closed = paymentRow(Payment.PaymentStatus.EXPIRED, Instant.now());
+        when(paynow.openPaymentsDue(any(Instant.class), eq(100))).thenReturn(List.of(slow, next));
+        when(paynow.closedPaymentsDue(any(Instant.class), eq(100))).thenReturn(List.of(closed));
+        when(paynow.isRailConfigured()).thenReturn(true);
+        when(paynow.sweepRunBudget()).thenReturn(Duration.ofMillis(500));
+        when(paynow.resolveOpen(eq(slow), any())).thenAnswer(inv -> {
+            Thread.sleep(800);   // a Paynow that hangs past the budget
+            return innbucks.paymentservice.service.PaynowPaymentService.CheckOutcome.ERROR;
+        });
+
+        paynowJob(paynow).pollPaynowPayments();
+
+        verify(paynow).resolveOpen(eq(slow), any());
+        verify(paynow, never()).resolveOpen(eq(next), any());
+        verify(paynow, never()).recheckClosed(any());
+    }
+
+    @Test
+    void paynowSweep_withPaynowUnconfigured_checksNothing() {
+        var paynow = mock(innbucks.paymentservice.service.PaynowPaymentService.class);
+        when(paynow.openPaymentsDue(any(Instant.class), eq(100)))
+                .thenReturn(List.of(paymentRow(Payment.PaymentStatus.TOKEN_ISSUED, Instant.now())));
+        when(paynow.isRailConfigured()).thenReturn(false);
+
+        paynowJob(paynow).pollPaynowPayments();
+
+        verify(paynow, never()).resolveOpen(any(), any());
+        verify(paynow, never()).recheckClosed(any());
     }
 }

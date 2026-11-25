@@ -706,6 +706,45 @@ spring:
                     # Fail-SAFE: public machine endpoint — keep throttling if Redis is down.
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # Paynow's result URL: Paynow posts payment status updates here
+            # from the public internet, with no bearer. IP-keyed like the
+            # EcoCash notify, for the same reason; the handler acts on an
+            # update only when its hash verifies, and then only by polling
+            # Paynow. BEFORE the write catch-all so the IP keying applies.
+            - id: paynow-result-write-route
+              uri: lb://payment-service
+              predicates:
+                - Path=/payments/paynow/result
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${PAYMENTS_PAYNOW_RESULT_RATE_LIMIT_REPLENISH_PER_SECOND:5}
+                    redis-rate-limiter.burstCapacity: ${PAYMENTS_PAYNOW_RESULT_RATE_LIMIT_BURST_CAPACITY:20}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@paymentsInnbucksIpKeyResolver}"
+                    # Fail-SAFE: public machine endpoint — keep throttling if Redis is down.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
+            # O'mari's code (OMARI payments through Paynow): sent by the payer
+            # with no bearer, the transactionId as the key. IP-keyed and tight:
+            # O'mari allows 5 wrong codes before it cancels the payment, so
+            # nobody needs more than a few tries a minute. BEFORE the catch-all.
+            - id: payment-otp-write-route
+              uri: lb://payment-service
+              predicates:
+                - Path=/payments/{transactionId}/otp
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${PAYMENTS_OTP_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${PAYMENTS_OTP_RATE_LIMIT_BURST_CAPACITY:5}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@paymentsInnbucksIpKeyResolver}"
+                    # Fail-SAFE: public payment step — keep throttling if Redis is down.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: payment-service-write-route
               uri: lb://payment-service
               predicates:

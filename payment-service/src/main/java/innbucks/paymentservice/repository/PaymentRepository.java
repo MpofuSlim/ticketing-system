@@ -29,6 +29,26 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     Optional<Payment> findByIdempotencyKey(String idempotencyKey);
 
     /**
+     * The row, locked ({@code SELECT … FOR UPDATE}) until the caller's
+     * transaction ends. Every status change reads through this
+     * ({@code PaymentRecordService.transitionFrom}), so two writers that both
+     * saw a row open cannot both change it: the second waits, then reads the
+     * first one's result.
+     */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from Payment p where p.id = :id")
+    Optional<Payment> findByIdForUpdate(@Param("id") UUID id);
+
+    /**
+     * Mark a Paynow payment as handed to an operator, once. Returns 1 for the
+     * caller that set it and 0 for everyone after, so one case is raised once
+     * however many updates or re-checks report it.
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update Payment p set p.paynowFlaggedAt = :now where p.id = :id and p.paynowFlaggedAt is null")
+    int flagPaynowOperatorCase(@Param("id") UUID id, @Param("now") Instant now);
+
+    /**
      * EcoCash notify-webhook lookup: "which row is this notification about?"
      * The correlator is unique where present (uq_payment_ecocash_correlator),
      * and it is OUR value — an attacker guessing one gains nothing, since the
@@ -75,6 +95,82 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
      */
     List<Payment> findByStatusAndPaymentRail(
             Payment.PaymentStatus status, PaymentRail paymentRail, Pageable pageable);
+
+    /** Open payments on any of the Paynow rails (tests and support reads; the sweep uses {@link #findPaynowDue}). */
+    List<Payment> findByStatusAndPaymentRailIn(
+            Payment.PaymentStatus status, Collection<PaymentRail> paymentRails, Pageable pageable);
+
+    /**
+     * The Paynow sweep's rows: open Paynow payments that need a check now,
+     * least recently checked first. Due means one of:
+     * <ul>
+     *   <li>its initiate reply was lost (no poll URL) for more than
+     *       {@code noReplyBefore}'s 30 s: looked up by its trace;</li>
+     *   <li>past its deadline plus grace ({@code deadlineBefore}): closed or
+     *       confirmed;</li>
+     *   <li>not checked since {@code checkedBefore} (Paynow's update may have
+     *       been lost).</li>
+     * </ul>
+     * Filtering here, not in Java, keeps a page of payments that are not yet
+     * due from crowding out the ones that are (the card poller's rule,
+     * {@link #findOpenPastCeiling}). A check stamps {@code paynow_checked_at}
+     * before Paynow is asked, so a payment whose check keeps failing moves to
+     * the back of the order rather than holding the head.
+     */
+    @Query("""
+            select p from Payment p
+             where p.status = :status
+               and p.paymentRail in :rails
+               and ((p.paynowPollUrl is null and p.createdAt < :noReplyBefore)
+                 or (p.codeExpiresAt is not null and p.codeExpiresAt < :deadlineBefore)
+                 or (p.codeExpiresAt is null and p.createdAt < :createdBefore)
+                 or coalesce(p.paynowCheckedAt, p.createdAt) < :checkedBefore)
+             order by coalesce(p.paynowCheckedAt, p.createdAt) asc, p.createdAt asc
+            """)
+    List<Payment> findPaynowDue(
+            @Param("status") Payment.PaymentStatus status,
+            @Param("rails") Collection<PaymentRail> rails,
+            @Param("noReplyBefore") Instant noReplyBefore,
+            @Param("deadlineBefore") Instant deadlineBefore,
+            @Param("createdBefore") Instant createdBefore,
+            @Param("checkedBefore") Instant checkedBefore,
+            Pageable pageable);
+
+    /**
+     * Paynow payments we closed unpaid ({@code EXPIRED}) in the last day that
+     * are due a look, in case the customer paid after all and Paynow's update
+     * about it was lost: within the first hour of closing, every
+     * {@code firstHourGap}; then every {@code laterGap}. A payment handed to an
+     * operator ({@code paynow_flagged_at}) is never read again. Least recently
+     * checked first. Backed by {@code idx_payment_paynow_closed} (V19).
+     */
+    @Query("""
+            select p from Payment p
+             where p.status = :status
+               and p.paymentRail in :rails
+               and p.paynowFlaggedAt is null
+               and p.completedAt > :closedAfter
+               and ((p.completedAt > :firstHourAfter
+                     and coalesce(p.paynowCheckedAt, p.completedAt) < :firstHourCheckedBefore)
+                 or (p.completedAt <= :firstHourAfter
+                     and coalesce(p.paynowCheckedAt, p.completedAt) < :laterCheckedBefore))
+             order by coalesce(p.paynowCheckedAt, p.completedAt) asc
+            """)
+    List<Payment> findPaynowClosedDue(
+            @Param("status") Payment.PaymentStatus status,
+            @Param("rails") Collection<PaymentRail> rails,
+            @Param("closedAfter") Instant closedAfter,
+            @Param("firstHourAfter") Instant firstHourAfter,
+            @Param("firstHourCheckedBefore") Instant firstHourCheckedBefore,
+            @Param("laterCheckedBefore") Instant laterCheckedBefore,
+            Pageable pageable);
+
+    /** The per-number prompt cap for the Paynow phone rails (OneMoney, O'mari). */
+    long countByPaymentRailInAndCustomerMsisdnInAndCreatedAtAfter(
+            Collection<PaymentRail> paymentRails, Collection<String> customerMsisdns, Instant createdAfter);
+
+    Optional<Payment> findFirstByPaymentRailInAndCustomerMsisdnInAndCreatedAtAfterOrderByCreatedAtAsc(
+            Collection<PaymentRail> paymentRails, Collection<String> customerMsisdns, Instant createdAfter);
 
     /**
      * The card sweep's rows: open checkouts past their ceiling, oldest first.
