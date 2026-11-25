@@ -142,12 +142,11 @@ public class SupportLookupLimiter {
     /** The verdict from Redis, or null when Redis could not give a sane one. */
     private long[] viaRedis(String key) {
         try {
-            @SuppressWarnings("unchecked")
-            List<Object> out = (List<Object>) redis.execute(REDIS_SCRIPT, List.of(key),
+            Object reply = redis.execute(REDIS_SCRIPT, List.of(key),
                     String.valueOf(config.getShortWindow().toMillis()), String.valueOf(config.getShortWindowMax()),
                     String.valueOf(DAY.toMillis()), String.valueOf(config.getDailyMax()),
                     Long.toHexString(RANDOM.nextLong()));
-            if (out == null || out.size() != 2) {
+            if (!(reply instanceof List<?> out) || out.size() != 2) {
                 log.error("Support lookup limiter: Redis returned an unexpected reply; using the in-memory window");
                 return null;
             }

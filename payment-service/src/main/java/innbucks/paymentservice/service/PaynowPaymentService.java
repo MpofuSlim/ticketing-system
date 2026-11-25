@@ -305,8 +305,12 @@ public class PaynowPaymentService {
         } catch (PaynowApiException e) {
             // Paynow answered no: nothing was created, so closing frees the slot.
             boolean wallet = PHONE_RAILS.contains(rail);
+            // A wallet decline's message is shown to the customer (declineReason:
+            // the decline hold and GET's failureReason), so it holds Paynow's own
+            // words or nothing, never our exception text. With none, the customer
+            // reads "the payment didn't go through"; PaynowClient logged the refusal.
             paymentRecordService.markFailed(opened.getId(), wallet ? DECLINED_CODE : REFUSED_CODE,
-                    e.paynowError() != null ? e.paynowError() : e.getMessage());
+                    wallet ? e.paynowError() : (e.paynowError() != null ? e.paynowError() : e.getMessage()));
             metrics.incPaynowStart(rail.name(), wallet ? "declined" : "refused");
             String message = wallet && e.paynowError() != null
                     ? label + ": " + sentence(e.paynowError())
@@ -905,7 +909,7 @@ public class PaynowPaymentService {
      */
     private void requireNoRecentDecline(PaymentRail rail, OrderType orderType, String orderRef) {
         Payment last = paymentRecordService.latestOnRail(orderType, orderRef, rail).orElse(null);
-        Long seconds = declineHoldRemaining(last);
+        Long seconds = last == null ? null : declineHoldRemaining(last);
         if (seconds == null) {
             return;
         }

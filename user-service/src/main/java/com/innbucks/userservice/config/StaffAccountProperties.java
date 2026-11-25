@@ -98,11 +98,7 @@ public class StaffAccountProperties implements InitializingBean {
     @Override
     public void afterPropertiesSet() {
         this.domains = normaliseDomains(allowedEmailDomains);
-        Set<String> denied = new LinkedHashSet<>();
-        for (String part : deniedLocalParts == null ? List.<String>of() : deniedLocalParts) {
-            if (part != null && !part.isBlank()) denied.add(part.strip().toLowerCase(Locale.ROOT));
-        }
-        this.deniedLocalPartSet = Collections.unmodifiableSet(denied);
+        this.deniedLocalPartSet = normaliseLocalParts(deniedLocalParts);
         this.resolvedConsoleBaseUrl = normaliseConsoleUrl(consoleBaseUrl);
         if (invitePath == null || !invitePath.startsWith("/") || invitePath.contains("#")
                 || invitePath.contains("?") || invitePath.chars().anyMatch(c -> c < 0x21 || c > 0x7E)) {
@@ -128,6 +124,17 @@ public class StaffAccountProperties implements InitializingBean {
      * that is not a plain ASCII host name fails boot, with the offending entry
      * named so the operator can fix the env file.
      */
+    /** The denied local parts, stripped and lower-cased; blank or null entries skipped. */
+    static Set<String> normaliseLocalParts(List<String> raw) {
+        Set<String> out = new LinkedHashSet<>();
+        if (raw == null) return Collections.unmodifiableSet(out);
+        for (String part : raw) {
+            if (part == null || part.isBlank()) continue;
+            out.add(part.strip().toLowerCase(Locale.ROOT));
+        }
+        return Collections.unmodifiableSet(out);
+    }
+
     static Set<String> normaliseDomains(List<String> raw) {
         Set<String> out = new LinkedHashSet<>();
         if (raw == null) return Collections.unmodifiableSet(out);

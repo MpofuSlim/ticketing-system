@@ -9,6 +9,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.stereotype.Component;
 
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -29,7 +30,9 @@ public class SupportAgentResolver {
     public SupportAgent resolve(Authentication auth) {
         String subject = auth == null ? null : auth.getName();
         Set<String> authorities = auth == null ? Set.of()
-                : auth.getAuthorities().stream().map(GrantedAuthority::getAuthority).collect(Collectors.toSet());
+                : auth.getAuthorities().stream().map(GrantedAuthority::getAuthority)
+                        // getAuthority() may be null (a custom authority); SupportAgent copies with Set.copyOf.
+                        .filter(Objects::nonNull).collect(Collectors.toSet());
         if (subject == null || subject.isBlank()) {
             return new SupportAgent("anonymous", null, null, null, null, null, authorities);
         }

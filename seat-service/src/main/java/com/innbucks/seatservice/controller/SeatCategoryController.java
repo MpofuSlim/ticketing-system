@@ -250,7 +250,7 @@ public class SeatCategoryController {
     public ResponseEntity<ApiResult<CategoryCapacityDTO>> getCategoryCapacity(
             @Parameter(description = "Seat category UUID") @PathVariable UUID id
     ) {
-        log.debug("GET /seat-categories/{}", id);
+        log.debug("GET one seat category id={}", id);
         CategoryCapacityDTO result = categoryService.getCategoryCapacity(id);
         return ResponseEntity.ok(ApiResult.ok("Category retrieved successfully", result));
     }

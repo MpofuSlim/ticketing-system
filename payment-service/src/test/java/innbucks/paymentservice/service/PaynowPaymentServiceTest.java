@@ -40,6 +40,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -213,6 +214,38 @@ class PaynowPaymentServiceTest {
         assertThat(outcome.failureStatus()).isEqualTo(400);
         assertThat(outcome.failureMessage()).isEqualTo("OneMoney: Insufficient balance.");
         verify(records).markFailed(any(), eq(PaynowPaymentService.DECLINED_CODE), eq("Insufficient balance"));
+    }
+
+    @Test
+    @DisplayName("a wallet refusal with no reason from Paynow stores no message: our own text never reaches the customer")
+    void startExpress_declinedWithoutReason_storesNoMessage() {
+        payableBooking("+263712345678");
+        when(client.initiateExpress(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString()))
+                .thenThrow(new PaynowApiException("Paynow refused the payment", null));
+
+        var outcome = service.start(PaymentRail.ONEMONEY, OrderType.BOOKING, UUID.randomUUID().toString());
+
+        assertThat(outcome.failureStatus()).isEqualTo(400);
+        assertThat(outcome.failureMessage())
+                .isEqualTo("OneMoney could not start this payment — please try again or pay another way");
+        // declineReason reads this column for the decline hold and GET's failureReason.
+        verify(records).markFailed(any(), eq(PaynowPaymentService.DECLINED_CODE), isNull());
+
+        Payment declined = Payment.builder().paymentRail(PaymentRail.ONEMONEY)
+                .upstreamErrorCode(PaynowPaymentService.DECLINED_CODE).upstreamErrorMessage(null).build();
+        assertThat(PaynowPaymentService.declineReason(declined)).isNull();
+    }
+
+    @Test
+    @DisplayName("a card refusal with no reason keeps our text for the operator: a card's message is never shown")
+    void startWeb_refusedWithoutReason_keepsOurTextForOperators() {
+        payableBooking("+263712345678");
+        when(client.initiateWeb(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
+                .thenThrow(new PaynowApiException("Paynow refused the payment", null));
+
+        service.start(PaymentRail.PAYNOW_CARD, OrderType.BOOKING, UUID.randomUUID().toString());
+
+        verify(records).markFailed(any(), eq(PaynowPaymentService.REFUSED_CODE), eq("Paynow refused the payment"));
     }
 
     @Test

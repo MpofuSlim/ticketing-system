@@ -5,15 +5,29 @@ import innbucks.paymentservice.client.LoyaltyServiceClient;
 import innbucks.paymentservice.dto.ApiResult;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.time.temporal.Temporal;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Funnels every exception escaping a controller into the project's standard
@@ -164,6 +178,205 @@ public class GlobalExceptionHandler {
                 .message(ex.getMessage() == null ? status.getReasonPhrase() : ex.getMessage())
                 .data(null)
                 .build());
+    }
+
+    // ── Spring MVC's own request errors ──────────────────────────────────────
+    // The catch-all below is an @ExceptionHandler, and the @ExceptionHandler
+    // resolver runs BEFORE Spring's DefaultHandlerExceptionResolver, so every
+    // one of these used to answer 500 "internal error" for what is the
+    // caller's mistake: a bookingId that is not a UUID, a paymentRail that is
+    // not one of ours, a body that is not JSON, no Content-Type, the wrong
+    // verb. GlobalExceptionHandlerDispatchTest drives each through real
+    // dispatch; a handler body is never where this breaks.
+
+    /**
+     * A body Jackson could not bind. Same shape as bean validation, keyed by
+     * the Jackson path ({@code paymentRail}), so a client renders both with one
+     * code path. Neither the body nor Jackson's message is logged or returned:
+     * Jackson quotes the offending input, and a body can carry a phone number.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handle(HttpMessageNotReadableException ex) {
+        Map<String, String> fields = unreadableFields(ex);
+        log.warn("Unreadable request body fields={} cause={}", fields.keySet(),
+                ex.getMostSpecificCause().getClass().getSimpleName());
+        return validationFailed(fields);
+    }
+
+    /** A path variable or query parameter that cannot convert to its type. The value is not echoed. */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handle(MethodArgumentTypeMismatchException ex) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put(ex.getName(), expectation(ex.getRequiredType()));
+        log.warn("Parameter type mismatch param={} requiredType={}", ex.getName(),
+                ex.getRequiredType() == null ? null : ex.getRequiredType().getSimpleName());
+        return validationFailed(fields);
+    }
+
+    /** A required query parameter or header that is missing, keyed by its name. */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handle(MissingServletRequestParameterException ex) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put(ex.getParameterName(), "Required.");
+        return validationFailed(fields);
+    }
+
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handle(MissingRequestHeaderException ex) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put(ex.getHeaderName(), "Required.");
+        return validationFailed(fields);
+    }
+
+    /** No Content-Type, or one we do not read. */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResult<Void>> handle(HttpMediaTypeNotSupportedException ex) {
+        log.warn("Unsupported Content-Type {}", ex.getContentType());
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).body(ApiResult.<Void>builder()
+                .code("415 UNSUPPORTED_MEDIA_TYPE")
+                .message("Send the request body as JSON, with Content-Type: application/json.")
+                .data(null)
+                .build());
+    }
+
+    /**
+     * The wrong verb on a real path. {@code Allow} says which verbs work; the
+     * attempted verb is caller-chosen and is not echoed.
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResult<Void>> handle(HttpRequestMethodNotSupportedException ex) {
+        var response = ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED);
+        if (ex.getSupportedHttpMethods() != null && !ex.getSupportedHttpMethods().isEmpty()) {
+            response.allow(ex.getSupportedHttpMethods().toArray(new HttpMethod[0]));
+        }
+        return response.body(ApiResult.<Void>builder()
+                .code("405 METHOD_NOT_ALLOWED")
+                .message("This method is not allowed here.")
+                .data(null)
+                .build());
+    }
+
+    /** A path no controller serves. */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResult<Void>> handle(NoResourceFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResult.<Void>builder()
+                .code("404 NOT_FOUND")
+                .message("Not found")
+                .data(null)
+                .build());
+    }
+
+    private static ResponseEntity<ApiResult<Map<String, String>>> validationFailed(Map<String, String> fields) {
+        return ResponseEntity.badRequest().body(ApiResult.<Map<String, String>>builder()
+                .code("400 BAD_REQUEST")
+                .message("validation failed")
+                .data(fields)
+                .build());
+    }
+
+    /**
+     * {@code {"<jackson path>": "<what it must be>"}} for a body Jackson
+     * rejected, or {@code {"body": …}} when the failure has no field: broken
+     * JSON, JSON of the wrong kind ({@code []}, a bare string), or no body.
+     * The twin of booking-service's; change them together.
+     */
+    private static Map<String, String> unreadableFields(HttpMessageNotReadableException ex) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (Throwable t = ex.getCause(); t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof tools.jackson.core.JacksonException jackson) {
+                String path = jacksonPath(jackson.getPath().stream()
+                        .map(r -> new PathStep(r.getPropertyName(), r.getIndex())).toList());
+                if (!path.isEmpty()) {
+                    fields.put(path, describe(t));
+                    return fields;
+                }
+                if (t instanceof tools.jackson.databind.exc.MismatchedInputException) {
+                    fields.put("body", "The request body must be a single JSON object.");
+                    return fields;
+                }
+                break;
+            }
+            if (t instanceof com.fasterxml.jackson.databind.JsonMappingException jackson) {
+                String path = jacksonPath(jackson.getPath().stream()
+                        .map(r -> new PathStep(r.getFieldName(), r.getIndex())).toList());
+                if (!path.isEmpty()) {
+                    fields.put(path, describe(t));
+                    return fields;
+                }
+                if (t instanceof com.fasterxml.jackson.databind.exc.MismatchedInputException) {
+                    fields.put("body", "The request body must be a single JSON object.");
+                    return fields;
+                }
+                break;
+            }
+        }
+        fields.put("body", ex.getCause() == null
+                ? "A request body is required."
+                : "The request body is not valid JSON.");
+        return fields;
+    }
+
+    private record PathStep(String property, int index) {
+    }
+
+    /** {@code seats[0].categoryId}: dotted properties, bracketed indexes. */
+    private static String jacksonPath(List<PathStep> steps) {
+        StringBuilder sb = new StringBuilder();
+        for (PathStep step : steps) {
+            if (step.property() != null) {
+                if (!sb.isEmpty()) {
+                    sb.append('.');
+                }
+                sb.append(step.property());
+            } else if (step.index() >= 0) {
+                sb.append('[').append(step.index()).append(']');
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String describe(Throwable jackson) {
+        if (jackson instanceof tools.jackson.databind.exc.UnrecognizedPropertyException
+                || jackson instanceof com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException) {
+            return "Unknown field.";
+        }
+        if (jackson instanceof tools.jackson.databind.exc.MismatchedInputException mismatch) {
+            return expectation(mismatch.getTargetType());
+        }
+        if (jackson instanceof com.fasterxml.jackson.databind.exc.MismatchedInputException mismatch) {
+            return expectation(mismatch.getTargetType());
+        }
+        return "Invalid value.";
+    }
+
+    /** What a value of {@code type} must look like, written for a person. Never echoes the input. */
+    private static String expectation(Class<?> type) {
+        if (type == null) {
+            return "Invalid value.";
+        }
+        if (UUID.class.equals(type)) {
+            return "Must be a valid UUID.";
+        }
+        if (type.isEnum()) {
+            return "Must be one of: " + Arrays.stream(type.getEnumConstants())
+                    .map(c -> ((Enum<?>) c).name()).collect(Collectors.joining(", ")) + ".";
+        }
+        if (Number.class.isAssignableFrom(type) || (type.isPrimitive() && type != boolean.class && type != char.class)) {
+            return "Must be a number.";
+        }
+        if (Boolean.class.equals(type) || boolean.class.equals(type)) {
+            return "Must be true or false.";
+        }
+        if (Temporal.class.isAssignableFrom(type)) {
+            return "Must be an ISO-8601 date-time.";
+        }
+        if (Collection.class.isAssignableFrom(type) || type.isArray()) {
+            return "Must be a list.";
+        }
+        if (CharSequence.class.isAssignableFrom(type)) {
+            return "Must be a string.";
+        }
+        return "Invalid value.";
     }
 
     /**
