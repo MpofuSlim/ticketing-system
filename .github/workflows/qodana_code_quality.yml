@@ -34,6 +34,16 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+          # Restore only, never save. The key is the hash of the poms alone, so
+          # this job shares it with ci.yml and release.yml, and a key, once
+          # saved, is never overwritten. test-compile never resolves the test
+          # plugins (surefire, failsafe and their surefire-* dependencies), and
+          # this job ends minutes before CI's `verify`. So after a pom change it
+          # saved first, without them, and every CI and Release run then
+          # fetched them from Maven Central: 429s on all four tries failed
+          # master's CI for c07a08a. Only the jobs that run `verify`, and so
+          # resolve the whole build, may save the key.
+          cache-read-only: true
       - name: 'Resolve dependencies for Qodana'
         run: |
           ./mvnw -B -ntp -q -DskipTests test-compile
