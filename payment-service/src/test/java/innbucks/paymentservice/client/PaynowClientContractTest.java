@@ -226,6 +226,19 @@ class PaynowClientContractTest {
     }
 
     @Test
+    @DisplayName("pollOnce reads once: a failed read is not retried (the O'mari reply must answer within 60 s)")
+    void pollOnce_isNeverRetried() {
+        stubPost("/Interface/CheckPayment/", 503, "Service Unavailable");
+        assertThatThrownBy(() -> client.pollOnce("USD", pollUrl())).isInstanceOf(PaynowApiTransientException.class);
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/Interface/CheckPayment/")));
+
+        wireMock.resetAll();
+        stubPost("/Interface/CheckPayment/", 503, "Service Unavailable");
+        assertThatThrownBy(() -> client.poll("USD", pollUrl())).isInstanceOf(PaynowApiTransientException.class);
+        wireMock.verify(2, postRequestedFor(urlPathEqualTo("/Interface/CheckPayment/")));
+    }
+
+    @Test
     @DisplayName("guard rails: no integration for the currency, or a malformed trace, never reaches the wire")
     void guardRails() {
         assertThatThrownBy(() -> client.initiateWeb("ZWG", REFERENCE, 1250, "x", "https://w.example/r", TRACE))

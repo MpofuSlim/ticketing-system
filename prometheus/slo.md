@@ -650,11 +650,10 @@ outcomes that change nothing automatically (`docs/api/paynow.md`):
 - `echo_mismatch` — a paid status whose amount or reference is not the
   payment's; parked IN_DOUBT, never confirmed.
 
-**Action:** grep payment-service for `[paynow] OPERATOR CASE` (every case:
-`paid_after_close`, `reversed_after_paid`, `reversed_before_paid`) or
-`ECHO MISMATCH`; each line names the payment reference and the order. A case is
-raised once per payment (`payment.paynow_flagged_at`); a repeat update logs
-`already raised` at INFO. The payment's journal
+**Action:** grep payment-service for `[paynow] OPERATOR CASE`: every one of the
+four outcomes logs it, with the outcome, the payment reference and the order. A
+case is raised once per payment (`payment.paynow_flagged_at`); a repeat update
+logs `already raised` at INFO. The payment's journal
 (`payment_event`, database `payment_service`) carries the same note. Check the
 transaction in the merchant's Paynow account by Paynow's reference, then:
 

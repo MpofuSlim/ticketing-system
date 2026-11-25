@@ -264,15 +264,31 @@ public class PaynowClient {
 
     /** Poll a payment: an empty POST to its {@code pollurl}. */
     public PaynowStatus poll(String currency, String pollUrl) {
+        return poll(currency, pollUrl, true);
+    }
+
+    /**
+     * {@link #poll} with ONE read (the breaker, no retry): for a caller with a
+     * customer waiting, such as the O'mari code reply, which must answer within
+     * the gateway's 60 s. The retried poll can take three reads at the read
+     * timeout; the sweep and the result update confirm the payment if this
+     * one read fails.
+     */
+    public PaynowStatus pollOnce(String currency, String pollUrl) {
+        return poll(currency, pollUrl, false);
+    }
+
+    private PaynowStatus poll(String currency, String pollUrl, boolean retried) {
         PaynowProperties.Integration integration = requireIntegration(currency);
         if (pollUrl == null || !isPaynowUrl(pollUrl)) {
             // A stored value we would not call: never splice it into a request.
             throw new PaynowApiTransientException("refusing to poll a URL off Paynow's hosts");
         }
-        return read(() -> {
+        Supplier<PaynowStatus> call = () -> {
             PaynowMessage reply = post(URI.create(pollUrl.strip()), Map.of(), "poll");
             return statusOf(reply, integration, "poll");
-        });
+        };
+        return retried ? read(call) : readOnce(call);
     }
 
     /**
@@ -351,6 +367,14 @@ public class PaynowClient {
                 circuitBreaker, Retry.decorateSupplier(retry, call));
         try {
             return decorated.get();
+        } catch (CallNotPermittedException e) {
+            throw new PaynowNotSentException("Paynow is temporarily unavailable (circuit open)", e);
+        }
+    }
+
+    private PaynowStatus readOnce(Supplier<PaynowStatus> call) {
+        try {
+            return CircuitBreaker.decorateSupplier(circuitBreaker, call).get();
         } catch (CallNotPermittedException e) {
             throw new PaynowNotSentException("Paynow is temporarily unavailable (circuit open)", e);
         }

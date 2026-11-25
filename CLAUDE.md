@@ -5317,7 +5317,10 @@ our own rails: never route them through Paynow (its fee, one more hop).
   express checkout (express takes saved-card tokens only). `ONEMONEY` is a
   prompt on the phone, like EcoCash. `OMARI` texts a code the customer types
   into our checkout; `POST /payments/{transactionId}/otp` passes it on (never
-  retried: O'mari cancels after 5 wrong codes). A non-BOOKING order is 422.
+  retried: O'mari cancels after 5 wrong codes). A non-BOOKING order is 422 in
+  the service, answered 400 (the controller answers every 422 as a 400). The
+  status read after an accepted code is ONE read (`pollOnce`, no retry): the
+  customer waits on that reply behind the gateway's 60 s.
 - **Every message is signed both ways** (SHA-512 of the values in MESSAGE
   ORDER + the integration key, upper-case hex). Paynow's two published examples
   are pinned in `PaynowHashTest`; replies are parsed in the order received and
@@ -5387,7 +5390,8 @@ our own rails: never route them through Paynow (its fee, one more hop).
     conditional UPDATE (`flagPaynowOperatorCase`).
   - A closed (FAILED/EXPIRED) row with the flag is answered stage VERIFYING,
     "don't pay again: support will confirm or refund", never "nothing was
-    charged". The flag means "paid" only because a late payment is the only
+    charged". Every case, `echo_mismatch` included, logs
+    `[paynow] OPERATOR CASE <outcome>` with the order (the runbook's grep). The flag means "paid" only because a late payment is the only
     case on a closed row: a new case there needs its own column.
   - Refunded/disputed while the booking is still unconfirmed
     (COMPLETED_UNCONFIRMED) parks the row IN_DOUBT (the new legal transition),

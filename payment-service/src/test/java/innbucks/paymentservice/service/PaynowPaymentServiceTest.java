@@ -450,10 +450,12 @@ class PaynowPaymentServiceTest {
         org.mockito.Mockito.reset(client);
         when(client.submitOtp("USD", p.getPaynowOtpUrl(), "482914"))
                 .thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
-        when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
+        when(client.pollOnce("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
         when(resolution.confirmOrder(p)).thenReturn(ConfirmOutcome.confirmed("INN-1"));
         assertThat(service.submitOtp(p.getId(), " 482914 ").httpStatus()).isEqualTo(200);
-        verify(client).poll("USD", POLL);
+        // One read, no retries: a customer waits on this reply behind the gateway's 60 s.
+        verify(client).pollOnce("USD", POLL);
+        verify(client, never()).poll(anyString(), anyString());
         verify(records).resolveUnconfirmed(eq(p.getId()), eq("INN-1"), anyString());
     }
 
@@ -769,5 +771,25 @@ class PaynowPaymentServiceTest {
         verify(records).flagPaynowOperatorCase(p.getId());
         verify(resolution, never()).confirmOrder(any());
         assertThat(resolutions("reversed_before_paid")).isEqualTo(1);
+    }
+
+
+    @Test
+    @DisplayName("an accepted O'mari code whose one status read fails: 200 with the payment as it stands, the sweep confirms it")
+    void otp_acceptedButTheReadFails() {
+        Payment p = open(PaymentRail.OMARI, Instant.now().plusSeconds(600));
+        p.setPaynowOtpUrl("https://www.paynow.co.zw/interface/remoteotp/9512");
+        when(repository.findById(p.getId())).thenReturn(Optional.of(p));
+        when(client.submitOtp("USD", p.getPaynowOtpUrl(), "482913"))
+                .thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
+        when(client.pollOnce("USD", POLL)).thenThrow(new PaynowApiTransientException("read timed out"));
+
+        var outcome = service.submitOtp(p.getId(), "482913");
+
+        assertThat(outcome.httpStatus()).isEqualTo(200);
+        assertThat(outcome.payment().getStatus()).isEqualTo(Payment.PaymentStatus.TOKEN_ISSUED);
+        verify(client, times(1)).pollOnce("USD", POLL);
+        verify(client, never()).poll(anyString(), anyString());
+        verify(resolution, never()).confirmOrder(any());
     }
 }

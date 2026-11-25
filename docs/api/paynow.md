@@ -128,8 +128,11 @@ POST to `remoteotpurl`: `id`, `otp`, `status=Message`, `hash`. A status update
 back on success; `status=Error&error=Invalid+OTP` on a wrong code. **Five wrong
 codes cancel the payment.** Never retried (each try spends an attempt).
 
-A code sent again for a payment that already went through (or is being
-confirmed) answers 200 with that payment, and O'mari is not asked again. A code
+After an accepted code we read the payment's status ONCE (no retries): the
+customer waits on that reply behind the gateway's 60 s, and the result update
+or the sweep confirms the payment if the read fails. A code sent again for a
+payment that already went through (or is being confirmed) answers 200 with that
+payment, and O'mari is not asked again. A code
 for a payment that is over is a 409 whose `data` says how it ended.
 
 ## Our rules (PaynowPaymentService)

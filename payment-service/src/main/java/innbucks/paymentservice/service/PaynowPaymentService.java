@@ -381,7 +381,11 @@ public class PaynowPaymentService {
         PaynowStatus status;
         try {
             if (p.getPaynowPollUrl() != null) {
-                status = paynowClient.poll(p.getCurrency(), p.getPaynowPollUrl());
+                // The O'mari code reply has a customer waiting behind the
+                // gateway's 60 s: one read, no retries.
+                status = trigger == Trigger.OTP
+                        ? paynowClient.pollOnce(p.getCurrency(), p.getPaynowPollUrl())
+                        : paynowClient.poll(p.getCurrency(), p.getPaynowPollUrl());
             } else if (p.getPaynowTrace() != null) {
                 status = paynowClient.trace(p.getCurrency(), p.getPaynowTrace());
             } else {
@@ -442,12 +446,11 @@ public class PaynowPaymentService {
         String mismatch = echoMismatch(p, status);
         String paynowRef = status.paynowReference() != null ? status.paynowReference() : p.getPaynowReference();
         if (mismatch != null) {
-            metrics.incPaynowResolution("echo_mismatch");
-            log.error("[paynow] PAID STATUS WITH ECHO MISMATCH — parking IN_DOUBT paymentReference={} paynowReference={} {}",
-                    p.getPaymentReference(), paynowRef, mismatch);
             paymentRecordService.markInDoubt(p.getId(), "Paynow reports " + status.rawStatus()
                     + " but the echo does not match the ledger (" + mismatch + ") — Paynow ref " + paynowRef
                     + ". Operator must reconcile against Paynow's records before any confirm or refund.");
+            operatorCase(p, "echo_mismatch", "Paynow reports " + status.rawStatus() + " but the ECHO MISMATCHES"
+                    + " the ledger (" + mismatch + "), Paynow ref " + paynowRef + ". Parked IN_DOUBT; never confirmed.");
             return CheckOutcome.OPEN;
         }
         // The money fact FIRST, and only while the row is still open: the
