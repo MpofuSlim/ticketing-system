@@ -83,7 +83,7 @@
              BOM, so both are pinned below. Drop on the next Boot/httpclient5
              upgrade once the transitive version reaches 5.4.3. -->
         <httpcore5.version>5.5</httpcore5.version>
-        <spring.cloud.version>2025.1.4</spring.cloud.version>
+        <spring.cloud.version>2026.0.0</spring.cloud.version>
         <springdoc.version>3.2.0</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
         <!-- jjwt centralized here so all five JWT-using services stay aligned.
