@@ -4658,6 +4658,14 @@ called-out reason, not a silent revert.**
   dependencies resolved on the runner from setup-java's Maven cache. **A
   Maven wrapper bump may need a linter bump**: the CLI's "non-compatible
   Qodana linter" warning in the scan log is the signal.
+- **Only a job that runs `verify` saves setup-java's Maven cache.** Its key is
+  the poms' hash alone, shared by CI, Release and Qodana, and a saved key is
+  never overwritten. Qodana runs `test-compile` (no surefire/failsafe) and
+  finishes first, so it saved an incomplete `~/.m2` after each pom change, and
+  every CI and Release run fetched failsafe's `surefire-*` POMs from Central
+  until a 429 on all four tries failed the build (master, c07a08a,
+  2026-11-25). Qodana's `setup-java` is `cache-read-only: true`; a new job that
+  resolves less than the whole build gets the same.
 - **`innbucks-core-gateway` was retired** (A06) — it was an EOL Spring Boot
   3.2.4 connectivity spike, not a reactor module and not containerized, so
   nothing built or scanned it. It has been deleted from the repo. If the
