@@ -107,6 +107,10 @@
              deps, JDK 21 compatible. Used on write paths in event/loyalty/user
              services to neutralize markup before persistence. -->
         <jsoup.version>1.24.1</jsoup.version>
+        <!-- maven-surefire-plugin and maven-failsafe-plugin are released
+             together and load the same surefire-* jars, so one version covers
+             both. Pinned with every other plugin in build/pluginManagement. -->
+        <surefire.version>3.6.1</surefire.version>
     </properties>
 
     <dependencyManagement>
@@ -378,6 +382,33 @@
     <build>
         <pluginManagement>
             <plugins>
+                <!-- Every plugin the build runs is pinned here, so a build runs
+                     the same plugins until a reviewed PR (usually Dependabot's)
+                     moves one. Until 2026-11-25 none of these had a version.
+                     Failsafe (declared below), this file's own compiler entry
+                     and the dependency plugin every Dockerfile runs
+                     (`dependency:go-offline`) were looked up in Maven Central's
+                     maven-metadata.xml on every build, taking the newest
+                     release. The lifecycle plugins came from defaults inside the
+                     Maven release in .mvn/wrapper. So a plugin release changed
+                     the build with no commit, and was downloaded on every run
+                     without being cached: setup-java's Maven cache key only
+                     moves when a pom does. That day Maven Central answered those
+                     downloads 429, and PR #849's Release test job failed before
+                     compiling anything.
+
+                     The versions are the ones the build already ran: Maven
+                     3.10.2's defaults, and the releases the lookups chose. -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-clean-plugin</artifactId>
+                    <version>3.5.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-resources-plugin</artifactId>
+                    <version>3.5.0</version>
+                </plugin>
                 <!-- Lombok MUST be named here as an explicit annotation-processor
                      path, not merely left on the compile classpath.
 
@@ -402,6 +433,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.16.0</version>
                     <configuration>
                         <!-- `release` rather than source+target: it also pins the
                              system-module location, which is what javac was
@@ -421,6 +453,41 @@
                             <arg>-parameters</arg>
                         </compilerArgs>
                     </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${surefire.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-failsafe-plugin</artifactId>
+                    <version>${surefire.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>3.5.1</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-install-plugin</artifactId>
+                    <version>3.2.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-deploy-plugin</artifactId>
+                    <version>3.2.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-site-plugin</artifactId>
+                    <version>3.22.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-dependency-plugin</artifactId>
+                    <version>3.11.0</version>
                 </plugin>
                 <plugin>
                     <groupId>org.springframework.boot</groupId>
