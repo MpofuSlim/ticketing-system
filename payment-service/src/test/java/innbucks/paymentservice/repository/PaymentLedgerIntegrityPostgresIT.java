@@ -337,7 +337,6 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
         java.time.Instant now = java.time.Instant.now();
         Payment row = paynowRow(innbucks.paymentservice.entity.PaymentRail.PAYNOW_CARD,
                 PaymentStatus.COMPLETED_UNCONFIRMED, now.minusSeconds(600), now.plusSeconds(1200), PAYNOW_POLL, null);
-        row.setCustomerMsisdn(null); // no WhatsApp from a test
         payments.saveAndFlush(row);
         Payment retryCopy = payments.findById(row.getId()).orElseThrow();
 
