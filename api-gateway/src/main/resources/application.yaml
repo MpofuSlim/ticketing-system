@@ -711,6 +711,14 @@ spring:
             # EcoCash notify, for the same reason; the handler acts on an
             # update only when its hash verifies, and then only by polling
             # Paynow. BEFORE the write catch-all so the IP keying applies.
+            # SIZED FOR ALL OF PAYNOW, unlike EcoCash's 5/20: every customer's
+            # updates come from Paynow's own servers, so this one bucket
+            # carries the whole cell's Paynow traffic (2-3 updates a payment),
+            # and after a booking is confirmed it is the ONLY channel a refund
+            # or dispute arrives on: a 429 here is never seen by
+            # payment-service, and Paynow stops resending after ten tries.
+            # Only Paynow can spend it (nginx overwrites X-Real-IP); a forged
+            # update costs an indexed lookup and a hash check.
             - id: paynow-result-write-route
               uri: lb://payment-service
               predicates:
@@ -719,8 +727,8 @@ spring:
               filters:
                 - name: RequestRateLimiter
                   args:
-                    redis-rate-limiter.replenishRate: ${PAYMENTS_PAYNOW_RESULT_RATE_LIMIT_REPLENISH_PER_SECOND:5}
-                    redis-rate-limiter.burstCapacity: ${PAYMENTS_PAYNOW_RESULT_RATE_LIMIT_BURST_CAPACITY:20}
+                    redis-rate-limiter.replenishRate: ${PAYMENTS_PAYNOW_RESULT_RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${PAYMENTS_PAYNOW_RESULT_RATE_LIMIT_BURST_CAPACITY:500}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@paymentsInnbucksIpKeyResolver}"
                     # Fail-SAFE: public machine endpoint — keep throttling if Redis is down.

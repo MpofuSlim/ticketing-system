@@ -48,9 +48,13 @@ public class PaynowProperties {
     private String resultUrl;
 
     /**
-     * The website page a card customer comes back to after Paynow's page.
-     * We append {@code transactionId=<our payment id>} so the page can poll
-     * {@code GET /payments/{transactionId}}.
+     * The website page a card customer comes back to after Paynow's page, sent
+     * to Paynow exactly as configured. Never with our payment id on it: an id
+     * in a page URL reaches browser history, the site's analytics and its
+     * host's logs, and {@code GET /payments/{id}} turns it into the booking.
+     * The website keeps the {@code transactionId} from {@code POST /payments}
+     * (sessionStorage) across the redirect and follows
+     * {@code GET /payments/{transactionId}} from there.
      */
     private String returnUrl;
 

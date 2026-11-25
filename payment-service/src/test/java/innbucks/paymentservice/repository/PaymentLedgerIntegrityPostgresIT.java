@@ -274,6 +274,55 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
         assertTrue(payments.findById(p.getId()).orElseThrow().getPaynowFlaggedAt() != null);
     }
 
+    @Autowired
+    private innbucks.paymentservice.reconciliation.UnconfirmedPaymentAlerter alerter;
+
+    /**
+     * The stuck-payment alert never writes the confirm-retry's copy back. The
+     * retry reads the row, then calls the booking confirm; a Paynow refund that
+     * parks the row IN_DOUBT (and flags it) during that call must survive the
+     * alert that follows. It used to save the copy, which merged every stale
+     * field back (no {@code @Version}): the row returned to
+     * COMPLETED_UNCONFIRMED with its flag cleared, and the next retry issued
+     * tickets for money that went back.
+     */
+    @Test
+    void stuckPaymentAlert_neverRevertsAParkThatLandedDuringTheConfirm() {
+        java.time.Instant now = java.time.Instant.now();
+        Payment row = paynowRow(innbucks.paymentservice.entity.PaymentRail.PAYNOW_CARD,
+                PaymentStatus.COMPLETED_UNCONFIRMED, now.minusSeconds(600), now.plusSeconds(1200), PAYNOW_POLL, null);
+        row.setCustomerMsisdn(null); // no WhatsApp from a test
+        payments.saveAndFlush(row);
+        Payment retryCopy = payments.findById(row.getId()).orElseThrow();
+
+        // During the retry's confirm call: Paynow reports the payment refunded.
+        assertTrue(records.parkUnconfirmedInDoubt(row.getId(), "refunded before the booking was confirmed"));
+        assertTrue(records.flagPaynowOperatorCase(row.getId()));
+
+        alerter.onStillFailing(retryCopy, "booking-service timed out");
+
+        Payment after = payments.findById(row.getId()).orElseThrow();
+        assertEquals(PaymentStatus.IN_DOUBT, after.getStatus(), "the park stands");
+        assertTrue(after.getPaynowFlaggedAt() != null, "the operator case stays raised");
+        assertNull(after.getOperatorAlertedAt(), "a payment that moved on is not announced as stuck");
+    }
+
+    /** The claim on a row still waiting for its confirm: once, and nothing but the stamp changes. */
+    @Test
+    void stuckPaymentAlert_claimsOnce_andTouchesNothingElse() {
+        java.time.Instant now = java.time.Instant.now();
+        Payment row = paynowRow(innbucks.paymentservice.entity.PaymentRail.ONEMONEY,
+                PaymentStatus.COMPLETED_UNCONFIRMED, now.minusSeconds(600), now.plusSeconds(1200), PAYNOW_POLL, null);
+        payments.saveAndFlush(row);
+
+        assertTrue(records.claimStuckPaymentAlert(row.getId()), "the first retry claims the alert");
+        assertFalse(records.claimStuckPaymentAlert(row.getId()), "every retry after finds it claimed");
+        Payment after = payments.findById(row.getId()).orElseThrow();
+        assertTrue(after.getOperatorAlertedAt() != null);
+        assertEquals(PaymentStatus.COMPLETED_UNCONFIRMED, after.getStatus());
+        assertEquals(PAYNOW_POLL, after.getPaynowPollUrl());
+    }
+
     /**
      * A card decline closes the attempt on real Postgres: the row goes FAILED
      * with the decline stamped, and the booking's one payment slot

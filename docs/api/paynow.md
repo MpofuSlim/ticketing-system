@@ -62,7 +62,7 @@ POST, `application/x-www-form-urlencoded`. Fields we send, in this order:
 | `reference` | ✓ | ✓ | Our payment reference (`TKZ-<tag>-<hex>`), unique per transaction |
 | `amount` | ✓ | ✓ | Major units, two decimals: `"12.50"` |
 | `additionalinfo` | ✓ | ✓ | Shown to the customer; no confidential data. We send "Ticketize tickets". |
-| `returnurl` | ✓ | ✓ | Web: the website's return page + `transactionId=<id>`. Express: the same page (or the result URL). |
+| `returnurl` | ✓ | ✓ | Web: the website's return page, as configured. **Never with our payment id on it**: an id in a page URL reaches browser history, the site's analytics and its host's logs, and `GET /payments/{id}` turns it into the booking. The website keeps the `transactionId` across the redirect. Express: the same page (or the result URL). |
 | `resulturl` | ✓ | ✓ | Our `POST /payments/paynow/result`, absolute, with `/foundry` |
 | `authemail` | — | ✓ | Required on express. **Test mode: must be a login email of the merchant.** Not sent on web (in test mode any other email blocks the payment). |
 | `phone` | — | ✓ | `0771234567` form |
@@ -132,8 +132,15 @@ After an accepted code we read the payment's status ONCE (no retries): the
 customer waits on that reply behind the gateway's 60 s, and the result update
 or the sweep confirms the payment if the read fails. A code sent again for a
 payment that already went through (or is being confirmed) answers 200 with that
-payment, and O'mari is not asked again. A code
+payment, and O'mari is not asked again; so does an attempt we had closed that
+Paynow then reported paid (stage VERIFYING, "don't pay again"). A code
 for a payment that is over is a 409 whose `data` says how it ended.
+
+A code that never left our server (our breaker was open, or no connection
+opened) is a **503** "…your code was not sent. Enter it again in a moment.": it
+was not used and O'mari counted no attempt, so the customer sends it again. A
+code that was sent with no usable answer stays the **502** "wait, then check
+your payment": it may have been used, so it is not asked for again.
 
 ## Our rules (PaynowPaymentService)
 
@@ -184,8 +191,19 @@ for a payment that is over is a 409 whose `data` says how it ended.
     still have reached the booking, so the operator checks it;
   - refunded or disputed after the booking was confirmed: the tickets are the
     operator's call.
+- **A refund or dispute after confirmation is seen only through Paynow's
+  update.** Nothing polls a confirmed payment again. So the gateway's
+  `paynow-result-write-route` bucket is sized for all of Paynow (50/s, burst
+  500, one bucket for Paynow's own address), not like EcoCash's notify (5/s,
+  burst 20): a 429 there never reaches payment-service, and Paynow stops
+  resending after ten tries.
 - Paynow's URLs are pinned to `PAYNOW_ALLOWED_HOSTS`; we never call or redirect
   to any other host.
+
+**Not yet modelled:** settlement reconciliation of Paynow payments against
+Paynow's records (like ZimSwitch and EcoCash: `SettlementReconciliationJob`
+reads InnBucks code rows only), and refunds (Paynow has no refund API; an
+operator refunds in Paynow's portal).
 
 ## Test mode
 

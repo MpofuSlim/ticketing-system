@@ -314,6 +314,26 @@ class GatewayRouteTableTest {
     }
 
     @Test
+    void paynowResultRouteIsSizedForAllOfPaynowFromOneAddress() {
+        // Every customer's update comes from Paynow's own servers, so this one
+        // IP bucket carries the whole cell's Paynow traffic, and after a booking
+        // is confirmed it is the ONLY channel a refund or dispute arrives on.
+        // EcoCash's notify bucket (5/s, burst 20) is fine there because its
+        // poller is the authority; copied here it 429s a reversal during an
+        // on-sale until Paynow gives up resending.
+        var args = route("paynow-result-write-route").getFilters().stream()
+                .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                .findFirst().orElseThrow().getArgs();
+        assertThat(args.get("key-resolver")).contains("paymentsInnbucksIpKeyResolver");
+        // The defaults, as bound (PAYMENTS_PAYNOW_RESULT_RATE_LIMIT_* override them).
+        assertThat(args.get("redis-rate-limiter.replenishRate")).isEqualTo("50");
+        assertThat(args.get("redis-rate-limiter.burstCapacity")).isEqualTo("500");
+        assertThat(usesResilientLimiter("paynow-result-write-route"))
+                .as("must fail SAFE: a Redis outage must not open a public endpoint to unlimited calls")
+                .isTrue();
+    }
+
+    @Test
     void ticketCheckRouteIsPostOnlyExactPathIpKeyedAndFailsSafe() {
         assertThat(predicateArgs("booking-ticket-check-route", "Method")).containsExactly("POST");
         assertThat(predicateArgs("booking-ticket-check-route", "Path"))

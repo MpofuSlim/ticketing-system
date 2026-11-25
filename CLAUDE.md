@@ -5313,7 +5313,11 @@ our own rails: never route them through Paynow (its fee, one more hop).
 - **Three rails, one client** (`PaynowClient`, `PaynowPaymentService`).
   `PAYNOW_CARD` is Paynow's web checkout: `POST /payments` answers
   `redirectUrl`, the website sends the browser there, and Paynow returns it to
-  `PAYNOW_RETURN_URL?transactionId=<id>`. A FIRST card payment cannot use
+  `PAYNOW_RETURN_URL` as configured. **Never put our payment id on that URL**:
+  history, the site's analytics and its host's logs would keep it, and the
+  public `GET /payments/{id}` turns it into the booking (and, while id links
+  are open, every QR code). The website keeps the `transactionId` from the POST
+  in sessionStorage across the redirect. A FIRST card payment cannot use
   express checkout (express takes saved-card tokens only). `ONEMONEY` is a
   prompt on the phone, like EcoCash. `OMARI` texts a code the customer types
   into our checkout; `POST /payments/{transactionId}/otp` passes it on (never
@@ -5339,8 +5343,10 @@ our own rails: never route them through Paynow (its fee, one more hop).
   customer has no page and nowhere to send the code, so nothing can be paid.
   **Never sent** (`PaynowNotSentException`: our breaker was open, or no
   connection opened — refused, unknown host, connect timeout, no pooled
-  connection) closes FAILED on every rail, OneMoney too. A read timeout or a
-  reset can follow the write, so it stays "no answer". A second tap while a card
+  connection) closes FAILED on every rail, OneMoney too. An O'mari code that
+  was never sent is a 503 asking for it again, journalled "NOT sent" (the
+  payment stays open); a sent code with no answer is the 502 "wait". A read
+  timeout or a reset can follow the write, so it stays "no answer". A second tap while a card
   or O'mari start waits for the reply is IN_PROGRESS (`startInFlight`), never
   "expired".
 - **Paid is recorded before the booking is confirmed** (`claimPaid`): TOKEN_ISSUED
@@ -5391,8 +5397,12 @@ our own rails: never route them through Paynow (its fee, one more hop).
   - A closed (FAILED/EXPIRED) row with the flag is answered stage VERIFYING,
     "don't pay again: support will confirm or refund", never "nothing was
     charged". Every case, `echo_mismatch` included, logs
-    `[paynow] OPERATOR CASE <outcome>` with the order (the runbook's grep). The flag means "paid" only because a late payment is the only
-    case on a closed row: a new case there needs its own column.
+    `[paynow] OPERATOR CASE <outcome>` with the order (search it with
+    `grep -F`: `[paynow]` is a bracket expression to a plain grep). Logs do
+    not survive a rollout, so the operator's list is the workbasket
+    (`GET /payments/internal/exceptions`, cases raised in the last 30 days,
+    with `paymentRail`). The flag means "paid" only because a late payment is
+    the only case on a closed row: a new case there needs its own column.
   - Refunded/disputed while the booking is still unconfirmed
     (COMPLETED_UNCONFIRMED) parks the row IN_DOUBT (the new legal transition),
     so the confirm-retry issues no tickets for money that went back. The retry
@@ -5419,7 +5429,11 @@ our own rails: never route them through Paynow (its fee, one more hop).
   staging overrides), `PAYNOW_RETURN_URL`, `PAYNOW_AUTH_EMAIL`, and staging's
   `PAYNOW_TEST_NUMBERS_ALLOWED=true` (local file only). Gateway routes
   `paynow-result-write-route` and `payment-otp-write-route` (IP-keyed,
-  fail-safe, before the write catch-all; `GatewayRouteTableTest`).
+  fail-safe, before the write catch-all; `GatewayRouteTableTest`). The result
+  route's one bucket is Paynow's own address carrying every customer's updates,
+  and after a confirm it is the only way a refund or dispute arrives, so it is
+  sized for all of Paynow (50/s, burst 500), never EcoCash's notify 5/20: a 429
+  there never reaches payment-service, and Paynow stops after ten resends.
 - booking-service shows them as "Bank card (Paynow)", "OneMoney", "O'mari"
   (`PaymentMethods`), each under its own code.
 

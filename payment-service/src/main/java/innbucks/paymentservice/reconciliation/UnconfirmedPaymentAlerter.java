@@ -3,12 +3,10 @@ package innbucks.paymentservice.reconciliation;
 import innbucks.paymentservice.client.EmailNotificationClient;
 import innbucks.paymentservice.client.WhatsAppNotificationClient;
 import innbucks.paymentservice.entity.Payment;
-import innbucks.paymentservice.repository.PaymentRepository;
+import innbucks.paymentservice.service.PaymentRecordService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
-import java.time.Instant;
 
 /**
  * One-time human escalation for the paid-but-unconfirmable queue. When the
@@ -31,6 +29,16 @@ import java.time.Instant;
  * nightly sweep. Strictly best-effort — any delivery failure is a log line;
  * the metric {@code payment.payments.unconfirmed_retry{outcome=still_failing}}
  * stays the dashboard signal regardless.
+ *
+ * <p>The stamp is ONE conditional UPDATE on the live row
+ * ({@link PaymentRecordService#claimStuckPaymentAlert}), never a save of the
+ * copy the retry read. That copy is read before the retry's confirm call, and a
+ * change can commit during the call (a Paynow refund parking the row IN_DOUBT,
+ * another trigger confirming it). Saving the copy merged its every field back,
+ * because {@code Payment} has no {@code @Version}: the refund park was undone and
+ * the next retry issued tickets for money that went back. The claim also only
+ * succeeds while the row is still COMPLETED_UNCONFIRMED, so a payment that moved
+ * on during the call is not announced as stuck.
  */
 @Component
 @Slf4j
@@ -38,26 +46,33 @@ public class UnconfirmedPaymentAlerter {
 
     private final EmailNotificationClient email;
     private final WhatsAppNotificationClient whatsApp;
-    private final PaymentRepository payments;
+    private final PaymentRecordService records;
     private final String operatorEmail;
 
     public UnconfirmedPaymentAlerter(EmailNotificationClient email,
                                      WhatsAppNotificationClient whatsApp,
-                                     PaymentRepository payments,
+                                     PaymentRecordService records,
                                      @Value("${payment.operator-alert-email:}") String operatorEmail) {
         this.email = email;
         this.whatsApp = whatsApp;
-        this.payments = payments;
+        this.records = records;
         this.operatorEmail = operatorEmail == null ? "" : operatorEmail.trim();
     }
 
-    /** Called by the reconciler each time a confirm retry still fails. */
+    /**
+     * Called by the reconciler each time a confirm retry still fails. The copy
+     * supplies only the alert's text (reference, amount, phone, order), which
+     * never changes; the decision is made on the live row.
+     */
     public void onStillFailing(Payment payment, String reason) {
         if (payment.getOperatorAlertedAt() != null) {
             return; // already escalated once — the queue item is with a human
         }
-        payment.setOperatorAlertedAt(Instant.now());
-        payments.save(payment);
+        if (!records.claimStuckPaymentAlert(payment.getId())) {
+            // Alerted already (another replica), or the row moved on during the
+            // confirm call: nothing to announce.
+            return;
+        }
 
         alertOperator(payment, reason);
         reassureCustomer(payment);

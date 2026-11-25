@@ -124,7 +124,7 @@ class PaynowClientContractTest {
                 + "/Payment/ConfirmPayment/9510") + "&PollUrl=" + enc(pollUrl()) + "&PaynowReference=9510"));
 
         PaynowInitiation init = client.initiateWeb("USD", REFERENCE, 1250, "Ticketize tickets",
-                "https://ticketize.example.co.zw/checkout/paynow-return?transactionId=t1", TRACE);
+                "https://ticketize.example.co.zw/checkout/paynow-return", TRACE);
 
         assertThat(init.browserUrl()).isEqualTo(wireMock.baseUrl() + "/Payment/ConfirmPayment/9510");
         assertThat(init.pollUrl()).isEqualTo(pollUrl());
@@ -135,7 +135,7 @@ class PaynowClientContractTest {
         assertThat(request.get("reference")).isEqualTo(REFERENCE);
         assertThat(request.get("amount")).isEqualTo("12.50");
         assertThat(request.get("additionalinfo")).isEqualTo("Ticketize tickets");
-        assertThat(request.get("returnurl")).endsWith("?transactionId=t1");
+        assertThat(request.get("returnurl")).isEqualTo("https://ticketize.example.co.zw/checkout/paynow-return");
         assertThat(request.get("resulturl")).isEqualTo("https://tickets.example.co.zw/foundry/payments/paynow/result");
         assertThat(request.get("merchanttrace")).isEqualTo(TRACE);
         assertThat(request.get("status")).isEqualTo("Message");

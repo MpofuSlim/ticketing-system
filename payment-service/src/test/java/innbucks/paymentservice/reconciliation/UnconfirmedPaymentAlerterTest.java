@@ -3,7 +3,7 @@ package innbucks.paymentservice.reconciliation;
 import innbucks.paymentservice.client.EmailNotificationClient;
 import innbucks.paymentservice.client.WhatsAppNotificationClient;
 import innbucks.paymentservice.entity.Payment;
-import innbucks.paymentservice.repository.PaymentRepository;
+import innbucks.paymentservice.service.PaymentRecordService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -13,19 +13,23 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 /**
  * At-most-once + best-effort contract of the stuck-payment escalation:
- * marker stamped before the sends, operator email optional, customer
- * reassurance independent of the operator channel.
+ * marker claimed on the live row before the sends, operator email optional,
+ * customer reassurance independent of the operator channel, and the copy the
+ * retry read never written back.
  */
 class UnconfirmedPaymentAlerterTest {
 
@@ -33,17 +37,18 @@ class UnconfirmedPaymentAlerterTest {
 
     private EmailNotificationClient email;
     private WhatsAppNotificationClient whatsApp;
-    private PaymentRepository payments;
+    private PaymentRecordService records;
 
     @BeforeEach
     void setUp() {
         email = mock(EmailNotificationClient.class);
         whatsApp = mock(WhatsAppNotificationClient.class);
-        payments = mock(PaymentRepository.class);
+        records = mock(PaymentRecordService.class);
+        when(records.claimStuckPaymentAlert(any())).thenReturn(true);
     }
 
     private UnconfirmedPaymentAlerter alerter(String operatorEmail) {
-        return new UnconfirmedPaymentAlerter(email, whatsApp, payments, operatorEmail);
+        return new UnconfirmedPaymentAlerter(email, whatsApp, records, operatorEmail);
     }
 
     private Payment stuckPayment() {
@@ -54,20 +59,37 @@ class UnconfirmedPaymentAlerterTest {
         p.setAmount(new BigDecimal("25.00"));
         p.setCurrency("USD");
         p.setCustomerMsisdn("+263771234567");
+        p.setStatus(Payment.PaymentStatus.COMPLETED_UNCONFIRMED);
         return p;
     }
 
     @Test
-    void firstFailure_alertsOperatorAndCustomer_andStampsMarker() {
+    void firstFailure_claimsTheLiveRow_thenAlertsOperatorAndCustomer() {
         Payment p = stuckPayment();
 
         alerter(OPS).onStillFailing(p, "booking-service 503");
 
-        assertThat(p.getOperatorAlertedAt()).isNotNull();
-        verify(payments).save(p);
-        verify(email).sendEmail(eq(OPS), contains("PAY-123"), contains("booking-service 503"),
+        var order = inOrder(records, email, whatsApp);
+        order.verify(records).claimStuckPaymentAlert(p.getId());
+        order.verify(email).sendEmail(eq(OPS), contains("PAY-123"), contains("booking-service 503"),
                 eq("PAY-OPS-" + p.getId()));
-        verify(whatsApp).sendCustomNotification(eq("+263771234567"), contains("confirming your order manually"));
+        order.verify(whatsApp).sendCustomNotification(eq("+263771234567"), contains("confirming your order manually"));
+        // The copy is the alert's text only: never stamped, never written back.
+        assertThat(p.getOperatorAlertedAt()).isNull();
+    }
+
+    @Test
+    void rowMovedOnDuringTheConfirm_orAlertedElsewhere_isSilent() {
+        // The claim lost: a Paynow refund parked the row IN_DOUBT (or another
+        // trigger confirmed it) while the retry's confirm was in flight, or
+        // another replica alerted first. Nothing is announced and nothing is
+        // written from the stale copy.
+        when(records.claimStuckPaymentAlert(any())).thenReturn(false);
+        Payment p = stuckPayment();
+
+        alerter(OPS).onStillFailing(p, "booking-service 503");
+
+        verifyNoInteractions(email, whatsApp);
     }
 
     @Test
@@ -77,7 +99,7 @@ class UnconfirmedPaymentAlerterTest {
 
         alerter(OPS).onStillFailing(p, "still down");
 
-        verifyNoInteractions(email, whatsApp, payments);
+        verifyNoInteractions(email, whatsApp, records);
     }
 
     @Test
@@ -88,7 +110,7 @@ class UnconfirmedPaymentAlerterTest {
 
         verify(email, never()).sendEmail(anyString(), anyString(), anyString(), anyString());
         verify(whatsApp).sendCustomNotification(eq("+263771234567"), anyString());
-        assertThat(p.getOperatorAlertedAt()).isNotNull();
+        verify(records).claimStuckPaymentAlert(p.getId());
     }
 
     @Test
@@ -100,7 +122,7 @@ class UnconfirmedPaymentAlerterTest {
         assertThatCode(() -> alerter(OPS).onStillFailing(p, "boom")).doesNotThrowAnyException();
 
         verify(whatsApp).sendCustomNotification(eq("+263771234567"), anyString());
-        assertThat(p.getOperatorAlertedAt()).isNotNull();
+        verify(records).claimStuckPaymentAlert(p.getId());
     }
 
     @Test

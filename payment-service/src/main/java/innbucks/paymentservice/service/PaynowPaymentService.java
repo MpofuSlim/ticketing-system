@@ -277,8 +277,12 @@ public class PaynowPaymentService {
 
         try {
             PaynowInitiation init = rail == PaymentRail.PAYNOW_CARD
+                    // The bare return page, never with our payment id on it: an id
+                    // in a page URL reaches browser history, the site's analytics
+                    // and its host's logs, and GET /payments/{id} turns it into
+                    // the booking. The website keeps the id across the redirect.
                     ? paynowClient.initiateWeb(currency, paymentReference, amountCents, additionalInfo(orderType),
-                            returnUrlFor(opened.getId()), trace)
+                            properties.getReturnUrl().strip(), trace)
                     : paynowClient.initiateExpress(currency, paymentReference, amountCents, additionalInfo(orderType),
                             trace, rail == PaymentRail.ONEMONEY ? "onemoney" : "omari", phone);
             paymentRecordService.recordPaynowInitiation(opened.getId(), init.pollUrl(), init.browserUrl(),
@@ -656,12 +660,17 @@ public class PaynowPaymentService {
         if (p == null || p.getPaymentRail() != PaymentRail.OMARI) {
             return new OtpOutcome(null, 404, "Payment not found");
         }
+        boolean paidAfterClose = p.getPaynowFlaggedAt() != null
+                && (p.getStatus() == Payment.PaymentStatus.FAILED || p.getStatus() == Payment.PaymentStatus.EXPIRED);
         if (p.getStatus() == Payment.PaymentStatus.SUCCEEDED
                 || p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED
-                || p.getStatus() == Payment.PaymentStatus.IN_DOUBT) {
-            // Paid (or being checked): a repeated or late code changes nothing.
-            // Answer with the payment as it stands, never "start a new payment",
-            // which invites a second charge. O'mari is not asked again.
+                || p.getStatus() == Payment.PaymentStatus.IN_DOUBT
+                || paidAfterClose) {
+            // Paid (or being checked), including a closed attempt Paynow then
+            // reported paid: a repeated or late code changes nothing. Answer
+            // with the payment as it stands ("don't pay again" for a late
+            // payment), never "start a new payment", which invites a second
+            // charge. O'mari is not asked again.
             return new OtpOutcome(p, 200, null);
         }
         if (p.getStatus() != Payment.PaymentStatus.TOKEN_ISSUED || p.getPaynowOtpUrl() == null
@@ -680,6 +689,16 @@ public class PaynowPaymentService {
                     + (e.paynowError() != null ? e.paynowError() : "no reason given"));
             return new OtpOutcome(p, 400,
                     "That code was not accepted. Check the SMS from O'mari and try again.");
+        } catch (PaynowNotSentException e) {
+            // Nothing left the pod (our breaker refused, or no connection
+            // opened): the code was not used, O'mari counted no attempt, and no
+            // status check can ever see it paid. So say so, and ask for the code
+            // again, never "wait": a customer who waits lets the payment lapse.
+            log.warn("[paynow] O'mari code NOT sent paymentReference={}: {}", p.getPaymentReference(), e.getMessage());
+            paymentRecordService.noteEvent(p.getId(), "O'mari code NOT sent: Paynow was not reached ("
+                    + e.getMessage() + ") — the customer can send it again");
+            return new OtpOutcome(p, 503,
+                    "We could not reach O'mari, so your code was not sent. Enter it again in a moment.");
         } catch (PaynowApiTransientException e) {
             log.warn("[paynow] O'mari code got no answer paymentReference={}: {}", p.getPaymentReference(), e.getMessage());
             paymentRecordService.noteEvent(p.getId(), "O'mari code sent, no usable answer (" + e.getMessage()
@@ -913,11 +932,6 @@ public class PaynowPaymentService {
     /** What the customer sees on Paynow's page. Paynow: no confidential information. */
     static String additionalInfo(OrderType orderType) {
         return orderType == OrderType.BOOKING ? "Ticketize tickets" : "Ticketize order";
-    }
-
-    private String returnUrlFor(UUID paymentId) {
-        String base = properties.getReturnUrl().strip();
-        return base + (base.contains("?") ? "&" : "?") + "transactionId=" + paymentId;
     }
 
     private static String canonicalCurrency(String c) {

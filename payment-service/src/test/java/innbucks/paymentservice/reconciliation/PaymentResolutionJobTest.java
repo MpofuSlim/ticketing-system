@@ -214,11 +214,35 @@ class PaymentResolutionJobTest {
                 .thenReturn(List.of(unconfirmed));
         when(bookings.confirmBooking(eq(unconfirmed.getBookingId()), any()))
                 .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-7"));
+        when(records.resolveUnconfirmed(eq(unconfirmed.getId()), eq("INN-CONF-7"), anyString())).thenReturn(true);
 
         newPaymentJob(payments, records, bookings, metrics).scanPayments();
 
-        verify(records).resolveUnconfirmed(unconfirmed.getId(), "INN-CONF-7");
+        verify(records).resolveUnconfirmed(eq(unconfirmed.getId()), eq("INN-CONF-7"), anyString());
         assertEquals(1.0, unconfirmedRetryCount(metrics, "resolved"));
+    }
+
+    @Test
+    void scanPayments_unconfirmedRetry_aRowThatMovedDuringTheConfirm_isNotCountedResolved() {
+        // The re-read saw COMPLETED_UNCONFIRMED, but during the confirm call a
+        // Paynow refund parked it IN_DOUBT: the strict promote refuses, and the
+        // retry says so instead of counting a resolution that did not happen.
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        BookingServiceClient bookings = mock(BookingServiceClient.class);
+        PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
+        Payment unconfirmed = paymentRow(Payment.PaymentStatus.COMPLETED_UNCONFIRMED,
+                Instant.now().minus(Duration.ofMinutes(3)));
+        when(payments.findByStatus(eq(Payment.PaymentStatus.COMPLETED_UNCONFIRMED), any(Pageable.class)))
+                .thenReturn(List.of(unconfirmed));
+        when(bookings.confirmBooking(eq(unconfirmed.getBookingId()), any()))
+                .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-9"));
+        when(records.resolveUnconfirmed(eq(unconfirmed.getId()), eq("INN-CONF-9"), anyString())).thenReturn(false);
+
+        newPaymentJob(payments, records, bookings, metrics).scanPayments();
+
+        assertEquals(0.0, unconfirmedRetryCount(metrics, "resolved"));
+        assertEquals(1.0, unconfirmedRetryCount(metrics, "moved"));
     }
 
     @Test
@@ -240,7 +264,7 @@ class PaymentResolutionJobTest {
         newPaymentJob(payments, records, bookings, metrics).scanPayments();
 
         verify(bookings, never()).confirmBooking(any(), any());
-        verify(records, never()).resolveUnconfirmed(any(), any());
+        verify(records, never()).resolveUnconfirmed(any(), any(), anyString());
     }
 
     @Test
@@ -261,11 +285,12 @@ class PaymentResolutionJobTest {
                 .thenThrow(new BookingServiceClient.BookingConfirmationException("hold gone for good", 409));
         when(bookings.confirmBooking(eq(healable.getBookingId()), any()))
                 .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-8"));
+        when(records.resolveUnconfirmed(eq(healable.getId()), eq("INN-CONF-8"), anyString())).thenReturn(true);
 
         newPaymentJob(payments, records, bookings, metrics).scanPayments();
 
-        verify(records).resolveUnconfirmed(healable.getId(), "INN-CONF-8");
-        verify(records, never()).resolveUnconfirmed(eq(broken.getId()), any());
+        verify(records).resolveUnconfirmed(eq(healable.getId()), eq("INN-CONF-8"), anyString());
+        verify(records, never()).resolveUnconfirmed(eq(broken.getId()), any(), anyString());
         assertEquals(1.0, unconfirmedRetryCount(metrics, "resolved"));
         assertEquals(1.0, unconfirmedRetryCount(metrics, "still_failing"));
     }

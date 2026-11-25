@@ -165,6 +165,18 @@ class PaynowPaymentControllerTest {
 
         assertThat(controller.submitOtp("not-a-uuid", new PaymentOtpRequest("482913")).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND);
+
+        // Never sent: a 503 the checkout can tell apart from the 502 "wait".
+        Payment notSent = row(PaymentRail.OMARI, UUID.randomUUID());
+        when(paynow.submitOtp(notSent.getId(), "482915")).thenReturn(new PaynowPaymentService.OtpOutcome(notSent, 503,
+                "We could not reach O'mari, so your code was not sent. Enter it again in a moment."));
+        ResponseEntity<ApiResult<PaymentResponse>> again =
+                controller.submitOtp(notSent.getId().toString(), new PaymentOtpRequest("482915"));
+        assertThat(again.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(again.getBody().getCode()).isEqualTo("503 SERVICE_UNAVAILABLE");
+        assertThat(again.getBody().getMessage())
+                .isEqualTo("We could not reach O'mari, so your code was not sent. Enter it again in a moment.");
+        assertThat(again.getBody().getData()).isNull();
     }
 
     @Test

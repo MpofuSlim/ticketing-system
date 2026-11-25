@@ -144,9 +144,11 @@ public class PaymentController {
                     "with `GET /payments/{transactionId}`, not by re-POSTing. " +
                     "\n\n**Paynow (ticket bookings only, additive):** send `paymentRail=PAYNOW_CARD` to pay on " +
                     "Paynow's own card page: the response carries `redirectUrl`; send the browser there (a " +
-                    "full redirect, not a frame). Paynow brings the customer back to the website's return " +
-                    "page with `transactionId` on the URL; the return itself proves nothing, so that page " +
-                    "follows `GET /payments/{transactionId}` until `stage` is COMPLETED or DECLINED. " +
+                    "full redirect, not a frame). Keep this response's `transactionId` (sessionStorage) before " +
+                    "you redirect: Paynow brings the customer back to the website's return page with NO " +
+                    "payment id on the URL, and never put one there yourself (history, analytics and logs " +
+                    "would keep it). The return itself proves nothing, so that page follows " +
+                    "`GET /payments/{transactionId}` until `stage` is COMPLETED or DECLINED. " +
                     "`checkoutExpiresAt` is when we stop waiting. Send `paymentRail=ONEMONEY` for a OneMoney " +
                     "prompt on the booking's phone: nothing to render, `promptExpiresAt` drives the countdown. " +
                     "Send `paymentRail=OMARI` and O'mari texts the booking's phone a code: " +
@@ -654,18 +656,29 @@ public class PaymentController {
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502",
                     description = "PAYNOW_CARD / OMARI: Paynow gave no usable answer, or no page or code "
-                            + "address, so there is nothing to pay with. The attempt is closed and nothing "
-                            + "was charged: POST again in a moment, or pay another way. (A OneMoney start "
-                            + "with no answer is never a 502: the prompt may be on the phone, so it answers "
-                            + "200 and the payment is followed up.)",
+                            + "address, so there is nothing to pay with. Any Paynow option, OneMoney "
+                            + "included: the start never reached Paynow (nothing was sent). Either way the "
+                            + "attempt is closed and nothing was charged: POST again in a moment, or pay "
+                            + "another way. (A OneMoney start that WAS sent but got no answer is never a "
+                            + "502: the prompt may be on the phone, so it answers 200 and the payment is "
+                            + "followed up.)",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Paynow could not be reached for a card payment", value = """
-                                    {
-                                      "code": "502 BAD_GATEWAY",
-                                      "message": "Card payment could not be started — please try again in a moment or pay another way",
-                                      "data": null
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "Paynow could not be reached for a card payment", value = """
+                                            {
+                                              "code": "502 BAD_GATEWAY",
+                                              "message": "Card payment could not be started — please try again in a moment or pay another way",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "A OneMoney start that never reached Paynow (nothing was sent)", value = """
+                                            {
+                                              "code": "502 BAD_GATEWAY",
+                                              "message": "OneMoney could not be started — please try again in a moment or pay another way",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
                     description = "The product service (booking-service / marketplace-service / "
                             + "loyalty-service) could not be read, or could not extend the hold before "
@@ -1501,7 +1514,8 @@ public class PaymentController {
                     + "The answer is the payment as it now stands (the same body as `GET /payments/{transactionId}`): "
                     + "`stage` COMPLETED when the payment went through, AWAITING_PAYMENT while O'mari is still "
                     + "confirming. A code sent again for a payment that already went through answers 200 with "
-                    + "that payment; O'mari is not asked again. A wrong code is a 400 and the customer can try "
+                    + "that payment; O'mari is not asked again. So does an attempt we had closed that Paynow "
+                    + "then reported paid: stage VERIFYING, \"don't pay again\". A wrong code is a 400 and the customer can try "
                     + "again; O'mari cancels the payment after 5 wrong codes (stage DECLINED), and a new payment "
                     + "is needed.")
     @ApiResponses({
@@ -1572,11 +1586,22 @@ public class PaymentController {
                             }
                             """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502",
-                    description = "O'mari could not be reached; follow the payment with GET /payments/{transactionId}",
+                    description = "The code was sent but O'mari gave no usable answer, so it may have been used: "
+                            + "do not ask for it again, follow the payment with GET /payments/{transactionId}",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             {
                               "code": "502 BAD_GATEWAY",
                               "message": "We could not reach O'mari. Wait a moment, then check your payment.",
+                              "data": null
+                            }
+                            """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "O'mari could not be reached, so the code was NOT sent: nothing was used. Keep the "
+                            + "code box open and let the customer send the same code again in a moment",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "code": "503 SERVICE_UNAVAILABLE",
+                              "message": "We could not reach O'mari, so your code was not sent. Enter it again in a moment.",
                               "data": null
                             }
                             """)))

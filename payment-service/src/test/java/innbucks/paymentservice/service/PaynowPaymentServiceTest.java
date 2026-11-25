@@ -168,8 +168,10 @@ class PaynowPaymentServiceTest {
         order.verify(records).recordPaynowInitiation(any(), eq(POLL), anyString(), eq("9510"), any(), any());
         assertThat(draft.getValue().getPaymentRail()).isEqualTo(PaymentRail.PAYNOW_CARD);
         assertThat(draft.getValue().getPaynowTrace()).matches("[0-9a-f]{32}").isEqualTo(trace.getValue());
-        assertThat(returnUrl.getValue()).isEqualTo("https://ticketize.example.co.zw/checkout/paynow-return?transactionId="
-                + draft.getValue().getId());
+        // The bare return page: our payment id never goes on a page URL, where
+        // history, analytics and logs would keep the key to the booking.
+        assertThat(returnUrl.getValue()).isEqualTo("https://ticketize.example.co.zw/checkout/paynow-return")
+                .doesNotContain(draft.getValue().getId().toString());
     }
 
     @Test
@@ -460,6 +462,37 @@ class PaynowPaymentServiceTest {
     }
 
     @Test
+    @DisplayName("O'mari code that never left (breaker open, no connection): a 503 asking for the code again, "
+            + "journalled as NOT sent, the payment left open; an ambiguous one stays the 502 'wait'")
+    void otp_notSent() {
+        Payment p = open(PaymentRail.OMARI, Instant.now().plusSeconds(600));
+        p.setPaynowOtpUrl("https://www.paynow.co.zw/interface/remoteotp/9512");
+        when(repository.findById(p.getId())).thenReturn(Optional.of(p));
+        when(client.submitOtp("USD", p.getPaynowOtpUrl(), "482913"))
+                .thenThrow(new PaynowNotSentException("Paynow is temporarily unavailable (circuit open)", null));
+
+        var notSent = service.submitOtp(p.getId(), "482913");
+
+        assertThat(notSent.httpStatus()).isEqualTo(503);
+        assertThat(notSent.message())
+                .isEqualTo("We could not reach O'mari, so your code was not sent. Enter it again in a moment.");
+        ArgumentCaptor<String> note = ArgumentCaptor.forClass(String.class);
+        verify(records).noteEvent(eq(p.getId()), note.capture());
+        assertThat(note.getValue()).startsWith("O'mari code NOT sent").doesNotContain("code sent,");
+        verify(records, never()).markFailed(any(), anyString(), anyString());
+        verify(records, never()).markExpired(any(), anyString());
+        verify(client, never()).pollOnce(anyString(), anyString());
+
+        // Sent, but no answer: the code may have been used, so "wait", not "again".
+        org.mockito.Mockito.reset(client);
+        when(client.submitOtp("USD", p.getPaynowOtpUrl(), "482914"))
+                .thenThrow(new PaynowApiTransientException("read timed out", null));
+        var ambiguous = service.submitOtp(p.getId(), "482914");
+        assertThat(ambiguous.httpStatus()).isEqualTo(502);
+        assertThat(ambiguous.message()).isEqualTo("We could not reach O'mari. Wait a moment, then check your payment.");
+    }
+
+    @Test
     @DisplayName("O'mari code on another rail is a 404; on a paid payment, that payment (200); on one that is over, a 409")
     void otp_wrongRailOrClosed() {
         Payment card = open(PaymentRail.PAYNOW_CARD, Instant.now().plusSeconds(600));
@@ -483,6 +516,19 @@ class PaynowPaymentServiceTest {
             ended.setStatus(over);
             when(repository.findById(ended.getId())).thenReturn(Optional.of(ended));
             assertThat(service.submitOtp(ended.getId(), "482913").httpStatus()).as(over.name()).isEqualTo(409);
+        }
+        // A closed attempt Paynow then reported paid (flagged): the payment as it
+        // stands (200, "don't pay again"), never "start a new payment".
+        for (Payment.PaymentStatus over : new Payment.PaymentStatus[] {Payment.PaymentStatus.FAILED,
+                Payment.PaymentStatus.EXPIRED}) {
+            Payment paidLate = open(PaymentRail.OMARI, Instant.now().plusSeconds(600));
+            paidLate.setPaynowOtpUrl("https://www.paynow.co.zw/interface/remoteotp/1");
+            paidLate.setStatus(over);
+            paidLate.setPaynowFlaggedAt(Instant.now().minusSeconds(60));
+            when(repository.findById(paidLate.getId())).thenReturn(Optional.of(paidLate));
+            var outcome = service.submitOtp(paidLate.getId(), "482913");
+            assertThat(outcome.httpStatus()).as("paid after close, " + over.name()).isEqualTo(200);
+            assertThat(outcome.payment()).isSameAs(paidLate);
         }
         verify(client, never()).submitOtp(anyString(), anyString(), anyString());
     }
