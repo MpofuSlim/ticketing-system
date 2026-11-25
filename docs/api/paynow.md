@@ -122,6 +122,14 @@ every 3 hours. Paynow's card page can outlive our deadline, and its update
 about a late payment can be lost. A paid status there is an operator's case
 (below).
 
+A customer is never answered from a stale "unpaid" either: before
+`GET /payments/{transactionId}` answers a card attempt we closed, and before
+`POST /payments` starts anything new for its order, we look at that attempt
+once more (one read, at most every `paynow.check-min-gap`, for the same 24 h).
+The return page reads right after a late payment, usually before Paynow's
+update has reached us. Card only: a OneMoney prompt or an O'mari code cannot be
+paid after its deadline. If the look fails, the answer is the row as it is.
+
 ## O'mari code
 
 POST to `remoteotpurl`: `id`, `otp`, `status=Message`, `hash`. A status update
@@ -184,7 +192,8 @@ your payment": it may have been used, so it is not asked for again.
   once per payment (`paynow_flagged_at`):
   - paid after we closed it: the payment stays closed, and its answer is stage
     VERIFYING ("we received your payment … don't pay again"), never "nothing
-    was charged";
+    was charged". Every later `POST /payments` for the order answers that
+    payment too, on every rail, and starts nothing: the order is paid for;
   - refunded or disputed before its booking was confirmed: parked IN_DOUBT, so
     the confirm-retry (which re-reads each row before its confirm) issues no
     tickets for money that went back; an earlier confirm that timed out may

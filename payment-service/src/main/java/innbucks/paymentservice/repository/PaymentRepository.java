@@ -246,6 +246,15 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     Optional<Payment> findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(
             OrderType orderType, String orderRef, Collection<Payment.PaymentStatus> statuses);
 
+    /**
+     * The order's latest attempt in {@code statuses} that was handed to an
+     * operator. With FAILED and EXPIRED, that is a Paynow attempt we closed
+     * which Paynow then reported paid: {@code POST /payments} answers it
+     * instead of starting a second payment for an order already paid.
+     */
+    Optional<Payment> findFirstByOrderTypeAndOrderRefAndPaynowFlaggedAtIsNotNullAndStatusInOrderByCreatedAtDesc(
+            OrderType orderType, String orderRef, Collection<Payment.PaymentStatus> statuses);
+
     /** The order's latest attempt on one rail — the EcoCash decline hold reads it. */
     Optional<Payment> findFirstByOrderTypeAndOrderRefAndPaymentRailOrderByCreatedAtDesc(
             OrderType orderType, String orderRef, innbucks.paymentservice.entity.PaymentRail paymentRail);

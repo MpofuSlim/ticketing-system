@@ -158,6 +158,10 @@ public class PaymentController {
                     "declined holds a new one on that option for 2 minutes: a POST meanwhile is a 400 with " +
                     "the declined attempt (stage `DECLINED`, `retryAfterSeconds`); another payment option " +
                     "works at once. A marketplace or voucher order on these options is a 400. " +
+                    "Paynow's card page can outlive our deadline: a card attempt we closed is looked at once " +
+                    "more before anything new starts for its booking, and once Paynow reports such an attempt " +
+                    "paid, every POST for that booking answers it (stage `VERIFYING`, \"don't pay again\") on " +
+                    "every rail and starts nothing. " +
                     "\n\nOne active payment per order across ALL rails: while an attempt is open on one rail, " +
                     "POSTing with the other returns the open attempt unchanged; switch rails once it lapses. " +
                     "Amount and currency are read server-side from the order. An InnBucks PAYMENT code is " +
@@ -877,7 +881,10 @@ public class PaymentController {
                     log.info("POST /payments paynow instant-check closed orderType={} orderRef={} — to the start",
                             key.type(), key.ref());
                 } else {
-                    // Re-read: a check can park the row IN_DOUBT and still answer OPEN.
+                    // Re-read: a check can park the row IN_DOUBT and still
+                    // answer OPEN, and PAID_LATE means another trigger closed
+                    // the row before Paynow said paid: its replay is VERIFYING,
+                    // "don't pay again", never a new payment.
                     Payment afterCheck = paymentRepository.findById(p.getId()).orElse(p);
                     log.info("POST /payments paynow replay orderType={} orderRef={} paymentReference={} status={}",
                             key.type(), key.ref(), p.getPaymentReference(), afterCheck.getStatus());
@@ -921,6 +928,34 @@ public class PaymentController {
                         key.type(), key.ref(), p.getPaymentReference(), p.getStatus());
                 return toReplayResponse(p, key);
             }
+        }
+
+        // Before anything new starts: the order's last Paynow card attempt, if
+        // we closed it unpaid, is looked at once more (one read, at most every
+        // 15 s). Paynow's page can outlive our deadline, and its update about
+        // a late payment can be lost or still on its way.
+        if (paynowPaymentService != null) {
+            paymentRepository.findFirstByOrderTypeAndOrderRefAndPaymentRailOrderByCreatedAtDesc(
+                            key.type(), key.ref(), innbucks.paymentservice.entity.PaymentRail.PAYNOW_CARD)
+                    .ifPresent(paynowPaymentService::lookAgainBeforeAnswering);
+        }
+
+        // Paynow reported this order paid after we had closed the attempt (its
+        // card page outlived our deadline): an operator confirms the booking by
+        // hand or refunds. The order is paid for, so a new payment on ANY rail
+        // would charge the customer twice. The answer is that attempt, as GET
+        // gives it (stage VERIFYING, "don't pay again"), until the operator
+        // has dealt with it; after a refund the customer books again.
+        var paidLate = paymentRepository
+                .findFirstByOrderTypeAndOrderRefAndPaynowFlaggedAtIsNotNullAndStatusInOrderByCreatedAtDesc(
+                        key.type(), key.ref(), innbucks.paymentservice.service.PaynowPaymentService.CLOSED_UNPAID)
+                .filter(innbucks.paymentservice.service.PaynowPaymentService::paidAfterClose);
+        if (paidLate.isPresent()) {
+            Payment p = paidLate.get();
+            log.warn("POST /payments refused a new payment: order {} {} was paid late through Paynow "
+                            + "(paymentReference={}, an operator's case) — answered with that attempt",
+                    key.type(), key.ref(), p.getPaymentReference());
+            return toReplayResponse(p, key);
         }
 
         // A return from ZimSwitch naming a checkout whose attempt has already
@@ -1195,9 +1230,7 @@ public class PaymentController {
         // status left as it was. On a closed row that is the only operator
         // case, so the flag means "the customer paid". Never answer it with
         // "nothing was charged; you can pay again".
-        boolean paidAfterClose = p.getPaymentRail() != null && p.getPaymentRail().isPaynow()
-                && p.getPaynowFlaggedAt() != null
-                && (p.getStatus() == Payment.PaymentStatus.FAILED || p.getStatus() == Payment.PaymentStatus.EXPIRED);
+        boolean paidAfterClose = innbucks.paymentservice.service.PaynowPaymentService.paidAfterClose(p);
         PaymentResponse.Status status = paidAfterClose ? PaymentResponse.Status.PROCESSING : switch (p.getStatus()) {
             case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
             // Terminal unpaid attempts — read by GET /payments/{id} only.
@@ -1380,8 +1413,12 @@ public class PaymentController {
     @Operation(
             summary = "Read one payment attempt by its transactionId (no login required)",
             description = "Public, like `POST /payments`: the `transactionId` from that response is the key, a "
-                    + "random UUID only the payer has. Read-only — it never starts, retries or checks a payment "
-                    + "upstream, so poll it as often as every 2–3 seconds while a payment is open.\n\n"
+                    + "random UUID only the payer has. It never starts or retries a payment, so poll it as often "
+                    + "as every 2–3 seconds while a payment is open. It asks a provider in one case only: a Paynow "
+                    + "card attempt we closed unpaid is looked at once more (one read, at most every 15 seconds, "
+                    + "for a day after the close) before it is answered, because Paynow's card page can outlive "
+                    + "our deadline. A late payment found that way reads stage `VERIFYING`, \"don't pay again\", "
+                    + "and `POST /payments` for that order then answers the same, on every rail.\n\n"
                     + "Use it to learn how an attempt ENDED, which polling the booking cannot tell you: stage "
                     + "`DECLINED` carries EcoCash's own reason in `failureReason` (e.g. \"You have insufficient "
                     + "funds to complete this transaction.\") and, while a new EcoCash attempt for the order is "
@@ -1493,6 +1530,13 @@ public class PaymentController {
         Payment p = paymentRepository.findById(id).orElse(null);
         if (p == null || p.getOrderType() == null || p.getOrderRef() == null) {
             return error(HttpStatus.NOT_FOUND, "Payment not found");
+        }
+        // A Paynow card attempt we closed unpaid can still be paid on Paynow's
+        // page, and the return page reads this right after a late payment,
+        // often before Paynow's update has reached us. Look once more (one
+        // read, at most every 15 s) before saying how it ended.
+        if (paynowPaymentService != null && paynowPaymentService.lookAgainBeforeAnswering(p) != null) {
+            p = paymentRepository.findById(id).orElse(p);
         }
         ApiResult<PaymentResponse> answer = replayResult(p, new OrderKey(p.getOrderType(), p.getOrderRef()));
         // Each rail's own decline hold answers for its own attempts.

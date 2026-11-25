@@ -274,6 +274,52 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
         assertTrue(payments.findById(p.getId()).orElseThrow().getPaynowFlaggedAt() != null);
     }
 
+    /**
+     * The lookup {@code POST /payments} uses to refuse a second payment: the
+     * order's latest Paynow attempt we closed that was then handed to an
+     * operator because Paynow reported it paid. A closed attempt nobody flagged,
+     * a flagged one still parked IN_DOUBT, and another order's are not it.
+     */
+    @Test
+    void paynowPaidAfterCloseLookup_findsOnlyTheOrdersFlaggedClosedAttempt() {
+        java.time.Instant now = java.time.Instant.now();
+        var card = innbucks.paymentservice.entity.PaymentRail.PAYNOW_CARD;
+        var oneMoney = innbucks.paymentservice.entity.PaymentRail.ONEMONEY;
+        UUID bookingId = UUID.randomUUID();
+        java.util.function.BiFunction<PaymentStatus, java.time.Instant, Payment> attempt = (status, createdAt) -> {
+            Payment p = paynowRow(card, status, createdAt, createdAt.plusSeconds(1800), PAYNOW_POLL, null);
+            p.setBookingId(bookingId);
+            return p;
+        };
+        Payment unflagged = payments.saveAndFlush(attempt.apply(PaymentStatus.EXPIRED, now.minusSeconds(4000)));
+        Payment paidLate = attempt.apply(PaymentStatus.EXPIRED, now.minusSeconds(3000));
+        paidLate.setPaynowFlaggedAt(now.minusSeconds(900));
+        payments.saveAndFlush(paidLate);
+        Payment laterUnflagged = attempt.apply(PaymentStatus.FAILED, now.minusSeconds(600));
+        laterUnflagged.setPaymentRail(oneMoney);
+        payments.saveAndFlush(laterUnflagged);
+        Payment parked = attempt.apply(PaymentStatus.IN_DOUBT, now.minusSeconds(300));
+        parked.setPaynowFlaggedAt(now.minusSeconds(200));
+        payments.saveAndFlush(parked);
+        Payment otherOrder = paynowRow(card, PaymentStatus.EXPIRED, now.minusSeconds(100), now.plusSeconds(1700),
+                PAYNOW_POLL, null);
+        otherOrder.setPaynowFlaggedAt(now.minusSeconds(50));
+        payments.saveAndFlush(otherOrder);
+
+        var found = payments.findFirstByOrderTypeAndOrderRefAndPaynowFlaggedAtIsNotNullAndStatusInOrderByCreatedAtDesc(
+                innbucks.paymentservice.order.OrderType.BOOKING, bookingId.toString(),
+                innbucks.paymentservice.service.PaynowPaymentService.CLOSED_UNPAID);
+
+        assertEquals(paidLate.getId(), found.map(Payment::getId).orElse(null),
+                "the flagged closed attempt, ahead of the newer unflagged and IN_DOUBT ones");
+        assertTrue(innbucks.paymentservice.service.PaynowPaymentService.paidAfterClose(found.orElseThrow()));
+        assertFalse(payments.findFirstByOrderTypeAndOrderRefAndPaynowFlaggedAtIsNotNullAndStatusInOrderByCreatedAtDesc(
+                        innbucks.paymentservice.order.OrderType.BOOKING, UUID.randomUUID().toString(),
+                        innbucks.paymentservice.service.PaynowPaymentService.CLOSED_UNPAID).isPresent(),
+                "an order with no such attempt");
+        assertNull(payments.findById(unflagged.getId()).orElseThrow().getPaynowFlaggedAt());
+    }
+
     @Autowired
     private innbucks.paymentservice.reconciliation.UnconfirmedPaymentAlerter alerter;
 

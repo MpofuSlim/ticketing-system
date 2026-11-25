@@ -647,7 +647,7 @@ class PaynowPaymentServiceTest {
     }
 
     @Test
-    @DisplayName("Paid, but the row closed between our read and our write: the booking is NOT confirmed; an operator's case")
+    @DisplayName("Paid, but the row closed between our read and our write: the booking is NOT confirmed; an operator's case, never 'slot free'")
     void resolve_paidOnARowClosedMeanwhile() {
         Payment p = open(PaymentRail.PAYNOW_CARD, Instant.now().minusSeconds(60));
         when(repository.findById(p.getId()))
@@ -655,7 +655,9 @@ class PaynowPaymentServiceTest {
         when(records.claimPaid(eq(p.getId()), any(), anyString())).thenReturn(false);
         when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
 
-        assertThat(service.resolveOpen(p, Trigger.SWEEP)).isEqualTo(CheckOutcome.CLOSED);
+        // Not CLOSED: a customer re-POST reads CLOSED as "the slot is free" and
+        // would start a second payment for an order already paid.
+        assertThat(service.resolveOpen(p, Trigger.SWEEP)).isEqualTo(CheckOutcome.PAID_LATE);
         verify(resolution, never()).confirmOrder(any());
         verify(records, never()).resolveUnconfirmed(any(), any(), anyString());
         verify(records).flagPaynowOperatorCase(p.getId());
@@ -748,7 +750,7 @@ class PaynowPaymentServiceTest {
         assertThat(resolutions("paid_after_close")).isZero();
 
         when(client.poll("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
-        assertThat(service.recheckClosed(p)).isEqualTo(CheckOutcome.CLOSED);
+        assertThat(service.recheckClosed(p)).isEqualTo(CheckOutcome.PAID_LATE);
         verify(records).flagPaynowOperatorCase(p.getId());
         verify(records).noteEvent(eq(p.getId()), anyString());
         assertThat(resolutions("paid_after_close")).isEqualTo(1);
@@ -764,6 +766,76 @@ class PaynowPaymentServiceTest {
         q.setPaynowPollUrl("https://www.paynow.co.zw/Interface/CheckPayment/?guid=g2");
         when(client.poll("USD", q.getPaynowPollUrl())).thenThrow(new PaynowApiTransientException("down"));
         assertThat(service.recheckClosed(q)).isEqualTo(CheckOutcome.ERROR);
+    }
+
+    /** A card attempt we closed unpaid {@code closedAgo} ago, last looked at {@code checkedAgo} ago. */
+    private static Payment closedCard(Duration closedAgo, Duration checkedAgo) {
+        Payment p = open(PaymentRail.PAYNOW_CARD, Instant.now().minus(closedAgo).minus(Duration.ofMinutes(2)));
+        p.setStatus(Payment.PaymentStatus.EXPIRED);
+        p.setCompletedAt(Instant.now().minus(closedAgo));
+        p.setPaynowCheckedAt(Instant.now().minus(checkedAgo));
+        return p;
+    }
+
+    @Test
+    @DisplayName("a customer reading a card attempt we closed: Paynow is asked once more (one read); paid late is the operator's case")
+    void lookAgain_paidLate() {
+        Payment p = closedCard(Duration.ofMinutes(1), Duration.ofMinutes(1));
+        when(client.pollOnce("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.PAID, "Paid", "12.50", REFERENCE));
+
+        assertThat(service.lookAgainBeforeAnswering(p)).isEqualTo(CheckOutcome.PAID_LATE);
+        verify(records).stampPaynowChecked(p.getId());
+        verify(records).flagPaynowOperatorCase(p.getId());
+        assertThat(resolutions("paid_after_close")).isEqualTo(1);
+        verify(client, never()).poll(anyString(), anyString());
+        verify(resolution, never()).confirmOrder(any());
+        verify(records, never()).claimPaid(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("looked at and still unpaid: CLOSED, nothing raised")
+    void lookAgain_stillUnpaid() {
+        Payment p = closedCard(Duration.ofMinutes(3), Duration.ofSeconds(20));
+        when(client.pollOnce("USD", POLL)).thenReturn(status(PaynowStatus.Outcome.OPEN, "Sent", null, null));
+
+        assertThat(service.lookAgainBeforeAnswering(p)).isEqualTo(CheckOutcome.CLOSED);
+        verify(records, never()).flagPaynowOperatorCase(any());
+        assertThat(resolutions("paid_after_close")).isZero();
+    }
+
+    @Test
+    @DisplayName("no look when one was just made, the attempt is not a closed card one, it is an operator's case, or it closed over a day ago")
+    void lookAgain_notDue() {
+        assertThat(service.lookAgainBeforeAnswering(closedCard(Duration.ofMinutes(1), Duration.ofSeconds(5)))).isNull();
+
+        Payment oneMoney = closedCard(Duration.ofMinutes(1), Duration.ofMinutes(1));
+        oneMoney.setPaymentRail(PaymentRail.ONEMONEY);
+        assertThat(service.lookAgainBeforeAnswering(oneMoney)).isNull();
+
+        Payment flagged = closedCard(Duration.ofMinutes(1), Duration.ofMinutes(1));
+        flagged.setPaynowFlaggedAt(Instant.now());
+        assertThat(service.lookAgainBeforeAnswering(flagged)).isNull();
+
+        assertThat(service.lookAgainBeforeAnswering(closedCard(Duration.ofHours(25), Duration.ofHours(4)))).isNull();
+
+        Payment open = open(PaymentRail.PAYNOW_CARD, Instant.now().plusSeconds(600));
+        assertThat(service.lookAgainBeforeAnswering(open)).isNull();
+        assertThat(service.lookAgainBeforeAnswering(null)).isNull();
+
+        verifyNoInteractions(client);
+        verify(records, never()).stampPaynowChecked(any());
+    }
+
+    @Test
+    @DisplayName("Paynow cannot be asked, or the ledger write fails: ERROR, never an exception to the customer")
+    void lookAgain_failsQuietly() {
+        Payment p = closedCard(Duration.ofMinutes(1), Duration.ofMinutes(1));
+        when(client.pollOnce("USD", POLL)).thenThrow(new PaynowApiTransientException("down"));
+        assertThat(service.lookAgainBeforeAnswering(p)).isEqualTo(CheckOutcome.ERROR);
+
+        Payment q = closedCard(Duration.ofMinutes(1), Duration.ofMinutes(1));
+        org.mockito.Mockito.doThrow(new IllegalStateException("db down")).when(records).stampPaynowChecked(q.getId());
+        assertThat(service.lookAgainBeforeAnswering(q)).isEqualTo(CheckOutcome.ERROR);
     }
 
     @Test

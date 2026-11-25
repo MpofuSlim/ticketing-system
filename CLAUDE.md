@@ -5396,7 +5396,24 @@ our own rails: never route them through Paynow (its fee, one more hop).
     conditional UPDATE (`flagPaynowOperatorCase`).
   - A closed (FAILED/EXPIRED) row with the flag is answered stage VERIFYING,
     "don't pay again: support will confirm or refund", never "nothing was
-    charged". Every case, `echo_mismatch` included, logs
+    charged" (`PaynowPaymentService.paidAfterClose`, the one definition). And
+    every later `POST /payments` for its order answers that row, on ANY rail,
+    and starts nothing: the order is paid for, and a second payment would be a
+    second charge (`findFirstBy…PaynowFlaggedAtIsNotNull…`). A resolver that
+    finds Paynow paid on a row another trigger had just closed answers
+    `PAID_LATE`, never `CLOSED` ("slot free"). After a refund the customer
+    books again; the old booking stays answered "don't pay again".
+  - **A card attempt we closed is looked at once more before a customer is
+    answered** (`lookAgainBeforeAnswering`): `GET /payments/{id}` on it, and
+    `POST /payments` for its order before anything new starts. One read
+    (`pollOnce`), at most every `PAYNOW_CHECK_MIN_GAP` (15 s), for
+    `PAYNOW_CLOSED_RECHECK_FOR` after the close; a failure answers from the row.
+    The return page reads right after a late payment, usually before Paynow's
+    update has reached us. Card only: OneMoney and O'mari cannot be paid after
+    their deadline. Residual: a late payment on a booking whose hold has
+    already lapsed is still only caught for THAT booking; a customer who books
+    again pays again.
+  - Every case, `echo_mismatch` included, logs
     `[paynow] OPERATOR CASE <outcome>` with the order (search it with
     `grep -F`: `[paynow]` is a bracket expression to a plain grep). Logs do
     not survive a rollout, so the operator's list is the workbasket

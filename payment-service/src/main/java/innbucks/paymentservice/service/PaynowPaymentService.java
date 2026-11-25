@@ -294,8 +294,9 @@ public class PaynowPaymentService {
                         "Paynow started the payment but gave " + (rail == PaymentRail.OMARI
                                 ? "no URL for the customer's code" : "no page to pay on"));
                 metrics.incPaynowStart(rail.name(), "refused");
+                // The same sentence as every other 502 of a start: one per option.
                 return StartOutcome.failed(opened, 502,
-                        label + " could not be started — please try again or pay another way");
+                        label + " could not be started — please try again in a moment or pay another way");
             }
             metrics.incPaynowStart(rail.name(), "started");
             log.info("[paynow] {} started paymentReference={} paynowReference={} expiresAt={}",
@@ -355,11 +356,37 @@ public class PaynowPaymentService {
         PAID,
         /** Closed unpaid: the slot is free. */
         CLOSED,
+        /**
+         * Paynow reports PAID on an attempt we had already closed: an operator's
+         * case ({@link #paidAfterClose}). The order is paid for, so nothing new
+         * may start for it, whatever the attempt's status says.
+         */
+        PAID_LATE,
         /** Still open, or parked for an operator. */
         OPEN,
         /** Paynow could not be asked. */
         ERROR
     }
+
+    /**
+     * A Paynow attempt we closed unpaid (FAILED or EXPIRED) that Paynow then
+     * reported PAID: its card page outlived our deadline, and an operator
+     * confirms the booking by hand or refunds. Its status is left as it was.
+     * On a closed row the operator's flag has no other cause, so it means "the
+     * customer paid": never answer such a row with "nothing was charged", and
+     * never start a second payment for its order. The one definition, for
+     * {@code POST /payments}, {@code GET /payments/{transactionId}} and the
+     * O'mari code endpoint.
+     */
+    public static boolean paidAfterClose(Payment p) {
+        return p != null && p.getPaymentRail() != null && p.getPaymentRail().isPaynow()
+                && p.getPaynowFlaggedAt() != null
+                && CLOSED_UNPAID.contains(p.getStatus());
+    }
+
+    /** The statuses a closed unpaid Paynow attempt is left in, a paid-after-close one included. */
+    public static final Set<Payment.PaymentStatus> CLOSED_UNPAID =
+            EnumSet.of(Payment.PaymentStatus.FAILED, Payment.PaymentStatus.EXPIRED);
 
     /** Who asked for a check: everyone but a Paynow update or an O'mari code waits out the minimum gap. */
     public enum Trigger { RESULT_UPDATE, OTP, CUSTOMER, SWEEP }
@@ -494,7 +521,9 @@ public class PaynowPaymentService {
             operatorCase(now, "paid_after_close", "Paynow reports " + status.rawStatus()
                     + " on a payment we had closed " + current + " (Paynow ref " + paynowRef
                     + "). The customer paid; confirm the booking by hand or refund.");
-            return CheckOutcome.CLOSED;
+            // Never CLOSED: that reads "the slot is free", and a customer
+            // re-POST would start a second payment for an order already paid.
+            return CheckOutcome.PAID_LATE;
         }
         log.warn("[paynow] paid status for paymentReference={} left alone: the row is {}",
                 now.getPaymentReference(), current);
@@ -660,12 +689,10 @@ public class PaynowPaymentService {
         if (p == null || p.getPaymentRail() != PaymentRail.OMARI) {
             return new OtpOutcome(null, 404, "Payment not found");
         }
-        boolean paidAfterClose = p.getPaynowFlaggedAt() != null
-                && (p.getStatus() == Payment.PaymentStatus.FAILED || p.getStatus() == Payment.PaymentStatus.EXPIRED);
         if (p.getStatus() == Payment.PaymentStatus.SUCCEEDED
                 || p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED
                 || p.getStatus() == Payment.PaymentStatus.IN_DOUBT
-                || paidAfterClose) {
+                || paidAfterClose(p)) {
             // Paid (or being checked), including a closed attempt Paynow then
             // reported paid: a repeated or late code changes nothing. Answer
             // with the payment as it stands ("don't pay again" for a late
@@ -785,6 +812,49 @@ public class PaynowPaymentService {
      * changes automatically.
      */
     public CheckOutcome recheckClosed(Payment stale) {
+        return recheckClosed(stale, false);
+    }
+
+    /**
+     * A customer is reading a card attempt we closed unpaid
+     * ({@code GET /payments/{transactionId}}) or paying again for its order
+     * ({@code POST /payments}). Paynow's card page can outlive our deadline,
+     * and its update about a late payment can be lost or still on its way, so
+     * we look once more before answering: one read (the customer is waiting),
+     * at most every {@code paynow.check-min-gap}, for
+     * {@code paynow.closed-recheck-for} after the close. A late payment becomes
+     * the operator's case ({@link CheckOutcome#PAID_LATE}), which every later
+     * answer for the order then gives. Null when no look was due. Never
+     * throws: a failed look answers from the row as it is.
+     */
+    public CheckOutcome lookAgainBeforeAnswering(Payment p) {
+        if (!closedCardLookDue(p, Instant.now())) {
+            return null;
+        }
+        try {
+            return recheckClosed(p, true);
+        } catch (RuntimeException e) {
+            metrics.incPaynowResolution("error");
+            log.warn("[paynow] look at a closed card attempt failed paymentReference={} — answered from the row: {}",
+                    p.getPaymentReference(), e.getMessage());
+            return CheckOutcome.ERROR;
+        }
+    }
+
+    /** A card attempt we closed unpaid, not handed to an operator, inside the late-payment window and not just looked at. */
+    boolean closedCardLookDue(Payment p, Instant now) {
+        Duration window = properties.getClosedRecheckFor();
+        Duration gap = properties.getCheckMinGap();
+        return p != null && p.getPaymentRail() == PaymentRail.PAYNOW_CARD
+                && p.getStatus() == Payment.PaymentStatus.EXPIRED
+                && p.getPaynowFlaggedAt() == null
+                && (p.getPaynowPollUrl() != null || p.getPaynowTrace() != null)
+                && p.getCompletedAt() != null
+                && window != null && p.getCompletedAt().plus(window).isAfter(now)
+                && (p.getPaynowCheckedAt() == null || gap == null || !p.getPaynowCheckedAt().plus(gap).isAfter(now));
+    }
+
+    private CheckOutcome recheckClosed(Payment stale, boolean customerWaiting) {
         Payment p = paymentRepository.findById(stale.getId()).orElse(stale);
         if (p.getStatus() != Payment.PaymentStatus.EXPIRED || p.getPaymentRail() == null
                 || !p.getPaymentRail().isPaynow() || p.getPaynowFlaggedAt() != null
@@ -794,8 +864,10 @@ public class PaynowPaymentService {
         paymentRecordService.stampPaynowChecked(p.getId());
         PaynowStatus status;
         try {
+            // A customer waiting on the answer gets one read, no retries.
             status = p.getPaynowPollUrl() != null
-                    ? paynowClient.poll(p.getCurrency(), p.getPaynowPollUrl())
+                    ? (customerWaiting ? paynowClient.pollOnce(p.getCurrency(), p.getPaynowPollUrl())
+                            : paynowClient.poll(p.getCurrency(), p.getPaynowPollUrl()))
                     : paynowClient.trace(p.getCurrency(), p.getPaynowTrace());
         } catch (RuntimeException e) {
             metrics.incPaynowResolution("error");
@@ -813,7 +885,7 @@ public class PaynowPaymentService {
                 + " on a payment we had closed " + p.getStatus() + " (Paynow ref " + paynowRef + ")"
                 + (mismatch != null ? "; the echo does not match the ledger (" + mismatch + ")" : "")
                 + ". The customer paid; confirm the booking by hand or refund.");
-        return CheckOutcome.CLOSED;
+        return CheckOutcome.PAID_LATE;
     }
 
     private boolean pastDeadline(Payment p) {

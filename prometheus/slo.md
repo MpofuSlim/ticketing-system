@@ -640,8 +640,12 @@ outcomes that change nothing automatically (`docs/api/paynow.md`):
 - `paid_after_close` — Paynow reports a payment Paid that we had already
   closed (FAILED or EXPIRED): the customer paid, usually on Paynow's page after
   our deadline, and has no ticket from it. Found by Paynow's update or by the
-  sweep's re-check of closed payments (24 h). The payment's answer to the
-  customer is "don't pay again; support will confirm or refund".
+  sweep's re-check of closed payments (24 h), or by the customer's own next
+  read or payment attempt (a card attempt we closed is looked at again before
+  the customer is answered). The payment's answer to the customer is "don't pay
+  again; support will confirm or refund", and `POST /payments` for that booking
+  answers the same on every rail and starts nothing, until you deal with it.
+  After a refund the customer makes a new booking.
 - `reversed_after_paid` — Paynow reports Refunded or Disputed after the booking
   was confirmed: the customer has tickets and the money has gone back or is held.
   Only Paynow's update brings this (nothing polls a confirmed payment), so a
@@ -667,8 +671,10 @@ database, not a grep:
   (to grep, `[paynow]` is a set of letters):
   `kubectl -n ticketing logs deploy/payment-service | grep -F '[paynow] OPERATOR CASE'`.
 
-A case is raised once per payment (`payment.paynow_flagged_at`); a repeat update
-logs `already raised` at INFO. The payment's journal
+A case is raised once per payment (`payment.paynow_flagged_at`). A later update
+for a flagged payment is not checked again (it counts as
+`payment_payments_paynow_result_update_total{outcome="ignored"}`); `already
+raised` (INFO) appears only when two checks race. The payment's journal
 (`payment_event`, database `payment_service`) carries the same note. Check the
 transaction in the merchant's Paynow account by our payment reference (the
 `reference` Paynow shows) or Paynow's own, then:
