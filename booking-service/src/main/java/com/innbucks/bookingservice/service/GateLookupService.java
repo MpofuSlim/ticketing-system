@@ -174,7 +174,7 @@ public class GateLookupService {
                 () -> bookingRepository.findByConfirmationNumberWithItems(confirmationNumber))
                 .orElse(null);
         if (booking == null) {
-            log.info("Gate lookup miss confirmationNumber={} scanner={}", confirmationNumber, scanner);
+            log.info("Super-app gate lookup miss confirmationNumber={} scanner={}", confirmationNumber, scanner);
             return refusal(GateLookupResponseDTO.Status.BOOKING_NOT_FOUND, confirmationNumber);
         }
         if (!eventId.equals(booking.getEventId()) || booking.getTenantUserUuid() == null
@@ -184,7 +184,7 @@ public class GateLookupService {
             return refusal(GateLookupResponseDTO.Status.WRONG_EVENT, confirmationNumber);
         }
         if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
-            log.info("Gate lookup rejected, booking not confirmed confirmationNumber={} status={} scanner={}",
+            log.info("Super-app gate lookup rejected, booking not confirmed confirmationNumber={} status={} scanner={}",
                     confirmationNumber, booking.getStatus(), scanner);
             return refusal(GateLookupResponseDTO.Status.BOOKING_NOT_CONFIRMED, confirmationNumber);
         }

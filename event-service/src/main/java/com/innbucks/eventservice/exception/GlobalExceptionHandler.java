@@ -212,9 +212,11 @@ public class GlobalExceptionHandler {
             org.springframework.http.converter.HttpMessageNotReadableException ex) {
         boolean badDate = false;
         Throwable deepest = ex;
-        for (Throwable t = ex; t != null && !badDate; t = t.getCause() == t ? null : t.getCause()) {
-            badDate = t instanceof java.time.format.DateTimeParseException;
-            deepest = t;
+        Throwable next = ex.getCause();
+        while (next != null && next != deepest && !badDate) {
+            badDate = next instanceof java.time.format.DateTimeParseException;
+            deepest = next;
+            next = next.getCause();
         }
         log.warn("Unreadable request body badDate={} type={}", badDate, deepest.getClass().getSimpleName());
         return ResponseEntity.badRequest()
@@ -239,7 +241,7 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(FieldErrorsException.class)
     public ResponseEntity<ApiResult<Map<String, String>>> handleFieldErrors(FieldErrorsException ex) {
-        log.warn("Validation failed fields={}", ex.getErrors().keySet());
+        log.warn("Validation failed (service rules) fields={}", ex.getErrors().keySet());
         return ResponseEntity.badRequest().body(ApiResult.<Map<String, String>>builder()
                 .code("400 BAD_REQUEST")
                 .message("Validation failed")
@@ -258,7 +260,7 @@ public class GlobalExceptionHandler {
                         (a, b) -> a,
                         java.util.LinkedHashMap::new
                 ));
-        log.warn("Validation failed fields={}", fieldErrors);
+        log.warn("Validation failed (request body) fields={}", fieldErrors);
         return ResponseEntity.badRequest().body(ApiResult.<Map<String, String>>builder()
                 .code("400 BAD_REQUEST")
                 .message("Validation failed")

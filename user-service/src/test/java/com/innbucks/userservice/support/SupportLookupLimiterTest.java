@@ -174,6 +174,19 @@ class SupportLookupLimiterTest {
     }
 
     @Test
+    @DisplayName("no reply from Redis: the memory window decides, never an exception to the caller")
+    void nullRedisReply_fallsBackToMemory() {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        SupportLookupLimiter limiter = new SupportLookupLimiter(redis, limits(1, 1), SupportMetrics.none(),
+                () -> 0L);
+        SupportAgent a = agent();
+        when(redis.execute(any(RedisScript.class), anyList(), any(Object[].class))).thenReturn(null);
+
+        limiter.acquire(a);
+        assertThatThrownBy(() -> limiter.acquire(a)).isInstanceOf(SupportPolicyException.class);
+    }
+
+    @Test
     @DisplayName("the in-memory window is race-free on one replica: N threads, exactly the limit admitted")
     void memoryWindowIsRaceFree() throws Exception {
         SupportLookupLimiter limiter = new SupportLookupLimiter(null, limits(10, 100), SupportMetrics.none(),
