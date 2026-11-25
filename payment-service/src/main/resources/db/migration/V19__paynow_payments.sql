@@ -17,7 +17,11 @@
 --
 -- code_expires_at is reused as the local deadline, as on every other rail.
 -- Every column is nullable with no default: a catalogue change, no rewrite,
--- and the previous image ignores them.
+-- and the previous image ignores them. Re-creating the rail CHECK reads every
+-- row under the table lock (seconds on today's table). The lock_timeout makes
+-- a busy table fail this migration fast (the old pod serves on) rather than
+-- queue every payment request behind it.
+SET LOCAL lock_timeout = '10s';
 
 ALTER TABLE payment ADD COLUMN paynow_trace VARCHAR(32);
 ALTER TABLE payment ADD COLUMN paynow_poll_url VARCHAR(512);
