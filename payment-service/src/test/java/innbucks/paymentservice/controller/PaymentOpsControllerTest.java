@@ -11,6 +11,7 @@ import innbucks.paymentservice.repository.PaymentRepository;
 import innbucks.paymentservice.repository.ReconRunRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -109,6 +110,40 @@ class PaymentOpsControllerTest {
         assertEquals(AgeBucket.UNDER_24H, byRef(queue, fresh).ageBucket());
         // MSISDN is masked for the ops screen — full numbers stay in the DB.
         assertEquals("****6983", queue.items().get(0).msisdnMasked());
+    }
+
+    @Test
+    void exceptions_listPaynowLateMoney_andSayWhoseRecordsToCheck() {
+        // Paid after we closed it (EXPIRED) and refunded after the booking was
+        // confirmed (SUCCEEDED): rows no other category shows, raised once.
+        Payment paidLate = aged(PaymentStatus.EXPIRED, Duration.ofHours(5));
+        paidLate.setPaymentRail(innbucks.paymentservice.entity.PaymentRail.PAYNOW_CARD);
+        paidLate.setPaynowFlaggedAt(Instant.now().minus(Duration.ofHours(1)));
+        Payment refundedLater = aged(PaymentStatus.SUCCEEDED, Duration.ofHours(20));
+        refundedLater.setPaymentRail(innbucks.paymentservice.entity.PaymentRail.ONEMONEY);
+        refundedLater.setPaynowFlaggedAt(Instant.now().minus(Duration.ofHours(2)));
+        Payment ecocashDoubt = aged(PaymentStatus.IN_DOUBT, Duration.ofHours(3));
+        ecocashDoubt.setPaymentRail(innbucks.paymentservice.entity.PaymentRail.ECOCASH);
+        when(payments.findByStatus(eq(PaymentStatus.IN_DOUBT), any(Pageable.class))).thenReturn(List.of(ecocashDoubt));
+        ArgumentCaptor<Instant> since = ArgumentCaptor.forClass(Instant.class);
+        when(payments.findByPaynowFlaggedAtAfterAndStatusInOrderByPaynowFlaggedAtAsc(since.capture(),
+                eq(java.util.EnumSet.of(PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.SUCCEEDED)),
+                any(Pageable.class)))
+                .thenReturn(List.of(paidLate, refundedLater));
+
+        ExceptionQueue queue = controller.exceptions(TOKEN).getBody().getData();
+
+        assertEquals(3, queue.totalCount());
+        assertEquals(2, queue.paynowLateMoneyCount());
+        assertEquals(1, queue.inDoubtCount());
+        assertEquals("PAYNOW_CARD", byRef(queue, paidLate).paymentRail());
+        assertTrue(byRef(queue, paidLate).why().startsWith("Paynow reports this payment PAID after we closed it"));
+        assertTrue(byRef(queue, refundedLater).why().startsWith("Paynow reports this payment refunded or disputed"));
+        // An EcoCash row is checked against EcoCash, never "InnBucks records".
+        assertEquals("ECOCASH", byRef(queue, ecocashDoubt).paymentRail());
+        assertTrue(byRef(queue, ecocashDoubt).why().contains("EcoCash's records"));
+        // Cases leave the list by age: raised in the last 30 days.
+        assertTrue(Duration.between(since.getValue(), Instant.now()).toDays() >= 29);
     }
 
     @Test

@@ -62,7 +62,7 @@ POST, `application/x-www-form-urlencoded`. Fields we send, in this order:
 | `reference` | ✓ | ✓ | Our payment reference (`TKZ-<tag>-<hex>`), unique per transaction |
 | `amount` | ✓ | ✓ | Major units, two decimals: `"12.50"` |
 | `additionalinfo` | ✓ | ✓ | Shown to the customer; no confidential data. We send "Ticketize tickets". |
-| `returnurl` | ✓ | ✓ | Web: the website's return page + `transactionId=<id>`. Express: the same page (or the result URL). |
+| `returnurl` | ✓ | ✓ | Web: the website's return page, as configured. **Never with our payment id on it**: an id in a page URL reaches browser history, the site's analytics and its host's logs, and `GET /payments/{id}` turns it into the booking. The website keeps the `transactionId` across the redirect. Express: the same page (or the result URL). |
 | `resulturl` | ✓ | ✓ | Our `POST /payments/paynow/result`, absolute, with `/foundry` |
 | `authemail` | — | ✓ | Required on express. **Test mode: must be a login email of the merchant.** Not sent on web (in test mode any other email blocks the payment). |
 | `phone` | — | ✓ | `0771234567` form |
@@ -122,6 +122,14 @@ every 3 hours. Paynow's card page can outlive our deadline, and its update
 about a late payment can be lost. A paid status there is an operator's case
 (below).
 
+A customer is never answered from a stale "unpaid" either: before
+`GET /payments/{transactionId}` answers a card attempt we closed, and before
+`POST /payments` starts anything new for its order, we look at that attempt
+once more (one read, at most every `paynow.check-min-gap`, for the same 24 h).
+The return page reads right after a late payment, usually before Paynow's
+update has reached us. Card only: a OneMoney prompt or an O'mari code cannot be
+paid after its deadline. If the look fails, the answer is the row as it is.
+
 ## O'mari code
 
 POST to `remoteotpurl`: `id`, `otp`, `status=Message`, `hash`. A status update
@@ -132,8 +140,15 @@ After an accepted code we read the payment's status ONCE (no retries): the
 customer waits on that reply behind the gateway's 60 s, and the result update
 or the sweep confirms the payment if the read fails. A code sent again for a
 payment that already went through (or is being confirmed) answers 200 with that
-payment, and O'mari is not asked again. A code
+payment, and O'mari is not asked again; so does an attempt we had closed that
+Paynow then reported paid (stage VERIFYING, "don't pay again"). A code
 for a payment that is over is a 409 whose `data` says how it ended.
+
+A code that never left our server (our breaker was open, or no connection
+opened) is a **503** "…your code was not sent. Enter it again in a moment.": it
+was not used and O'mari counted no attempt, so the customer sends it again. A
+code that was sent with no usable answer stays the **502** "wait, then check
+your payment": it may have been used, so it is not asked for again.
 
 ## Our rules (PaynowPaymentService)
 
@@ -177,15 +192,27 @@ for a payment that is over is a 409 whose `data` says how it ended.
   once per payment (`paynow_flagged_at`):
   - paid after we closed it: the payment stays closed, and its answer is stage
     VERIFYING ("we received your payment … don't pay again"), never "nothing
-    was charged";
+    was charged". Every later `POST /payments` for the order answers that
+    payment too, on every rail, and starts nothing: the order is paid for;
   - refunded or disputed before its booking was confirmed: parked IN_DOUBT, so
     the confirm-retry (which re-reads each row before its confirm) issues no
     tickets for money that went back; an earlier confirm that timed out may
     still have reached the booking, so the operator checks it;
   - refunded or disputed after the booking was confirmed: the tickets are the
     operator's call.
+- **A refund or dispute after confirmation is seen only through Paynow's
+  update.** Nothing polls a confirmed payment again. So the gateway's
+  `paynow-result-write-route` bucket is sized for all of Paynow (50/s, burst
+  500, one bucket for Paynow's own address), not like EcoCash's notify (5/s,
+  burst 20): a 429 there never reaches payment-service, and Paynow stops
+  resending after ten tries.
 - Paynow's URLs are pinned to `PAYNOW_ALLOWED_HOSTS`; we never call or redirect
   to any other host.
+
+**Not yet modelled:** settlement reconciliation of Paynow payments against
+Paynow's records (like ZimSwitch and EcoCash: `SettlementReconciliationJob`
+reads InnBucks code rows only), and refunds (Paynow has no refund API; an
+operator refunds in Paynow's portal).
 
 ## Test mode
 

@@ -282,10 +282,11 @@ public class PaymentResponse {
     /**
      * PAYNOW_CARD only, while {@code stage=AWAITING_PAYMENT}: Paynow's page for
      * this payment. Send the customer's browser there (a full redirect, not a
-     * frame); Paynow sends them back to the website's return page with
-     * {@code transactionId} on the URL, and the page follows
-     * {@code GET /payments/{transactionId}}. {@code checkoutExpiresAt} is when
-     * we stop waiting. Always a Paynow URL: we refuse any other host.
+     * frame), after keeping {@code transactionId} (sessionStorage): Paynow
+     * sends them back to the website's return page with no payment id on the
+     * URL, and the page follows {@code GET /payments/{transactionId}}.
+     * {@code checkoutExpiresAt} is when we stop waiting. Always a Paynow URL:
+     * we refuse any other host.
      */
     @io.swagger.v3.oas.annotations.media.Schema(nullable = true,
             example = "https://www.paynow.co.zw/Payment/ConfirmPayment/9510")

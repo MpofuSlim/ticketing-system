@@ -1069,6 +1069,17 @@ class PaymentControllerTest {
         var unconfigured = mock(innbucks.paymentservice.client.PaynowClient.class);
         recordSent(sent, paynowController(unconfigured, "+263712345678")
                 .processPayment(paynowPayment(paymentFor(bookingId), "PAYNOW_CARD")));
+        // A OneMoney start that never reached Paynow (breaker open): the one
+        // OneMoney start that is a 502, because nothing was sent.
+        var notSent = mock(innbucks.paymentservice.client.PaynowClient.class);
+        when(notSent.hasAnyIntegration()).thenReturn(true);
+        when(notSent.isConfigured("USD")).thenReturn(true);
+        when(notSent.canStartExpress("USD")).thenReturn(true);
+        when(notSent.initiateExpress(eq("USD"), anyString(), anyLong(), anyString(), anyString(), eq("onemoney"),
+                anyString())).thenThrow(new innbucks.paymentservice.client.PaynowNotSentException(
+                        "Paynow is temporarily unavailable (circuit open)", null));
+        recordSent(sent, paynowController(notSent, "+263712345678")
+                .processPayment(paynowPayment(paymentFor(bookingId), "ONEMONEY")));
         // The decline hold: the order's last OneMoney attempt was cancelled a
         // moment ago, so the answer is that attempt (data), not a new prompt.
         Payment cancelled = Payment.builder()

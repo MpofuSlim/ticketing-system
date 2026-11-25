@@ -451,10 +451,21 @@ public class PaymentResolutionJob {
                 }
                 ConfirmOutcome outcome = resolutionService.confirmOrder(p);
                 if (outcome.succeeded()) {
-                    paymentRecordService.resolveUnconfirmed(p.getId(), outcome.confirmationNumber());
-                    metrics.incUnconfirmedRetry("resolved");
-                    log.info("Reconciler resolved COMPLETED_UNCONFIRMED paymentId={} paymentReference={} confirmation={}",
-                            p.getId(), p.getPaymentReference(), outcome.confirmationNumber());
+                    if (paymentRecordService.resolveUnconfirmed(p.getId(), outcome.confirmationNumber(),
+                            "Reconciler confirmed booking after earlier failure")) {
+                        metrics.incUnconfirmedRetry("resolved");
+                        log.info("Reconciler resolved COMPLETED_UNCONFIRMED paymentId={} paymentReference={} confirmation={}",
+                                p.getId(), p.getPaymentReference(), outcome.confirmationNumber());
+                    } else {
+                        // The order confirmed, but the payment moved on while the
+                        // call was out: another trigger resolved it, or a Paynow
+                        // refund parked it IN_DOUBT (that case is already with an
+                        // operator). Left as it is; never counted as resolved here.
+                        metrics.incUnconfirmedRetry("moved");
+                        log.warn("Reconciler confirmed the order of paymentId={} paymentReference={} confirmation={}, "
+                                        + "but the payment was no longer COMPLETED_UNCONFIRMED: left as it is",
+                                p.getId(), p.getPaymentReference(), outcome.confirmationNumber());
+                    }
                 } else {
                     metrics.incUnconfirmedRetry("still_failing");
                     log.warn("Reconciler confirm retry still failing paymentId={} paymentReference={} upstreamRef={} orderType={} orderRef={} reason={}",

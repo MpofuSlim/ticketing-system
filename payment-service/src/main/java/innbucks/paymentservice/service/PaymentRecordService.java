@@ -527,6 +527,18 @@ public class PaymentRecordService {
         return repository.flagPaynowOperatorCase(id, Instant.now()) == 1;
     }
 
+    /**
+     * Claim the one stuck-payment alert for a payment still waiting on its
+     * confirm (COMPLETED_UNCONFIRMED). True only for the caller that stamped
+     * it: false when it was alerted before, or when the row moved on (parked
+     * IN_DOUBT, confirmed) while the retry's confirm was in flight. Committed
+     * before any message goes out, so a crash under-alerts, never repeats.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean claimStuckPaymentAlert(UUID id) {
+        return repository.claimStuckPaymentAlert(id, Instant.now(), PaymentStatus.COMPLETED_UNCONFIRMED) == 1;
+    }
+
     private void transition(UUID id, PaymentStatus target, String detail,
                             String upstreamRef, java.util.function.Consumer<Payment> mutator) {
         transitionFrom(id, null, target, detail, upstreamRef, mutator);

@@ -71,6 +71,11 @@ public class PaymentOpsController {
     private static final int PAGE = 200;
     /** TOKEN_ISSUED rows this far past expiry are stuck, not merely slow. */
     private static final Duration STUCK_CODE_SLACK = Duration.ofMinutes(5);
+    /**
+     * How long a Paynow late-money case stays in the workbasket after it was
+     * raised. Nothing marks a case handled yet, so it leaves by age.
+     */
+    static final Duration PAYNOW_CASE_WINDOW = Duration.ofDays(30);
 
     private final PaymentRepository paymentRepository;
     private final ReconRunRepository reconRunRepository;
@@ -97,6 +102,7 @@ public class PaymentOpsController {
             String orderType,
             String orderRef,
             String status,
+            String paymentRail,
             BigDecimal amount,
             String currency,
             String msisdnMasked,
@@ -112,6 +118,7 @@ public class PaymentOpsController {
             int paidUnconfirmedCount,
             int stuckCodeCount,
             int inDoubtCount,
+            int paynowLateMoneyCount,
             int over72hCount,
             List<ExceptionItem> items) {
     }
@@ -120,12 +127,15 @@ public class PaymentOpsController {
     @SecurityRequirements({})
     @Operation(
             summary = "Operator workbasket — ledger rows that need a human",
-            description = "Internal (X-Internal-Token). Three categories, oldest first: "
+            description = "Internal (X-Internal-Token). Four categories, oldest first: "
                     + "COMPLETED_UNCONFIRMED (customer PAID, booking not confirmed — after the retry loop "
                     + "gives up these are manual refunds; code payments have NO real-time reversal), "
                     + "TOKEN_ISSUED stuck past expiry (upstream status unreadable; the slot stays blocked "
-                    + "by design — never auto-expired), and legacy IN_DOUBT rows. "
-                    + "Age buckets: UNDER_24H work queue, H24_TO_72H overdue, OVER_72H escalation."
+                    + "by design — never auto-expired), IN_DOUBT rows (outcome unknown), and Paynow "
+                    + "late-money cases raised in the last 30 days (paid after we closed the attempt, or "
+                    + "refunded/disputed after the booking was confirmed; their rows are closed or "
+                    + "confirmed, so no other category shows them). `paymentRail` says whose records to "
+                    + "check. Age buckets: UNDER_24H work queue, H24_TO_72H overdue, OVER_72H escalation."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
@@ -140,6 +150,7 @@ public class PaymentOpsController {
                                         "paidUnconfirmedCount": 1,
                                         "stuckCodeCount": 1,
                                         "inDoubtCount": 1,
+                                        "paynowLateMoneyCount": 0,
                                         "over72hCount": 0,
                                         "items": [
                                           {
@@ -149,6 +160,7 @@ public class PaymentOpsController {
                                             "orderType": "BOOKING",
                                             "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
                                             "status": "COMPLETED_UNCONFIRMED",
+                                            "paymentRail": "INNBUCKS_CODE",
                                             "amount": 40.00,
                                             "currency": "USD",
                                             "msisdnMasked": "****6983",
@@ -193,21 +205,38 @@ public class PaymentOpsController {
                 PaymentStatus.TOKEN_ISSUED, now.minus(STUCK_CODE_SLACK), PageRequest.of(0, PAGE));
         for (Payment p : stuckCodes) {
             items.add(item(p, now,
-                    "Code past expiry but upstream status unreadable — slot stays blocked until "
-                            + "InnBucks answers (never auto-expired: the customer may have paid)"));
+                    "Past its deadline but its status at " + provider(p) + " is unreadable — the order's "
+                            + "payment slot stays blocked until " + provider(p) + " answers (never "
+                            + "auto-expired: the customer may have paid)"));
         }
 
         List<Payment> inDoubt = paymentRepository.findByStatus(
                 PaymentStatus.IN_DOUBT, PageRequest.of(0, PAGE));
         for (Payment p : inDoubt) {
             items.add(item(p, now,
-                    "Legacy IN_DOUBT row — resolve against InnBucks records manually"));
+                    "IN_DOUBT: the outcome is unknown — resolve it against " + provider(p)
+                            + "'s records before any confirm or refund"));
+        }
+
+        // Paynow money that moved after we closed or confirmed the payment. The
+        // row is FAILED/EXPIRED (paid late) or SUCCEEDED (refunded or disputed
+        // later), so no category above shows it, and its alert fires once.
+        List<Payment> paynowLate = paymentRepository.findByPaynowFlaggedAtAfterAndStatusInOrderByPaynowFlaggedAtAsc(
+                now.minus(PAYNOW_CASE_WINDOW),
+                java.util.EnumSet.of(PaymentStatus.FAILED, PaymentStatus.EXPIRED, PaymentStatus.SUCCEEDED),
+                PageRequest.of(0, PAGE));
+        for (Payment p : paynowLate) {
+            items.add(item(p, now, p.getStatus() == PaymentStatus.SUCCEEDED
+                    ? "Paynow reports this payment refunded or disputed after the booking was confirmed — "
+                            + "decide with the organizer what happens to the tickets"
+                    : "Paynow reports this payment PAID after we closed it — the customer has no ticket: "
+                            + "confirm the booking by hand or refund through Paynow"));
         }
 
         items.sort(Comparator.comparing(ExceptionItem::createdAt));
         int over72h = (int) items.stream().filter(i -> i.ageBucket() == AgeBucket.OVER_72H).count();
         ExceptionQueue queue = new ExceptionQueue(items.size(), paidUnconfirmed.size(),
-                stuckCodes.size(), inDoubt.size(), over72h, items);
+                stuckCodes.size(), inDoubt.size(), paynowLate.size(), over72h, items);
         return ResponseEntity.ok(ApiResult.ok(
                 items.isEmpty() ? "Workbasket is empty" : items.size() + " exception(s) in the workbasket",
                 queue));
@@ -357,9 +386,25 @@ public class PaymentOpsController {
                 : AgeBucket.UNDER_24H;
         return new ExceptionItem(p.getId(), p.getPaymentReference(), p.getBookingId(),
                 p.getOrderType() == null ? null : p.getOrderType().name(), p.getOrderRef(),
-                p.getStatus().name(), p.getAmount(), p.getCurrency(),
+                p.getStatus().name(),
+                (p.getPaymentRail() == null ? innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE
+                        : p.getPaymentRail()).name(),
+                p.getAmount(), p.getCurrency(),
                 MsisdnMasking.mask(p.getCustomerMsisdn()), p.getCodeAuthNumber(),
                 p.getCreatedAt(), ageMinutes, bucket, why);
+    }
+
+    /** Whose records settle this payment: what an operator checks it against. */
+    static String provider(Payment p) {
+        if (p.getPaymentRail() == null) {
+            return "InnBucks"; // rows from before the rail column: the code rail
+        }
+        return switch (p.getPaymentRail()) {
+            case INNBUCKS_CODE -> "InnBucks";
+            case ZIMSWITCH_CARD -> "ZimSwitch";
+            case ECOCASH -> "EcoCash";
+            case PAYNOW_CARD, ONEMONEY, OMARI -> "Paynow";
+        };
     }
 
     /**

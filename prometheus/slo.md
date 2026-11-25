@@ -640,22 +640,44 @@ outcomes that change nothing automatically (`docs/api/paynow.md`):
 - `paid_after_close` — Paynow reports a payment Paid that we had already
   closed (FAILED or EXPIRED): the customer paid, usually on Paynow's page after
   our deadline, and has no ticket from it. Found by Paynow's update or by the
-  sweep's re-check of closed payments (24 h). The payment's answer to the
-  customer is "don't pay again; support will confirm or refund".
+  sweep's re-check of closed payments (24 h), or by the customer's own next
+  read or payment attempt (a card attempt we closed is looked at again before
+  the customer is answered). The payment's answer to the customer is "don't pay
+  again; support will confirm or refund", and `POST /payments` for that booking
+  answers the same on every rail and starts nothing, until you deal with it.
+  After a refund the customer makes a new booking.
 - `reversed_after_paid` — Paynow reports Refunded or Disputed after the booking
   was confirmed: the customer has tickets and the money has gone back or is held.
+  Only Paynow's update brings this (nothing polls a confirmed payment), so a
+  refund made in Paynow's portal with no case here means the update was lost:
+  check the payment by hand.
 - `reversed_before_paid` — Refunded or Disputed on a payment whose booking we
   never confirmed (open, or paid but its confirm still failing); parked IN_DOUBT,
   so the confirm-retry issues no tickets.
 - `echo_mismatch` — a paid status whose amount or reference is not the
   payment's; parked IN_DOUBT, never confirmed.
 
-**Action:** grep payment-service for `[paynow] OPERATOR CASE`: every one of the
-four outcomes logs it, with the outcome, the payment reference and the order. A
-case is raised once per payment (`payment.paynow_flagged_at`); a repeat update
-logs `already raised` at INFO. The payment's journal
+**Action:** find the case. Pod logs do not survive a rollout, so start from the
+database, not a grep:
+
+- the operator workbasket, `GET /payments/internal/exceptions`
+  (X-Internal-Token): paid-after-close and reversed-after-paid cases raised in
+  the last 30 days are listed with `paymentRail` and their own `why`; the
+  IN_DOUBT ones are under IN_DOUBT;
+- or SQL, in database `payment_service`:
+  `SELECT id, payment_reference, order_ref, status, payment_rail, paynow_reference, paynow_flagged_at FROM payment WHERE paynow_flagged_at IS NOT NULL ORDER BY paynow_flagged_at DESC;`
+- the log line `[paynow] OPERATOR CASE` (outcome, payment reference, order) is
+  there too while the pod lives. Search it as a fixed string, never a pattern
+  (to grep, `[paynow]` is a set of letters):
+  `kubectl -n ticketing logs deploy/payment-service | grep -F '[paynow] OPERATOR CASE'`.
+
+A case is raised once per payment (`payment.paynow_flagged_at`). A later update
+for a flagged payment is not checked again (it counts as
+`payment_payments_paynow_result_update_total{outcome="ignored"}`); `already
+raised` (INFO) appears only when two checks race. The payment's journal
 (`payment_event`, database `payment_service`) carries the same note. Check the
-transaction in the merchant's Paynow account by Paynow's reference, then:
+transaction in the merchant's Paynow account by our payment reference (the
+`reference` Paynow shows) or Paynow's own, then:
 
 - paid after close: confirm the booking by hand if tickets are still available
   and the customer still wants them, or refund through Paynow;

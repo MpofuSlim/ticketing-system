@@ -49,6 +49,20 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     int flagPaynowOperatorCase(@Param("id") UUID id, @Param("now") Instant now);
 
     /**
+     * Claim the one stuck-payment alert of a payment that is still
+     * COMPLETED_UNCONFIRMED. Returns 1 for the caller that set the stamp and
+     * 0 otherwise (already alerted, or the row moved on). One statement on
+     * the live row, never a save of a copy read earlier: a save would write
+     * that copy's every stale field back (Payment has no {@code @Version}),
+     * undoing a park or a confirm that landed meanwhile.
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update Payment p set p.operatorAlertedAt = :now where p.id = :id and p.operatorAlertedAt is null "
+            + "and p.status = :status")
+    int claimStuckPaymentAlert(@Param("id") UUID id, @Param("now") Instant now,
+                               @Param("status") Payment.PaymentStatus status);
+
+    /**
      * EcoCash notify-webhook lookup: "which row is this notification about?"
      * The correlator is unique where present (uq_payment_ecocash_correlator),
      * and it is OUR value — an attacker guessing one gains nothing, since the
@@ -214,12 +228,31 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
             Payment.PaymentStatus status, Instant cutoff, Pageable pageable);
 
     /**
+     * Workbasket: the Paynow late-money cases raised since {@code since} whose
+     * row is closed or confirmed (paid after we closed it; refunded or disputed
+     * after the booking was confirmed). Those rows never reach the other
+     * workbasket categories, and the alert on them is one-shot. Flagged rows
+     * parked IN_DOUBT are listed with IN_DOUBT already.
+     */
+    List<Payment> findByPaynowFlaggedAtAfterAndStatusInOrderByPaynowFlaggedAtAsc(
+            Instant since, java.util.Collection<Payment.PaymentStatus> statuses, Pageable pageable);
+
+    /**
      * Replay lookup for the public {@code POST /payments} entry: when an
      * order already has an active-or-successful payment, the endpoint
      * returns THAT row's receipt (idempotent-replay semantics — a double-tap
      * must never surface as an error to the FE).
      */
     Optional<Payment> findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(
+            OrderType orderType, String orderRef, Collection<Payment.PaymentStatus> statuses);
+
+    /**
+     * The order's latest attempt in {@code statuses} that was handed to an
+     * operator. With FAILED and EXPIRED, that is a Paynow attempt we closed
+     * which Paynow then reported paid: {@code POST /payments} answers it
+     * instead of starting a second payment for an order already paid.
+     */
+    Optional<Payment> findFirstByOrderTypeAndOrderRefAndPaynowFlaggedAtIsNotNullAndStatusInOrderByCreatedAtDesc(
             OrderType orderType, String orderRef, Collection<Payment.PaymentStatus> statuses);
 
     /** The order's latest attempt on one rail — the EcoCash decline hold reads it. */

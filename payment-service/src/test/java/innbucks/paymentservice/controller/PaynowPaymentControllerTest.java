@@ -165,6 +165,18 @@ class PaynowPaymentControllerTest {
 
         assertThat(controller.submitOtp("not-a-uuid", new PaymentOtpRequest("482913")).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND);
+
+        // Never sent: a 503 the checkout can tell apart from the 502 "wait".
+        Payment notSent = row(PaymentRail.OMARI, UUID.randomUUID());
+        when(paynow.submitOtp(notSent.getId(), "482915")).thenReturn(new PaynowPaymentService.OtpOutcome(notSent, 503,
+                "We could not reach O'mari, so your code was not sent. Enter it again in a moment."));
+        ResponseEntity<ApiResult<PaymentResponse>> again =
+                controller.submitOtp(notSent.getId().toString(), new PaymentOtpRequest("482915"));
+        assertThat(again.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(again.getBody().getCode()).isEqualTo("503 SERVICE_UNAVAILABLE");
+        assertThat(again.getBody().getMessage())
+                .isEqualTo("We could not reach O'mari, so your code was not sent. Enter it again in a moment.");
+        assertThat(again.getBody().getData()).isNull();
     }
 
     @Test
@@ -275,6 +287,129 @@ class PaynowPaymentControllerTest {
         when(payments.findById(lapsed.getId())).thenReturn(Optional.of(lapsed));
         assertThat(controller.getPayment(lapsed.getId().toString()).getBody().getData().getStage())
                 .isEqualTo(PaymentResponse.Stage.LAPSED);
+    }
+
+    @Test
+    @DisplayName("an order Paynow reported paid after we closed its attempt: every later POST answers that attempt "
+            + "(VERIFYING, don't pay again) and starts nothing, on any rail")
+    void paidAfterClose_aLaterPostStartsNoSecondPayment() {
+        InnbucksPaymentService innbucks = mock(InnbucksPaymentService.class);
+        ZimswitchCardPaymentService zimswitch = mock(ZimswitchCardPaymentService.class);
+        EcocashPaymentService ecocash = mock(EcocashPaymentService.class);
+        PaymentController guarded = new PaymentController(mock(LoyaltyServiceClient.class),
+                new PaymentMetrics(new SimpleMeterRegistry()), innbucks, zimswitch, new ZimswitchProperties(),
+                ecocash, mock(PaymentRecordService.class), payments);
+        ReflectionTestUtils.setField(guarded, "cellCurrency", "USD");
+        guarded.setPaynowPaymentService(paynow);
+
+        UUID bookingId = UUID.randomUUID();
+        Payment late = row(PaymentRail.PAYNOW_CARD, bookingId);
+        late.setStatus(Payment.PaymentStatus.EXPIRED);
+        late.setPaynowFlaggedAt(Instant.now());
+        when(payments.findFirstByOrderTypeAndOrderRefAndPaynowFlaggedAtIsNotNullAndStatusInOrderByCreatedAtDesc(
+                eq(OrderType.BOOKING), eq(bookingId.toString()), eq(PaynowPaymentService.CLOSED_UNPAID)))
+                .thenReturn(Optional.of(late));
+
+        // null = the default InnBucks code.
+        for (PaymentRail rail : new PaymentRail[] {PaymentRail.ONEMONEY, PaymentRail.OMARI, PaymentRail.PAYNOW_CARD,
+                PaymentRail.ECOCASH, PaymentRail.ZIMSWITCH_CARD, null}) {
+            ResponseEntity<ApiResult<PaymentResponse>> resp = guarded.processPayment(request(bookingId, rail));
+
+            assertThat(resp.getStatusCode()).as("rail %s", rail).isEqualTo(HttpStatus.OK);
+            PaymentResponse data = resp.getBody().getData();
+            assertThat(data.getStage()).as("rail %s", rail).isEqualTo(PaymentResponse.Stage.VERIFYING);
+            assertThat(data.getTransactionId()).as("rail %s", rail).isEqualTo(late.getId());
+            assertThat(data.getFundsCaptured()).as("rail %s", rail).isNull();
+            assertThat(resp.getBody().getMessage()).as("rail %s", rail)
+                    .isEqualTo("We received your payment after this attempt had timed out. Don't pay again: support "
+                            + "will confirm your booking or refund you.");
+        }
+        verify(paynow, never()).start(any(), any(), anyString());
+        verify(innbucks, never()).processPayment(any(), any(), any(), any());
+        verify(ecocash, never()).startCharge(any(), any());
+        verify(zimswitch, never()).startCheckout(any(), any());
+    }
+
+    @Test
+    @DisplayName("GET of a card attempt we closed looks at Paynow once more first: paid late reads VERIFYING, "
+            + "never 'nothing was charged'")
+    void getPayment_closedCard_isLookedAtBeforeAnswering() {
+        Payment closed = row(PaymentRail.PAYNOW_CARD, UUID.randomUUID());
+        closed.setStatus(Payment.PaymentStatus.EXPIRED);
+        Payment flagged = row(PaymentRail.PAYNOW_CARD, UUID.fromString(closed.getOrderRef()));
+        flagged.setId(closed.getId());
+        flagged.setStatus(Payment.PaymentStatus.EXPIRED);
+        flagged.setPaynowFlaggedAt(Instant.now());
+        when(payments.findById(closed.getId())).thenReturn(Optional.of(closed), Optional.of(flagged));
+        when(paynow.lookAgainBeforeAnswering(closed)).thenReturn(PaynowPaymentService.CheckOutcome.PAID_LATE);
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = controller.getPayment(closed.getId().toString());
+
+        PaymentResponse data = resp.getBody().getData();
+        assertThat(data.getStage()).isEqualTo(PaymentResponse.Stage.VERIFYING);
+        assertThat(data.getFundsCaptured()).isNull();
+        assertThat(resp.getBody().getMessage()).doesNotContain("Nothing was charged");
+
+        // No look due: answered from the row as it is.
+        Payment other = row(PaymentRail.PAYNOW_CARD, UUID.randomUUID());
+        other.setStatus(Payment.PaymentStatus.EXPIRED);
+        when(payments.findById(other.getId())).thenReturn(Optional.of(other));
+        assertThat(controller.getPayment(other.getId().toString()).getBody().getData().getStage())
+                .isEqualTo(PaymentResponse.Stage.LAPSED);
+    }
+
+    @Test
+    @DisplayName("before a new payment starts, the order's last card attempt we closed is looked at once more: paid "
+            + "late answers it (VERIFYING) and starts nothing")
+    void post_looksAtTheClosedCardAttemptFirst() {
+        UUID bookingId = UUID.randomUUID();
+        Payment closed = row(PaymentRail.PAYNOW_CARD, bookingId);
+        closed.setStatus(Payment.PaymentStatus.EXPIRED);
+        when(payments.findFirstByOrderTypeAndOrderRefAndPaymentRailOrderByCreatedAtDesc(OrderType.BOOKING,
+                bookingId.toString(), PaymentRail.PAYNOW_CARD)).thenReturn(Optional.of(closed));
+        Payment flagged = row(PaymentRail.PAYNOW_CARD, bookingId);
+        flagged.setId(closed.getId());
+        flagged.setStatus(Payment.PaymentStatus.EXPIRED);
+        flagged.setPaynowFlaggedAt(Instant.now());
+        when(paynow.lookAgainBeforeAnswering(closed)).thenReturn(PaynowPaymentService.CheckOutcome.PAID_LATE);
+        when(payments.findFirstByOrderTypeAndOrderRefAndPaynowFlaggedAtIsNotNullAndStatusInOrderByCreatedAtDesc(
+                eq(OrderType.BOOKING), eq(bookingId.toString()), any())).thenReturn(Optional.of(flagged));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = controller.processPayment(request(bookingId, PaymentRail.ONEMONEY));
+
+        assertThat(resp.getBody().getData().getStage()).isEqualTo(PaymentResponse.Stage.VERIFYING);
+        assertThat(resp.getBody().getData().getTransactionId()).isEqualTo(closed.getId());
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(paynow, payments);
+        order.verify(paynow).lookAgainBeforeAnswering(closed);
+        order.verify(payments).findFirstByOrderTypeAndOrderRefAndPaynowFlaggedAtIsNotNullAndStatusInOrderByCreatedAtDesc(
+                eq(OrderType.BOOKING), eq(bookingId.toString()), any());
+        verify(paynow, never()).start(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("the re-POST's own check finds Paynow paid on a row another trigger had just closed: it answers "
+            + "that row (VERIFYING), never a new payment")
+    void paidLate_onTheReposts_ownCheck_answersTheRow() {
+        UUID bookingId = UUID.randomUUID();
+        Payment open = row(PaymentRail.PAYNOW_CARD, bookingId);
+        open.setPaynowBrowserUrl(PAGE);
+        when(payments.findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(eq(OrderType.BOOKING),
+                eq(bookingId.toString()), any())).thenReturn(Optional.of(open));
+        when(paynow.resolveOpen(open, PaynowPaymentService.Trigger.CUSTOMER))
+                .thenReturn(PaynowPaymentService.CheckOutcome.PAID_LATE);
+        Payment flagged = row(PaymentRail.PAYNOW_CARD, bookingId);
+        flagged.setId(open.getId());
+        flagged.setStatus(Payment.PaymentStatus.EXPIRED);
+        flagged.setPaynowFlaggedAt(Instant.now());
+        when(payments.findById(open.getId())).thenReturn(Optional.of(flagged));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = controller.processPayment(request(bookingId, PaymentRail.ONEMONEY));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().getData().getStage()).isEqualTo(PaymentResponse.Stage.VERIFYING);
+        assertThat(resp.getBody().getData().getTransactionId()).isEqualTo(open.getId());
+        assertThat(resp.getBody().getData().getRedirectUrl()).isNull();
+        verify(paynow, never()).start(any(), any(), anyString());
     }
 
 
