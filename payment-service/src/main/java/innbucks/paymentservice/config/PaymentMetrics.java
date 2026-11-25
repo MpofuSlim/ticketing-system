@@ -54,7 +54,21 @@ public class PaymentMetrics {
                 .description("audit_events chain links that failed to recompute (deletion/reorder signal)")
                 .baseUnit("rows")
                 .register(registry);
+        // Paynow outcomes an operator must act on, registered at 0 so the alert
+        // sees the first one (increase() cannot see a series' first sample).
+        for (String outcome : PAYNOW_OPERATOR_OUTCOMES) {
+            paynowResolutionCounter(outcome);
+        }
     }
+
+    /**
+     * Paynow resolution outcomes that need a person: money paid on a payment
+     * we had closed, money refunded or disputed after a confirmed booking (or
+     * before we ever confirmed one), or a paid status whose amount or
+     * reference is not ours. Alert PaynowPaymentNeedsOperator.
+     */
+    public static final java.util.List<String> PAYNOW_OPERATOR_OUTCOMES = java.util.List.of(
+            "paid_after_close", "reversed_after_paid", "reversed_before_paid", "echo_mismatch");
 
     public Timer shopCheckoutDuration() {
         return shopCheckoutDuration;
@@ -238,6 +252,51 @@ public class PaymentMetrics {
         Counter.builder("payment.recon.discrepancies")
                 .description("Settlement reconciliation discrepancies, by type")
                 .tag("type", type)
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Paynow payment starts, by rail and outcome: started, refused (Paynow said
+     * no; nothing created), declined (a wallet refused at the start, e.g.
+     * insufficient balance), ambiguous (no answer; the status check resolves
+     * it), unconfigured, unsupported_currency, number_limited.
+     */
+    public void incPaynowStart(String rail, String outcome) {
+        Counter.builder("payment.payments.paynow_start")
+                .description("Paynow payment starts, by rail and outcome")
+                .tag("rail", rail)
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Paynow status checks, by outcome: paid, paid_unconfirmed, cancelled,
+     * expired, still_open, not_found_open, unknown, error, plus the three in
+     * {@link #PAYNOW_OPERATOR_OUTCOMES}, which are a person's to act on.
+     */
+    public void incPaynowResolution(String outcome) {
+        paynowResolutionCounter(outcome).increment();
+    }
+
+    private Counter paynowResolutionCounter(String outcome) {
+        return Counter.builder("payment.payments.paynow_resolution")
+                .description("Paynow status checks of payments, by outcome")
+                .tag("outcome", outcome)
+                .register(registry);
+    }
+
+    /**
+     * Status updates Paynow posted to our result URL: applied (we checked the
+     * payment), ignored (no such payment, or nothing to do), bad_hash (not
+     * signed with our key; ignored), retry (we could not check; answered 503
+     * so Paynow sends it again).
+     */
+    public void incPaynowResultUpdate(String outcome) {
+        Counter.builder("payment.payments.paynow_result_update")
+                .description("Status updates Paynow posted to our result URL, by outcome")
+                .tag("outcome", outcome)
                 .register(registry)
                 .increment();
     }

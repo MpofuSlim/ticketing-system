@@ -52,7 +52,7 @@ public class ConfirmBookingRequestDTO {
 
     @Schema(example = "ECOCASH", nullable = true,
             description = "The payment rail that paid for the booking, as payment-service names it: "
-                    + "INNBUCKS_CODE, ECOCASH or ZIMSWITCH_CARD. Recorded once and shown to the organizer "
+                    + "INNBUCKS_CODE, ECOCASH, ZIMSWITCH_CARD, PAYNOW_CARD, ONEMONEY or OMARI. Recorded once and shown to the organizer "
                     + "as the payment method. Optional: a confirm without it records nothing, and a value "
                     + "that is not a plain upper-case name is ignored.")
     @Size(max = 32, message = "paymentRail must be at most 32 characters")

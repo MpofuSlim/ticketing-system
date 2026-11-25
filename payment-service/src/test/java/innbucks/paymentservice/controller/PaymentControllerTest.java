@@ -1044,13 +1044,75 @@ class PaymentControllerTest {
         sent.computeIfAbsent(declinedResp.getStatusCode().value(), s -> new HashSet<>())
                 .add(declinedResp.getBody().getCode() + " | " + declinedResp.getBody().getMessage());
 
-        assertEquals(Set.of(400, 409, 503), sent.keySet(), "every failure above is a 400, 409 or 503");
+        // Paynow: the real PaynowPaymentService over a mocked Paynow client, so
+        // a reworded refusal in the service fails here.
+        var paynow = mock(innbucks.paymentservice.client.PaynowClient.class);
+        when(paynow.hasAnyIntegration()).thenReturn(true);
+        when(paynow.isConfigured("USD")).thenReturn(true);
+        when(paynow.canStartWeb("USD")).thenReturn(true);
+        when(paynow.canStartExpress("USD")).thenReturn(true);
+        when(paynow.initiateExpress(eq("USD"), anyString(), anyLong(), anyString(), anyString(), eq("onemoney"),
+                anyString())).thenThrow(new innbucks.paymentservice.client.PaynowApiException(
+                        "Paynow refused the payment", "Insufficient balance"));
+        when(paynow.initiateWeb(eq("USD"), anyString(), anyLong(), anyString(), anyString(), anyString()))
+                .thenThrow(new innbucks.paymentservice.client.PaynowApiTransientException("read timed out"));
+        recordSent(sent, paynowController(paynow, "+263774444444")
+                .processPayment(paynowPayment(paymentFor(bookingId), "ONEMONEY")));
+        recordSent(sent, paynowController(paynow, "+263774444444")
+                .processPayment(paynowPayment(marketplacePayment("MKT-4F9A1C22B7D3"), "ONEMONEY")));
+        recordSent(sent, paynowController(paynow, "+27821234567")
+                .processPayment(paynowPayment(paymentFor(bookingId), "OMARI")));
+        recordSent(sent, paynowController(paynow, "+263774444444")
+                .processPayment(paynowPayment(paymentFor(bookingId), "PAYNOW_CARD")));
+        var unconfigured = mock(innbucks.paymentservice.client.PaynowClient.class);
+        recordSent(sent, paynowController(unconfigured, "+263774444444")
+                .processPayment(paynowPayment(paymentFor(bookingId), "PAYNOW_CARD")));
+
+        assertEquals(Set.of(400, 409, 502, 503), sent.keySet(), "every failure above is a 400, 409, 502 or 503");
         assertTrue(sent.get(400).containsAll(documented.get(400)),
                 "a 400 example nothing sends: " + diff(documented.get(400), sent.get(400)));
+        assertEquals(documented.get(502), sent.get(502), "the 502 examples are exactly what is sent");
         for (int status : new int[] {409, 503}) {
             assertTrue(documented.get(status).containsAll(sent.get(status)),
                     "sent but undocumented " + status + ": " + diff(sent.get(status), documented.get(status)));
         }
+    }
+
+    private static PaymentRequest paynowPayment(PaymentRequest request, String rail) {
+        request.setPaymentRail(innbucks.paymentservice.entity.PaymentRail.valueOf(rail));
+        return request;
+    }
+
+    /** A controller whose Paynow options run the real PaynowPaymentService, for a USD 100.00 booking. */
+    private static PaymentController paynowController(innbucks.paymentservice.client.PaynowClient client,
+                                                      String bookingPhone) {
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        when(records.recentCharges(any(), any(), any())).thenReturn(new PaymentRecordService.RecentCharges(0, null));
+        when(records.openPending(any())).thenAnswer(inv -> {
+            Payment p = inv.getArgument(0);
+            p.setId(UUID.randomUUID());
+            p.setStatus(Payment.PaymentStatus.PENDING);
+            return p;
+        });
+        var gateways = mock(innbucks.paymentservice.order.OrderGatewayRegistry.class);
+        var gateway = mock(innbucks.paymentservice.order.OrderGateway.class);
+        when(gateways.forType(OrderType.BOOKING)).thenReturn(gateway);
+        when(gateway.fetch(anyString())).thenReturn(new innbucks.paymentservice.order.OrderSnapshot(
+                UUID.randomUUID().toString(), 10000, "USD", bookingPhone, "AMA2KFESTIVA", "Ama2K Festiva", true));
+        var properties = new innbucks.paymentservice.client.PaynowProperties();
+        properties.setReturnUrl("https://tickets.example.co.zw/checkout/paynow-return");
+        var service = new innbucks.paymentservice.service.PaynowPaymentService(records, client, properties,
+                gateways, mock(innbucks.paymentservice.service.CodePaymentResolutionService.class),
+                mock(PaymentRepository.class), newMetrics());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "cellCurrency", "USD");
+        PaymentController controller = new PaymentController(
+                mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class),
+                mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class),
+                new innbucks.paymentservice.client.ZimswitchProperties(),
+                mock(innbucks.paymentservice.service.EcocashPaymentService.class), records,
+                mock(PaymentRepository.class));
+        controller.setPaynowPaymentService(service);
+        return controller;
     }
 
     /** Drives {@code failure} where the rail service would have run, through the real controller. */

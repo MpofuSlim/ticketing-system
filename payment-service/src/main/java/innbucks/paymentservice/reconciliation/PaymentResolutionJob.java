@@ -277,6 +277,59 @@ public class PaymentResolutionJob {
      * the prompt deadline + grace expires locally; UNKNOWN never closes a
      * row.
      */
+    /**
+     * The Paynow sweep (PAYNOW_CARD, ONEMONEY, OMARI). Paynow's status update
+     * to our result URL is the usual path, and Paynow asks merchants not to
+     * poll for no reason, so this checks only the payments that need it
+     * ({@link innbucks.paymentservice.service.PaynowPaymentService#dueForSweep}):
+     * one whose initiate reply was lost (looked up by its trace), one past its
+     * deadline (before it is closed), and any open one not checked for
+     * {@code paynow.recheck-every}, in case an update was lost. Money rules
+     * live in {@link innbucks.paymentservice.service.PaynowPaymentService#resolveOpen}.
+     */
+    @Scheduled(fixedDelayString = "${payment-service.paynow-poll.interval:PT30S}")
+    @SchedulerLock(name = "PaymentResolutionJob.pollPaynowPayments", lockAtMostFor = "PT2M", lockAtLeastFor = "PT15S")
+    public void pollPaynowPayments() {
+        if (paynowPaymentService == null) {
+            return;
+        }
+        List<Payment> open = paymentRepository.findByStatusAndPaymentRailIn(PaymentStatus.TOKEN_ISSUED,
+                EnumSet.of(PaymentRail.PAYNOW_CARD, PaymentRail.ONEMONEY, PaymentRail.OMARI),
+                PageRequest.of(0, batchSize));
+        if (open.isEmpty()) {
+            return;
+        }
+        if (!paynowPaymentService.isRailConfigured()) {
+            log.warn("Paynow poll: {} open Paynow payments but Paynow is not configured — cannot resolve", open.size());
+            return;
+        }
+        Instant now = Instant.now();
+        for (Payment p : open) {
+            if (!paynowPaymentService.dueForSweep(p, now)) {
+                continue;
+            }
+            try {
+                paynowPaymentService.resolveOpen(p,
+                        innbucks.paymentservice.service.PaynowPaymentService.Trigger.SWEEP);
+            } catch (RuntimeException e) {
+                metrics.incPaynowResolution("error");
+                log.warn("Paynow poll failed for paymentReference={} — leaving it for the next pass: {}",
+                        p.getPaymentReference(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Setter-injected so the tests that build this job by hand keep
+     * compiling; the context always injects it.
+     */
+    private innbucks.paymentservice.service.PaynowPaymentService paynowPaymentService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setPaynowPaymentService(innbucks.paymentservice.service.PaynowPaymentService paynowPaymentService) {
+        this.paynowPaymentService = paynowPaymentService;
+    }
+
     @Scheduled(fixedDelayString = "${payment-service.ecocash-poll.interval:PT20S}")
     @SchedulerLock(name = "PaymentResolutionJob.pollEcocashPayments", lockAtMostFor = "PT2M", lockAtLeastFor = "PT10S")
     public void pollEcocashPayments() {

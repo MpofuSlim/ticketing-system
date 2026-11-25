@@ -126,6 +126,16 @@ public class PaymentRecordService {
      * per-number prompt cap's inputs.
      */
     @Transactional(readOnly = true)
+    public RecentCharges recentCharges(java.util.Collection<PaymentRail> rails,
+                                       java.util.Collection<String> msisdns, Instant since) {
+        long count = repository.countByPaymentRailInAndCustomerMsisdnInAndCreatedAtAfter(rails, msisdns, since);
+        Instant oldest = count == 0 ? null
+                : repository.findFirstByPaymentRailInAndCustomerMsisdnInAndCreatedAtAfterOrderByCreatedAtAsc(
+                        rails, msisdns, since).map(Payment::getCreatedAt).orElse(null);
+        return new RecentCharges(count, oldest);
+    }
+
+    @Transactional(readOnly = true)
     public RecentCharges recentEcocashCharges(java.util.Collection<String> msisdns, Instant since) {
         long count = repository.countByPaymentRailAndCustomerMsisdnInAndCreatedAtAfter(
                 PaymentRail.ECOCASH, msisdns, since);
@@ -253,6 +263,73 @@ public class PaymentRecordService {
         transition(id, PaymentStatus.TOKEN_ISSUED,
                 "EcoCash charge armed; sending the wallet PIN prompt", clientCorrelator,
                 payment -> payment.setCodeExpiresAt(expiresAt));
+    }
+
+    /**
+     * Paynow: the row is armed for the initiate call. Like EcoCash, this runs
+     * BEFORE the upstream request: a OneMoney prompt can be live on the
+     * customer's phone even when Paynow's reply is lost, so TOKEN_ISSUED with
+     * the merchant trace already on the row (from openPending) means "a
+     * payment may exist, look it up by this trace", and PENDING still means
+     * "no call was made". One rule for all three Paynow rails.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markPaynowIssued(UUID id, String merchantTrace, Instant expiresAt) {
+        transition(id, PaymentStatus.TOKEN_ISSUED,
+                "Paynow payment armed; starting it with Paynow", merchantTrace,
+                payment -> payment.setCodeExpiresAt(expiresAt));
+    }
+
+    /**
+     * Paynow answered the initiate: record what the customer and the status
+     * check need (page URL, poll URL, O'mari code URL and reference). No
+     * status change, so no journal row, like the other informational writes.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordPaynowInitiation(UUID id, String pollUrl, String browserUrl, String paynowReference,
+                                       String otpUrl, String otpReference) {
+        repository.findById(id).ifPresent(payment -> {
+            payment.setPaynowPollUrl(truncate(pollUrl, 512));
+            payment.setPaynowBrowserUrl(truncate(browserUrl, 512));
+            if (paynowReference != null && !paynowReference.isBlank()) {
+                payment.setPaynowReference(truncate(paynowReference, 64));
+            }
+            payment.setPaynowOtpUrl(truncate(otpUrl, 512));
+            payment.setPaynowOtpReference(truncate(otpReference, 64));
+            repository.save(payment);
+        });
+    }
+
+    /**
+     * Paynow: a status read named Paynow's reference or poll URL (a trace is
+     * how a payment whose initiate reply was lost learns its poll URL). Fills
+     * what is missing; never overwrites.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordPaynowSeen(UUID id, String paynowReference, String pollUrl) {
+        repository.findById(id).ifPresent(payment -> {
+            boolean changed = false;
+            if (payment.getPaynowReference() == null && paynowReference != null && !paynowReference.isBlank()) {
+                payment.setPaynowReference(truncate(paynowReference, 64));
+                changed = true;
+            }
+            if (payment.getPaynowPollUrl() == null && pollUrl != null && !pollUrl.isBlank()) {
+                payment.setPaynowPollUrl(truncate(pollUrl, 512));
+                changed = true;
+            }
+            if (changed) {
+                repository.save(payment);
+            }
+        });
+    }
+
+    /** Paynow: when the status was last read, spacing the checks. Same no-journal rationale as the card stamp. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void stampPaynowChecked(UUID id) {
+        repository.findById(id).ifPresent(payment -> {
+            payment.setPaynowCheckedAt(Instant.now());
+            repository.save(payment);
+        });
     }
 
     /**

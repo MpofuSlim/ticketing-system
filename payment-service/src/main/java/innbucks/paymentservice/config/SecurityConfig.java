@@ -101,6 +101,18 @@ public class SecurityConfig {
                         // would ask within 20s anyway. Rate-limited per-IP at
                         // the gateway (ecocash-notify-write-route).
                         .requestMatchers(HttpMethod.POST, "/payments/ecocash/notify").permitAll()
+                        // Paynow's result URL: Paynow posts status updates from
+                        // the public internet without our JWTs. Safe to open for
+                        // the same reasons as the EcoCash notify: an update is
+                        // acted on only when its hash verifies under our key, and
+                        // then only by polling Paynow. IP-limited at the gateway
+                        // (paynow-result-write-route).
+                        .requestMatchers(HttpMethod.POST, "/payments/paynow/result").permitAll()
+                        // O'mari's code, sent by the payer: public like POST
+                        // /payments; the random transactionId is the key, and
+                        // O'mari cancels the payment after 5 wrong codes.
+                        // IP-limited at the gateway (payment-otp-write-route).
+                        .requestMatchers(HttpMethod.POST, "/payments/{transactionId}/otp").permitAll()
                         // Everything else — /payments/shop-checkout,
                         // /actuator/prometheus, any future endpoint — requires a
                         // valid customer JWT populated by JwtFilter.

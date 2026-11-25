@@ -3,6 +3,8 @@ package innbucks.paymentservice.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.EcocashEipClient;
+import innbucks.paymentservice.client.PaynowClient;
+import innbucks.paymentservice.client.PaynowProperties;
 import innbucks.paymentservice.client.EcocashProperties;
 import innbucks.paymentservice.client.EventServiceClient;
 import innbucks.paymentservice.client.InnbucksApiClient;
@@ -98,6 +100,18 @@ class OutboundClientsArePooledTest {
                 CircuitBreakerRegistry.ofDefaults(), POOL));
 
         assertPooled(rc, 3000, 15000);
+        assertThat(userAgentOf(rc)).isEqualTo("Ticketize-Payments/1.0");
+    }
+
+    @Test
+    @DisplayName("Paynow: pooled, its own 3s/20s, our honest User-Agent")
+    void paynow() {
+        PaynowProperties props = new PaynowProperties();
+        props.setBaseUrl("https://paynow.example");
+        RestClient rc = restClientOf(new PaynowClient(props, RetryRegistry.ofDefaults(),
+                CircuitBreakerRegistry.ofDefaults(), POOL));
+
+        assertPooled(rc, 3000, 20000);
         assertThat(userAgentOf(rc)).isEqualTo("Ticketize-Payments/1.0");
     }
 

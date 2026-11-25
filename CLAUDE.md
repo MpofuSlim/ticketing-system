@@ -5012,7 +5012,8 @@ kubectl -n ticketing rollout status deployment/<service>
 the InnBucks 2D-code rail (the default — `paymentRail` omitted), the
 ZimSwitch COPYandPAY card rail (additive, `paymentRail=ZIMSWITCH_CARD`) and
 the EcoCash EIP wallet rail (additive, `paymentRail=ECOCASH`; see the
-sections below).** The earlier "exclusively InnBucks" wording predates the
+sections below), plus three Paynow rails for TICKETS ONLY (`PAYNOW_CARD`,
+`ONEMONEY`, `OMARI`; "Paynow" below).** The earlier "exclusively InnBucks" wording predates the
 other rails; what remains
 non-negotiable is that the earlier server-side wallet debit
 (`/bank/api/payment`) was removed at the InnBucks team's direction — do not
@@ -5293,6 +5294,77 @@ back). Non-negotiables:
   Pinned by `EcocashPaymentServiceTest` (the decline cases),
   `PaymentDeclineAndStatusTest`, `PaymentStageTest` and the
   insufficient-funds shape in `EcocashEipClientContractTest`.
+
+## Paynow — PAYNOW_CARD, ONEMONEY, OMARI (tickets only)
+
+**Owner decisions (2026-11-25): Paynow carries only what our own rails do not —
+a card payment on Paynow's page (Visa/Mastercard, and ZimSwitch cards, as a
+second card route while the direct ZimSwitch link is down), OneMoney and
+O'mari — for ticket bookings only; money that moves after we closed or
+confirmed a payment goes to an operator, never an automatic step.** Spec
+distilled at `docs/api/paynow.md`; read it first. EcoCash and InnBucks stay on
+our own rails: never route them through Paynow (its fee, one more hop).
+
+- **Three rails, one client** (`PaynowClient`, `PaynowPaymentService`).
+  `PAYNOW_CARD` is Paynow's web checkout: `POST /payments` answers
+  `redirectUrl`, the website sends the browser there, and Paynow returns it to
+  `PAYNOW_RETURN_URL?transactionId=<id>`. A FIRST card payment cannot use
+  express checkout (express takes saved-card tokens only). `ONEMONEY` is a
+  prompt on the phone, like EcoCash. `OMARI` texts a code the customer types
+  into our checkout; `POST /payments/{transactionId}/otp` passes it on (never
+  retried: O'mari cancels after 5 wrong codes). A non-BOOKING order is 422.
+- **Every message is signed both ways** (SHA-512 of the values in MESSAGE
+  ORDER + the integration key, upper-case hex). Paynow's two published examples
+  are pinned in `PaynowHashTest`; replies are parsed in the order received and
+  keys read in any case (Paynow's initiate example capitalises them). An `Ok`
+  or a status whose hash does not verify is NO ANSWER, never acted on. The
+  integration key is a secret: host `cell.zw.local.env` only.
+- **One integration per currency** — Paynow's initiate has no currency field.
+  `PAYNOW_USD_*` / `PAYNOW_ZWG_*`; the order's currency picks one; none = 422
+  (another rail), an integration missing its result/return URL or auth email =
+  503 + a HALF-PROVISIONED boot ERROR.
+- **Initiate is NEVER retried** (no idempotency key). Each carries our
+  `merchanttrace` (32 hex, on the row BEFORE the call, unique index V19), and
+  `/interface/trace` resolves a lost reply. The row goes TOKEN_ISSUED before the
+  call (EcoCash's order). No answer: ONEMONEY stays open (a prompt may be
+  live); PAYNOW_CARD and OMARI close FAILED at once — without the reply the
+  customer has no page and nowhere to send the code, so nothing can be paid.
+- **The result URL is a trigger, the poll is the answer** (Paynow's own
+  advice). `POST /payments/paynow/result` acts only on an update whose hash
+  verifies under the payment's own integration, then polls; 200 when handled or
+  ignored, 503 when it could not check (Paynow resends up to ten times). A paid
+  status must echo our amount and reference, else IN_DOUBT. An unknown status
+  never closes. Paid / Awaiting Delivery / Delivered all mean paid; Cancelled
+  and test mode's Failed close FAILED.
+- **Don't poll for no reason** (Paynow asks merchants not to). The sweep
+  (`pollPaynowPayments`, 30 s) checks only payments whose reply was lost, past
+  their deadline (card 30 min, phone 10 min, + 2 min grace), or not checked for
+  `PAYNOW_RECHECK_EVERY` (2 min); a customer re-POST checks at most every 15 s.
+- **Operator cases change nothing** (`payment.payments.paynow_resolution`
+  `paid_after_close`, `reversed_after_paid`, `reversed_before_paid`,
+  `echo_mismatch`, registered at 0; alert `PaynowPaymentNeedsOperator`): a
+  payment paid after we closed it (the card page outlived our deadline), or
+  refunded/disputed after the booking was confirmed. Journalled on the payment;
+  the runbook says what to do. There is no Paynow refund or cancel API.
+- **Paynow's URLs are pinned** to `PAYNOW_ALLOWED_HOSTS` (https; a plain-http
+  base URL allows only itself, for tests): we POST to the poll and O'mari URLs
+  server-side and redirect browsers to the page URL, so any other host is
+  refused and never called.
+- **Test mode:** a new integration is in test mode until Paynow sets it live
+  (after one successful test payment). Card payments are FAKED there — only the
+  merchant's own Paynow login can press "Faked Success" — so staging proves the
+  integration, not real cards. OneMoney test numbers: 0771111111 (success 5 s),
+  0772222222 (30 s), 0773333333 (cancelled), 0774444444 (insufficient balance at
+  the start). `PAYNOW_AUTH_EMAIL` must be a merchant login email. O'mari has no
+  test numbers.
+- **Config** (`cell.zw.env`, IDs/keys/email per host): `PAYNOW_BASE_URL`,
+  `PAYNOW_ALLOWED_HOSTS`, `PAYNOW_{USD,ZWG}_INTEGRATION_{ID,KEY}`,
+  `PAYNOW_RESULT_URL` (absolute, with `/foundry`; production's value committed,
+  staging overrides), `PAYNOW_RETURN_URL`, `PAYNOW_AUTH_EMAIL`. Gateway routes
+  `paynow-result-write-route` and `payment-otp-write-route` (IP-keyed,
+  fail-safe, before the write catch-all; `GatewayRouteTableTest`).
+- booking-service shows them as "Bank card (Paynow)", "OneMoney", "O'mari"
+  (`PaymentMethods`), each under its own code.
 
 ## Veengu API reference — source of truth for payment integrations
 

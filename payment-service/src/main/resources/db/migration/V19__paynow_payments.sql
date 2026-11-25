@@ -1,0 +1,38 @@
+-- Paynow: three new rails beside the InnBucks code, ZimSwitch card and EcoCash
+-- (spec: docs/api/paynow.md). Paynow carries only what the other rails do not:
+--   PAYNOW_CARD  web checkout on Paynow's page (Visa/Mastercard, ZimSwitch cards)
+--   ONEMONEY     express checkout: a OneMoney prompt on the customer's phone
+--   OMARI        express checkout: O'mari texts a code, the customer types it in
+--
+--   paynow_trace         our merchanttrace (32 hex): sent with every initiate
+--                        and persisted BEFORE the call, so a payment whose
+--                        reply never arrived can be looked up by it. Paynow
+--                        requires it unique per merchant.
+--   paynow_poll_url      where we POST to read the status (Paynow's pollurl)
+--   paynow_browser_url   PAYNOW_CARD: the page the customer pays on
+--   paynow_reference     Paynow's own reference for the transaction
+--   paynow_otp_url       OMARI: where we POST the code the customer types
+--   paynow_otp_reference OMARI: the reference of the texted code (shown)
+--   paynow_checked_at    when we last read the status (spacing the checks)
+--
+-- code_expires_at is reused as the local deadline, as on every other rail.
+-- Every column is nullable with no default: a catalogue change, no rewrite,
+-- and the previous image ignores them.
+
+ALTER TABLE payment ADD COLUMN paynow_trace VARCHAR(32);
+ALTER TABLE payment ADD COLUMN paynow_poll_url VARCHAR(512);
+ALTER TABLE payment ADD COLUMN paynow_browser_url VARCHAR(512);
+ALTER TABLE payment ADD COLUMN paynow_reference VARCHAR(64);
+ALTER TABLE payment ADD COLUMN paynow_otp_url VARCHAR(512);
+ALTER TABLE payment ADD COLUMN paynow_otp_reference VARCHAR(64);
+ALTER TABLE payment ADD COLUMN paynow_checked_at TIMESTAMP WITH TIME ZONE;
+
+-- Same vocabulary discipline as every rail before: a new rail enters the
+-- ledger only through a migration (LedgerVocabularyMigrationTest).
+ALTER TABLE payment DROP CONSTRAINT chk_payment_rail;
+ALTER TABLE payment ADD CONSTRAINT chk_payment_rail
+    CHECK (payment_rail IN ('INNBUCKS_CODE', 'ZIMSWITCH_CARD', 'ECOCASH', 'PAYNOW_CARD', 'ONEMONEY', 'OMARI'));
+
+CREATE UNIQUE INDEX uq_payment_paynow_trace
+    ON payment (paynow_trace)
+    WHERE paynow_trace IS NOT NULL;

@@ -250,6 +250,38 @@ public class Payment {
     @Column(name = "card_declined_at")
     private Instant cardDeclinedAt;
 
+    /**
+     * Paynow (V19): our {@code merchanttrace}, 32 hex characters. Persisted
+     * BEFORE the initiate call, so a payment whose reply never arrived can be
+     * looked up by it ({@code /interface/trace}). Unique where present.
+     */
+    @Column(name = "paynow_trace", length = 32)
+    private String paynowTrace;
+
+    /** Paynow: where we POST to read the status. Always a pinned Paynow URL. */
+    @Column(name = "paynow_poll_url", length = 512)
+    private String paynowPollUrl;
+
+    /** PAYNOW_CARD: the page on Paynow the customer pays on. */
+    @Column(name = "paynow_browser_url", length = 512)
+    private String paynowBrowserUrl;
+
+    /** Paynow's own reference for the transaction, once known. */
+    @Column(name = "paynow_reference", length = 64)
+    private String paynowReference;
+
+    /** OMARI: where we POST the code the customer types. */
+    @Column(name = "paynow_otp_url", length = 512)
+    private String paynowOtpUrl;
+
+    /** OMARI: the reference of the code O'mari texted the customer (shown to them). */
+    @Column(name = "paynow_otp_reference", length = 64)
+    private String paynowOtpReference;
+
+    /** Paynow: when we last read this payment's status (spaces the checks). */
+    @Column(name = "paynow_checked_at")
+    private Instant paynowCheckedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

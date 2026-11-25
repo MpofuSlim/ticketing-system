@@ -76,6 +76,17 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     List<Payment> findByStatusAndPaymentRail(
             Payment.PaymentStatus status, PaymentRail paymentRail, Pageable pageable);
 
+    /** The Paynow sweep's rows: open payments on any of the Paynow rails. */
+    List<Payment> findByStatusAndPaymentRailIn(
+            Payment.PaymentStatus status, Collection<PaymentRail> paymentRails, Pageable pageable);
+
+    /** The per-number prompt cap for the Paynow phone rails (OneMoney, O'mari). */
+    long countByPaymentRailInAndCustomerMsisdnInAndCreatedAtAfter(
+            Collection<PaymentRail> paymentRails, Collection<String> customerMsisdns, Instant createdAfter);
+
+    Optional<Payment> findFirstByPaymentRailInAndCustomerMsisdnInAndCreatedAtAfterOrderByCreatedAtAsc(
+            Collection<PaymentRail> paymentRails, Collection<String> customerMsisdns, Instant createdAfter);
+
     /**
      * The card sweep's rows: open checkouts past their ceiling, oldest first.
      * The ceiling is the local deadline plus the grace, so the caller passes

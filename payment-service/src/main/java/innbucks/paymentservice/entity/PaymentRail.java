@@ -17,10 +17,24 @@ package innbucks.paymentservice.entity;
  *       charge that pushes a PIN prompt to the customer's phone; resolved by
  *       polling the Query endpoint keyed on our {@code clientCorrelator}
  *       ({@code docs/api/ecocash-eip.md}). Extended in V14.</li>
+ *   <li>{@link #PAYNOW_CARD}, {@link #ONEMONEY}, {@link #OMARI} (V19) — the
+ *       methods the rails above do not carry, through Paynow
+ *       ({@code docs/api/paynow.md}): a card payment on Paynow's own page
+ *       (Visa/Mastercard and ZimSwitch cards), a OneMoney prompt on the
+ *       customer's phone, and O'mari, which texts the customer a code they
+ *       type into our checkout. Tickets only for now.</li>
  * </ul>
  */
 public enum PaymentRail {
     INNBUCKS_CODE,
     ZIMSWITCH_CARD,
-    ECOCASH
+    ECOCASH,
+    PAYNOW_CARD,
+    ONEMONEY,
+    OMARI;
+
+    /** The rails that run through Paynow. */
+    public boolean isPaynow() {
+        return this == PAYNOW_CARD || this == ONEMONEY || this == OMARI;
+    }
 }
