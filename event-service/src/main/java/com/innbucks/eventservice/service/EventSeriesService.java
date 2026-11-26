@@ -125,7 +125,9 @@ public class EventSeriesService {
                         + ". Shorten the booking window, or use fewer days or start times.");
             }
         }
-        if (!errors.isEmpty()) {
+        // parse() returns no schedule only after recording why, and a schedule with no first
+        // start records why too, so the two null checks never refuse anything on their own.
+        if (!errors.isEmpty() || schedule == null || firstLocal == null) {
             log.info("Series refused organizerUuid={} problems={}", organizerUuid, errors.keySet());
             throw new FieldErrorsException(errors);
         }

@@ -253,7 +253,7 @@ public class SeriesDateGenerator {
             return null;
         }
         Event template = eventRepository.findById(series.getTemplateEventId()).orElse(null);
-        if (template == null || !SeriesState.isTemplate(template)) {
+        if (!SeriesState.isTemplate(template)) {
             return null;
         }
         SeriesSchedule schedule = SeriesSchedule.of(series);
