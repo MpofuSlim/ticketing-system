@@ -171,6 +171,18 @@ public class Event {
     @Column(name = "series_state", length = 16)
     private String seriesState;
 
+    /**
+     * When the date's series paused its sales (V25, TIC-71); null when it did
+     * not. A pause moves {@link #salesEndAt} to that moment; resuming puts
+     * {@link #seriesPausedSalesEndAt} back.
+     */
+    @Column(name = "series_paused_at")
+    private LocalDateTime seriesPausedAt;
+
+    /** The date's own sales end before its series paused it; null = none (sales ran to the end). */
+    @Column(name = "series_paused_sales_end_at")
+    private LocalDateTime seriesPausedSalesEndAt;
+
     @Column(updatable = false)
     private LocalDateTime createdAt;
 

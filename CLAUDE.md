@@ -89,9 +89,12 @@ existing callers" is a claim to prove from the code, not a default.
 
 ## Jira status follows the PR (owner rule, 2026-11-26)
 
-**A ticket moves to In Review (QA/UAT) when its PR is ready for review, and to
-Done when the PR is merged and every check on master's merge commit passes.**
+**A ticket moves to In Progress when work on it starts, to In Review (QA/UAT)
+when its PR is ready for review, and to Done when the PR is merged and every
+check on master's merge commit passes.**
 
+- **In Progress** (id 31): as soon as the work starts (the owner's go on the
+  build list), before any code. Don't wait to be asked.
 - **In Review:** as soon as the PR is open and ready (not a draft). A
   transition's name is not its target status: in TIC the one leading to In
   Review (QA/UAT) is named "Testing" (id 41). Look it up with
@@ -4175,6 +4178,83 @@ endpoint a 404 and the generator do nothing.
   event's JSON is unchanged (cached pages too: `EventSnapshot`).
 - **Deploy order:** seat-service, then event-service (V24 is additive). Switch
   it on per cell once both run.
+
+## Editing a series (event-service V25, seat-service, TIC-71)
+
+**An organizer (or SUPER_ADMIN) changes a series after it has made dates:
+its schedule, every future date's details, one ticket type's price, one date,
+or its whole run (pause, resume, end).** `SeriesEditService`, endpoints under
+`/events/series/{seriesId}`, all behind `EVENTS_SERIES_ENABLED`. Each answers a
+`SeriesChange`: the series as it now is, and one row per date the change
+touched with its `outcome`. Owner's go (2026-11-26).
+
+- **One rule for every removal: a date nobody holds a ticket for is removed;
+  a date someone does is KEPT and goes ahead as before.** Cancelling a booked
+  date with refunds is BE-L4, not built. `removeUnbooked` runs it in three
+  steps, never with a remote call inside a transaction: (1) a transaction takes
+  each candidate off sale (booking-service asks event-service live before every
+  booking, so none can start while it is counted); (2) booking-service counts
+  active bookings, FAIL CLOSED (`BookingGateway.activeCountsIfKnown`: a batch
+  it cannot answer is 503 "We couldn't check the bookings just now, so nothing
+  was changed."); (3) a transaction makes the change it belongs to, removes the
+  unbooked dates and puts the booked ones back as they were. Any failure puts
+  every date back.
+- **Every change re-checks the series' `@Version` in its write transaction**
+  (`lockedSeries`): a concurrent change is 409 "This series was changed by
+  someone else just now.", with the dates put back.
+- **`PUT .../schedule`**: the full schedule, with a new series' rules. Dates
+  not made yet follow it at the generator's next run; a made date the new
+  schedule no longer has is removed (unbooked) or kept (booked). Kept dates
+  keep their own length and sales window. **A schedule's removal DETACHES the
+  date** (`series_id` / `series_state` cleared, soft-deleted), so its start is
+  free and a later schedule can make it again; an extra start is how a single
+  date is added.
+- **`POST .../dates/{eventId}/skip`**: removes one unbooked date that has not
+  started; a booked one is 409 naming its active bookings. **A skipped date
+  stays in the series** (deleted), so `uq_events_series_start` keeps the
+  generator from making it again. Skip and detach are opposites on purpose.
+- **`PUT .../future-dates`**: title, description, venue, category, location
+  on the template and every date not started, and `moveStartTime` (one start
+  time to another, the same day). The schedule's start times move too, so new
+  dates follow. A move takes a date the organizer deleted along with it (its
+  start stays blocked); an extra start never moves; a date whose new time is
+  taken or passed is `NOT_MOVED_TAKEN` / `NOT_MOVED_PASSED`. Everyone booked
+  on a date that moved or changed venue gets the ordinary event-change
+  message (`notifyEventChange`), after the commit.
+- **`PUT .../future-prices`** (`categoryName`, `price`): seat-service's
+  `POST /seat-categories/internal/price-by-name` (internal trio: controller
+  token, the exact POST permitAll, gateway `seat-internal-deny`) sets the full
+  price of that ticket type on the template and every date not started, by
+  NAME (dates copied the template's types by name), at most 500 events per
+  call. Each event changes in its own transaction: one with a price tier still
+  open at or above the new price is `PRICE_REFUSED` (the same rule as
+  `PUT /seat-categories/{id}`, `openTierAtOrAbove`), the rest change; sold
+  tickets keep their price. The price history records the organizer (or the
+  staff email) explicitly, because no one is signed in on the internal call.
+  Public event pages show the new price within the 30s `seat-categories`
+  cache.
+- **`POST .../pause` / `resume`** (V25). A pause makes no new dates and
+  CLOSES SALES on every date that has not ended; it never unpublishes, so
+  dates stay listed, tickets stay valid and scans work. Each date's sales end
+  moves to now, its own end is kept in `events.series_paused_sales_end_at`,
+  and `series_paused_at` marks that the series did it (`SeriesPauses`).
+  Resume puts each end back; so do ending the series and deleting the
+  template. Both moves go in the date's sales-window history. An organizer
+  who sets a paused date's sales window on `PUT /events/{id}` takes that date
+  out of the pause (from its own end); any other edit leaves it closed. The
+  series' own moves of a paused date shift its kept end. A paused series cannot
+  be published (`EventSeriesService`); a rejected one must be published for
+  review before it is resumed.
+- **`POST .../end`**: no new dates, every unbooked future date removed, booked
+  ones kept (a paused one sells again), the template deleted. Final.
+- **Residuals, stated:** a date the generator makes in the seconds between
+  computing a removal's candidates and the write can survive it (it is still
+  GENERATING, hidden); a booking that a client started just before step 1 and
+  that lands PENDING after the count is not seen (step 1 makes this a window
+  of milliseconds).
+- **Deploy order:** seat-service, then event-service (V25 is two nullable
+  columns). Rollback is clean: the previous image ignores the columns, and a
+  paused date reads as sales closed until its end is put back by hand.
 
 ## Ticket sales open at a scheduled time, and every booking asks first (event-service V15)
 

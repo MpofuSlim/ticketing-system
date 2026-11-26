@@ -557,6 +557,57 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     Page<Event> findUpcomingSeriesDates(@Param("seriesId") UUID seriesId, @Param("now") LocalDateTime now,
                                         Pageable pageable);
 
+    // ---- Editing a series (TIC-71) ---------------------------------------------
+
+    /**
+     * A series' dates that have not started, made or being made, not deleted,
+     * soonest first: what an edit of "every future date" changes.
+     */
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState IN ('GENERATING', 'READY')
+        AND e.deleted = false
+        AND e.startDateTime > :now
+        ORDER BY e.startDateTime ASC, e.eventId ASC
+    """)
+    List<Event> findFutureSeriesDates(@Param("seriesId") UUID seriesId, @Param("now") LocalDateTime now);
+
+    /**
+     * The same with deleted dates too: a move takes a deleted date along, so
+     * it keeps blocking its start and the generator never makes it again.
+     */
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState IN ('GENERATING', 'READY')
+        AND e.startDateTime > :now
+        ORDER BY e.startDateTime ASC, e.eventId ASC
+    """)
+    List<Event> findFutureSeriesDatesWithDeleted(@Param("seriesId") UUID seriesId, @Param("now") LocalDateTime now);
+
+    /** A series' dates that have not ended and whose sales the series has not paused: what a pause closes. */
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState IN ('GENERATING', 'READY')
+        AND e.deleted = false
+        AND e.endDateTime > :now
+        AND e.seriesPausedAt IS NULL
+        ORDER BY e.startDateTime ASC, e.eventId ASC
+    """)
+    List<Event> findSeriesDatesToPause(@Param("seriesId") UUID seriesId, @Param("now") LocalDateTime now);
+
+    /** A series' dates whose sales the series paused: what a resume puts back. */
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesPausedAt IS NOT NULL
+        AND e.deleted = false
+        ORDER BY e.startDateTime ASC, e.eventId ASC
+    """)
+    List<Event> findSeriesPausedDates(@Param("seriesId") UUID seriesId);
+
     /** A date locked for the generator's last step, so two runs cannot both finish it. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT e FROM Event e WHERE e.eventId = :eventId")

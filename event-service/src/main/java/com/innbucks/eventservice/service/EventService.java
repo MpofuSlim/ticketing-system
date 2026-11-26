@@ -1112,6 +1112,16 @@ public class EventService {
         // DTO's flags). Checked against the MERGED values, so moving the event's
         // end before a stored sales time, or one side past the other, is refused
         // too.
+        // A date its series paused (V25, TIC-71) has its sales end at the pause.
+        // Setting its sales window takes it out of the pause, starting from its
+        // own end; any other edit is checked against its own end, not the
+        // pause's, which can sit before a sales start still to come.
+        if (event.getSeriesPausedAt() != null
+                && (request.isSalesStartDateTimeSent() || request.isSalesEndDateTimeSent())) {
+            event.setSalesEndAt(event.getSeriesPausedSalesEndAt());
+            event.setSeriesPausedAt(null);
+            event.setSeriesPausedSalesEndAt(null);
+        }
         if (request.isSalesStartDateTimeSent()) {
             event.setSalesStartAt(request.getSalesStartDateTime() == null
                     ? null : marketTimeZone.toUtc(request.getSalesStartDateTime()));
@@ -1120,7 +1130,9 @@ public class EventService {
             event.setSalesEndAt(request.getSalesEndDateTime() == null
                     ? null : marketTimeZone.toUtc(request.getSalesEndDateTime()));
         }
-        requireSalesWindow(event.getSalesStartAt(), event.getSalesEndAt(), event.getEndDateTime());
+        requireSalesWindow(event.getSalesStartAt(),
+                event.getSeriesPausedAt() != null ? event.getSeriesPausedSalesEndAt() : event.getSalesEndAt(),
+                event.getEndDateTime());
         if (request.isTermsTextSent() && termsAndQuestions != null) {
             termsAndQuestions.applyEdit(event, request.getTermsText());
         }

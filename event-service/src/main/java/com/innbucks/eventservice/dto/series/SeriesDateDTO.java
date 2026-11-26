@@ -32,4 +32,8 @@ public class SeriesDateDTO {
 
     @Schema(description = "Whether the date is published.", example = "true")
     private boolean active;
+
+    @Schema(description = "Whether the series' pause closed this date's sales (TIC-71). Resuming opens them.",
+            example = "false")
+    private boolean salesPaused;
 }

@@ -45,10 +45,11 @@ import java.util.stream.Collectors;
 public class EventSeriesService {
 
     static final String NOT_FOUND = "Not found";
-    static final String SERIES_NOT_FOUND = "Series not found";
+    public static final String SERIES_NOT_FOUND = "Series not found";
     static final String STAFF_CANNOT_CREATE =
             "A series must belong to an event organizer. Sign in as the organizer to set one up.";
-    static final String SERIES_ENDED = "This series has ended. Set up a new one.";
+    public static final String SERIES_ENDED = "This series has ended. Set up a new one.";
+    static final String SERIES_PAUSED_PUBLISH = "This series is paused. Resume it instead.";
     /** How many upcoming dates the detail view lists. */
     static final int DETAIL_DATES = 50;
     /** How many next starts the detail view previews. */
@@ -88,49 +89,16 @@ public class EventSeriesService {
         if (organizerUuid == null) {
             throw new BadRequestException(STAFF_CANNOT_CREATE);
         }
-        Map<String, String> errors = new LinkedHashMap<>();
-        int durationMinutes = request.getDurationMinutes() == null ? 0 : request.getDurationMinutes();
-        SeriesSchedule schedule = SeriesSchedule.parse(request.getDaysOfWeek(), request.getStartTimes(),
-                durationMinutes, request.getStartDate(), request.getEndDate(), request.getSkipDates(),
-                request.getExtraStarts(), errors);
-        int window = request.getBookingWindowDays() == null
-                ? SeriesSchedule.DEFAULT_BOOKING_WINDOW_DAYS : request.getBookingWindowDays();
+        CheckedSchedule checked = checkSchedule(request.getDaysOfWeek(), request.getStartTimes(),
+                request.getDurationMinutes(), request.getStartDate(), request.getEndDate(), request.getSkipDates(),
+                request.getExtraStarts(), request.getBookingWindowDays(), request.getSalesOpenMinutesBefore(),
+                request.getSalesCloseMinutesBefore(), List.of(), "organizerUuid=" + organizerUuid);
+        SeriesSchedule schedule = checked.schedule();
+        LocalDateTime firstLocal = checked.firstLocal();
+        int durationMinutes = request.getDurationMinutes();
+        int window = checked.window();
         Integer open = request.getSalesOpenMinutesBefore();
         Integer close = request.getSalesCloseMinutesBefore();
-        if (open != null && close != null && close >= open) {
-            errors.put("salesCloseMinutesBefore",
-                    "Must be less than salesOpenMinutesBefore: sales close after they open.");
-        }
-        LocalDateTime nowLocal = marketTimeZone.toMarketLocal(nowUtc());
-        LocalDateTime firstLocal = null;
-        if (schedule != null) {
-            List<String> extras = request.getExtraStarts() == null ? List.of() : request.getExtraStarts();
-            for (int i = 0; i < extras.size(); i++) {
-                LocalDateTime extra = SeriesSchedule.parseExtra(extras.get(i));
-                if (extra != null && !extra.isAfter(nowLocal)) {
-                    errors.put("extraStarts[" + i + "]", "That start has passed.");
-                }
-            }
-            Optional<LocalDateTime> first = schedule.firstStartFrom(nowLocal);
-            if (first.isEmpty()) {
-                errors.put("startDate", "This schedule makes no date from now on. Check the days, the dates and "
-                        + "the skipped days.");
-            } else {
-                firstLocal = first.get();
-            }
-            int inWindow = schedule.startsBetween(nowLocal, nowLocal.plusDays(window)).size();
-            if (inWindow > SeriesSchedule.MAX_DATES_IN_WINDOW) {
-                errors.put("bookingWindowDays", "This schedule makes " + inWindow + " dates in " + window
-                        + " days; at most " + SeriesSchedule.MAX_DATES_IN_WINDOW
-                        + ". Shorten the booking window, or use fewer days or start times.");
-            }
-        }
-        // parse() returns no schedule only after recording why, and a schedule with no first
-        // start records why too, so the two null checks never refuse anything on their own.
-        if (!errors.isEmpty() || schedule == null || firstLocal == null) {
-            log.info("Series refused organizerUuid={} problems={}", organizerUuid, errors.keySet());
-            throw new FieldErrorsException(errors);
-        }
 
         CreateEventRequestDTO event = new CreateEventRequestDTO();
         event.setTitle(request.getTitle());
@@ -173,6 +141,73 @@ public class EventSeriesService {
         return detail(series, template);
     }
 
+    /** A schedule as sent, checked: parsed, with its first start and its booking window. */
+    public record CheckedSchedule(SeriesSchedule schedule, LocalDateTime firstLocal, int window) {
+    }
+
+    /**
+     * Checks a schedule as sent, for a new series and for a schedule edit
+     * (TIC-71): the same rules for both. Every problem is named by its field
+     * ({@link FieldErrorsException}). An extra start must be in the future,
+     * except one in {@code storedExtras}: an edit sends the whole schedule back,
+     * passed extras included. The schedule must still make a date from now on
+     * (to stop a series, end it), and at most
+     * {@value SeriesSchedule#MAX_DATES_IN_WINDOW} in its booking window.
+     */
+    public CheckedSchedule checkSchedule(List<String> daysOfWeek, List<String> startTimes, Integer durationMinutes,
+                                  java.time.LocalDate startDate, java.time.LocalDate endDate,
+                                  List<String> skipDates, List<String> extraStarts, Integer bookingWindowDays,
+                                  Integer open, Integer close, java.util.Collection<String> storedExtras,
+                                  String logContext) {
+        Map<String, String> errors = new LinkedHashMap<>();
+        int duration = durationMinutes == null ? 0 : durationMinutes;
+        SeriesSchedule schedule = SeriesSchedule.parse(daysOfWeek, startTimes, duration, startDate, endDate,
+                skipDates, extraStarts, errors);
+        int window = bookingWindowDays == null ? SeriesSchedule.DEFAULT_BOOKING_WINDOW_DAYS : bookingWindowDays;
+        if (open != null && close != null && close >= open) {
+            errors.put("salesCloseMinutesBefore",
+                    "Must be less than salesOpenMinutesBefore: sales close after they open.");
+        }
+        LocalDateTime nowLocal = marketTimeZone.toMarketLocal(nowUtc());
+        LocalDateTime firstLocal = null;
+        if (schedule != null) {
+            java.util.Set<LocalDateTime> kept = new java.util.HashSet<>();
+            for (String stored : storedExtras) {
+                LocalDateTime parsed = SeriesSchedule.parseExtra(stored);
+                if (parsed != null) {
+                    kept.add(parsed);
+                }
+            }
+            List<String> extras = extraStarts == null ? List.of() : extraStarts;
+            for (int i = 0; i < extras.size(); i++) {
+                LocalDateTime extra = SeriesSchedule.parseExtra(extras.get(i));
+                if (extra != null && !extra.isAfter(nowLocal) && !kept.contains(extra)) {
+                    errors.put("extraStarts[" + i + "]", "That start has passed.");
+                }
+            }
+            Optional<LocalDateTime> first = schedule.firstStartFrom(nowLocal);
+            if (first.isEmpty()) {
+                errors.put("startDate", "This schedule makes no date from now on. Check the days, the dates and "
+                        + "the skipped days.");
+            } else {
+                firstLocal = first.get();
+            }
+            int inWindow = schedule.startsBetween(nowLocal, nowLocal.plusDays(window)).size();
+            if (inWindow > SeriesSchedule.MAX_DATES_IN_WINDOW) {
+                errors.put("bookingWindowDays", "This schedule makes " + inWindow + " dates in " + window
+                        + " days; at most " + SeriesSchedule.MAX_DATES_IN_WINDOW
+                        + ". Shorten the booking window, or use fewer days or start times.");
+            }
+        }
+        // parse() returns no schedule only after recording why, and a schedule with no first
+        // start records why too, so the two null checks never refuse anything on their own.
+        if (!errors.isEmpty() || schedule == null || firstLocal == null) {
+            log.info("Series schedule refused {} problems={}", logContext, errors.keySet());
+            throw new FieldErrorsException(errors);
+        }
+        return new CheckedSchedule(schedule, firstLocal, window);
+    }
+
     /** The caller's series, newest first; platform staff see every organizer's. */
     @Transactional(readOnly = true)
     public Page<EventSeriesResponseDTO> list(UUID organizerUuid, boolean staff, int page, int size) {
@@ -213,11 +248,14 @@ public class EventSeriesService {
         if (series.getStatus() == EventSeries.Status.ENDED) {
             throw new ConflictException(SERIES_ENDED);
         }
+        if (series.getStatus() == EventSeries.Status.PAUSED) {
+            throw new ConflictException(SERIES_PAUSED_PUBLISH);
+        }
         eventService.activateEvent(organizerUuid, role, series.getTemplateEventId());
         return get(organizerUuid, staff, seriesId);
     }
 
-    private EventSeries readable(UUID organizerUuid, boolean staff, UUID seriesId) {
+    public EventSeries readable(UUID organizerUuid, boolean staff, UUID seriesId) {
         EventSeries series = seriesRepository.findById(seriesId)
                 .orElseThrow(() -> new NotFoundException(SERIES_NOT_FOUND));
         if (!staff && !series.getTenantUserUuid().equals(organizerUuid)) {
@@ -226,7 +264,7 @@ public class EventSeriesService {
         return series;
     }
 
-    private void requireEnabled() {
+    public void requireEnabled() {
         if (!policy.enabled()) {
             throw new NotFoundException(NOT_FOUND);
         }
@@ -278,6 +316,7 @@ public class EventSeriesService {
                 .salesStatus(SalesStatus.of(date.isActive(), date.isRejected(), date.getSalesStartAt(),
                         date.getSalesEndAt(), date.getEndDateTime(), nowUtc))
                 .active(date.isActive())
+                .salesPaused(date.getSeriesPausedAt() != null)
                 .build()).toList());
         dto.setUpcomingDateCount(dates.getTotalElements());
         dto.setLastDateStart(eventRepository.findLastSeriesStart(series.getSeriesId()));

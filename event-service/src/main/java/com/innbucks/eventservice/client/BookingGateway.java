@@ -62,7 +62,50 @@ public class BookingGateway {
         );
     }
 
+    /** How many events one fail-closed count request names: the ids ride the URL. */
+    static final int STRICT_BATCH = 100;
+
+    /**
+     * Active-booking counts that FAIL CLOSED (TIC-71): empty when booking-service
+     * could not answer for every id, never "no bookings". For a decision that
+     * removes a date: {@link #activeCountsByEventIds} reads an outage as zero,
+     * which is right for a listing and would remove a date people hold tickets
+     * for. Events with no active booking are absent from the map. Asked
+     * {@value #STRICT_BATCH} ids at a time, since the ids ride the query string.
+     */
+    public java.util.Optional<Map<UUID, Long>> activeCountsIfKnown(Collection<UUID> eventIds) {
+        if (eventIds == null || eventIds.isEmpty()) {
+            return java.util.Optional.of(Collections.emptyMap());
+        }
+        List<UUID> ids = List.copyOf(new java.util.LinkedHashSet<>(eventIds));
+        Map<UUID, Long> all = new HashMap<>();
+        for (int from = 0; from < ids.size(); from += STRICT_BATCH) {
+            List<UUID> batch = ids.subList(from, Math.min(ids.size(), from + STRICT_BATCH));
+            Map<UUID, Long> part = circuitBreaker.run(
+                    () -> fetch(batch),
+                    throwable -> {
+                        log.warn("bookingActiveCounts strict fetch failed events={}", batch.size(), throwable);
+                        return null;
+                    });
+            if (part == null) {
+                return java.util.Optional.empty();
+            }
+            all.putAll(part);
+        }
+        return java.util.Optional.of(all);
+    }
+
     private Map<UUID, Long> doFetch(Collection<UUID> eventIds) {
+        Map<UUID, Long> counts = fetch(eventIds);
+        return counts == null ? Collections.emptyMap() : counts;
+    }
+
+    /**
+     * The counts, or null when booking-service answered with no readable list
+     * (no body, or {@code data} not a list). An empty list is an answer: no
+     * event has an active booking.
+     */
+    private Map<UUID, Long> fetch(Collection<UUID> eventIds) {
         // A01: the count endpoint is internal-only — call /bookings/internal/**
         // with the shared X-Internal-Token (service identity). This runs while
         // event-service serves public event listings, so it is NOT a user JWT.
@@ -86,11 +129,14 @@ public class BookingGateway {
                 Map.class);
         Map<String, Object> raw = response.getBody();
         if (raw == null) {
-            return Collections.emptyMap();
+            return null;
         }
         Object data = raw.get("data");
-        if (!(data instanceof List<?> list) || list.isEmpty()) {
-            return Collections.emptyMap();
+        if (!(data instanceof List<?> list)) {
+            return null;
+        }
+        if (list.isEmpty()) {
+            return new HashMap<>();
         }
         List<BookingActiveCountDTO> rows = objectMapper.convertValue(
                 list, new TypeReference<List<BookingActiveCountDTO>>() {});
