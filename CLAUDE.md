@@ -87,6 +87,23 @@ screen, a changed error), what the deploy needs (order, a quiet time for a
 migration), and whether a rollback is still clean. "Nothing changes for
 existing callers" is a claim to prove from the code, not a default.
 
+## Jira status follows the PR (owner rule, 2026-11-26)
+
+**A ticket moves to In Review (QA/UAT) when its PR is ready for review, and to
+Done when the PR is merged and every check on master's merge commit passes.**
+
+- **In Review:** as soon as the PR is open and ready (not a draft). A
+  transition's name is not its target status: in TIC the one leading to In
+  Review (QA/UAT) is named "Testing" (id 41). Look it up with
+  `listJiraIssueTransitions` and pick it by the status it leads to.
+- **Done** (id 51): only once the PR is merged AND CI, Release and Qodana are
+  green on the merge commit (`gh api
+  "repos/MpofuSlim/ticketing-system/actions/runs?head_sha=<sha>"`). A merge
+  whose master run is red stays In Review until it is fixed. Done does not wait
+  for the EC2 deploy.
+- A Jira automation reassigns a ticket that enters In Review to the "Tawanda"
+  account. That is expected; leave it.
+
 ## Files for the owner: Markdown only for the frontend (owner rule, 2026-10-29)
 
 **Send a Markdown file (`SendUserFile`) only when it is a frontend integration
