@@ -437,6 +437,62 @@ class SeatCategoryGatewayContractTest {
         wireMock.verify(2, getRequestedFor(urlPathEqualTo("/seat-categories/by-events")));
     }
 
+    // --- a series' date picker (TIC-73): price and a seats-left level ---
+
+    private static String sized(UUID eventId, String name, String price, Integer availableSeats, int allocated) {
+        return """
+                { "eventId": "%s", "name": "%s", "price": %s, "availableSeats": %s, "priceTiers": [],
+                  "sections": [ { "section": "Floor", "seatCount": %d } ] }"""
+                .formatted(eventId, name, price, availableSeats, allocated);
+    }
+
+    @Test
+    @DisplayName("saleSummaries: the seats-left level from every category, and the same from price")
+    void saleSummaries_levelsFromTheCategoriesSeatsLeft() {
+        UUID plenty = UUID.randomUUID();
+        UUID fewByCount = UUID.randomUUID();
+        UUID fewByShare = UUID.randomUUID();
+        UUID soldOut = UUID.randomUUID();
+        UUID unknownCount = UUID.randomUUID();
+        UUID noCategories = UUID.randomUUID();
+        stubByEvents(String.join(",", plenty.toString(), fewByCount.toString(), fewByShare.toString(),
+                        soldOut.toString(), unknownCount.toString(), noCategories.toString()),
+                sized(plenty, "GA", "60.00", 50, 100),
+                sized(fewByCount, "GA", "60.00", 6, 100),
+                sized(fewByCount, "VIP", "150.00", 4, 20),
+                sized(fewByShare, "GA", "60.00", 300, 4000),
+                sized(soldOut, "GA", "60.00", 0, 100),
+                sized(soldOut, "VIP", "150.00", 0, 20),
+                sized(unknownCount, "GA", "60.00", 0, 100),
+                sized(unknownCount, "VIP", "150.00", null, 20));
+
+        java.util.Map<UUID, SeatCategoryGateway.SaleSummary> summaries = cachedGateway().fetchSaleSummaries(
+                List.of(plenty, fewByCount, fewByShare, soldOut, unknownCount, noCategories));
+
+        assertEquals(com.innbucks.eventservice.dto.AvailabilityLevel.AVAILABLE, summaries.get(plenty).availability());
+        assertEquals(com.innbucks.eventservice.dto.AvailabilityLevel.FEW_LEFT,
+                summaries.get(fewByCount).availability(), "10 left in all is few");
+        assertEquals(com.innbucks.eventservice.dto.AvailabilityLevel.FEW_LEFT,
+                summaries.get(fewByShare).availability(), "300 of 4000 is under 10%");
+        assertEquals(com.innbucks.eventservice.dto.AvailabilityLevel.SOLD_OUT, summaries.get(soldOut).availability());
+        assertTrue(summaries.get(soldOut).priceFrom().isSoldOut());
+        assertEquals(com.innbucks.eventservice.dto.AvailabilityLevel.AVAILABLE,
+                summaries.get(unknownCount).availability(), "an unknown count is never shown sold out");
+        assertEquals(new BigDecimal("60.00"), summaries.get(plenty).priceFrom().getCurrentPrice());
+        assertTrue(!summaries.containsKey(noCategories), "no categories: the caller shows UNKNOWN");
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/seat-categories/by-events")));
+    }
+
+    @Test
+    @DisplayName("saleSummaries: seat-service down gives nothing, so every date shows UNKNOWN")
+    void saleSummaries_seatServiceDown_givesNothing() {
+        UUID event = UUID.randomUUID();
+        wireMock.stubFor(get(urlPathEqualTo("/seat-categories/by-events"))
+                .willReturn(aResponse().withStatus(503)));
+
+        assertTrue(cachedGateway().fetchSaleSummaries(List.of(event)).isEmpty());
+    }
+
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static CircuitBreakerFactory passThroughBreakerFactory() {
         CircuitBreakerFactory factory = mock(CircuitBreakerFactory.class);

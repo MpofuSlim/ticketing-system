@@ -15,7 +15,9 @@ import com.innbucks.eventservice.security.RevokedTokenDenylist;
 import com.innbucks.eventservice.security.SecurityConfig;
 import com.innbucks.eventservice.security.TokenVersionStore;
 import com.innbucks.eventservice.service.EventSeriesService;
+import com.innbucks.eventservice.service.SeriesDatesService;
 import com.innbucks.eventservice.service.SeriesEditService;
+import com.innbucks.eventservice.dto.series.SeriesMonthDTO;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.junit.jupiter.api.BeforeEach;
@@ -82,7 +84,8 @@ class EventSeriesSecurityTest {
     @Configuration
     @EnableWebMvc
     @EnableWebSecurity
-    @Import({SecurityConfig.class, EventSeriesController.class, GlobalExceptionHandler.class})
+    @Import({SecurityConfig.class, EventSeriesController.class, SeriesDatesController.class,
+            GlobalExceptionHandler.class})
     static class Ctx {
         @Bean JwtUtil jwtUtil() { return new JwtUtil(); }
         @Bean RevokedTokenDenylist revokedTokenDenylist() { return mock(RevokedTokenDenylist.class); }
@@ -93,6 +96,7 @@ class EventSeriesSecurityTest {
         @Bean MetricsScrapeAuthFilter metricsScrapeAuthFilter() { return new MetricsScrapeAuthFilter(""); }
         @Bean EventSeriesService seriesService() { return mock(EventSeriesService.class); }
         @Bean SeriesEditService editService() { return mock(SeriesEditService.class); }
+        @Bean SeriesDatesService datesService() { return mock(SeriesDatesService.class); }
         // What Spring Boot registers in the application: @Validated's @Min/@Max on the paging params.
         @Bean static MethodValidationPostProcessor methodValidationPostProcessor() {
             return new MethodValidationPostProcessor();
@@ -102,6 +106,7 @@ class EventSeriesSecurityTest {
     @Autowired WebApplicationContext context;
     @Autowired EventSeriesService seriesService;
     @Autowired SeriesEditService editService;
+    @Autowired SeriesDatesService datesService;
     @Autowired RevokedTokenDenylist denylist;
 
     MockMvc mvc;
@@ -109,7 +114,7 @@ class EventSeriesSecurityTest {
     @BeforeEach
     void setUp() {
         mvc = webAppContextSetup(context).apply(springSecurity()).build();
-        Mockito.reset(seriesService, editService, denylist);
+        Mockito.reset(seriesService, editService, datesService, denylist);
         when(denylist.isRevoked(anyString())).thenReturn(false);
     }
 
@@ -149,6 +154,32 @@ class EventSeriesSecurityTest {
         mvc.perform(get("/events/series")).andExpect(status().isUnauthorized());
         mvc.perform(get("/events/series/" + SERIES)).andExpect(status().isUnauthorized());
         verifyNoInteractions(seriesService);
+    }
+
+    @Test
+    void theBuyersDates_arePublic_whileTheSeriesItselfStaysSignedIn() throws Exception {
+        when(datesService.month(SERIES, "2026-12")).thenReturn(SeriesMonthDTO.builder()
+                .seriesId(SERIES).month("2026-12").months(List.of("2026-12")).dates(List.of()).build());
+
+        mvc.perform(get("/events/series/" + SERIES + "/dates").param("month", "2026-12"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Series dates retrieved"))
+                .andExpect(jsonPath("$.data.month").value("2026-12"));
+        mvc.perform(get("/events/series/" + SERIES + "/dates").param("month", "2026-12")
+                        .header("Authorization", bearer("CUSTOMER", null)))
+                .andExpect(status().isOk());
+
+        // The permit is that one path: the series detail beside it still needs a session.
+        mvc.perform(get("/events/series/" + SERIES)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/events/series/" + SERIES + "/dates/extra")).andExpect(status().isUnauthorized());
+        verifyNoInteractions(seriesService);
+    }
+
+    @Test
+    void theBuyersDates_staysClosedToAGateSession() throws Exception {
+        mvc.perform(get("/events/series/" + SERIES + "/dates").header("Authorization", bearer("GATE_SCANNER", null)))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(datesService);
     }
 
     @Test

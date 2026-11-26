@@ -78,6 +78,39 @@ public class PublicEventCatalog {
         return new PageImpl<>(cached.content(), pageable, cached.total());
     }
 
+    /**
+     * One month of a series' public dates (TIC-73): the dates as snapshots and
+     * the months that have any, from the cache or from {@code loader}. Shares
+     * this cache, so every event write on this pod clears it too; other pods
+     * keep theirs up to the TTL, as for a list page. The returned lists are
+     * the cached ones, unmodifiable: callers build fresh DTOs from them.
+     */
+    public SeriesMonthPage seriesMonth(SeriesMonthKey key, Supplier<SeriesMonthPage> loader) {
+        return pages.get(key, loader);
+    }
+
+    /** A series and a month in the market's calendar ({@code 2026-12}). Never shares an entry with a page. */
+    public record SeriesMonthKey(java.util.UUID seriesId, java.time.YearMonth month) {
+    }
+
+    /** What is cached for one series month: its dates (soonest first) and every month with a date. */
+    public record SeriesMonthPage(List<EventSnapshot> dates, List<String> months)
+            implements ReadCacheConfig.Weighted {
+
+        public static SeriesMonthPage of(List<Event> dates, List<String> months, EventMapper mapper) {
+            List<EventSnapshot> snapshots = new ArrayList<>(dates.size());
+            for (Event event : dates) {
+                snapshots.add(EventSnapshot.of(mapper.toDTO(event)));
+            }
+            return new SeriesMonthPage(Collections.unmodifiableList(snapshots), List.copyOf(months));
+        }
+
+        @Override
+        public int weight() {
+            return dates.size() + 1;
+        }
+    }
+
     /** Clears every cached page (now, and again after the caller's commit). */
     public void invalidateAll() {
         pages.invalidateAll();

@@ -557,6 +557,43 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     Page<Event> findUpcomingSeriesDates(@Param("seriesId") UUID seriesId, @Param("now") LocalDateTime now,
                                         Pageable pageable);
 
+    // ---- Dates for buyers (TIC-73) ----------------------------------------------
+
+    /**
+     * A series' dates a buyer may see that start in {@code [from, to)} and have
+     * not ended: made, published, not rejected, not deleted. Soonest first.
+     * Keep the WHERE in step with {@link #findPublicSeriesStarts}.
+     */
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState = 'READY'
+        AND e.deleted = false
+        AND e.active = true
+        AND e.rejected = false
+        AND e.endDateTime > :now
+        AND e.startDateTime >= :from
+        AND e.startDateTime < :to
+        ORDER BY e.startDateTime ASC, e.eventId ASC
+    """)
+    List<Event> findPublicSeriesDates(@Param("seriesId") UUID seriesId, @Param("from") LocalDateTime from,
+                                      @Param("to") LocalDateTime to, @Param("now") LocalDateTime now,
+                                      Pageable limit);
+
+    /** The starts of every date {@link #findPublicSeriesDates} could list, from now on. Soonest first. */
+    @Query("""
+        SELECT e.startDateTime FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState = 'READY'
+        AND e.deleted = false
+        AND e.active = true
+        AND e.rejected = false
+        AND e.endDateTime > :now
+        ORDER BY e.startDateTime ASC
+    """)
+    List<LocalDateTime> findPublicSeriesStarts(@Param("seriesId") UUID seriesId, @Param("now") LocalDateTime now,
+                                               Pageable limit);
+
     // ---- Editing a series (TIC-71) ---------------------------------------------
 
     /**

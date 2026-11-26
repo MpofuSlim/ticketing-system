@@ -57,6 +57,8 @@ public class SecurityConfig {
                         // Recurring series (V24): an organizer's and staff's set-up, never
                         // public. Same reason, same place: before the GET permitAll below,
                         // which would otherwise answer GET /events/series anonymously.
+                        // TIC-73: one month of a series' public dates, for a buyer's date picker.
+                        .requestMatchers(HttpMethod.GET, "/events/series/*/dates").permitAll()
                         .requestMatchers(HttpMethod.GET, "/events/series", "/events/series/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/events").permitAll()
                         // Internal: full event lookup (tenantUserUuid intact) for sibling

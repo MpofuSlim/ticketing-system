@@ -89,32 +89,38 @@ existing callers" is a claim to prove from the code, not a default.
 
 ## Jira status follows the PR (owner rule, 2026-11-26)
 
-**A ticket moves to In Progress when work on it starts, to In Review (QA/UAT)
-when its PR is ready for review, and to Done when the PR is merged and every
-check on master's merge commit passes. A Bug waits for the owner's own test
-before Done, and the owner moves it.**
+**A ticket moves to In Progress when work on it starts, to Testing when its PR
+is ready for review, and to Done when the PR is merged and every check on
+master's merge commit passes. A Bug waits for the owner's own test before
+Done, and the owner moves it.**
 
+- **We call the review step "Testing"** (owner decision, 2026-11-26, as on the
+  team's other boards), in messages, PR bodies and tickets. Until the TIC
+  status itself is renamed in Jira's workflow it still reads "In Review
+  (QA/UAT)"; that is the same status. Renaming it is a Jira admin change: check
+  afterwards that the reassign-to-Tawanda automation still fires.
 - **In Progress** (id 31): as soon as the work starts (the owner's go on the
   build list), before any code. Don't wait to be asked.
-- **In Review:** as soon as the PR is open and ready (not a draft). A
-  transition's name is not its target status: in TIC the one leading to In
-  Review (QA/UAT) is named "Testing" (id 41). Look it up with
-  `listJiraIssueTransitions` and pick it by the status it leads to.
+- **Testing:** as soon as the PR is open and ready (not a draft). In TIC the
+  transition is named "Testing" (id 41) and leads to the status Jira shows as
+  "In Review (QA/UAT)". A transition's name is not its target status: look it
+  up with `listJiraIssueTransitions` and pick it by the status it leads to.
 - **Done** (id 51), for a Task or Story: only once the PR is merged AND CI,
   Release and Qodana are green on the merge commit (`gh api
   "repos/MpofuSlim/ticketing-system/actions/runs?head_sha=<sha>"`). A merge
-  whose master run is red stays In Review until it is fixed. Done does not wait
-  for the EC2 deploy.
-- A Jira automation reassigns a ticket that enters In Review to the "Tawanda"
+  whose master run is red stays in Testing until it is fixed. Done does not
+  wait for the EC2 deploy.
+- A Jira automation reassigns a ticket that enters Testing to the "Tawanda"
   account. That is expected; leave it.
 - **A bug found and fixed in a session gets its own ticket** (owner rule,
   2026-11-26), even when nobody asked for one: a TIC **Bug** with what breaks,
   who sees it, where it was found, the cause and how it was proved, the fix's
-  PR, and the deploy. Raise it when the fix starts, then In Progress, then In
-  Review with the PR. **A Bug is never moved to Done by Claude** (owner rule,
-  2026-11-26): it stays In Review after the merge and the green master, and
-  the owner moves it once they have tested the fix on staging and it works.
-  Say in the merge message that it is waiting on their test. Put
+  PR, and the deploy. Raise it when the fix starts, then In Progress, then
+  Testing with the PR. **A Bug is never moved to Done by Claude on its own**
+  (owner rule, 2026-11-26): it stays in Testing after the merge and the green
+  master, and the owner moves it, or tells Claude to, once they have tested
+  the fix on staging and it works. Say in the merge message that it is
+  waiting on their test. Put
   the key in the PR title, and word the title and the squash commit as a fix
   ("Fix … (TIC-NNN)"), never as a feature. A fix with no ticket leaves no
   trace on the board of what broke. TIC-117 (Paynow's TLS reset) is the
@@ -4272,6 +4278,49 @@ touched with its `outcome`. Owner's go (2026-11-26).
 - **Deploy order:** seat-service, then event-service (V25 is two nullable
   columns). Rollback is clean: the previous image ignores the columns, and a
   paused date reads as sales closed until its end is put back by hand.
+
+## A series' dates for buyers (event-service, TIC-73)
+
+**`GET /events/series/{seriesId}/dates?month=2026-12` lists one month of a
+series' dates for a buyer's date picker, with no sign-in.** Each date carries
+its sale status, its "from" price and a seats-left level. Every event carries
+its `seriesId`, so a client goes from any date's page to the others.
+`SeriesDatesService`, `SeriesDatesController`, behind `EVENTS_SERIES_ENABLED`
+like every series endpoint.
+
+- **Which series answer:** one whose template is approved and not rejected
+  (published at least once, not taken down by staff). Anything else, an
+  unknown id included, is the same 404 "Series not found" as a draft's
+  `GET /events/{id}`. A paused or ended series still answers: its dates are
+  public events.
+- **Which dates:** made (`READY`), published, not rejected, not deleted, not
+  ended. Two queries, `findPublicSeriesDates` and `findPublicSeriesStarts`,
+  share the same WHERE; change them together.
+- **The month is the market's calendar** (`uuuu-MM`, strict; anything else is
+  400 `data.month`). Left out, the picker opens on the month of the next date,
+  else this month. `months` lists every month with a date from now on. A
+  month before last month or more than 36 months ahead answers no dates and
+  is never queried, so a caller cannot fill the cache with months of its
+  choosing.
+- **What is cached:** the series and its template are read live on every call
+  (they decide the 404). A month's dates and the month list are cached in the
+  public-pages cache (`public-event-pages`, 30s, cleared by any event write on
+  the pod; a date the generator just made can take up to the TTL to appear).
+  The sale status is worked out per call, and a date that has ended since the
+  entry was cached is dropped. The price and the level come from the
+  `seat-categories` layout cache through
+  `SeatCategoryGateway.fetchSaleSummaries` (one `by-events` call per 100
+  dates not cached), worked out per call like a list page's `priceFrom`.
+- **The level is never a count** (`AvailabilityLevel`): SOLD_OUT when every
+  category reports no seats left; FEW_LEFT at 10 seats or fewer left, or 10%
+  of the allocation or less; AVAILABLE otherwise; UNKNOWN when seat-service
+  could not be asked or the date has no categories. A category with an unknown
+  count counts as having seats, as for `priceFrom`, so an unanswered count
+  never shows a date sold out. Display only: a booking claims its own stock.
+- **Security:** `SecurityConfig` permits exactly `GET /events/series/*/dates`,
+  ahead of the authenticated `/events/series/**`. A gate session stays refused
+  (`GateSessionScope` closes all of `/events/series/`). No gateway change:
+  `/events/**` already routes to event-service.
 
 ## Ticket sales open at a scheduled time, and every booking asks first (event-service V15)
 
