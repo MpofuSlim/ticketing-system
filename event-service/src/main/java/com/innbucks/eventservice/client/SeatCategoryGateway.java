@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.client;
 
 import com.innbucks.eventservice.dto.ApiResult;
+import com.innbucks.eventservice.dto.AvailabilityLevel;
 import com.innbucks.eventservice.dto.EventPriceFromDTO;
 import com.innbucks.eventservice.dto.EventPriceTierDTO;
 import com.innbucks.eventservice.dto.EventSeatCategoryResponseDTO;
@@ -185,6 +186,46 @@ public class SeatCategoryGateway {
      * could not be asked about, is absent: the list still serves.
      */
     public Map<UUID, EventPriceFromDTO> fetchPriceFrom(Collection<UUID> eventIds) {
+        LocalDateTime now = nowUtc();
+        Map<UUID, EventPriceFromDTO> out = new LinkedHashMap<>();
+        layoutsFor(eventIds).forEach((eventId, layout) -> {
+            EventPriceFromDTO priceFrom = layout.priceFrom(now);
+            if (priceFrom != null) {
+                out.put(eventId, priceFrom);
+            }
+        });
+        return out;
+    }
+
+    /**
+     * What a buyer's date picker shows for each event (TIC-73): its "from"
+     * price and how many seats are left, as a coarse level. Read from the same
+     * layouts as {@link #fetchPriceFrom}, worked out on this request. An event
+     * with no category, or one seat-service could not be asked about, is
+     * absent: the caller shows it as unknown.
+     */
+    public Map<UUID, SaleSummary> fetchSaleSummaries(Collection<UUID> eventIds) {
+        LocalDateTime now = nowUtc();
+        Map<UUID, SaleSummary> out = new LinkedHashMap<>();
+        layoutsFor(eventIds).forEach((eventId, layout) -> {
+            if (!layout.categories().isEmpty()) {
+                out.put(eventId, new SaleSummary(layout.priceFrom(now), layout.availability()));
+            }
+        });
+        return out;
+    }
+
+    /** An event's "from" price (null when no category is priced) and its seats-left level. */
+    public record SaleSummary(EventPriceFromDTO priceFrom, AvailabilityLevel availability) {
+    }
+
+    /**
+     * Each event's layout: from this pod's cache, the rest in one
+     * {@code GET /seat-categories/by-events} call per 100, cached as if each
+     * had been read alone. Events seat-service could not be asked about are
+     * absent.
+     */
+    private Map<UUID, CategoryLayout> layoutsFor(Collection<UUID> eventIds) {
         if (eventIds == null || eventIds.isEmpty()) {
             return Map.of();
         }
@@ -204,20 +245,12 @@ public class SeatCategoryGateway {
             layouts.putAll(circuitBreaker.run(
                     () -> fetchLayouts(chunk),
                     throwable -> {
-                        log.warn("seatCategories breaker fallback on price-from lookup events={}",
+                        log.warn("seatCategories breaker fallback on layout lookup events={}",
                                 chunk.size(), throwable);
                         return Map.of();
                     }));
         }
-        LocalDateTime now = nowUtc();
-        Map<UUID, EventPriceFromDTO> out = new LinkedHashMap<>();
-        layouts.forEach((eventId, layout) -> {
-            EventPriceFromDTO priceFrom = layout.priceFrom(now);
-            if (priceFrom != null) {
-                out.put(eventId, priceFrom);
-            }
-        });
-        return out;
+        return layouts;
     }
 
     /** Several events' layouts from one seat-service call, each cached as {@link #fetchForEvent} would. */
@@ -386,6 +419,43 @@ public class SeatCategoryGateway {
                 cheapestSoldOut.setSoldOut(true);
             }
             return cheapestSoldOut;
+        }
+
+        /**
+         * How many seats are left, as a level (TIC-73): SOLD_OUT when every
+         * category reports none left; FEW_LEFT when the categories report at
+         * most {@value AvailabilityLevel#FEW_LEFT_SEATS} seats left, or at most
+         * {@value AvailabilityLevel#FEW_LEFT_PERCENT}% of the seats allocated;
+         * AVAILABLE otherwise. A category whose seats left are unknown counts
+         * as having some, as for the "from" price, so an unanswered count
+         * never shows a date as sold out. Display only, up to the layout's TTL
+         * old: a booking claims its own stock.
+         */
+        AvailabilityLevel availability() {
+            long left = 0;
+            long allocated = 0;
+            boolean unknown = false;
+            for (CategoryView c : categories) {
+                if (c.availableSeats() == null) {
+                    unknown = true;
+                } else {
+                    left += Math.max(0, c.availableSeats());
+                }
+                for (SectionView s : c.sections()) {
+                    allocated += s.seatCount() == null ? 0 : Math.max(0, s.seatCount());
+                }
+            }
+            if (unknown) {
+                return AvailabilityLevel.AVAILABLE;
+            }
+            if (left == 0) {
+                return AvailabilityLevel.SOLD_OUT;
+            }
+            if (left <= AvailabilityLevel.FEW_LEFT_SEATS
+                    || left * 100 <= allocated * AvailabilityLevel.FEW_LEFT_PERCENT) {
+                return AvailabilityLevel.FEW_LEFT;
+            }
+            return AvailabilityLevel.AVAILABLE;
         }
 
         /** The lower current price; on a tie the lower full price; on a full tie the first. */

@@ -60,6 +60,7 @@ class EventSeriesPostgresIT extends PostgresIntegrationTestBase {
 
     @Autowired EventSeriesService seriesService;
     @Autowired SeriesDateGenerator generator;
+    @Autowired SeriesDatesService datesService;
     @Autowired EventService eventService;
     @Autowired EventRepository eventRepository;
     @Autowired EventSeriesRepository seriesRepository;
@@ -246,5 +247,39 @@ class EventSeriesPostgresIT extends PostgresIntegrationTestBase {
         assertThat(dates).isNotEmpty();
         assertThat(assignmentRepository.findByEventId(dates.get(0).getEventId()))
                 .extracting(EventScannerAssignment::getScannerId).containsExactly(scanner.getScannerId());
+    }
+
+    @Test
+    void buyersSee_onlyTheSeriesPublishedDates_monthByMonth() {
+        EventSeriesResponseDTO series = publishedSeries(4);
+        generator.run();
+        List<Event> dates = datesOf(series.getSeriesId());
+        assertThat(dates).hasSize(4);
+        UUID takenDown = dates.get(0).getEventId();
+        UUID deleted = dates.get(1).getEventId();
+        jdbc.update("UPDATE events SET active = false WHERE event_id = ?", takenDown);
+        jdbc.update("UPDATE events SET deleted = true WHERE event_id = ?", deleted);
+
+        com.innbucks.eventservice.dto.series.SeriesMonthDTO first = datesService.month(series.getSeriesId(), null);
+        List<UUID> listed = new java.util.ArrayList<>();
+        for (String month : first.getMonths()) {
+            datesService.month(series.getSeriesId(), month).getDates()
+                    .forEach(d -> listed.add(d.getEventId()));
+        }
+
+        assertThat(first.getMonth()).isEqualTo(first.getMonths().getFirst());
+        assertThat(listed).containsExactlyElementsOf(dates.subList(2, 4).stream()
+                .sorted(java.util.Comparator.comparing(Event::getStartDateTime))
+                .map(Event::getEventId).toList());
+        assertThat(listed).doesNotContain(series.getTemplateEventId(), takenDown, deleted);
+    }
+
+    @Test
+    void aSeriesNeverPublished_hasNoPublicDates() {
+        EventSeriesResponseDTO draft = seriesService.create(organizer, "ZW", everyDay(3));
+
+        assertThatThrownBy(() -> datesService.month(draft.getSeriesId(), null))
+                .isInstanceOf(com.innbucks.eventservice.exception.NotFoundException.class)
+                .hasMessage("Series not found");
     }
 }
