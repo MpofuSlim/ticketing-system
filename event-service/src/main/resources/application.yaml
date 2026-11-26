@@ -117,6 +117,16 @@ events:
   # shows "Awaiting approval" and the review queue (GET /events/review-queue).
   review:
     required: ${EVENTS_REVIEW_REQUIRED:false}
+  # Recurring events (V24, TIC-70). Off: /events/series answers 404 and the
+  # generator does nothing. On: an organizer sets up a series once and its
+  # dates are made inside the booking window. The generator runs every five
+  # minutes, makes at most max-dates-per-run dates and stops starting new work
+  # after run-budget.
+  series:
+    enabled: ${EVENTS_SERIES_ENABLED:false}
+    generator-cron: ${EVENTS_SERIES_GENERATOR_CRON:0 */5 * * * *}
+    max-dates-per-run: ${EVENTS_SERIES_MAX_DATES_PER_RUN:100}
+    run-budget: ${EVENTS_SERIES_RUN_BUDGET:PT25S}
   cache:
     enabled: true
     public-event-pages:   # anonymous-branch list pages; max-size counts events

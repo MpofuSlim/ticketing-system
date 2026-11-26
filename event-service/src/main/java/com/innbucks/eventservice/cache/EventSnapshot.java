@@ -51,7 +51,9 @@ public record EventSnapshot(
         LocalDateTime updatedAt,
         LocalDateTime salesStartDateTime,
         LocalDateTime salesEndDateTime,
-        Integer termsVersion
+        Integer termsVersion,
+        UUID seriesId,
+        String seriesState
 ) {
 
     /** Null in, null out (a mocked mapper may answer null). */
@@ -82,7 +84,9 @@ public record EventSnapshot(
                 dto.getUpdatedAt(),
                 dto.getSalesStartDateTime(),
                 dto.getSalesEndDateTime(),
-                dto.getTermsVersion());
+                dto.getTermsVersion(),
+                dto.getSeriesId(),
+                dto.getSeriesState());
     }
 
     /** A new, independent DTO carrying exactly what the mapper produced. */
@@ -112,6 +116,8 @@ public record EventSnapshot(
                 .rejected(rejected)
                 .createdAt(createdAt)
                 .updatedAt(updatedAt)
+                .seriesId(seriesId)
+                .seriesState(seriesState)
                 .build();
     }
 }

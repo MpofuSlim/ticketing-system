@@ -324,8 +324,12 @@ public class ScannerService {
         if (assignmentRepository.existsByScannerIdAndEventId(scannerId, eventId)) {
             return new Written(get(organizerUuid, scannerId), null);
         }
-        long clashes = assignmentRepository.countClashes(scanner.getPhoneNumber(), scannerId, eventId,
-                event.getStartDateTime(), event.getEndDateTime(), now);
+        // A series template (V24) has no times of its own (they are its next
+        // date's), so nothing can clash with it: the generator checks each
+        // date when it copies the team onto it, and skips a clashing scanner.
+        long clashes = com.innbucks.eventservice.entity.SeriesState.isTemplate(event) ? 0
+                : assignmentRepository.countClashes(scanner.getPhoneNumber(), scannerId, eventId,
+                        event.getStartDateTime(), event.getEndDateTime(), now);
         if (clashes > 0) {
             log.info("Scanner assignment refused, schedule clash scannerId={} eventId={} by={}",
                     scannerId, eventId, actor);
@@ -1025,9 +1029,14 @@ public class ScannerService {
         return result;
     }
 
-    /** Not deleted, not ended, and the row's own organizer's. */
+    /**
+     * Not deleted, not ended, the row's own organizer's, and a real event: a
+     * series template and a date still being made (V24) are on nobody's gate
+     * or sales screen.
+     */
     private static boolean upcomingFor(Event event, EventScanner scanner, LocalDateTime now) {
         return event != null && scanner != null && !event.isDeleted() && event.getEndDateTime().isAfter(now)
+                && com.innbucks.eventservice.entity.SeriesState.isListed(event)
                 && scanner.getOrganizerUuid().equals(event.getTenantUserUuid());
     }
 

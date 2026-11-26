@@ -43,6 +43,12 @@ public class SecurityConfig {
                         // tier-ending reminders): the controller checks X-Internal-Token
                         // and the gateway's seat-internal-deny keeps it off the internet.
                         .requestMatchers(HttpMethod.GET, "/seat-categories/**").permitAll()
+                        // event-service's series generator copying a template's layout
+                        // onto a new date. Same trio: the controller checks
+                        // X-Internal-Token, the gateway's seat-internal-deny keeps
+                        // /seat-categories/internal/** off the internet. POST, so the
+                        // GET permit above never covered it.
+                        .requestMatchers(HttpMethod.POST, "/seat-categories/internal/copy").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()

@@ -154,6 +154,23 @@ public class Event {
     @Column(name = "terms_version")
     private Integer termsVersion;
 
+    /**
+     * The series this event belongs to (V24, TIC-70), or null for a one-off
+     * event. Set together with {@link #seriesState} (a CHECK holds them as a
+     * pair).
+     */
+    @Column(name = "series_id")
+    private UUID seriesId;
+
+    /**
+     * {@link SeriesState#TEMPLATE}, {@link SeriesState#GENERATING} or
+     * {@link SeriesState#READY} when {@link #seriesId} is set. A template and a
+     * date still being made are never active (a CHECK refuses it) and are kept
+     * out of every list; a READY date is an ordinary event.
+     */
+    @Column(name = "series_state", length = 16)
+    private String seriesState;
+
     @Column(updatable = false)
     private LocalDateTime createdAt;
 

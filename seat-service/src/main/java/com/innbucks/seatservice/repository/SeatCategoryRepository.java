@@ -32,4 +32,14 @@ public interface SeatCategoryRepository extends JpaRepository<SeatCategory, UUID
     @Query("UPDATE SeatCategory c SET c.availableSeats = c.availableSeats + 1 " +
             "WHERE c.id = :id AND c.availableSeats < c.totalSeats")
     int incrementAvailableSeats(@Param("id") UUID id);
+
+    // A layout copy onto one event (SeatLayoutCopyService) takes this
+    // transaction-scoped advisory lock FIRST, so two copies onto the same
+    // target queue and the second finds the first's categories. Released at
+    // commit or rollback. Nothing else takes it, and a copy takes one, so it
+    // adds no cycle. Two targets sharing a key only queue.
+    // pg_advisory_xact_lock returns void; called in FROM, it always runs.
+    @Query(value = "SELECT 1 FROM pg_advisory_xact_lock(CAST(:namespace AS integer), CAST(:eventKey AS integer))",
+            nativeQuery = true)
+    Integer lockEventLayout(@Param("namespace") int namespace, @Param("eventKey") int eventKey);
 }
