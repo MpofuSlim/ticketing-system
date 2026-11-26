@@ -45,8 +45,9 @@ import java.util.Set;
  *       the request headers stay what they were before the swap.</li>
  *   <li><b>System proxy and TLS settings</b> ({@code ProxySelector.getDefault()},
  *       {@code javax.net.ssl.*}), the same sources the JDK transports read,
- *       except that hosts listed as TLS-1.2-only are offered TLS 1.2 alone
- *       ({@link TlsProtocolsByHost}: Paynow resets a TLS 1.3 offer).</li>
+ *       except that the hosts listed are offered the JVM's own cipher list
+ *       ({@link TlsCiphersByHost}: Paynow accepts only CBC ciphers, which
+ *       HttpClient's default list drops).</li>
  *   <li><b>Bounded everything</b>: lease, connect, TLS handshake, response.</li>
  * </ul>
  *
@@ -72,19 +73,19 @@ public final class PooledHttpClient implements AutoCloseable {
     private final PoolingHttpClientConnectionManager connectionManager;
     private final CloseableHttpClient httpClient;
 
-    private final TlsProtocolsByHost tls;
+    private final TlsCiphersByHost tls;
 
     public PooledHttpClient(PooledHttpClientProperties properties) {
         this(properties, Set.of());
     }
 
     /**
-     * @param tls12OnlyHosts hosts offered TLS 1.2 only (Paynow's, today); every
-     *                       other host gets the system's TLS settings
+     * @param jvmCipherHosts hosts offered the JVM's own cipher list (Paynow's,
+     *                       today); every other host gets HttpClient's default
      */
-    public PooledHttpClient(PooledHttpClientProperties properties, Collection<String> tls12OnlyHosts) {
+    public PooledHttpClient(PooledHttpClientProperties properties, Collection<String> jvmCipherHosts) {
         this.properties = properties;
-        this.tls = TlsProtocolsByHost.systemDefault(tls12OnlyHosts);
+        this.tls = TlsCiphersByHost.systemDefault(jvmCipherHosts);
         this.connectionManager = PoolingHttpClientConnectionManagerBuilder.create()
                 .setMaxConnTotal(properties.getMaxTotal())
                 .setMaxConnPerRoute(properties.getMaxPerRoute())
@@ -129,7 +130,7 @@ public final class PooledHttpClient implements AutoCloseable {
     }
 
     /** The pool's TLS step, for tests and the boot log. */
-    public TlsProtocolsByHost tls() {
+    public TlsCiphersByHost tls() {
         return tls;
     }
 

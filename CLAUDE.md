@@ -679,6 +679,9 @@ with no pool limit and no lease timeout.
   `connect-timeout` / `read-timeout` still apply per request.
 - **Proxy and TLS come from the system**, as before: `ProxySelector.getDefault()`
   and `DefaultClientTlsStrategy.createSystemDefault()` (`javax.net.ssl.*`).
+  One exception, payment-service only: Paynow's hosts get the JVM's own cipher
+  list, because HttpClient's default drops every CBC cipher and Paynow has no
+  other kind (`TlsCiphersByHost`, the Paynow section).
   Lease (1s), connect, TLS handshake and response are all bounded; the
   handshake runs before any per-client timeout applies, so it is bounded by
   the pool-wide `read-timeout` (10s).
@@ -5617,19 +5620,29 @@ our own rails: never route them through Paynow (its fee, one more hop).
 - **The O'mari code endpoint answers with the payment**: a code sent again for a
   paid (or being-confirmed) payment is 200 with it, O'mari not asked again; a
   payment that is over is a 409 whose `data` says how it ended.
-- **Paynow's hosts get TLS 1.2 only** (`TlsProtocolsByHost`, wired into the
-  pool from `PaynowProperties.hosts()`: the allowed hosts plus the base URL's).
-  `www.paynow.co.zw` RESETS a TLS 1.3 offer instead of negotiating down
-  (measured from the ZW cell 2026-11-26: `openssl s_client -tls1_3` →
-  `errno=104`, `-tls1_2` connects). curl and wget fall back on their own, so
-  they reach Paynow; Java's client does not, and every start failed
-  "Connection reset" before Paynow saw it. Every other host keeps the system
-  default (TLS 1.3 where offered). It is a strategy picked per host, not a
-  `setTlsConfigResolver`: HttpClient 5.6's classic path ignores a per-host
-  `TlsConfig`'s protocols. `TlsProtocolsByHostTest` runs real handshakes and
-  fails if the pin is dropped. Remove the host once Paynow fixes its edge.
-  **Debugging rule this bought:** a partner that answers curl but resets our
-  client is a TLS question first: `openssl s_client -tls1_2` / `-tls1_3`.
+- **Paynow's hosts get the JVM's own cipher list** (`TlsCiphersByHost`, wired
+  into the pool from `PaynowProperties.hosts()`: the allowed hosts plus the base
+  URL's). `www.paynow.co.zw` accepts only CBC ciphers (`ECDHE-RSA-AES*-CBC-SHA256/384`)
+  and RESETS a connection it shares no cipher with, instead of sending a TLS
+  alert. HttpClient, given no cipher list, filters the JVM's through
+  `TlsCiphers.excludeWeak`, which also drops the whole HTTP/2 blocklist, i.e.
+  every CBC cipher, so every Paynow call failed "Connection reset" before Paynow
+  saw it (TIC-117). Measured from the payment-service pod 2026-11-26: plain Java
+  TLS reached Paynow (TLSv1.2, `TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384`), and
+  HttpClient, with or without any TLS setting of ours, was reset. Every other
+  host keeps HttpClient's default. Protocols stay the system's for every host:
+  Paynow has no TLS 1.3, so `openssl -tls1_3` is reset, but Java offers 1.3 and
+  1.2 together and Paynow picks 1.2. **#858 pinned Paynow to TLS 1.2 on that
+  openssl reading, and it fixed nothing; don't bring the pin back.** It is a
+  strategy picked per host, because HttpClient 5.6's classic path ignores a
+  per-host `TlsConfig`. `TlsCiphersByHostTest` runs real requests through
+  HttpClient against a CBC-only TLS 1.2 server and fails without the list.
+  Remove the host once Paynow offers a GCM cipher.
+  **Debugging rule this bought:** when a partner answers curl but resets our
+  client, run the same request from inside the pod twice, over plain Java TLS
+  and over HttpClient (the probe in TIC-117), before changing anything. If plain
+  Java gets through, the difference is HttpClient's (its cipher filter first);
+  `openssl s_client` alone cannot tell a protocol from a cipher problem.
 - **Paynow's URLs are pinned** to `PAYNOW_ALLOWED_HOSTS` (https; a plain-http
   base URL allows only itself, for tests): we POST to the poll and O'mari URLs
   server-side and redirect browsers to the page URL, so any other host is

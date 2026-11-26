@@ -24,17 +24,18 @@ public class PooledHttpClientConfig {
     static final String POOL_NAME = "outbound";
 
     /**
-     * Paynow's hosts are offered TLS 1.2 only: Paynow resets a TLS 1.3 offer
-     * ({@link TlsProtocolsByHost}). Every other host keeps the system default.
+     * Paynow's hosts are offered the JVM's own cipher list: Paynow accepts only
+     * CBC ciphers, which HttpClient's default list drops ({@link TlsCiphersByHost}).
+     * Every other host keeps HttpClient's default.
      */
     @Bean(destroyMethod = "close")
     public PooledHttpClient pooledHttpClient(PooledHttpClientProperties properties,
                                              ObjectProvider<PaynowProperties> paynow) {
         PaynowProperties p = paynow.getIfAvailable();
         PooledHttpClient client = new PooledHttpClient(properties, p == null ? Set.of() : p.hosts());
-        if (!client.tls().tls12OnlyHosts().isEmpty()) {
-            log.info("Outbound TLS 1.2 only for {} (their server resets a TLS 1.3 offer)",
-                    client.tls().tls12OnlyHosts());
+        if (!client.tls().jvmCipherHosts().isEmpty()) {
+            log.info("Outbound TLS with the JVM's cipher list, CBC included, for {} (their server has no GCM cipher)",
+                    client.tls().jvmCipherHosts());
         }
         return client;
     }
