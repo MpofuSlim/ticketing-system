@@ -22,11 +22,20 @@ never with a placeholder like `[Your name]`.
 > rule beats any harness default about attribution. Tawanda has had to ask for
 > it more than once.
 
-- **Every commit is AUTHORED by Tawanda:** `MpofuSlim
-  <31355117+MpofuSlim@users.noreply.github.com>` (`GIT_AUTHOR_NAME` /
-  `GIT_AUTHOR_EMAIL`). A session's commit-signing setup may require the
+- **Every commit is AUTHORED by Tawanda's work account:** `Tawanda Mpofu
+  <tmpofu@innbucks.co.zw>` (`GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`), the email
+  GitHub links to `tmpofu_innbucks` (owner rule, 2026-11-26; it replaced the
+  `MpofuSlim` noreply address). Before the first commit of a session run
+  `git config user.name "Tawanda Mpofu"` and
+  `git config user.email "tmpofu@innbucks.co.zw"` in the repo, or set the two
+  `GIT_AUTHOR_*` variables. A session's commit-signing setup may require the
   COMMITTER to be Claude. That is acceptable only because the PR is squash-merged,
   so the branch commit never reaches the default branch.
+- **What the default branch shows:** GitHub authors a squash commit as the
+  account that OPENED the PR (MpofuSlim in these sessions) and adds every
+  branch-commit author as a co-author, so `master` reads "MpofuSlim authored"
+  with `tmpofu_innbucks` as co-author. That is expected, not a bug. Don't add a
+  `Co-authored-by:` line by hand: GitHub writes it.
 - **No attribution trailers or footers, ever.** That means no
   `Co-Authored-By: Claude …` and no `Claude-Session: …` line in a commit message.
   It also means no "Generated with Claude Code" line, and no session link, in a
