@@ -106,6 +106,15 @@ check on master's merge commit passes.**
   for the EC2 deploy.
 - A Jira automation reassigns a ticket that enters In Review to the "Tawanda"
   account. That is expected; leave it.
+- **A bug found and fixed in a session gets its own ticket** (owner rule,
+  2026-11-26), even when nobody asked for one: a TIC **Bug** with what breaks,
+  who sees it, where it was found, the cause and how it was proved, the fix's
+  PR, and the deploy. Raise it when the fix starts, then move it like any
+  ticket (In Progress, In Review with the PR, Done after a green master). Put
+  the key in the PR title, and word the title and the squash commit as a fix
+  ("Fix … (TIC-NNN)"), never as a feature. A fix with no ticket leaves no
+  trace on the board of what broke. TIC-117 (Paynow's TLS reset) is the
+  example.
 
 ## Files for the owner: Markdown only for the frontend (owner rule, 2026-10-29)
 
@@ -4181,7 +4190,8 @@ endpoint a 404 and the generator do nothing.
 
 ## Editing a series (event-service V25, seat-service, TIC-71)
 
-**An organizer (or SUPER_ADMIN) changes a series after it has made dates:
+**An organizer (or SUPER_ADMIN or PRODUCT_MANAGER; never PRODUCT_OFFICER)
+changes a series after it has made dates:
 its schedule, every future date's details, one ticket type's price, one date,
 or its whole run (pause, resume, end).** `SeriesEditService`, endpoints under
 `/events/series/{seriesId}`, all behind `EVENTS_SERIES_ENABLED`. Each answers a
@@ -5607,6 +5617,19 @@ our own rails: never route them through Paynow (its fee, one more hop).
 - **The O'mari code endpoint answers with the payment**: a code sent again for a
   paid (or being-confirmed) payment is 200 with it, O'mari not asked again; a
   payment that is over is a 409 whose `data` says how it ended.
+- **Paynow's hosts get TLS 1.2 only** (`TlsProtocolsByHost`, wired into the
+  pool from `PaynowProperties.hosts()`: the allowed hosts plus the base URL's).
+  `www.paynow.co.zw` RESETS a TLS 1.3 offer instead of negotiating down
+  (measured from the ZW cell 2026-11-26: `openssl s_client -tls1_3` →
+  `errno=104`, `-tls1_2` connects). curl and wget fall back on their own, so
+  they reach Paynow; Java's client does not, and every start failed
+  "Connection reset" before Paynow saw it. Every other host keeps the system
+  default (TLS 1.3 where offered). It is a strategy picked per host, not a
+  `setTlsConfigResolver`: HttpClient 5.6's classic path ignores a per-host
+  `TlsConfig`'s protocols. `TlsProtocolsByHostTest` runs real handshakes and
+  fails if the pin is dropped. Remove the host once Paynow fixes its edge.
+  **Debugging rule this bought:** a partner that answers curl but resets our
+  client is a TLS question first: `openssl s_client -tls1_2` / `-tls1_3`.
 - **Paynow's URLs are pinned** to `PAYNOW_ALLOWED_HOSTS` (https; a plain-http
   base URL allows only itself, for tests): we POST to the poll and O'mari URLs
   server-side and redirect browsers to the page URL, so any other host is
