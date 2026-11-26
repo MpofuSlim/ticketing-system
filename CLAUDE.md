@@ -106,6 +106,15 @@ check on master's merge commit passes.**
   for the EC2 deploy.
 - A Jira automation reassigns a ticket that enters In Review to the "Tawanda"
   account. That is expected; leave it.
+- **A bug found and fixed in a session gets its own ticket** (owner rule,
+  2026-11-26), even when nobody asked for one: a TIC **Bug** with what breaks,
+  who sees it, where it was found, the cause and how it was proved, the fix's
+  PR, and the deploy. Raise it when the fix starts, then move it like any
+  ticket (In Progress, In Review with the PR, Done after a green master). Put
+  the key in the PR title, and word the title and the squash commit as a fix
+  ("Fix … (TIC-NNN)"), never as a feature. A fix with no ticket leaves no
+  trace on the board of what broke. TIC-117 (Paynow's TLS reset) is the
+  example.
 
 ## Files for the owner: Markdown only for the frontend (owner rule, 2026-10-29)
 
