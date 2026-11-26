@@ -91,7 +91,8 @@ existing callers" is a claim to prove from the code, not a default.
 
 **A ticket moves to In Progress when work on it starts, to In Review (QA/UAT)
 when its PR is ready for review, and to Done when the PR is merged and every
-check on master's merge commit passes.**
+check on master's merge commit passes. A Bug waits for the owner's own test
+before Done, and the owner moves it.**
 
 - **In Progress** (id 31): as soon as the work starts (the owner's go on the
   build list), before any code. Don't wait to be asked.
@@ -99,8 +100,8 @@ check on master's merge commit passes.**
   transition's name is not its target status: in TIC the one leading to In
   Review (QA/UAT) is named "Testing" (id 41). Look it up with
   `listJiraIssueTransitions` and pick it by the status it leads to.
-- **Done** (id 51): only once the PR is merged AND CI, Release and Qodana are
-  green on the merge commit (`gh api
+- **Done** (id 51), for a Task or Story: only once the PR is merged AND CI,
+  Release and Qodana are green on the merge commit (`gh api
   "repos/MpofuSlim/ticketing-system/actions/runs?head_sha=<sha>"`). A merge
   whose master run is red stays In Review until it is fixed. Done does not wait
   for the EC2 deploy.
@@ -109,8 +110,11 @@ check on master's merge commit passes.**
 - **A bug found and fixed in a session gets its own ticket** (owner rule,
   2026-11-26), even when nobody asked for one: a TIC **Bug** with what breaks,
   who sees it, where it was found, the cause and how it was proved, the fix's
-  PR, and the deploy. Raise it when the fix starts, then move it like any
-  ticket (In Progress, In Review with the PR, Done after a green master). Put
+  PR, and the deploy. Raise it when the fix starts, then In Progress, then In
+  Review with the PR. **A Bug is never moved to Done by Claude** (owner rule,
+  2026-11-26): it stays In Review after the merge and the green master, and
+  the owner moves it once they have tested the fix on staging and it works.
+  Say in the merge message that it is waiting on their test. Put
   the key in the PR title, and word the title and the squash commit as a fix
   ("Fix … (TIC-NNN)"), never as a feature. A fix with no ticket leaves no
   trace on the board of what broke. TIC-117 (Paynow's TLS reset) is the
