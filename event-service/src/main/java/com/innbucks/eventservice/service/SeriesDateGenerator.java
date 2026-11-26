@@ -134,6 +134,14 @@ public class SeriesDateGenerator {
         this.clock = clock;
     }
 
+    private SeriesPauses pauses;
+
+    /** Optional so tests that never pause can build the generator without it. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setPauses(SeriesPauses pauses) {
+        this.pauses = pauses;
+    }
+
     /** What one run did. */
     public record Summary(int created, int finished, int waiting, int failed) {
         static final Summary NONE = new Summary(0, 0, 0, 0);
@@ -463,8 +471,16 @@ public class SeriesDateGenerator {
             int questions = copyQuestions(templateId, dateId, copy.categoryIds());
             EventSeries series = locked.getSeriesId() == null ? null
                     : seriesRepository.findById(locked.getSeriesId()).orElse(null);
-            boolean goesLive = series != null && series.getStatus() == EventSeries.Status.ACTIVE
+            // A paused series' date is finished and listed with its sales closed
+            // (TIC-71), so resuming opens it like every other date.
+            boolean paused = series != null && series.getStatus() == EventSeries.Status.PAUSED;
+            boolean goesLive = series != null
+                    && (series.getStatus() == EventSeries.Status.ACTIVE || paused)
                     && !locked.isDeleted() && !locked.isRejected();
+            if (paused && goesLive && locked.getSeriesPausedAt() == null && pauses != null) {
+                // Made just before the pause took its list of dates.
+                pauses.pause(locked, nowUtc());
+            }
             locked.setSeriesState(SeriesState.READY);
             locked.setActive(goesLive);
             eventRepository.save(locked);

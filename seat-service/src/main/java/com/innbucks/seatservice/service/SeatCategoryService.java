@@ -371,15 +371,11 @@ public class SeatCategoryService {
             // "discount" would cost the same or more. A tier past its end no
             // longer matters, so it never blocks a price change. A sold-out one
             // still counts: an expired hold can reopen it.
-            LocalDateTime now = nowUtc();
-            for (SeatCategoryPriceTier tier : tiersOf(categoryId)) {
-                boolean ended = tier.getEndsAt() != null && !now.isBefore(tier.getEndsAt());
-                if (!ended && request.getPrice().compareTo(tier.getPrice()) <= 0) {
-                    log.warn("Category update rejected, price not above an open tier categoryId={} price={} "
-                            + "tierId={} tierPrice={}", categoryId, request.getPrice(), tier.getId(), tier.getPrice());
-                    throw new BadRequestException("The ticket price must be higher than the price tier \""
-                            + tier.getName() + "\" (" + money(tier.getPrice()) + "). Lower or remove that tier first.");
-                }
+            String tierProblem = openTierAtOrAbove(categoryId, request.getPrice());
+            if (tierProblem != null) {
+                log.warn("Category update rejected, price not above an open tier categoryId={} price={}",
+                        categoryId, request.getPrice());
+                throw new BadRequestException(tierProblem);
             }
 
             // Renaming onto a name another live category in the same event already
@@ -406,6 +402,103 @@ public class SeatCategoryService {
         });
         log.info("Seat category updated categoryId={} eventId={}", categoryId, updated.getEventId());
         return updated;
+    }
+
+    /**
+     * Why {@code price} can't be a category's full price, or null when it can:
+     * every price tier that can still apply must stay below it, or the
+     * "discount" would cost the same or more. A tier past its end no longer
+     * matters, so it never blocks a price change. A sold-out one still counts:
+     * an expired hold can reopen it. The one rule for every price edit.
+     */
+    private String openTierAtOrAbove(UUID categoryId, BigDecimal price) {
+        LocalDateTime now = nowUtc();
+        for (SeatCategoryPriceTier tier : tiersOf(categoryId)) {
+            boolean ended = tier.getEndsAt() != null && !now.isBefore(tier.getEndsAt());
+            if (!ended && price.compareTo(tier.getPrice()) <= 0) {
+                return "The ticket price must be higher than the price tier \""
+                        + tier.getName() + "\" (" + money(tier.getPrice()) + "). Lower or remove that tier first.";
+            }
+        }
+        return null;
+    }
+
+    /** The most events one {@link #setPriceByName} call may name. */
+    public static final int MAX_PRICE_BY_NAME_EVENTS = 500;
+
+    /**
+     * Sets the full price of the category called {@code categoryName} on each
+     * event (TIC-71: one price for every future date of a series, whose
+     * categories were copied from the template by name). Internal: the caller
+     * (event-service) has already checked who may change these events.
+     *
+     * <p>Each event is its own short write transaction, so one event refused
+     * by the tier rule does not stop the others, and the answer says what
+     * happened to each. The same rules as {@link #updateCategory}: greater than
+     * 0, and above every price tier that can still apply. A change is recorded
+     * in the category's price history with {@code changedBy} as the actor. Sold
+     * tickets keep the price they were sold at ({@code priceAtBooking}), so
+     * this only sets what the next buyer pays. Makes no remote call.
+     */
+    public com.innbucks.seatservice.dto.PriceByNameResultDTO setPriceByName(
+            List<UUID> eventIds, String categoryName, BigDecimal price, String changedBy) {
+        if (eventIds == null || eventIds.isEmpty()) {
+            throw new BadRequestException("eventIds is required.");
+        }
+        if (eventIds.size() > MAX_PRICE_BY_NAME_EVENTS) {
+            throw new BadRequestException("At most " + MAX_PRICE_BY_NAME_EVENTS + " events per call.");
+        }
+        if (categoryName == null || categoryName.isBlank()) {
+            throw new BadRequestException("categoryName is required.");
+        }
+        if (price == null || price.signum() <= 0) {
+            throw new BadRequestException("Price must be greater than 0.");
+        }
+        if (price.stripTrailingZeros().scale() > 2) {
+            throw new BadRequestException("Price can't have more than 2 decimals.");
+        }
+        String wanted = categoryName.strip();
+        List<com.innbucks.seatservice.dto.PriceByNameResultDTO.Row> rows = new ArrayList<>();
+        for (UUID eventId : new java.util.LinkedHashSet<>(eventIds)) {
+            if (eventId == null) {
+                continue;
+            }
+            rows.add(TransactionPhases.inTransaction(writeTx, () -> priceByNameOn(eventId, wanted, price, changedBy)));
+        }
+        log.info("Price set by name categoryName={} price={} events={} updated={}", wanted, price, rows.size(),
+                rows.stream().filter(r -> r.getOutcome()
+                        == com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.UPDATED).count());
+        return com.innbucks.seatservice.dto.PriceByNameResultDTO.builder().results(rows).build();
+    }
+
+    private com.innbucks.seatservice.dto.PriceByNameResultDTO.Row priceByNameOn(UUID eventId, String name,
+                                                                              BigDecimal price, String changedBy) {
+        var row = com.innbucks.seatservice.dto.PriceByNameResultDTO.Row.builder().eventId(eventId);
+        SeatCategory category = categoryRepository.findByEventIdAndDeletedFalse(eventId).stream()
+                .filter(c -> c.getName() != null && c.getName().strip().equalsIgnoreCase(name))
+                .findFirst()
+                .orElse(null);
+        if (category == null) {
+            return row.outcome(com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.NO_SUCH_CATEGORY).build();
+        }
+        // Re-read under the write transaction, as an edit does.
+        category = loadLiveForUpdate(category.getId());
+        BigDecimal oldPrice = category.getPrice();
+        row.categoryId(category.getId()).oldPrice(oldPrice);
+        if (oldPrice != null && oldPrice.compareTo(price) == 0) {
+            return row.outcome(com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.UNCHANGED).build();
+        }
+        String tierProblem = openTierAtOrAbove(category.getId(), price);
+        if (tierProblem != null) {
+            return row.outcome(com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.REFUSED)
+                    .message(tierProblem).build();
+        }
+        category.setPrice(price);
+        categoryRepository.save(category);
+        recordChange(category, SeatCategoryPriceChange.ChangeType.PRICE_CHANGED, oldPrice, price, null, null,
+                changedBy);
+        layoutCache.evict(eventId);
+        return row.outcome(com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.UPDATED).build();
     }
 
     /**
@@ -510,10 +603,22 @@ public class SeatCategoryService {
      */
     private void recordChange(SeatCategory category, SeatCategoryPriceChange.ChangeType type,
                               BigDecimal oldPrice, BigDecimal newPrice, String tiersBefore, String tiersAfter) {
+        recordChange(category, type, oldPrice, newPrice, tiersBefore, tiersAfter, null);
+    }
+
+    /**
+     * {@code changedBy} names the actor when the call has no signed-in caller
+     * (an internal call); the JPA auditor fills it otherwise, and leaves an
+     * explicit value alone when it has no caller of its own.
+     */
+    private void recordChange(SeatCategory category, SeatCategoryPriceChange.ChangeType type,
+                              BigDecimal oldPrice, BigDecimal newPrice, String tiersBefore, String tiersAfter,
+                              String changedBy) {
         if (priceChangeRepository == null) {
             return;
         }
         priceChangeRepository.save(SeatCategoryPriceChange.builder()
+                .changedBy(changedBy == null || changedBy.isBlank() ? null : changedBy.strip())
                 .categoryId(category.getId())
                 .eventId(category.getEventId())
                 .changeType(type)

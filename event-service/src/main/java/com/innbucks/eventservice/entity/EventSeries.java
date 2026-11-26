@@ -47,7 +47,10 @@ public class EventSeries {
         DRAFT,
         /** Live: dates are made inside the booking window. */
         ACTIVE,
-        /** Reserved for pausing a series (S2); nothing sets it yet. */
+        /**
+         * Paused by its organizer (TIC-71): no new dates, and every date's sales
+         * closed until it resumes. Its dates stay listed and their tickets valid.
+         */
         PAUSED,
         /** The template was deleted: no new dates, ever. */
         ENDED

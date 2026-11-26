@@ -23,7 +23,9 @@ import java.util.UUID;
 
 /**
  * Asks seat-service to copy a series template's seat layout onto a new date
- * ({@code POST /seat-categories/internal/copy}, X-Internal-Token; TIC-70).
+ * ({@code POST /seat-categories/internal/copy}, X-Internal-Token; TIC-70), and
+ * to set one category's price on every future date of a series
+ * ({@code POST /seat-categories/internal/price-by-name}; TIC-71).
  *
  * <p>The copy is idempotent on seat-service's side, so a call whose answer
  * was lost is simply made again by the next generator run. Never called with
@@ -96,6 +98,73 @@ public class SeatLayoutGateway {
             log.warn("Seat layout copy failed sourceEventId={} targetEventId={} cause={}",
                     sourceEventId, targetEventId, e.toString());
             return LayoutCopy.failed(Outcome.UNAVAILABLE);
+        }
+    }
+
+    /** What a price-by-name call came to (TIC-71). */
+    public record PriceChange(Outcome outcome, List<PriceRow> rows, String message) {
+    }
+
+    /** seat-service's answer for one event. */
+    @Data
+    @NoArgsConstructor
+    public static class PriceRow {
+        private UUID eventId;
+        private UUID categoryId;
+        /** UPDATED, UNCHANGED, NO_SUCH_CATEGORY or REFUSED. */
+        private String outcome;
+        private java.math.BigDecimal oldPrice;
+        private String message;
+    }
+
+    @Data
+    @NoArgsConstructor
+    public static class PriceRows {
+        private List<PriceRow> results;
+    }
+
+    /**
+     * Sets the named category's full price on each event
+     * ({@code POST /seat-categories/internal/price-by-name}, TIC-71). Never
+     * retried here and never called with a transaction open. DONE carries a row
+     * per event; REFUSED carries seat-service's message (a field it refused);
+     * UNAVAILABLE means no readable answer, and some events may have been
+     * changed: asking again is safe, since an unchanged price is left alone.
+     */
+    public PriceChange setPriceByName(List<UUID> eventIds, String categoryName, java.math.BigDecimal price,
+                                      String changedBy) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Internal-Token", internalToken);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("eventIds", eventIds.stream().map(UUID::toString).toList());
+        body.put("categoryName", categoryName);
+        body.put("price", price);
+        body.put("changedBy", changedBy);
+        try {
+            ResponseEntity<ApiResult<PriceRows>> response = restTemplate.exchange(
+                    seatServiceBaseUrl + "/seat-categories/internal/price-by-name", HttpMethod.POST,
+                    new HttpEntity<>(body, headers), new ParameterizedTypeReference<>() { });
+            ApiResult<PriceRows> envelope = response.getBody();
+            PriceRows rows = envelope == null ? null : envelope.getData();
+            if (rows == null || rows.getResults() == null) {
+                log.warn("Price by name answered without results events={}", eventIds.size());
+                return new PriceChange(Outcome.UNAVAILABLE, List.of(), null);
+            }
+            return new PriceChange(Outcome.DONE, List.copyOf(rows.getResults()), null);
+        } catch (HttpClientErrorException e) {
+            String message = null;
+            try {
+                ApiResult<?> error = e.getResponseBodyAs(ApiResult.class);
+                message = error == null ? null : error.getMessage();
+            } catch (RuntimeException unreadable) {
+                // The status is enough; the message is a courtesy.
+            }
+            log.warn("Price by name refused events={} status={}", eventIds.size(), e.getStatusCode().value());
+            return new PriceChange(Outcome.REFUSED, List.of(), message);
+        } catch (RestClientException e) {
+            log.warn("Price by name failed events={} cause={}", eventIds.size(), e.toString());
+            return new PriceChange(Outcome.UNAVAILABLE, List.of(), null);
         }
     }
 

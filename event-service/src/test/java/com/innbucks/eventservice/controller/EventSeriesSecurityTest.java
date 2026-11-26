@@ -3,6 +3,9 @@ package com.innbucks.eventservice.controller;
 import com.innbucks.eventservice.dto.ReviewStatus;
 import com.innbucks.eventservice.dto.series.CreateSeriesRequestDTO;
 import com.innbucks.eventservice.dto.series.EventSeriesResponseDTO;
+import com.innbucks.eventservice.dto.series.FuturePriceRequestDTO;
+import com.innbucks.eventservice.dto.series.SeriesChangeDTO;
+import com.innbucks.eventservice.dto.series.SeriesScheduleRequestDTO;
 import com.innbucks.eventservice.entity.EventSeries;
 import com.innbucks.eventservice.exception.GlobalExceptionHandler;
 import com.innbucks.eventservice.security.JwtFilter;
@@ -12,6 +15,7 @@ import com.innbucks.eventservice.security.RevokedTokenDenylist;
 import com.innbucks.eventservice.security.SecurityConfig;
 import com.innbucks.eventservice.security.TokenVersionStore;
 import com.innbucks.eventservice.service.EventSeriesService;
+import com.innbucks.eventservice.service.SeriesEditService;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,6 +56,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup;
@@ -87,6 +92,7 @@ class EventSeriesSecurityTest {
         }
         @Bean MetricsScrapeAuthFilter metricsScrapeAuthFilter() { return new MetricsScrapeAuthFilter(""); }
         @Bean EventSeriesService seriesService() { return mock(EventSeriesService.class); }
+        @Bean SeriesEditService editService() { return mock(SeriesEditService.class); }
         // What Spring Boot registers in the application: @Validated's @Min/@Max on the paging params.
         @Bean static MethodValidationPostProcessor methodValidationPostProcessor() {
             return new MethodValidationPostProcessor();
@@ -95,6 +101,7 @@ class EventSeriesSecurityTest {
 
     @Autowired WebApplicationContext context;
     @Autowired EventSeriesService seriesService;
+    @Autowired SeriesEditService editService;
     @Autowired RevokedTokenDenylist denylist;
 
     MockMvc mvc;
@@ -102,7 +109,7 @@ class EventSeriesSecurityTest {
     @BeforeEach
     void setUp() {
         mvc = webAppContextSetup(context).apply(springSecurity()).build();
-        Mockito.reset(seriesService, denylist);
+        Mockito.reset(seriesService, editService, denylist);
         when(denylist.isRevoked(anyString())).thenReturn(false);
     }
 
@@ -221,5 +228,107 @@ class EventSeriesSecurityTest {
                         .header("Authorization", bearer("EVENT_ORGANIZER", UUID.randomUUID())))
                 .andExpect(status().isBadRequest());
         Mockito.verify(seriesService, Mockito.never()).list(any(), anyBoolean(), anyInt(), anyInt());
+    }
+
+    // ---- Changing a series (TIC-71) --------------------------------------------
+
+    private static final String SCHEDULE = """
+            {"daysOfWeek":["SATURDAY"],"startTimes":["19:00"],"durationMinutes":120,"startDate":"2026-12-04"}""";
+
+    private static SeriesChangeDTO changed() {
+        return SeriesChangeDTO.builder().series(series(EventSeries.Status.ACTIVE, ReviewStatus.APPROVED))
+                .dates(List.of()).build();
+    }
+
+    @Test
+    void theEdits_areRefusedWithoutASession_toCustomers_andToTheReadOnlyOfficer() throws Exception {
+        String[][] posts = {{"/pause"}, {"/resume"}, {"/end"}, {"/dates/" + UUID.randomUUID() + "/skip"}};
+        for (String[] path : posts) {
+            mvc.perform(post("/events/series/" + SERIES + path[0])).andExpect(status().isUnauthorized());
+            mvc.perform(post("/events/series/" + SERIES + path[0]).header("Authorization", bearer("CUSTOMER", null)))
+                    .andExpect(status().isForbidden());
+            mvc.perform(post("/events/series/" + SERIES + path[0])
+                            .header("Authorization", bearer("PRODUCT_OFFICER", null)))
+                    .andExpect(status().isForbidden());
+        }
+        mvc.perform(put("/events/series/" + SERIES + "/schedule").header("Authorization", bearer("PRODUCT_OFFICER", null))
+                        .contentType(MediaType.APPLICATION_JSON).content(SCHEDULE))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/events/series/" + SERIES + "/future-prices")
+                        .header("Authorization", bearer("GATE_SCANNER", null))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"categoryName\":\"VIP\",\"price\":150}"))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(editService);
+    }
+
+    @Test
+    void anOrganizersScheduleEdit_reachesTheServiceWithTheOrganizerFromTheToken() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        when(editService.updateSchedule(eq(organizer), eq(false), eq(SERIES), any(SeriesScheduleRequestDTO.class)))
+                .thenReturn(changed());
+
+        mvc.perform(put("/events/series/" + SERIES + "/schedule")
+                        .header("Authorization", bearer("EVENT_ORGANIZER", organizer))
+                        .contentType(MediaType.APPLICATION_JSON).content(SCHEDULE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Schedule changed"))
+                .andExpect(jsonPath("$.data.series.seriesId").value(SERIES.toString()))
+                .andExpect(jsonPath("$.data.dates").isArray());
+    }
+
+    @Test
+    void aScheduleWithoutItsRequiredFields_isABadRequest_beforeTheService() throws Exception {
+        mvc.perform(put("/events/series/" + SERIES + "/schedule")
+                        .header("Authorization", bearer("EVENT_ORGANIZER", UUID.randomUUID()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"daysOfWeek\":[\"FRIDAY\"]}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(put("/events/series/" + SERIES + "/future-prices")
+                        .header("Authorization", bearer("EVENT_ORGANIZER", UUID.randomUUID()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"categoryName\":\"VIP\",\"price\":1.005}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.price").value("Use at most 2 decimals."));
+        verifyNoInteractions(editService);
+    }
+
+    @Test
+    void aPriceChange_recordsTheOrganizersUuid_orAStaffMembersEmail_asTheActor() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        when(editService.setFuturePrice(any(), anyBoolean(), anyString(), eq(SERIES), any(FuturePriceRequestDTO.class)))
+                .thenReturn(changed());
+
+        mvc.perform(put("/events/series/" + SERIES + "/future-prices")
+                        .header("Authorization", bearer("EVENT_ORGANIZER", organizer))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"categoryName\":\"VIP\",\"price\":150}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Price changed"));
+        verify(editService).setFuturePrice(eq(organizer), eq(false), eq(organizer.toString()), eq(SERIES),
+                any(FuturePriceRequestDTO.class));
+
+        mvc.perform(put("/events/series/" + SERIES + "/future-prices")
+                        .header("Authorization", bearer("PRODUCT_MANAGER", null))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"categoryName\":\"VIP\",\"price\":150}"))
+                .andExpect(status().isOk());
+        verify(editService).setFuturePrice(eq(null), eq(true), eq("product_manager@example.com"), eq(SERIES),
+                any(FuturePriceRequestDTO.class));
+    }
+
+    @Test
+    void pauseResumeEndAndSkip_answerWithTheirOwnWords() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        UUID date = UUID.randomUUID();
+        when(editService.pause(organizer, false, SERIES)).thenReturn(changed());
+        when(editService.resume(organizer, false, SERIES)).thenReturn(changed());
+        when(editService.end(organizer, false, SERIES)).thenReturn(changed());
+        when(editService.skipDate(organizer, false, SERIES, date)).thenReturn(changed());
+        String auth = bearer("EVENT_ORGANIZER", organizer);
+
+        mvc.perform(post("/events/series/" + SERIES + "/pause").header("Authorization", auth))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.message").value("Series paused"));
+        mvc.perform(post("/events/series/" + SERIES + "/resume").header("Authorization", auth))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.message").value("Series resumed"));
+        mvc.perform(post("/events/series/" + SERIES + "/end").header("Authorization", auth))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.message").value("Series ended"));
+        mvc.perform(post("/events/series/" + SERIES + "/dates/" + date + "/skip").header("Authorization", auth))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.message").value("Date skipped"));
     }
 }

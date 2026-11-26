@@ -299,6 +299,25 @@ class SeriesDateGeneratorTest {
     }
 
     @Test
+    void aDateFinishedWhileItsSeriesIsPaused_isListedWithItsSalesClosed_soResumingOpensIt() {
+        generator.setPauses(new SeriesPauses(events, windowChanges));
+        UUID dateId = generator.createDate(series.getSeriesId(), utc(12, 4, 17));
+        LocalDateTime ownSalesEnd = stored.get(dateId).getSalesEndAt();
+        series.setStatus(EventSeries.Status.PAUSED);
+        when(layouts.copyLayout(any(), any(), anyInt())).thenReturn(
+                new SeatLayoutGateway.LayoutCopy(SeatLayoutGateway.Outcome.DONE, Map.of()));
+
+        generator.finishDate(template.getEventId(), dateId);
+
+        Event date = stored.get(dateId);
+        assertThat(date.getSeriesState()).isEqualTo(SeriesState.READY);
+        assertThat(date.isActive()).isTrue();
+        assertThat(date.getSalesEndAt()).isEqualTo(NOW_UTC);
+        assertThat(date.getSeriesPausedAt()).isEqualTo(NOW_UTC);
+        assertThat(date.getSeriesPausedSalesEndAt()).isEqualTo(ownSalesEnd);
+    }
+
+    @Test
     void aRun_makesAndFinishesEveryPlannedDate() {
         when(layouts.copyLayout(any(), any(), anyInt())).thenReturn(
                 new SeatLayoutGateway.LayoutCopy(SeatLayoutGateway.Outcome.DONE, Map.of()));

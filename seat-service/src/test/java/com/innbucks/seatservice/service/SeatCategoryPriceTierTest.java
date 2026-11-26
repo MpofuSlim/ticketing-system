@@ -696,4 +696,85 @@ class SeatCategoryPriceTierTest {
             return now;
         }
     }
+
+    // ---- One price on several events by name (TIC-71) -----------------------
+
+    @Test
+    void priceByName_setsThePrice_recordsWhoDidIt_andSaysWhatHappenedToEachEvent() {
+        UUID otherEvent = UUID.randomUUID();
+        var result = service().setPriceByName(List.of(eventId, otherEvent), "  vip ", new BigDecimal("175.00"),
+                "9f0e1d2c-3b4a-4958-8776-655443322110");
+
+        assertEquals(2, result.getResults().size());
+        var updated = result.getResults().get(0);
+        assertEquals(eventId, updated.getEventId());
+        assertEquals(vip.getId(), updated.getCategoryId());
+        assertEquals(com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.UPDATED, updated.getOutcome());
+        assertEquals(0, new BigDecimal("150.00").compareTo(updated.getOldPrice()));
+        assertEquals(0, new BigDecimal("175.00").compareTo(vip.getPrice()));
+        assertEquals(com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.NO_SUCH_CATEGORY,
+                result.getResults().get(1).getOutcome());
+
+        assertEquals(1, changes.size());
+        SeatCategoryPriceChange change = changes.get(0);
+        assertEquals(SeatCategoryPriceChange.ChangeType.PRICE_CHANGED, change.getChangeType());
+        assertEquals("9f0e1d2c-3b4a-4958-8776-655443322110", change.getChangedBy());
+        assertEquals(0, new BigDecimal("150.00").compareTo(change.getOldPrice()));
+        assertEquals(0, new BigDecimal("175.00").compareTo(change.getNewPrice()));
+    }
+
+    @Test
+    void priceByName_theSamePrice_isUnchanged_andRecordsNothing() {
+        var result = service().setPriceByName(List.of(eventId), "VIP", new BigDecimal("150"), "someone");
+
+        assertEquals(com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.UNCHANGED,
+                result.getResults().get(0).getOutcome());
+        assertTrue(changes.isEmpty());
+        verify(catRepo, never()).save(any());
+    }
+
+    @Test
+    void priceByName_atOrBelowAnOpenTier_isRefusedForThatEvent_withTheEditsOwnWords() {
+        storeStandardTiers();
+
+        var result = service().setPriceByName(List.of(eventId), "VIP", new BigDecimal("120.00"), "someone");
+
+        var row = result.getResults().get(0);
+        assertEquals(com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.REFUSED, row.getOutcome());
+        assertEquals("The ticket price must be higher than the price tier \"Phase 1\" (120.00). Lower or remove "
+                + "that tier first.", row.getMessage());
+        assertEquals(0, new BigDecimal("150.00").compareTo(vip.getPrice()));
+        assertTrue(changes.isEmpty());
+    }
+
+    @Test
+    void priceByName_aTierThatHasEnded_neverBlocksIt() {
+        storeStandardTiers();
+        clock.set(Instant.parse("2026-09-25T08:00:00Z"));
+
+        var result = service().setPriceByName(List.of(eventId), "VIP", new BigDecimal("110.00"), "someone");
+
+        assertEquals(com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.UPDATED,
+                result.getResults().get(0).getOutcome());
+    }
+
+    @Test
+    void priceByName_refusesABadRequest_beforeTouchingAnything() {
+        SeatCategoryService service = service();
+        assertEquals("Price must be greater than 0.", assertThrows(BadRequestException.class,
+                () -> service.setPriceByName(List.of(eventId), "VIP", BigDecimal.ZERO, "x")).getMessage());
+        assertEquals("Price can't have more than 2 decimals.", assertThrows(BadRequestException.class,
+                () -> service.setPriceByName(List.of(eventId), "VIP", new BigDecimal("1.005"), "x")).getMessage());
+        assertEquals("categoryName is required.", assertThrows(BadRequestException.class,
+                () -> service.setPriceByName(List.of(eventId), " ", new BigDecimal("1"), "x")).getMessage());
+        assertEquals("eventIds is required.", assertThrows(BadRequestException.class,
+                () -> service.setPriceByName(List.of(), "VIP", new BigDecimal("1"), "x")).getMessage());
+        List<UUID> tooMany = new ArrayList<>();
+        for (int i = 0; i <= SeatCategoryService.MAX_PRICE_BY_NAME_EVENTS; i++) {
+            tooMany.add(UUID.randomUUID());
+        }
+        assertEquals("At most 500 events per call.", assertThrows(BadRequestException.class,
+                () -> service.setPriceByName(tooMany, "VIP", new BigDecimal("1"), "x")).getMessage());
+        verify(catRepo, never()).save(any());
+    }
 }

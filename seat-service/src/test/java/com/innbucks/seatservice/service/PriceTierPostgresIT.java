@@ -182,4 +182,21 @@ class PriceTierPostgresIT extends PostgresIntegrationTestBase {
         assertThat(ending.get(0).getPriceTiers()).extracting(PriceTierDTO::getName)
                 .containsExactly("Early bird", "Phase 1");
     }
+
+    @Test
+    void aPriceSetByName_isRecordedWithTheActorItWasGiven_whenNoOneIsSignedIn() {
+        UUID categoryId = seedCategory();
+        UUID eventId = categoryRepository.findById(categoryId).orElseThrow().getEventId();
+
+        var result = categoryService.setPriceByName(List.of(eventId), "vip", new BigDecimal("175.00"),
+                "9f0e1d2c-3b4a-4958-8776-655443322110");
+
+        assertThat(result.getResults()).singleElement().satisfies(row -> assertThat(row.getOutcome())
+                .isEqualTo(com.innbucks.seatservice.dto.PriceByNameResultDTO.Outcome.UPDATED));
+        assertThat(categoryRepository.findById(categoryId).orElseThrow().getPrice()).isEqualByComparingTo("175.00");
+        assertThat(jdbc.queryForObject("SELECT changed_by FROM seat_category_price_changes WHERE category_id = ? "
+                + "AND change_type = 'PRICE_CHANGED'", String.class, categoryId))
+                .as("the JPA auditor has no caller here and leaves the given actor alone")
+                .isEqualTo("9f0e1d2c-3b4a-4958-8776-655443322110");
+    }
 }

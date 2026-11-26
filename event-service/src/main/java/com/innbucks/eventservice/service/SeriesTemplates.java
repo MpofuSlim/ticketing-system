@@ -5,6 +5,7 @@ import com.innbucks.eventservice.entity.EventSeries;
 import com.innbucks.eventservice.entity.SeriesState;
 import com.innbucks.eventservice.repository.EventSeriesRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -15,16 +16,30 @@ import org.springframework.stereotype.Component;
  * stopped. The template itself never goes live.
  *
  * <p>Only NEW dates follow the series: a date already made is an ordinary
- * event and keeps its own state (pausing and ending its dates is S2).
+ * event and keeps its own state. Pausing and ending a series' dates are the
+ * series endpoints' (TIC-71).
+ *
+ * <p><b>A PAUSED series stays paused</b> when its template is published,
+ * approved, unpublished or rejected: the pause is the organizer's explicit
+ * choice, and only resume or end takes a series out of it. Ending puts back
+ * the sales the pause closed, so the dates that remain keep selling as before.
  */
 @Component
 @Slf4j
 public class SeriesTemplates {
 
     private final EventSeriesRepository seriesRepository;
+    private final SeriesPauses pauses;
 
-    public SeriesTemplates(EventSeriesRepository seriesRepository) {
+    @Autowired
+    public SeriesTemplates(EventSeriesRepository seriesRepository, SeriesPauses pauses) {
         this.seriesRepository = seriesRepository;
+        this.pauses = pauses;
+    }
+
+    /** For tests that never pause a series. */
+    public SeriesTemplates(EventSeriesRepository seriesRepository) {
+        this(seriesRepository, null);
     }
 
     /** Published by its organizer or approved by staff: the series makes dates. */
@@ -50,6 +65,14 @@ public class SeriesTemplates {
             EventSeries.Status from = series.getStatus();
             if (from == to || from == EventSeries.Status.ENDED) {
                 return;
+            }
+            if (from == EventSeries.Status.PAUSED && to != EventSeries.Status.ENDED) {
+                log.info("Event series stays paused seriesId={} templateEventId={} wouldMoveTo={}",
+                        series.getSeriesId(), template.getEventId(), to);
+                return;
+            }
+            if (from == EventSeries.Status.PAUSED && pauses != null) {
+                pauses.restore(series.getSeriesId());
             }
             series.setStatus(to);
             seriesRepository.save(series);

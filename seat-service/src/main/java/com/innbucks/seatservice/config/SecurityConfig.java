@@ -49,6 +49,9 @@ public class SecurityConfig {
                         // /seat-categories/internal/** off the internet. POST, so the
                         // GET permit above never covered it.
                         .requestMatchers(HttpMethod.POST, "/seat-categories/internal/copy").permitAll()
+                        // event-service setting one price on every future date of a
+                        // series (TIC-71). The same trio as the copy above.
+                        .requestMatchers(HttpMethod.POST, "/seat-categories/internal/price-by-name").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()
