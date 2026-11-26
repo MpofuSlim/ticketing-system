@@ -3,9 +3,12 @@ package innbucks.paymentservice.client;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Paynow settings ({@code docs/api/paynow.md}). Blank credentials fail SAFE:
@@ -140,5 +143,26 @@ public class PaynowProperties {
 
     static boolean notBlank(String s) {
         return s != null && !s.isBlank();
+    }
+
+    /**
+     * Every host we call Paynow on: the allowed hosts and the base URL's host,
+     * lower case. Used to offer them TLS 1.2 only, because Paynow resets a
+     * TLS 1.3 offer ({@code TlsProtocolsByHost}).
+     */
+    public Set<String> hosts() {
+        Set<String> hosts = new TreeSet<>();
+        if (allowedHosts != null) {
+            for (String h : allowedHosts.split(",")) {
+                if (!h.isBlank()) hosts.add(h.strip().toLowerCase(Locale.ROOT));
+            }
+        }
+        try {
+            String host = baseUrl == null || baseUrl.isBlank() ? null : URI.create(baseUrl.strip()).getHost();
+            if (host != null) hosts.add(host.toLowerCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            // an unreadable base URL is reported where it is used
+        }
+        return hosts;
     }
 }

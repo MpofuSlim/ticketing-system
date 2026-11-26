@@ -8,7 +8,6 @@ import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.client5.http.impl.routing.SystemDefaultRoutePlanner;
-import org.apache.hc.client5.http.ssl.DefaultClientTlsStrategy;
 import org.apache.hc.core5.http.io.SocketConfig;
 import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.util.TimeValue;
@@ -17,6 +16,8 @@ import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 
 import java.time.Duration;
+import java.util.Collection;
+import java.util.Set;
 
 /**
  * This service's ONE outbound HTTP client: an Apache HttpClient 5 (classic, so
@@ -43,7 +44,9 @@ import java.time.Duration;
  *       shared across partners, so it must carry no state between them, and
  *       the request headers stay what they were before the swap.</li>
  *   <li><b>System proxy and TLS settings</b> ({@code ProxySelector.getDefault()},
- *       {@code javax.net.ssl.*}), the same sources the JDK transports read.</li>
+ *       {@code javax.net.ssl.*}), the same sources the JDK transports read,
+ *       except that hosts listed as TLS-1.2-only are offered TLS 1.2 alone
+ *       ({@link TlsProtocolsByHost}: Paynow resets a TLS 1.3 offer).</li>
  *   <li><b>Bounded everything</b>: lease, connect, TLS handshake, response.</li>
  * </ul>
  *
@@ -69,12 +72,23 @@ public final class PooledHttpClient implements AutoCloseable {
     private final PoolingHttpClientConnectionManager connectionManager;
     private final CloseableHttpClient httpClient;
 
+    private final TlsProtocolsByHost tls;
+
     public PooledHttpClient(PooledHttpClientProperties properties) {
+        this(properties, Set.of());
+    }
+
+    /**
+     * @param tls12OnlyHosts hosts offered TLS 1.2 only (Paynow's, today); every
+     *                       other host gets the system's TLS settings
+     */
+    public PooledHttpClient(PooledHttpClientProperties properties, Collection<String> tls12OnlyHosts) {
         this.properties = properties;
+        this.tls = TlsProtocolsByHost.systemDefault(tls12OnlyHosts);
         this.connectionManager = PoolingHttpClientConnectionManagerBuilder.create()
                 .setMaxConnTotal(properties.getMaxTotal())
                 .setMaxConnPerRoute(properties.getMaxPerRoute())
-                .setTlsSocketStrategy(DefaultClientTlsStrategy.createSystemDefault())
+                .setTlsSocketStrategy(tls)
                 .setDefaultConnectionConfig(ConnectionConfig.custom()
                         .setConnectTimeout(timeout(properties.getConnectTimeout()))
                         .setSocketTimeout(timeout(properties.getReadTimeout()))
@@ -112,6 +126,11 @@ public final class PooledHttpClient implements AutoCloseable {
     /** The shared client (booking-service's Feign clients wrap this same instance). */
     public CloseableHttpClient httpClient() {
         return httpClient;
+    }
+
+    /** The pool's TLS step, for tests and the boot log. */
+    public TlsProtocolsByHost tls() {
+        return tls;
     }
 
     /** The shared pool, for metrics. */
