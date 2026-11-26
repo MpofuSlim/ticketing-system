@@ -54,6 +54,10 @@ public class SecurityConfig {
                         // Who moved an event's sales window (V22): the organizer's
                         // and staff's record, never public. Same reason, same place.
                         .requestMatchers(HttpMethod.GET, "/events/*/sales-window/history").authenticated()
+                        // Recurring series (V24): an organizer's and staff's set-up, never
+                        // public. Same reason, same place: before the GET permitAll below,
+                        // which would otherwise answer GET /events/series anonymously.
+                        .requestMatchers(HttpMethod.GET, "/events/series", "/events/series/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/events").permitAll()
                         // Internal: full event lookup (tenantUserUuid intact) for sibling
                         // services — booking-service's ownership checks + tenant capture.

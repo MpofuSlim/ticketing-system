@@ -143,6 +143,14 @@ public class EventService {
         this.staffNotificationGateway = staffNotificationGateway;
     }
 
+    /** Recurring series (V24); absent in hand-built tests, where no event is a template. */
+    private SeriesTemplates seriesTemplates;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setSeriesTemplates(SeriesTemplates seriesTemplates) {
+        this.seriesTemplates = seriesTemplates;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setTransactionTemplate(
             org.springframework.transaction.support.TransactionTemplate transactionTemplate) {
@@ -673,7 +681,32 @@ public class EventService {
         log.info("Creating event tenantUserUuid={} country={} title={} venue={} startDateTime={} capacity={} hasBanner={}",
                 tenantUserUuid, country, request.getTitle(), request.getVenue(), request.getStartDateTime(),
                 request.getTotalCapacity(), eventBanner != null && !eventBanner.isEmpty());
+        Inserted inserted = insertEvent(tenantUserUuid, country, request, eventBanner);
+        Event saved = inserted.event();
+        EventResponseDTO created = toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+        if (created != null) {
+            created.setTermsText(inserted.terms());
+        }
+        return created;
+    }
 
+    /**
+     * A recurring series' template (V24, TIC-70), created exactly as
+     * {@link #createEvent} creates an event (the same checks, the same row,
+     * terms as version 1) but with no banner and nothing asked of another
+     * service, so it can run inside the series' own transaction. The caller
+     * marks it a template.
+     */
+    @Transactional
+    public Event createSeriesTemplate(UUID tenantUserUuid, String country, CreateEventRequestDTO request) {
+        return insertEvent(tenantUserUuid, country, request, null).event();
+    }
+
+    /** A new event row and its terms text (null when none). */
+    private record Inserted(Event event, String terms) {}
+
+    private Inserted insertEvent(UUID tenantUserUuid, String country,
+                                 CreateEventRequestDTO request, MultipartFile eventBanner) {
         if (tenantUserUuid == null) {
             // Defence in depth — the controller resolves this from the JWT and
             // the JwtFilter rejects pre-V20 tokens that lack the claim, so we
@@ -755,11 +788,7 @@ public class EventService {
         }
         log.info("Event created eventId={} tenantUserUuid={}",
                 saved.getEventId(), saved.getTenantUserUuid());
-        EventResponseDTO created = toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
-        if (created != null) {
-            created.setTermsText(terms);
-        }
-        return created;
+        return new Inserted(saved, terms);
     }
 
     /**
@@ -1035,6 +1064,13 @@ public class EventService {
                     eventId, tenantUserUuid, event.getTenantUserUuid());
             throw new ForbiddenException("You are not authorized to update this event");
         }
+        // A series template's times are its next date's, set by the generator
+        // (V24); every date's times and sales window come from the schedule.
+        if (com.innbucks.eventservice.entity.SeriesState.isTemplate(event)
+                && (request.getStartDateTime() != null || request.getEndDateTime() != null
+                    || request.isSalesStartDateTimeSent() || request.isSalesEndDateTimeSent())) {
+            throw new BadRequestException(SERIES_TEMPLATE_TIMES);
+        }
 
         // Capture pre-patch values so we can tell whether a customer-affecting
         // field (start time / venue) actually changed. Only those trigger an
@@ -1186,6 +1222,10 @@ public class EventService {
     }
 
     /** The refusal when ticket sales would open at or after the event's end. */
+    /** An edit of a series template that names times (V24). */
+    public static final String SERIES_TEMPLATE_TIMES =
+            "A series gets its dates and sales times from its schedule. Leave the times out.";
+
     public static final String SALES_START_AFTER_END_MESSAGE = "Ticket sales must open before the event ends.";
     /** The refusal when ticket sales would close at or before they open. */
     public static final String SALES_END_NOT_AFTER_START_MESSAGE = "Ticket sales must close after they open.";
@@ -1416,7 +1456,7 @@ public class EventService {
                 // themselves while it was off).
                 event.setApprovedBy(review && isAdmin ? actor : null);
             }
-            event.setActive(true);
+            goLive(event);
             Event saved = eventRepository.save(event);
             publicEventCatalog.invalidateAll();
             log.info("Event activated eventId={} tenantUserUuid={} firstApproval={}", eventId, tenantUserUuid,
@@ -1463,6 +1503,9 @@ public class EventService {
 
         boolean wasActive = event.isActive();
         event.setActive(false);
+        if (seriesTemplates != null) {
+            seriesTemplates.unpublished(event);
+        }
         Event saved = eventRepository.save(event);
         publicEventCatalog.invalidateAll();
         log.info("Event deactivated eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
@@ -1507,6 +1550,9 @@ public class EventService {
             boolean wasRejected = event.isRejected();
             event.setRejected(true);
             event.setActive(false);
+            if (seriesTemplates != null) {
+                seriesTemplates.unpublished(event);
+            }
             event.setApprovedAt(null);
             event.setApprovedBy(null);
             event.setSubmittedAt(null);
@@ -1559,7 +1605,7 @@ public class EventService {
                 event.setRejectionReason(null);
                 event.setApprovedAt(now);
                 event.setApprovedBy(actor);
-                event.setActive(true);
+                goLive(event);
                 Event saved = eventRepository.save(event);
                 publicEventCatalog.invalidateAll();
                 log.info("Event approved and published eventId={} tenantUserUuid={}", eventId,
@@ -1600,6 +1646,21 @@ public class EventService {
 
     /** A write and what to send once it has committed (null: nothing). */
     private record LifecycleChange(Event event, Runnable notices) {}
+
+    /**
+     * Puts the event live. A series template (V24) never goes live itself: its
+     * series starts making dates instead, and the template stays unpublished
+     * (chk_events_series_unpublished refuses anything else).
+     */
+    private void goLive(Event event) {
+        if (com.innbucks.eventservice.entity.SeriesState.isTemplate(event)) {
+            if (seriesTemplates != null) {
+                seriesTemplates.published(event);
+            }
+            return;
+        }
+        event.setActive(true);
+    }
 
     private boolean reviewRequired() {
         return reviewPolicy != null && reviewPolicy.required();
@@ -1740,9 +1801,20 @@ public class EventService {
         }
 
         event.setDeleted(true);
+        boolean template = com.innbucks.eventservice.entity.SeriesState.isTemplate(event);
+        if (template && seriesTemplates != null) {
+            // Deleting a series' template ends the series (V24). Its dates are
+            // ordinary events and stay as they are.
+            seriesTemplates.ended(event);
+        }
         eventRepository.save(event);
         publicEventCatalog.invalidateAll();
-        log.info("Event deleted (soft) eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
+        log.info("Event deleted (soft) eventId={} tenantUserUuid={} seriesTemplate={}", eventId, tenantUserUuid,
+                template);
+        if (template) {
+            // A template sells nothing, so nobody holds a ticket to tell.
+            return;
+        }
 
         // A soft-delete is a cancellation — tell confirmed attendees. Best-effort.
         bookingNotificationGateway.notifyEventChange(

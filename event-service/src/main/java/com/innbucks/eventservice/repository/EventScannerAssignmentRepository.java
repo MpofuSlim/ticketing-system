@@ -15,6 +15,9 @@ public interface EventScannerAssignmentRepository extends JpaRepository<EventSca
 
     List<EventScannerAssignment> findByScannerIdIn(Collection<UUID> scannerIds);
 
+    /** An event's gate team: what a series date copies from its template (V24). */
+    List<EventScannerAssignment> findByEventId(UUID eventId);
+
     boolean existsByScannerIdAndEventId(UUID scannerId, UUID eventId);
 
     @Modifying
@@ -30,7 +33,9 @@ public interface EventScannerAssignmentRepository extends JpaRepository<EventSca
      * the number's OTHER rows that count: not switched off, not declined, and
      * scanning (V21: a sell-only row's kept scan assignments grant nothing, so
      * they block nothing; selling has no overlap rule). Ended
-     * and deleted events never clash. Windows are half-open, so an event that
+     * and deleted events never clash, and neither does a series template
+     * (V24): its times are only its next date's, and each date is checked
+     * when the generator copies the team onto it. Windows are half-open, so an event that
      * starts as another ends is no clash. Times are the events' live UTC
      * columns, so an organizer's later edit is read as it now stands.
      *
@@ -46,6 +51,7 @@ public interface EventScannerAssignmentRepository extends JpaRepository<EventSca
                    OR (s.disabled_at IS NULL AND s.declined_at IS NULL AND s.can_scan))
               AND a.event_id <> :eventId
               AND e.deleted = FALSE
+              AND (e.series_state IS NULL OR e.series_state <> 'TEMPLATE')
               AND e.end_date_time > :now
               AND e.start_date_time < :end
               AND e.end_date_time > :start
@@ -77,6 +83,8 @@ public interface EventScannerAssignmentRepository extends JpaRepository<EventSca
             WHERE mine.scanner_id = :scannerId
               AND me.deleted = FALSE AND me.end_date_time > :now
               AND oe.deleted = FALSE AND oe.end_date_time > :now
+              AND (me.series_state IS NULL OR me.series_state <> 'TEMPLATE')
+              AND (oe.series_state IS NULL OR oe.series_state <> 'TEMPLATE')
               AND oe.start_date_time < me.end_date_time
               AND oe.end_date_time > me.start_date_time
             """, nativeQuery = true)

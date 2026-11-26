@@ -47,6 +47,8 @@ public class EventMapper {
                 .rejectionReason(event.getRejectionReason())
                 .createdAt(event.getCreatedAt())
                 .updatedAt(event.getUpdatedAt())
+                .seriesId(event.getSeriesId())
+                .seriesState(event.getSeriesState())
                 .build();
     }
 

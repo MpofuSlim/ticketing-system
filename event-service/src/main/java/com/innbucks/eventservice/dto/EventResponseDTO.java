@@ -155,4 +155,16 @@ public class EventResponseDTO {
             + "has no seat category, when seat-service could not be asked, and on create / update / "
             + "status-change responses.")
     private EventPriceFromDTO priceFrom;
+
+    @Schema(nullable = true, description = "The recurring series this event belongs to (V24); absent on a one-off "
+            + "event. Every date of a series carries the same id.",
+            example = "5d0c6f1e-3b2a-4c8d-9e7f-1a2b3c4d5e6f")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private UUID seriesId;
+
+    @Schema(nullable = true, description = "What the event is to its series: TEMPLATE (the series' set-up, only "
+            + "ever seen by its organizer and staff), GENERATING (a date still being made) or READY (a date). "
+            + "Absent on a one-off event.", example = "READY")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String seriesState;
 }

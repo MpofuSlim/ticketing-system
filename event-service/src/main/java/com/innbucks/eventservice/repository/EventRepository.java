@@ -4,7 +4,9 @@ import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.EventCategory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -29,10 +31,17 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     // for non-null values, and `cast(null as timestamp/varchar)` is still
     // NULL so the IS NULL branch behaves identically.
 
+    // Series (V24, TIC-70): `(e.seriesState IS NULL OR e.seriesState = 'READY')`
+    // keeps a series' TEMPLATE and its dates still GENERATING out of every list
+    // that shows unpublished events. The active-only lists need no such line:
+    // neither is ever active (chk_events_series_unpublished). The review queue
+    // keeps templates on purpose: a series is reviewed through its template.
+
     // Get all non-deleted events with optional date filter — paginated
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
+        AND (e.seriesState IS NULL OR e.seriesState = 'READY')
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
@@ -107,6 +116,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
+        AND (e.seriesState IS NULL OR e.seriesState = 'READY')
         AND e.active = false
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
@@ -126,6 +136,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
+        AND (e.seriesState IS NULL OR e.seriesState = 'READY')
         AND e.active = false
         AND e.category = :category
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
@@ -152,6 +163,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
+        AND (e.seriesState IS NULL OR e.seriesState = 'READY')
         AND e.tenantUserUuid = :tenantUserUuid
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
@@ -184,6 +196,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
+        AND (e.seriesState IS NULL OR e.seriesState = 'READY')
         AND e.tenantUserUuid = :tenantUserUuid
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
@@ -271,6 +284,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
+        AND (e.seriesState IS NULL OR e.seriesState = 'READY')
         AND e.active = false
         AND e.tenantUserUuid = :tenantUserUuid
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
@@ -291,6 +305,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
+        AND (e.seriesState IS NULL OR e.seriesState = 'READY')
         AND e.active = false
         AND e.tenantUserUuid = :tenantUserUuid
         AND e.category = :category
@@ -417,6 +432,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Query("""
         SELECT e.eventId FROM Event e
         WHERE e.deleted = false
+          AND (e.seriesState IS NULL OR e.seriesState = 'READY')
           AND e.endDateTime >= :from
           AND e.endDateTime < :to
     """)
@@ -478,4 +494,71 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     """)
     long countLiveByOrganizers(@Param("organizers") java.util.Collection<java.util.UUID> organizers,
                                @Param("now") LocalDateTime now);
+
+    // ---- Series (V24, TIC-70) -------------------------------------------------
+
+    /**
+     * The starts a series has made dates for from {@code from} on, deleted
+     * dates included, so the generator never makes a start twice (the unique
+     * index uq_events_series_start is the backstop).
+     */
+    @Query("""
+        SELECT e.startDateTime FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState <> 'TEMPLATE'
+        AND e.startDateTime >= :from
+    """)
+    List<LocalDateTime> findSeriesStartsFrom(@Param("seriesId") UUID seriesId, @Param("from") LocalDateTime from);
+
+    /** Whether a series already has a date (made or being made, deleted or not) starting then. */
+    boolean existsBySeriesIdAndStartDateTimeAndSeriesStateIn(UUID seriesId, LocalDateTime startDateTime,
+                                                             java.util.Collection<String> seriesStates);
+
+    /** How many of a series' dates are in one state and not deleted. */
+    long countBySeriesIdAndSeriesStateAndDeletedFalse(UUID seriesId, String seriesState);
+
+    /** A series' dates from {@code from} on that are not deleted: what its cap counts. */
+    @Query("""
+        SELECT COUNT(e) FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState <> 'TEMPLATE'
+        AND e.deleted = false
+        AND e.startDateTime >= :from
+    """)
+    long countSeriesDatesFrom(@Param("seriesId") UUID seriesId, @Param("from") LocalDateTime from);
+
+    /** The latest start a series has made a date for, deleted dates included; null when none. */
+    @Query("""
+        SELECT MAX(e.startDateTime) FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState <> 'TEMPLATE'
+    """)
+    LocalDateTime findLastSeriesStart(@Param("seriesId") UUID seriesId);
+
+    /** Dates the generator started and has not finished, soonest first. */
+    @Query("""
+        SELECT e.eventId FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState = 'GENERATING'
+        AND e.deleted = false
+        ORDER BY e.startDateTime ASC, e.eventId ASC
+    """)
+    List<UUID> findGeneratingDateIds(@Param("seriesId") UUID seriesId, Pageable limit);
+
+    /** A series' finished dates that have not ended, soonest first. */
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState = 'READY'
+        AND e.deleted = false
+        AND e.endDateTime > :now
+        ORDER BY e.startDateTime ASC, e.eventId ASC
+    """)
+    Page<Event> findUpcomingSeriesDates(@Param("seriesId") UUID seriesId, @Param("now") LocalDateTime now,
+                                        Pageable pageable);
+
+    /** A date locked for the generator's last step, so two runs cannot both finish it. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT e FROM Event e WHERE e.eventId = :eventId")
+    Optional<Event> lockById(@Param("eventId") UUID eventId);
 }

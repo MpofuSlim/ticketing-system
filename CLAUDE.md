@@ -4095,6 +4095,70 @@ never reviewed again.
   are 404s (logged and dropped). V17 is four nullable columns, a small backfill
   and a partial index on `events`.
 
+## Recurring event series (event-service V24, TIC-70)
+
+**An organizer sets a series up once (`POST /events/series`): a schedule and a
+TEMPLATE event. The generator makes an ordinary event for every start the
+schedule has inside the booking window, each a copy of the template.** Off per
+cell: `EVENTS_SERIES_ENABLED` (default false) makes every `/events/series`
+endpoint a 404 and the generator do nothing.
+
+- **The template is an event row** (`events.series_state = TEMPLATE`), set up
+  with the ordinary endpoints: seat categories, price tiers and add-ons
+  (seat-service), booking questions, terms, banner, gate scanners, sales
+  agents. It is never published (`chk_events_series_unpublished`) and is in no
+  list but the review queue: a series is reviewed through its template. Its
+  times are its next date's, moved by the generator so that assigning its team
+  is never refused as "ended"; an edit that names times is 400
+  (`EventService.SERIES_TEMPLATE_TIMES`).
+- **Its lifecycle is the template's** (`SeriesTemplates`, called where
+  `EventService` would set `active`): publish or approve makes the series
+  ACTIVE, deactivate or reject makes it DRAFT, delete ENDS it. **Only NEW
+  dates follow.** A date already made is an ordinary event and keeps its
+  state, so staff rejecting a series leave its dates on sale (reject them one
+  by one); pausing and ending a series' dates is S2.
+- **The schedule** (`SeriesSchedule`, market-local, STRICT parsing): days of the
+  week, 1 to 10 start times, a duration of at most 24 hours, a first day, an
+  optional last day, skipped days and extra starts; a booking window of 1 to
+  180 days (default 60); sales opening and closing N minutes before each
+  start. At most 400 dates in the window, refused at create.
+- **A date is made in three steps** (`SeriesDateGenerator`, every 5 minutes,
+  `events.series.*`), never with a remote call inside a transaction:
+  1. A transaction inserts it GENERATING (hidden, inactive) with the
+     template's fields, banner, current terms (as version 1), its sales window
+     and the template's team. A scanner whose number would then be at two
+     overlapping events is left off that date (the overlap rule, after
+     `lockAllByPhoneNumber` in phone order). Nobody is messaged.
+  2. With no transaction open, seat-service copies the layout
+     (`POST /seat-categories/internal/copy`: the internal trio, covered by
+     `seat-internal-deny`). Idempotent there: an advisory lock on the target,
+     nothing copied when it already has a category, the answer mapped by name.
+     Tiers that have ended are not copied; tier times are instants, so an
+     early bird ending 8 September ends then for every date.
+  3. A transaction locks the date, copies the booking questions with their
+     category ids mapped (a question none of whose categories reached the date
+     is left off: an empty list would ask it on every ticket) and marks it
+     READY, live when the series is ACTIVE.
+
+  A date that fails at step 2 or 3 stays hidden and a later run finishes it.
+  **No ShedLock, deliberately:** two runs making one start meet at
+  `uq_events_series_start`; two copies onto one date queue on seat-service's
+  lock; step 3 holds the row lock and stops once the date is READY; the
+  template's times move under its `@Version`.
+- **Never made twice:** `uq_events_series_start (series_id, start_date_time)`
+  covers every date, deleted ones included, so a date the organizer deleted is
+  never made again.
+- **Not copied (S1):** promo codes and number series (booking-service's, keyed
+  by the old ids). Changes to the template reach only dates made afterwards.
+- **Lists:** every list that shows unpublished events filters
+  `(e.seriesState IS NULL OR e.seriesState = 'READY')`; the active-only lists
+  need nothing (neither state is ever active). The scanner clash queries skip
+  TEMPLATE rows, and `ScannerService.upcomingFor` skips anything not READY.
+- Event responses carry `seriesId` and `seriesState`, NON_NULL, so a one-off
+  event's JSON is unchanged (cached pages too: `EventSnapshot`).
+- **Deploy order:** seat-service, then event-service (V24 is additive). Switch
+  it on per cell once both run.
+
 ## Ticket sales open at a scheduled time, and every booking asks first (event-service V15)
 
 **An organizer can set `salesStartDateTime` on an event: the event is listed

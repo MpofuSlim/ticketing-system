@@ -47,7 +47,9 @@ public final class GateSessionScope {
         if ("GET".equals(method)) {
             // The gate screen, and the public event reads (answered as for an
             // anonymous caller: the session holds no organizer or staff role).
-            return !path.startsWith("/event-organizer") && !path.equals("/events/sales");
+            // Never an organizer's set-up: their team, sales or series (V24).
+            return !path.startsWith("/event-organizer") && !path.equals("/events/sales")
+                    && !path.equals("/events/series") && !path.startsWith("/events/series/");
         }
         return "POST".equals(method) && INVITE_DECISION.matcher(path).matches();
     }

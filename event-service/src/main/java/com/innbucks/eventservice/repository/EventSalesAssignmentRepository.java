@@ -15,6 +15,9 @@ public interface EventSalesAssignmentRepository extends JpaRepository<EventSales
 
     List<EventSalesAssignment> findByScannerIdIn(Collection<UUID> scannerIds);
 
+    /** An event's sales agents: what a series date copies from its template (V24). */
+    List<EventSalesAssignment> findByEventId(UUID eventId);
+
     Optional<EventSalesAssignment> findByScannerIdAndEventId(UUID scannerId, UUID eventId);
 
     @Modifying
