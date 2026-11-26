@@ -147,8 +147,8 @@ public class PaynowProperties {
 
     /**
      * Every host we call Paynow on: the allowed hosts and the base URL's host,
-     * lower case. Used to offer them TLS 1.2 only, because Paynow resets a
-     * TLS 1.3 offer ({@code TlsProtocolsByHost}).
+     * lower case. Used to offer them the JVM's own cipher list, because Paynow
+     * accepts only CBC ciphers ({@code TlsCiphersByHost}).
      */
     public Set<String> hosts() {
         Set<String> hosts = new TreeSet<>();
