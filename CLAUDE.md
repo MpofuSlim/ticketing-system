@@ -4318,6 +4318,40 @@ for the Cloudflare reason ("Cloudflare blocks `PUT` + multipart").
   (who may call it, POST and DELETE) and `SeriesEditPostgresIT` (the md5
   comparison and the copy in Postgres). No migration.
 
+## Reports per series (booking-service, event-service, TIC-72)
+
+**Every organizer report that takes `eventId` also takes `seriesId`: the report
+then covers every date of that recurring series.** Revenue, by-event (one row
+per date), by-category, time-series, add-ons, cash-up and the CSV export.
+
+- **booking-service asks event-service live**, with no transaction open
+  (`SeriesReportScope`, called by the controller before the report):
+  `GET /events/internal/series-dates?seriesId=`, the internal trio (controller
+  token in `SeriesInternalController`, the `GET /events/internal/*` permitAll,
+  gateway `event-internal-deny`). It answers 200 always: the series' owner and
+  every date it has made, deleted ones included, never the template; an
+  unknown series is `found: false`.
+- **Fails closed.** No answer is a 503, never a report over nothing. An
+  organizer reads only their own series: anyone else's and an unknown one are
+  the same 404 "Series not found". Platform staff read any series, scoped to
+  its owner. `eventId` and `seriesId` together are a 400.
+- **The queries are unchanged.** A series reads the owner's bookings in the
+  window (`eventId` null) and keeps its dates in Java (`ReportEvents.keep`), so
+  the organizer scope still bounds the fetch.
+- **By-category groups a series by NAME**: each date has its own category and
+  tier ids (copied from the template by name), so "VIP" on every date is one
+  row, with `categoryId` and `priceTierId` null.
+- `meta.seriesId` (NON_NULL) says the report was filtered to a series; every
+  other report's meta is unchanged.
+- **Not covered, stated:** the booking-questions report stays per date (each
+  date has its own question ids) and the sales-agents reports take no
+  `seriesId`. A date a schedule change DETACHED (an unbooked date the new
+  schedule dropped) has left the series, so a refund on it is not in the
+  series' figures.
+- **Deploy order:** event-service, then booking-service. An older
+  event-service answers the new call with an error, so a series report is a 503
+  until it is updated; every other report is unaffected.
+
 ## A team for a whole series (event-service, TIC-72)
 
 **An organizer puts a gate scanner or a sales agent on a whole series in one

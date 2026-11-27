@@ -56,6 +56,16 @@ public class EventServiceClientFallback implements EventServiceClient {
                 .code("503").message("event unavailable").data(null).build();
     }
 
+    // Null data = "could not ask". A series report refuses that with a
+    // retryable 503: an outage is never read as "a series with no dates".
+    @Override
+    public ApiResult<com.innbucks.bookingservice.dto.SeriesDateIdsDTO> seriesDates(
+            java.util.UUID seriesId, String internalToken) {
+        log.warn("event-service circuit open or call failed (seriesDates) seriesId={}", seriesId);
+        return ApiResult.<com.innbucks.bookingservice.dto.SeriesDateIdsDTO>builder()
+                .code("503").message("event unavailable").data(null).build();
+    }
+
     @Override
     public ApiResult<AvailabilityResponseDTO> consumeAvailability(java.util.UUID id, int count, String internalToken) {
         log.warn("event-service circuit open or call failed (consumeAvailability) eventId={} count={}",

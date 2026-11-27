@@ -66,9 +66,16 @@ public class OrganizerReportService {
 
     @Transactional(readOnly = true)
     public RevenueSummaryDTO revenueSummary(UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {
+        return revenueSummary(organizerUuid, ReportEvents.event(eventId), from, to);
+    }
+
+    @Transactional(readOnly = true)
+    public RevenueSummaryDTO revenueSummary(UUID organizerUuid, ReportEvents events, LocalDate from, LocalDate to) {
+        UUID eventId = events.eventId();
         Range r = resolveRange(from, to);
-        List<Booking> confirmed = repository.findConfirmedWithItems(organizerUuid, eventId, r.start(), r.end());
-        List<Booking> reversed = repository.findReversed(organizerUuid, eventId, r.start(), r.end());
+        List<Booking> confirmed = confirmed(organizerUuid, events, r);
+        List<Booking> reversed = events.keep(
+                repository.findReversed(organizerUuid, events.queryEventId(), r.start(), r.end()));
 
         long confirmedBookings = confirmed.size();
         long ticketsSold = 0;
@@ -136,9 +143,16 @@ public class OrganizerReportService {
 
     @Transactional(readOnly = true)
     public List<EventRevenueDTO> revenueByEvent(UUID organizerUuid, LocalDate from, LocalDate to) {
+        return revenueByEvent(organizerUuid, ReportEvents.all(), from, to);
+    }
+
+    /** One row per event; for a series, one row per date that sold or refunded in the window. */
+    @Transactional(readOnly = true)
+    public List<EventRevenueDTO> revenueByEvent(UUID organizerUuid, ReportEvents events, LocalDate from, LocalDate to) {
         Range r = resolveRange(from, to);
-        List<Booking> confirmed = repository.findConfirmedWithItems(organizerUuid, null, r.start(), r.end());
-        List<Booking> reversed = repository.findReversed(organizerUuid, null, r.start(), r.end());
+        List<Booking> confirmed = confirmed(organizerUuid, events, r);
+        List<Booking> reversed = events.keep(
+                repository.findReversed(organizerUuid, events.queryEventId(), r.start(), r.end()));
 
         Map<UUID, long[]> counts = new LinkedHashMap<>();      // eventId -> [bookings, tickets]
         Map<UUID, BigDecimal> confirmedTotals = new LinkedHashMap<>();
@@ -174,42 +188,60 @@ public class OrganizerReportService {
 
     @Transactional(readOnly = true)
     public List<CategoryRevenueDTO> revenueByCategory(UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {
-        if (eventId == null) {
-            throw new BadRequestException("eventId is required for the per-category breakdown.");
+        return revenueByCategory(organizerUuid, ReportEvents.event(eventId), from, to);
+    }
+
+    /**
+     * Revenue per ticket category and price tier. For one event, keyed by the
+     * category's and tier's ids. For a series (TIC-72), keyed by NAME: each
+     * date has its own category and tier ids, copied from the template by
+     * name, so "VIP" on every date is one row, with no {@code categoryId} and
+     * no {@code priceTierId}.
+     */
+    @Transactional(readOnly = true)
+    public List<CategoryRevenueDTO> revenueByCategory(UUID organizerUuid, ReportEvents events,
+                                                      LocalDate from, LocalDate to) {
+        if (events.eventId() == null && !events.isSeries()) {
+            throw new BadRequestException("eventId or seriesId is required for the per-category breakdown.");
         }
         Range r = resolveRange(from, to);
-        List<Booking> confirmed = repository.findConfirmedWithItems(organizerUuid, eventId, r.start(), r.end());
+        List<Booking> confirmed = confirmed(organizerUuid, events, r);
+        boolean byName = events.isSeries();
 
-        Map<UUID, CategoryAccumulator> byCategory = new LinkedHashMap<>();
+        Map<Object, CategoryAccumulator> byCategory = new LinkedHashMap<>();
         for (Booking b : confirmed) {
             if (b.getItems() == null) continue;
             for (BookingItem item : b.getItems()) {
-                CategoryAccumulator acc = byCategory.computeIfAbsent(item.getCategoryId(),
-                        k -> new CategoryAccumulator(item.getCategoryName()));
+                Object categoryKey = byName ? String.valueOf(item.getCategoryName()) : item.getCategoryId();
+                CategoryAccumulator acc = byCategory.computeIfAbsent(categoryKey,
+                        k -> new CategoryAccumulator(byName ? null : item.getCategoryId(), item.getCategoryName()));
                 acc.tickets++;
                 acc.revenue = acc.revenue.add(nz(item.getPriceAtBooking()));
                 // Bookings come oldest first, so tiers are listed in the order
-                // they first sold, which is the order they ran.
-                TierAccumulator tier = acc.tiers.computeIfAbsent(item.getPriceTierId(),
-                        k -> new TierAccumulator(item.getPriceTierId() == null
-                                ? PriceTierRevenueDTO.FULL_PRICE : item.getPriceTierName()));
+                // they first sold, which is the order they ran. The full price
+                // is the null key either way.
+                Object tierKey = item.getPriceTierId() == null ? null
+                        : byName ? String.valueOf(item.getPriceTierName()) : item.getPriceTierId();
+                TierAccumulator tier = acc.tiers.computeIfAbsent(tierKey,
+                        k -> new TierAccumulator(byName ? null : item.getPriceTierId(),
+                                item.getPriceTierId() == null ? PriceTierRevenueDTO.FULL_PRICE : item.getPriceTierName()));
                 tier.tickets++;
                 tier.revenue = tier.revenue.add(nz(item.getPriceAtBooking()));
             }
         }
         List<CategoryRevenueDTO> out = new ArrayList<>();
-        byCategory.forEach((categoryId, acc) -> {
+        byCategory.forEach((categoryKey, acc) -> {
             List<PriceTierRevenueDTO> tiers = new ArrayList<>();
-            acc.tiers.forEach((tierId, tier) -> {
-                if (tierId != null) {
-                    tiers.add(new PriceTierRevenueDTO(tierId, tier.name, tier.tickets, scale2(tier.revenue)));
+            acc.tiers.forEach((tierKey, tier) -> {
+                if (tierKey != null) {
+                    tiers.add(new PriceTierRevenueDTO(tier.id, tier.name, tier.tickets, scale2(tier.revenue)));
                 }
             });
             TierAccumulator full = acc.tiers.get(null);
             if (full != null) {
                 tiers.add(new PriceTierRevenueDTO(null, full.name, full.tickets, scale2(full.revenue)));
             }
-            out.add(new CategoryRevenueDTO(categoryId, acc.name, acc.tickets, scale2(acc.revenue), tiers));
+            out.add(new CategoryRevenueDTO(acc.id, acc.name, acc.tickets, scale2(acc.revenue), tiers));
         });
         out.sort(Comparator.comparing(CategoryRevenueDTO::revenue).reversed());
         return out;
@@ -218,9 +250,15 @@ public class OrganizerReportService {
     @Transactional(readOnly = true)
     public List<SalesBucketDTO> salesTimeSeries(UUID organizerUuid, UUID eventId,
                                                 LocalDate from, LocalDate to, BucketSize bucket) {
+        return salesTimeSeries(organizerUuid, ReportEvents.event(eventId), from, to, bucket);
+    }
+
+    @Transactional(readOnly = true)
+    public List<SalesBucketDTO> salesTimeSeries(UUID organizerUuid, ReportEvents events,
+                                                LocalDate from, LocalDate to, BucketSize bucket) {
         Range r = resolveRange(from, to);
         BucketSize size = bucket == null ? BucketSize.DAY : bucket;
-        List<Booking> confirmed = repository.findConfirmedWithItems(organizerUuid, eventId, r.start(), r.end());
+        List<Booking> confirmed = confirmed(organizerUuid, events, r);
 
         // Sorted map keyed by bucket start so the series comes out chronological.
         Map<LocalDate, long[]> counts = new java.util.TreeMap<>();   // [bookings, tickets]
@@ -241,8 +279,13 @@ public class OrganizerReportService {
     /** CSV ledger of the period's CONFIRMED bookings, ordered by createdAt. */
     @Transactional(readOnly = true)
     public String confirmedBookingsCsv(UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {
+        return confirmedBookingsCsv(organizerUuid, ReportEvents.event(eventId), from, to);
+    }
+
+    @Transactional(readOnly = true)
+    public String confirmedBookingsCsv(UUID organizerUuid, ReportEvents events, LocalDate from, LocalDate to) {
         Range r = resolveRange(from, to);
-        List<Booking> confirmed = repository.findConfirmedWithItems(organizerUuid, eventId, r.start(), r.end());
+        List<Booking> confirmed = confirmed(organizerUuid, events, r);
 
         // V22 appends customerName + attendees (named guests on the booking's
         // tickets, "; "-joined, names only). Still one row per BOOKING — this
@@ -303,8 +346,12 @@ public class OrganizerReportService {
      * rejected identically whether or not the caller reads the meta.
      */
     public ReportMetaDTO resolvedMeta(UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {
+        return resolvedMeta(organizerUuid, ReportEvents.event(eventId), from, to);
+    }
+
+    public ReportMetaDTO resolvedMeta(UUID organizerUuid, ReportEvents events, LocalDate from, LocalDate to) {
         Range range = resolveRange(from, to);
-        return ReportMetaDTO.of(range.from(), range.to(), eventId, organizerUuid);
+        return ReportMetaDTO.of(range.from(), range.to(), events.eventId(), organizerUuid, events.seriesId());
     }
 
     /** Validate + default the [from, to] window into a half-open instant range. */
@@ -352,6 +399,12 @@ public class OrganizerReportService {
     @Transactional(readOnly = true)
     public com.innbucks.bookingservice.dto.report.CashUpReportDTO cashUp(
             UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {
+        return cashUp(organizerUuid, ReportEvents.event(eventId), from, to);
+    }
+
+    @Transactional(readOnly = true)
+    public com.innbucks.bookingservice.dto.report.CashUpReportDTO cashUp(
+            UUID organizerUuid, ReportEvents events, LocalDate from, LocalDate to) {
         Range r = resolveRange(from, to);
         final class Till {
             int sales;
@@ -366,7 +419,8 @@ public class OrganizerReportService {
                 Comparator.comparing(TillKey::name, String.CASE_INSENSITIVE_ORDER)
                         .thenComparing(TillKey::agentId, Comparator.nullsFirst(Comparator.naturalOrder())));
         List<com.innbucks.bookingservice.dto.report.CashUpReportDTO.Entry> entries = new ArrayList<>();
-        for (Booking b : repository.findCashSalesWithItems(organizerUuid, eventId, r.start(), r.end())) {
+        for (Booking b : events.keep(
+                repository.findCashSalesWithItems(organizerUuid, events.queryEventId(), r.start(), r.end()))) {
             int tickets = b.getItems() == null ? 0 : b.getItems().size();
             BigDecimal amount = scale2(nz(b.getTotalAmount()));
             boolean agentSale = b.getSoldByAgentId() != null;
@@ -424,9 +478,16 @@ public class OrganizerReportService {
     @Transactional(readOnly = true)
     public List<com.innbucks.bookingservice.dto.report.AddOnSalesDTO> addOnSales(
             UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {
+        return addOnSales(organizerUuid, ReportEvents.event(eventId), from, to);
+    }
+
+    /** One row per add-on and event: a series lists each date's add-ons on their own rows. */
+    @Transactional(readOnly = true)
+    public List<com.innbucks.bookingservice.dto.report.AddOnSalesDTO> addOnSales(
+            UUID organizerUuid, ReportEvents events, LocalDate from, LocalDate to) {
         Range r = resolveRange(from, to);
         // Oldest first, so the last name seen for an add-on is the latest.
-        List<Booking> confirmed = repository.findConfirmedWithItems(organizerUuid, eventId, r.start(), r.end());
+        List<Booking> confirmed = confirmed(organizerUuid, events, r);
         record Key(UUID addOnId, UUID eventId) { }
         final class Acc {
             String name;
@@ -485,18 +546,25 @@ public class OrganizerReportService {
     private record Range(LocalDate from, LocalDate to, LocalDateTime start, LocalDateTime end) { }
 
     private static final class CategoryAccumulator {
+        final UUID id;
         final String name;
         long tickets;
         BigDecimal revenue = BigDecimal.ZERO;
-        /** By price tier id, null for the full price, in the order each first sold. */
-        final Map<UUID, TierAccumulator> tiers = new LinkedHashMap<>();
-        CategoryAccumulator(String name) { this.name = name; }
+        /** By price tier id (a series: name), null for the full price, in the order each first sold. */
+        final Map<Object, TierAccumulator> tiers = new LinkedHashMap<>();
+        CategoryAccumulator(UUID id, String name) { this.id = id; this.name = name; }
     }
 
     private static final class TierAccumulator {
+        final UUID id;
         final String name;
         long tickets;
         BigDecimal revenue = BigDecimal.ZERO;
-        TierAccumulator(String name) { this.name = name; }
+        TierAccumulator(UUID id, String name) { this.id = id; this.name = name; }
+    }
+
+    /** The window's confirmed bookings for these events. */
+    private List<Booking> confirmed(UUID organizerUuid, ReportEvents events, Range r) {
+        return events.keep(repository.findConfirmedWithItems(organizerUuid, events.queryEventId(), r.start(), r.end()));
     }
 }

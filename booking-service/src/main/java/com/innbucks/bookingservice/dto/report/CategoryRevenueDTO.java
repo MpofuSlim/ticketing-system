@@ -18,7 +18,9 @@ import java.util.UUID;
 @Schema(name = "OrganizerCategoryRevenue",
         description = "Tickets sold and revenue for one ticket class within an event.")
 public record CategoryRevenueDTO(
-        @Schema(example = "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11") UUID categoryId,
+        @Schema(example = "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11", nullable = true,
+                description = "Null in a series report (TIC-72): its rows are by category name, because "
+                        + "each date has its own category ids.") UUID categoryId,
         @Schema(example = "VIP") String categoryName,
         @Schema(example = "120") long ticketsSold,
         @Schema(example = "12000.00") BigDecimal revenue,

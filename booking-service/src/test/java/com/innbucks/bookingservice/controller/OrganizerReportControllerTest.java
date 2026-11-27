@@ -5,6 +5,7 @@ import com.innbucks.bookingservice.dto.report.RevenueSummaryDTO;
 import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.service.OrganizerReportService;
+import com.innbucks.bookingservice.service.ReportEvents;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -55,16 +56,16 @@ class OrganizerReportControllerTest {
                 LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31), null,
                 1, 1, new BigDecimal("100.00"), new BigDecimal("100.00"), BigDecimal.ZERO,
                 0, BigDecimal.ZERO, new BigDecimal("100.00"), new BigDecimal("100.00"), "USD");
-        when(svc.revenueSummary(eq(org), isNull(), isNull(), isNull())).thenReturn(dto);
+        when(svc.revenueSummary(eq(org), eq(ReportEvents.all()), isNull(), isNull())).thenReturn(dto);
 
         ResponseEntity<ApiResult<RevenueSummaryDTO>> resp =
-                new OrganizerReportController(svc).revenue(authWithOrganizer(org), null, null, null);
+                new OrganizerReportController(svc).revenue(authWithOrganizer(org), null, null, null, null);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(resp.getBody()).isNotNull();
         assertThat(resp.getBody().getData()).isSameAs(dto);
         // The service was called with the caller's org uuid, not anything else.
-        verify(svc).revenueSummary(eq(org), isNull(), isNull(), isNull());
+        verify(svc).revenueSummary(eq(org), eq(ReportEvents.all()), isNull(), isNull());
     }
 
     @Test
@@ -76,13 +77,13 @@ class OrganizerReportControllerTest {
                 LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31), null,
                 1, 1, new BigDecimal("100.00"), new BigDecimal("100.00"), BigDecimal.ZERO,
                 0, BigDecimal.ZERO, new BigDecimal("100.00"), new BigDecimal("100.00"), "USD");
-        when(svc.revenueSummary(isNull(), isNull(), isNull(), isNull())).thenReturn(dto);
+        when(svc.revenueSummary(isNull(), eq(ReportEvents.all()), isNull(), isNull())).thenReturn(dto);
 
         ResponseEntity<ApiResult<RevenueSummaryDTO>> resp =
-                new OrganizerReportController(svc).revenue(superAdminAuth(), null, null, null);
+                new OrganizerReportController(svc).revenue(superAdminAuth(), null, null, null, null);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
-        verify(svc).revenueSummary(isNull(), isNull(), isNull(), isNull());
+        verify(svc).revenueSummary(isNull(), eq(ReportEvents.all()), isNull(), isNull());
     }
 
     @Test
@@ -90,7 +91,7 @@ class OrganizerReportControllerTest {
         OrganizerReportService svc = mock(OrganizerReportService.class);
         // Legacy token: organizerUuid claim absent.
         assertThatThrownBy(() ->
-                new OrganizerReportController(svc).revenue(authWithOrganizer(null), null, null, null))
+                new OrganizerReportController(svc).revenue(authWithOrganizer(null), null, null, null, null))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("missing organizer identity");
     }

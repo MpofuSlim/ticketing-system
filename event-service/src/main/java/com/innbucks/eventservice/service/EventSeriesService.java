@@ -7,6 +7,7 @@ import com.innbucks.eventservice.dto.SalesStatus;
 import com.innbucks.eventservice.dto.series.CreateSeriesRequestDTO;
 import com.innbucks.eventservice.dto.series.EventSeriesResponseDTO;
 import com.innbucks.eventservice.dto.series.SeriesDateDTO;
+import com.innbucks.eventservice.dto.series.SeriesDateIdsDTO;
 import com.innbucks.eventservice.dto.series.SeriesScheduleDTO;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.EventSeries;
@@ -209,6 +210,20 @@ public class EventSeriesService {
     }
 
     /** The caller's series, newest first; platform staff see every organizer's. */
+    /**
+     * The series' dates and owner, for booking-service's series reports
+     * (TIC-72). Not behind the series switch: a series made while it was on
+     * still has sales to report. Ownership is booking-service's to check
+     * against the caller, with the owner given here.
+     */
+    @Transactional(readOnly = true)
+    public SeriesDateIdsDTO dateIds(UUID seriesId) {
+        return seriesRepository.findById(seriesId)
+                .map(series -> new SeriesDateIdsDTO(seriesId, true, series.getTenantUserUuid(),
+                        List.copyOf(eventRepository.findSeriesDateIds(seriesId))))
+                .orElseGet(() -> SeriesDateIdsDTO.notFound(seriesId));
+    }
+
     @Transactional(readOnly = true)
     public Page<EventSeriesResponseDTO> list(UUID organizerUuid, boolean staff, int page, int size) {
         requireEnabled();

@@ -10,6 +10,7 @@ import com.innbucks.bookingservice.dto.report.SalesBucketDTO;
 import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.security.AuthenticatedCaller;
 import com.innbucks.bookingservice.service.OrganizerReportService;
+import com.innbucks.bookingservice.service.SeriesReportScope;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -61,6 +62,23 @@ public class OrganizerReportController {
 
     private final OrganizerReportService reportService;
 
+    /** Series reports (TIC-72); a setter so the one-service constructor tests use stays. */
+    private com.innbucks.bookingservice.service.SeriesReportScope seriesReportScope;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setSeriesReportScope(com.innbucks.bookingservice.service.SeriesReportScope seriesReportScope) {
+        this.seriesReportScope = seriesReportScope;
+    }
+
+    static final String SERIES_PARAM = "A recurring series (TIC-72): the report covers every date of it, deleted "
+            + "dates included. Send it instead of eventId, never both. An organizer reads only their own series.";
+    static final String SERIES_FILTER = " Optional `seriesId` instead of `eventId`: every date of a recurring "
+            + "series (404 when it is not the caller's, 503 when event-service cannot list its dates).";
+    static final String SERIES_NOT_FOUND_EXAMPLE = """
+            { "code": "404 NOT_FOUND", "message": "Series not found", "data": null }""";
+    static final String SERIES_UNAVAILABLE_EXAMPLE = """
+            { "code": "503 SERVICE_UNAVAILABLE", "message": "We're having trouble reaching part of the system right now. Please try again in a moment.", "data": null }""";
+
     /** Booking questions (V32); a setter so the one-service constructor tests use stays. */
     private com.innbucks.bookingservice.service.BookingQuestionReportService bookingQuestionReportService;
 
@@ -77,8 +95,14 @@ public class OrganizerReportController {
                     + "day it was made: a sale voided the next day is in both days' cash-ups, each on its side. "
                     + "`net` is what the account's till should hold. For one day, send `from` and `to` the same "
                     + "date; days are UTC days, like every organiser report. Optional `eventId`; `from`/`to` "
-                    + "default to the last 30 days.")
+                    + "default to the last 30 days." + SERIES_FILTER)
     @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "seriesId names no series the caller may read",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_NOT_FOUND_EXAMPLE))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "seriesId was sent and event-service could not list its dates; try again",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_UNAVAILABLE_EXAMPLE))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Cash-up",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             {
@@ -122,12 +146,14 @@ public class OrganizerReportController {
     public ResponseEntity<ApiResult<com.innbucks.bookingservice.dto.report.CashUpReportDTO>> cashUp(
             Authentication authentication,
             @RequestParam(required = false) UUID eventId,
+            @io.swagger.v3.oas.annotations.Parameter(description = SERIES_PARAM) @RequestParam(required = false) UUID seriesId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         UUID organizerUuid = resolveScope(authentication);
+        SeriesReportScope.Resolved scope = scope(organizerUuid, eventId, seriesId);
         return ResponseEntity.ok(ApiResult.ok("Cash-up retrieved",
-                reportService.cashUp(organizerUuid, eventId, from, to),
-                reportService.resolvedMeta(organizerUuid, eventId, from, to)));
+                reportService.cashUp(scope.organizerUuid(), scope.events(), from, to),
+                reportService.resolvedMeta(scope.organizerUuid(), scope.events(), from, to)));
     }
 
     @GetMapping("/add-ons")
@@ -136,8 +162,14 @@ public class OrganizerReportController {
                     + "revenue first; `name` is the latest it sold under. Optional `eventId`; `from`/`to` default "
                     + "to the last 30 days. Refunded bookings are not counted. The revenue summary includes add-on "
                     + "revenue (it sums booking totals); `/by-category` counts ticket prices only, so the two "
-                    + "together make up the summary's net.")
+                    + "together make up the summary's net." + SERIES_FILTER)
     @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "seriesId names no series the caller may read",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_NOT_FOUND_EXAMPLE))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "seriesId was sent and event-service could not list its dates; try again",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_UNAVAILABLE_EXAMPLE))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Add-on sales",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             {
@@ -166,12 +198,14 @@ public class OrganizerReportController {
     public ResponseEntity<ApiResult<List<com.innbucks.bookingservice.dto.report.AddOnSalesDTO>>> addOns(
             Authentication authentication,
             @RequestParam(required = false) UUID eventId,
+            @io.swagger.v3.oas.annotations.Parameter(description = SERIES_PARAM) @RequestParam(required = false) UUID seriesId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         UUID organizerUuid = resolveScope(authentication);
+        SeriesReportScope.Resolved scope = scope(organizerUuid, eventId, seriesId);
         return ResponseEntity.ok(ApiResult.ok("Add-on sales retrieved",
-                reportService.addOnSales(organizerUuid, eventId, from, to),
-                reportService.resolvedMeta(organizerUuid, eventId, from, to)));
+                reportService.addOnSales(scope.organizerUuid(), scope.events(), from, to),
+                reportService.resolvedMeta(scope.organizerUuid(), scope.events(), from, to)));
     }
 
     @GetMapping("/booking-questions")
@@ -240,8 +274,14 @@ public class OrganizerReportController {
                           "paid (InnBucks, EcoCash, bank card; NOT_RECORDED when none is on record); its rows add " +
                           "up to `netRevenue`, `confirmedBookings` and `ticketsSold`. Optional `eventId` narrows to " +
                           "one event; `from`/`to` default to the last 30 days, so for a whole event pass a `from` " +
-                          "on or before its first sale.")
+                          "on or before its first sale." + SERIES_FILTER)
     @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "seriesId names no series the caller may read",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_NOT_FOUND_EXAMPLE))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "seriesId was sent and event-service could not list its dates; try again",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_UNAVAILABLE_EXAMPLE))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Summary computed",
                     content = @Content(mediaType = "application/json",
@@ -291,21 +331,29 @@ public class OrganizerReportController {
     public ResponseEntity<ApiResult<RevenueSummaryDTO>> revenue(
             Authentication authentication,
             @RequestParam(required = false) UUID eventId,
+            @io.swagger.v3.oas.annotations.Parameter(description = SERIES_PARAM) @RequestParam(required = false) UUID seriesId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         UUID organizerUuid = resolveScope(authentication);
+        SeriesReportScope.Resolved scope = scope(organizerUuid, eventId, seriesId);
         log.debug("GET /event-organizer/reports/revenue organizer={} eventId={} from={} to={}",
                 organizerUuid, eventId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Revenue summary retrieved",
-                reportService.revenueSummary(organizerUuid, eventId, from, to),
-                reportService.resolvedMeta(organizerUuid, eventId, from, to)));
+                reportService.revenueSummary(scope.organizerUuid(), scope.events(), from, to),
+                reportService.resolvedMeta(scope.organizerUuid(), scope.events(), from, to)));
     }
 
     @GetMapping("/by-event")
     @Operation(summary = "Revenue per event",
             description = "One row per event the organizer owns that had a sale or refund in the window, " +
-                          "ordered by net revenue. `from`/`to` default to the last 30 days.")
+                          "ordered by net revenue. `from`/`to` default to the last 30 days." + SERIES_FILTER)
     @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "seriesId names no series the caller may read",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_NOT_FOUND_EXAMPLE))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "seriesId was sent and event-service could not list its dates; try again",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_UNAVAILABLE_EXAMPLE))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Per-event breakdown",
                     content = @Content(mediaType = "application/json",
@@ -338,22 +386,32 @@ public class OrganizerReportController {
     })
     public ResponseEntity<ApiResult<List<EventRevenueDTO>>> byEvent(
             Authentication authentication,
+            @io.swagger.v3.oas.annotations.Parameter(description = SERIES_PARAM) @RequestParam(required = false) UUID seriesId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         UUID organizerUuid = resolveScope(authentication);
+        SeriesReportScope.Resolved scope = scope(organizerUuid, null, seriesId);
         log.debug("GET /event-organizer/reports/by-event organizer={} from={} to={}", organizerUuid, from, to);
         return ResponseEntity.ok(ApiResult.ok("Per-event revenue retrieved",
-                reportService.revenueByEvent(organizerUuid, from, to),
-                reportService.resolvedMeta(organizerUuid, null, from, to)));
+                reportService.revenueByEvent(scope.organizerUuid(), scope.events(), from, to),
+                reportService.resolvedMeta(scope.organizerUuid(), scope.events(), from, to)));
     }
 
     @GetMapping("/by-category")
     @Operation(summary = "Revenue per ticket class",
             description = "Tickets sold and revenue per ticket class (category) for a single event, each split "
                           + "by `priceTiers`: the price tier every ticket was sold at (e.g. Early bird), in the "
-                          + "order the tiers first sold, with the \"Full price\" row last. `eventId` is required; "
-                          + "`from`/`to` default to the last 30 days.")
+                          + "order the tiers first sold, with the \"Full price\" row last. `eventId` or `seriesId` is "
+                          + "required; for a series the rows are by category NAME (each date has its own category "
+                          + "ids), with `categoryId` and `priceTierId` null; "
+                          + "`from`/`to` default to the last 30 days." + SERIES_FILTER)
     @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "seriesId names no series the caller may read",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_NOT_FOUND_EXAMPLE))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "seriesId was sent and event-service could not list its dates; try again",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_UNAVAILABLE_EXAMPLE))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Per-category breakdown",
                     content = @Content(mediaType = "application/json",
@@ -378,32 +436,40 @@ public class OrganizerReportController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "eventId missing or invalid range",
+                    description = "eventId and seriesId both missing, or invalid range",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
-                                    { "code": "400 BAD_REQUEST", "message": "eventId is required for the per-category breakdown.", "data": null }
+                                    { "code": "400 BAD_REQUEST", "message": "eventId or seriesId is required for the per-category breakdown.", "data": null }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Not an EVENT_ORGANIZER")
     })
     public ResponseEntity<ApiResult<List<CategoryRevenueDTO>>> byCategory(
             Authentication authentication,
-            @RequestParam UUID eventId,
+            @RequestParam(required = false) UUID eventId,
+            @io.swagger.v3.oas.annotations.Parameter(description = SERIES_PARAM) @RequestParam(required = false) UUID seriesId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         UUID organizerUuid = resolveScope(authentication);
+        SeriesReportScope.Resolved scope = scope(organizerUuid, eventId, seriesId);
         log.debug("GET /event-organizer/reports/by-category organizer={} eventId={} from={} to={}",
                 organizerUuid, eventId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Per-category revenue retrieved",
-                reportService.revenueByCategory(organizerUuid, eventId, from, to),
-                reportService.resolvedMeta(organizerUuid, eventId, from, to)));
+                reportService.revenueByCategory(scope.organizerUuid(), scope.events(), from, to),
+                reportService.resolvedMeta(scope.organizerUuid(), scope.events(), from, to)));
     }
 
     @GetMapping("/time-series")
     @Operation(summary = "Sales time-series",
             description = "Net revenue and tickets bucketed by day or week for a trend chart. Optional " +
                           "`eventId`; `bucket` is DAY (default) or WEEK; `from`/`to` default to the last 30 days. " +
-                          "Buckets with no sales are omitted.")
+                          "Buckets with no sales are omitted." + SERIES_FILTER)
     @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "seriesId names no series the caller may read",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_NOT_FOUND_EXAMPLE))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "seriesId was sent and event-service could not list its dates; try again",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_UNAVAILABLE_EXAMPLE))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Time-series computed",
                     content = @Content(mediaType = "application/json",
@@ -423,15 +489,17 @@ public class OrganizerReportController {
     public ResponseEntity<ApiResult<List<SalesBucketDTO>>> timeSeries(
             Authentication authentication,
             @RequestParam(required = false) UUID eventId,
+            @io.swagger.v3.oas.annotations.Parameter(description = SERIES_PARAM) @RequestParam(required = false) UUID seriesId,
             @RequestParam(required = false, defaultValue = "DAY") BucketSize bucket,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         UUID organizerUuid = resolveScope(authentication);
+        SeriesReportScope.Resolved scope = scope(organizerUuid, eventId, seriesId);
         log.debug("GET /event-organizer/reports/time-series organizer={} eventId={} bucket={} from={} to={}",
                 organizerUuid, eventId, bucket, from, to);
         return ResponseEntity.ok(ApiResult.ok("Sales time-series retrieved",
-                reportService.salesTimeSeries(organizerUuid, eventId, from, to, bucket),
-                reportService.resolvedMeta(organizerUuid, eventId, from, to)));
+                reportService.salesTimeSeries(scope.organizerUuid(), scope.events(), from, to, bucket),
+                reportService.resolvedMeta(scope.organizerUuid(), scope.events(), from, to)));
     }
 
     @GetMapping(value = "/bookings/export", produces = "text/csv")
@@ -444,8 +512,14 @@ public class OrganizerReportController {
                           "on the booking's tickets, `; `-joined, names only — for contacts use GET /bookings/by-event/{id}). " +
                           "V27 appends `promoCode` and `discountAmount` (empty when no code was used); `totalAmount` " +
                           "is already after the discount. V29 appends `paymentMethod`: \"InnBucks\", \"EcoCash\" or " +
-                          "\"Bank card (ZimSwitch)\", empty when not recorded.")
+                          "\"Bank card (ZimSwitch)\", empty when not recorded." + SERIES_FILTER)
     @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "seriesId names no series the caller may read",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_NOT_FOUND_EXAMPLE))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "seriesId was sent and event-service could not list its dates; try again",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = SERIES_UNAVAILABLE_EXAMPLE))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "CSV body (no ApiResult envelope)",
                     content = @Content(mediaType = "text/csv",
@@ -460,19 +534,21 @@ public class OrganizerReportController {
     public ResponseEntity<String> exportCsv(
             Authentication authentication,
             @RequestParam(required = false) UUID eventId,
+            @io.swagger.v3.oas.annotations.Parameter(description = SERIES_PARAM) @RequestParam(required = false) UUID seriesId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         UUID organizerUuid = resolveScope(authentication);
+        SeriesReportScope.Resolved scope = scope(organizerUuid, eventId, seriesId);
         log.info("CSV export /event-organizer/reports/bookings/export organizer={} eventId={} from={} to={}",
                 organizerUuid, eventId, from, to);
-        String csv = reportService.confirmedBookingsCsv(organizerUuid, eventId, from, to);
+        String csv = reportService.confirmedBookingsCsv(scope.organizerUuid(), scope.events(), from, to);
         // Provenance for the export. A CSV has nowhere to put the JSON `meta`
         // the other report endpoints now carry, and prepending a preamble row
         // would break every naive parser that reads line 1 as the header — so
         // the resolved period rides on the FILENAME instead, which is what
         // actually survives into someone's Downloads folder. Same resolvedMeta
         // as the JSON reports, so the dates cannot disagree with the rows.
-        ReportMetaDTO meta = reportService.resolvedMeta(organizerUuid, eventId, from, to);
+        ReportMetaDTO meta = reportService.resolvedMeta(scope.organizerUuid(), scope.events(), from, to);
         String filename = "organizer-bookings_" + meta.from() + "_to_" + meta.to() + ".csv";
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/csv"))
@@ -489,6 +565,19 @@ public class OrganizerReportController {
      * re-login rather than silently returning another organizer's (or
      * empty) data.
      */
+    /** The organizer and events a report reads: a series' dates and owner when {@code seriesId} is sent. */
+    private SeriesReportScope.Resolved scope(UUID organizerUuid, UUID eventId, UUID seriesId) {
+        if (seriesId == null || seriesReportScope == null) {
+            if (seriesId != null) {
+                throw new com.innbucks.bookingservice.exception.DependencyUnavailableException(
+                        "series reports are not wired");
+            }
+            return new SeriesReportScope.Resolved(organizerUuid,
+                    com.innbucks.bookingservice.service.ReportEvents.event(eventId));
+        }
+        return seriesReportScope.resolve(organizerUuid, eventId, seriesId);
+    }
+
     @org.springframework.lang.Nullable
     private UUID resolveScope(Authentication authentication) {
         if (AuthenticatedCaller.isPlatformStaff(authentication)) {
