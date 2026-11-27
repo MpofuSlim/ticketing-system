@@ -301,6 +301,60 @@ class EventSeriesPostgresIT extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void thePublicLists_showEachSeriesOnce_asItsNextMatchingDate_withItsDateCount() {
+        EventSeriesResponseDTO series = publishedSeries(4);
+        generator.run();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        List<Event> upcoming = datesOf(series.getSeriesId()).stream()
+                .filter(e -> e.getEndDateTime().isAfter(now))
+                .sorted(java.util.Comparator.comparing(Event::getStartDateTime))
+                .toList();
+        assertThat(upcoming).hasSizeGreaterThanOrEqualTo(3);
+        String title = upcoming.getFirst().getTitle();
+
+        // Every public list: the series once, as its first date, counting all of them.
+        assertThat(cardsOf(series, eventService.getActiveOnlyEvents(null, null, null, null, null, 0, 50,
+                "startDateTime").getContent()))
+                .containsExactly(card(upcoming.getFirst(), upcoming.size()));
+        assertThat(cardsOf(series, eventService.getActiveOnlyEvents(null, null, null, null, EventCategory.COMEDY,
+                0, 50, "startDateTime").getContent()))
+                .containsExactly(card(upcoming.getFirst(), upcoming.size()));
+        org.springframework.data.domain.Page<com.innbucks.eventservice.dto.EventResponseDTO> searched =
+                eventService.searchEvents(title, 0, 50, "startDateTime");
+        assertThat(searched.getTotalElements()).isEqualTo(1);
+        assertThat(cardsOf(series, searched.getContent())).containsExactly(card(upcoming.getFirst(), upcoming.size()));
+        // By country lists only what has not started yet; its first such date stands for the series.
+        Event firstNotStarted = upcoming.stream().filter(e -> e.getStartDateTime().isAfter(now)).findFirst()
+                .orElseThrow();
+        String country = upcoming.getFirst().getCountry();
+        assertThat(cardsOf(series, eventService.getEventsByCountry(country.toLowerCase(), 0, 50).getContent()))
+                .containsExactly(card(firstNotStarted, upcoming.size()));
+
+        // The card follows the list's own filter: from the second date on, the second date stands for it.
+        assertThat(cardsOf(series, eventService.getActiveOnlyEvents(upcoming.get(1).getStartDateTime(), null,
+                null, null, null, 0, 50, "startDateTime").getContent()))
+                .containsExactly(card(upcoming.get(1), upcoming.size()));
+
+        // The first date taken down: the next one stands for the series, and is counted without it.
+        jdbc.update("UPDATE events SET active = false WHERE event_id = ?", upcoming.getFirst().getEventId());
+        assertThat(cardsOf(series, eventService.getActiveOnlyEvents(null, null, null, null, null, 0, 50,
+                "startDateTime").getContent()))
+                .containsExactly(card(upcoming.get(1), upcoming.size() - 1));
+    }
+
+    private static List<String> cardsOf(EventSeriesResponseDTO series,
+                                        List<com.innbucks.eventservice.dto.EventResponseDTO> rows) {
+        assertThat(rows).extracting(com.innbucks.eventservice.dto.EventResponseDTO::getEventId)
+                .doesNotContain(series.getTemplateEventId());
+        return rows.stream().filter(r -> series.getSeriesId().equals(r.getSeriesId()))
+                .map(r -> r.getEventId() + "/" + r.getSeriesDateCount()).toList();
+    }
+
+    private static String card(Event date, long count) {
+        return date.getEventId() + "/" + count;
+    }
+
+    @Test
     void aScannerPutOnAWholeSeries_isOnItsTemplateAndEveryDate_exceptOneThatClashes() {
         EventSeriesResponseDTO series = publishedSeries(3);
         EventSeriesResponseDTO other = publishedSeries(3);

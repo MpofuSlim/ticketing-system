@@ -234,7 +234,8 @@ public class EventService {
                     return category == null
                             ? eventRepository.findAllActiveOnly(from, to, venue, country, now, pageable)
                             : eventRepository.findAllActiveOnlyByCategory(from, to, venue, country, category, now, pageable);
-                });
+                },
+                this::seriesDateCounts);
         return stripInternalIds(enrichSnapshots(events));
     }
 
@@ -509,6 +510,20 @@ public class EventService {
         return caller != null && caller.equals(event.getTenantUserUuid());
     }
 
+    /**
+     * How many dates each series on a public list page has on sale or coming
+     * up (TIC-72), in one grouped query; cached with the page.
+     */
+    private Map<UUID, Long> seriesDateCounts(Set<UUID> seriesIds) {
+        Map<UUID, Long> counts = new java.util.HashMap<>();
+        List<Object[]> rows = eventRepository.countUpcomingPublicSeriesDates(seriesIds,
+                LocalDateTime.now(ZoneOffset.UTC));
+        for (Object[] row : rows) {
+            counts.put((UUID) row[0], ((Number) row[1]).longValue());
+        }
+        return counts;
+    }
+
     public Page<EventResponseDTO> searchEvents(
             String q,
             int page,
@@ -522,7 +537,8 @@ public class EventService {
         Page<EventSnapshot> events = publicEventCatalog.page(
                 PublicEventCatalog.PageKey.search(keyword, page, size, sort),
                 pageable,
-                () -> eventRepository.searchByKeyword(keyword, LocalDateTime.now(ZoneOffset.UTC), pageable));
+                () -> eventRepository.searchByKeyword(keyword, LocalDateTime.now(ZoneOffset.UTC), pageable),
+                this::seriesDateCounts);
         return stripInternalIds(enrichSnapshots(events));
     }
 
@@ -537,9 +553,8 @@ public class EventService {
         Page<EventSnapshot> entities = publicEventCatalog.page(
                 PublicEventCatalog.PageKey.byCountry(country, page, size),
                 pageable,
-                () -> eventRepository
-                        .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
-                                country, LocalDateTime.now(ZoneOffset.UTC), pageable));
+                () -> eventRepository.findPublicByCountry(country, LocalDateTime.now(ZoneOffset.UTC), pageable),
+                this::seriesDateCounts);
 
         Page<EventResponseDTO> dtos = enrichSnapshots(entities);
         int n = 1;

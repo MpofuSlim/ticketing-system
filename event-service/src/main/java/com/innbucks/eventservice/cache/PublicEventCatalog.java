@@ -1,5 +1,6 @@
 package com.innbucks.eventservice.cache;
 
+import com.innbucks.eventservice.dto.EventResponseDTO;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.EventCategory;
 import com.innbucks.eventservice.mapper.EventMapper;
@@ -14,7 +15,12 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -74,9 +80,22 @@ public class PublicEventCatalog {
      * {@code pageable}.
      */
     public Page<EventSnapshot> page(PageKey key, Pageable pageable, Supplier<Page<Event>> loader) {
-        SnapshotPage cached = pages.get(key, () -> SnapshotPage.of(loader.get(), mapper));
+        return page(key, pageable, loader, NO_SERIES_COUNTS);
+    }
+
+    /**
+     * As {@link #page(PageKey, Pageable, Supplier)}, and each date of a series
+     * on the page carries its series' {@code seriesDateCount} (TIC-72), asked
+     * of {@code seriesDateCounts} once per page, only when the page holds a
+     * series, and cached with the page.
+     */
+    public Page<EventSnapshot> page(PageKey key, Pageable pageable, Supplier<Page<Event>> loader,
+                                    Function<Set<UUID>, Map<UUID, Long>> seriesDateCounts) {
+        SnapshotPage cached = pages.get(key, () -> SnapshotPage.of(loader.get(), mapper, seriesDateCounts));
         return new PageImpl<>(cached.content(), pageable, cached.total());
     }
+
+    private static final Function<Set<UUID>, Map<UUID, Long>> NO_SERIES_COUNTS = ids -> Map.of();
 
     /**
      * One month of a series' public dates (TIC-73): the dates as snapshots and
@@ -143,10 +162,24 @@ public class PublicEventCatalog {
     /** What is cached for one page: immutable snapshots plus the total. */
     record SnapshotPage(List<EventSnapshot> content, long total) implements ReadCacheConfig.Weighted {
 
-        static SnapshotPage of(Page<Event> page, EventMapper mapper) {
+        static SnapshotPage of(Page<Event> page, EventMapper mapper,
+                               Function<Set<UUID>, Map<UUID, Long>> seriesDateCounts) {
+            Set<UUID> seriesIds = new HashSet<>();
+            for (Event event : page.getContent()) {
+                if (event.getSeriesId() != null) {
+                    seriesIds.add(event.getSeriesId());
+                }
+            }
+            Map<UUID, Long> counts = seriesIds.isEmpty() ? Map.of() : seriesDateCounts.apply(seriesIds);
             List<EventSnapshot> snapshots = new ArrayList<>(page.getNumberOfElements());
             for (Event event : page.getContent()) {
-                snapshots.add(EventSnapshot.of(mapper.toDTO(event)));
+                EventResponseDTO dto = mapper.toDTO(event);
+                if (event.getSeriesId() != null) {
+                    // The date itself is listed, so the count is at least one
+                    // even if it ended between the two reads.
+                    dto.setSeriesDateCount(Math.max(1L, counts.getOrDefault(event.getSeriesId(), 1L)));
+                }
+                snapshots.add(EventSnapshot.of(dto));
             }
             // unmodifiableList, not List.copyOf: a mocked mapper may yield null.
             return new SnapshotPage(Collections.unmodifiableList(snapshots), page.getTotalElements());

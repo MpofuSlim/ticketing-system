@@ -36,6 +36,16 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     // that shows unpublished events. The active-only lists need no such line:
     // neither is ever active (chk_events_series_unpublished). The review queue
     // keeps templates on purpose: a series is reviewed through its template.
+    //
+    // One card per series (TIC-72): the four PUBLIC lists (findAllActiveOnly,
+    // findAllActiveOnlyByCategory, searchByKeyword, findPublicByCountry) keep
+    // only a series' FIRST date that matches the list's own filters, through
+    // `NOT EXISTS (an earlier date of the same series that also matches)`. A
+    // one-off event has no series, so `d.seriesId = e.seriesId` is never true
+    // for it and it is always kept. The subquery repeats the outer filters
+    // exactly: change one, change the other (EventSeriesListsPostgresIT). No
+    // two dates of a series share a start (uq_events_series_start), so exactly
+    // one date per series survives, and that index serves the subquery.
 
     // Get all non-deleted events with optional date filter — paginated
     @Query("""
@@ -70,6 +80,19 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
         AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
+        AND NOT EXISTS (
+            SELECT d.eventId FROM Event d
+            WHERE d.seriesId = e.seriesId
+            AND d.startDateTime < e.startDateTime
+            AND d.deleted = false
+            AND d.active = true
+            AND d.rejected = false
+            AND d.endDateTime > :now
+            AND (CAST(:from AS timestamp) IS NULL OR d.startDateTime >= :from)
+            AND (CAST(:to AS timestamp) IS NULL OR d.startDateTime <= :to)
+            AND (CAST(:venue AS string) IS NULL OR LOWER(d.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+            AND (CAST(:country AS string) IS NULL OR LOWER(d.country) = LOWER(CAST(:country AS string)))
+        )
     """)
     Page<Event> findAllActiveOnly(
             @Param("from") LocalDateTime from,
@@ -97,6 +120,20 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
         AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
+        AND NOT EXISTS (
+            SELECT d.eventId FROM Event d
+            WHERE d.seriesId = e.seriesId
+            AND d.startDateTime < e.startDateTime
+            AND d.deleted = false
+            AND d.active = true
+            AND d.rejected = false
+            AND d.endDateTime > :now
+            AND d.category = :category
+            AND (CAST(:from AS timestamp) IS NULL OR d.startDateTime >= :from)
+            AND (CAST(:to AS timestamp) IS NULL OR d.startDateTime <= :to)
+            AND (CAST(:venue AS string) IS NULL OR LOWER(d.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+            AND (CAST(:country AS string) IS NULL OR LOWER(d.country) = LOWER(CAST(:country AS string)))
+        )
     """)
     Page<Event> findAllActiveOnlyByCategory(
             @Param("from") LocalDateTime from,
@@ -327,10 +364,46 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     // Upcoming events in a country: non-deleted, tenant-active, not admin-rejected,
     // and starting at or after the supplied cutoff (usually "now"). Country match
     // is case-insensitive since it's free text carried over from the JWT claim.
-    // Used by /events/by-country.
-    Page<Event> findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
-            String country, LocalDateTime cutoff, Pageable pageable
-    );
+    // Used by /events/by-country. One row per series (TIC-72), like the other
+    // public lists.
+    @Query("""
+        SELECT e FROM Event e
+        WHERE UPPER(e.country) = UPPER(CAST(:country AS string))
+        AND e.deleted = false
+        AND e.active = true
+        AND e.rejected = false
+        AND e.startDateTime >= :cutoff
+        AND NOT EXISTS (
+            SELECT d.eventId FROM Event d
+            WHERE d.seriesId = e.seriesId
+            AND d.startDateTime < e.startDateTime
+            AND d.deleted = false
+            AND d.active = true
+            AND d.rejected = false
+            AND d.startDateTime >= :cutoff
+            AND UPPER(d.country) = UPPER(CAST(:country AS string))
+        )
+    """)
+    Page<Event> findPublicByCountry(@Param("country") String country,
+                                    @Param("cutoff") LocalDateTime cutoff,
+                                    Pageable pageable);
+
+    // How many dates each series has on sale or coming up (TIC-72): the
+    // `seriesDateCount` on a public list card. The same dates the series date
+    // picker lists (TIC-73): made, published, not rejected, not deleted, not
+    // ended. A series with none is absent from the answer.
+    @Query("""
+        SELECT e.seriesId, COUNT(e) FROM Event e
+        WHERE e.seriesId IN :seriesIds
+        AND e.seriesState = 'READY'
+        AND e.deleted = false
+        AND e.active = true
+        AND e.rejected = false
+        AND e.endDateTime > :now
+        GROUP BY e.seriesId
+    """)
+    List<Object[]> countUpcomingPublicSeriesDates(@Param("seriesIds") java.util.Collection<UUID> seriesIds,
+                                                  @Param("now") LocalDateTime now);
 
     // Detects an already-created event by the same organizer with identical title,
     // venue, and scheduled dateTime. Used as a duplicate-create guard. The legacy
@@ -362,6 +435,20 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             LOWER(e.title)       LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
          OR LOWER(e.description) LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
          OR LOWER(e.venue)       LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
+        )
+        AND NOT EXISTS (
+            SELECT d.eventId FROM Event d
+            WHERE d.seriesId = e.seriesId
+            AND d.startDateTime < e.startDateTime
+            AND d.deleted = false
+            AND d.active = true
+            AND d.rejected = false
+            AND d.endDateTime > :now
+            AND (
+                LOWER(d.title)       LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
+             OR LOWER(d.description) LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
+             OR LOWER(d.venue)       LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
+            )
         )
     """)
     Page<Event> searchByKeyword(@Param("q") String q,
