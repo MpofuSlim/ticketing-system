@@ -653,6 +653,21 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     List<Event> findFutureSeriesDates(@Param("seriesId") UUID seriesId, @Param("now") LocalDateTime now);
 
     /**
+     * A series' dates that have not ended (TIC-72), made or still being made,
+     * soonest first: what putting a team member on a whole series reaches.
+     * Never the template.
+     */
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState IN ('GENERATING', 'READY')
+        AND e.deleted = false
+        AND e.endDateTime > :now
+        ORDER BY e.startDateTime ASC, e.eventId ASC
+    """)
+    List<Event> findUnendedSeriesDates(@Param("seriesId") UUID seriesId, @Param("now") LocalDateTime now);
+
+    /**
      * The same with deleted dates too: a move takes a deleted date along, so
      * it keeps blocking its start and the generator never makes it again.
      */

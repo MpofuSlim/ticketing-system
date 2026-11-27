@@ -4318,6 +4318,38 @@ for the Cloudflare reason ("Cloudflare blocks `PUT` + multipart").
   (who may call it, POST and DELETE) and `SeriesEditPostgresIT` (the md5
   comparison and the copy in Postgres). No migration.
 
+## A team for a whole series (event-service, TIC-72)
+
+**An organizer puts a gate scanner or a sales agent on a whole series in one
+call:** `PUT`/`DELETE /event-organizer/scanners/{scannerId}/series/{seriesId}`
+(scan; organizer, or SUPER_ADMIN / PRODUCT_MANAGER like every gate-scanner
+write) and `.../sales-series/{seriesId}` (sell; the organizer alone, body = the
+one-event terms). Before this, assigning someone to the template reached only
+the dates made AFTER it.
+
+- **Reach:** the template (so the generator copies the person onto every date
+  it makes later, checking each for a clash as it always did) and every date
+  that has not ended, made or still being made
+  (`EventRepository.findUnendedSeriesDates`). Removal takes the same set; dates
+  that have ended keep the person, so their scan reports still name them.
+- **A clash leaves that date off, never fails the call** (owner's go,
+  2026-11-27): the number is locked first (`lockAllByPhoneNumber`), then each
+  date runs the one-event `countClashes`; a date that overlaps another event of
+  the number, any organizer's or another date of THIS series, is
+  `NOT_ASSIGNED_CLASH`, the rest `ASSIGNED`. Each new assignment is
+  `saveAndFlush`ed so the next date's native clash query sees it.
+- **Sales terms are one set for the series**, the cap applying to EACH date on
+  its own; a date already assigned takes them (`TERMS_CHANGED`, or
+  `ALREADY_ASSIGNED` when equal). No overlap rule, as for one event.
+- **One invite message at most**, naming the first date assigned (else the
+  series, when only the template was new), claimed like any assignment's.
+- **The answer** is `SeriesTeamChangeDTO`: the member as they now are, and one
+  row per unended date with its outcome. 404 `series_not_found` for someone
+  else's series, an unknown one, or series switched off; 409 `series_ended`.
+- No gateway change: `/event-organizer/scanners/**` is already
+  `event-organizer-scanners-route`. Pinned by `EventSeriesPostgresIT`,
+  `ScannerEndpointsSecurityTest` and `ScannerServiceTest`.
+
 ## A series' dates for buyers (event-service, TIC-73)
 
 **`GET /events/series/{seriesId}/dates?month=2026-12` lists one month of a
