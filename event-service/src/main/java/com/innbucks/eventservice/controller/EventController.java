@@ -879,6 +879,10 @@ public class EventController {
                     Returns a paginated list of non-deleted events for a specific country,
                     ordered by `startDateTime` ascending so the soonest-starting event is first.
                     Country match is case-insensitive.
+
+                    **A recurring series shows once** (TIC-72), as its next date that
+                    matches the filters, with `seriesDateCount` (its dates on sale or
+                    coming up). `GET /events/series/{seriesId}/dates` lists them all.
                     """
     )
     @ApiResponses({
@@ -939,10 +943,6 @@ public class EventController {
     public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getEventsByCountry(
             @Parameter(description = "Country name, e.g. Zimbabwe (case-insensitive)")
             @RequestParam String country,
-
-                    **A recurring series shows once** (TIC-72), as its next date that
-                    matches the filters, with `seriesDateCount` (its dates on sale or
-                    coming up). `GET /events/series/{seriesId}/dates` lists them all.
 
             @Parameter(description = "Zero-based page index")
             @RequestParam(defaultValue = "0") @Min(0) int page,
