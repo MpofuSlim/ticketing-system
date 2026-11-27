@@ -166,7 +166,7 @@ public class PublicEventCatalog {
                                Function<Set<UUID>, Map<UUID, Long>> seriesDateCounts) {
             Set<UUID> seriesIds = new HashSet<>();
             for (Event event : page.getContent()) {
-                if (event != null && event.getSeriesId() != null) {
+                if (event.getSeriesId() != null) {
                     seriesIds.add(event.getSeriesId());
                 }
             }
