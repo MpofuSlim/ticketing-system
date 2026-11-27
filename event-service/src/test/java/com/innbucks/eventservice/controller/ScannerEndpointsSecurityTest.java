@@ -49,6 +49,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -333,6 +334,78 @@ class ScannerEndpointsSecurityTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("409 CONFLICT"))
                 .andExpect(jsonPath("$.data.errorCode").value("scanner_schedule_clash"));
+    }
+
+    private static final UUID SERIES = UUID.fromString("5d0c6f1e-3b2a-4c8d-9e7f-1a2b3c4d5e6f");
+
+    private static com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO seriesChange(UUID organizer) {
+        return new com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO(scanner(organizer), SERIES, true,
+                List.of());
+    }
+
+    @Test
+    void aWholeSeries_scanAssignment_isTheOrganizersOrStaffs_salesTheOrganizersAlone() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        String asOrganizer = "Bearer " + staffToken("EVENT_ORGANIZER", organizer, organizer);
+        when(scannerService.assignSeries(asOrganizer(organizer), SCANNER, SERIES)).thenReturn(seriesChange(organizer));
+        when(scannerService.unassignSeries(asOrganizer(organizer), SCANNER, SERIES)).thenReturn(seriesChange(organizer));
+        when(scannerService.assignSalesSeries(eq(organizer), any(), eq(SCANNER), eq(SERIES), eq(50),
+                any())).thenReturn(seriesChange(organizer));
+        when(scannerService.unassignSalesSeries(eq(organizer), any(), eq(SCANNER), eq(SERIES)))
+                .thenReturn(seriesChange(organizer));
+
+        mvc.perform(put("/event-organizer/scanners/{s}/series/{x}", SCANNER, SERIES).header("Authorization", asOrganizer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Scanner assigned to the series"))
+                .andExpect(jsonPath("$.data.seriesId").value(SERIES.toString()))
+                .andExpect(jsonPath("$.data.futureDates").value(true));
+        mvc.perform(delete("/event-organizer/scanners/{s}/series/{x}", SCANNER, SERIES).header("Authorization", asOrganizer))
+                .andExpect(status().isOk());
+        mvc.perform(put("/event-organizer/scanners/{s}/sales-series/{x}", SCANNER, SERIES)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"ticketCap\":50,\"commissionPercent\":5}")
+                        .header("Authorization", asOrganizer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Sales agent assigned to the series"));
+        mvc.perform(delete("/event-organizer/scanners/{s}/sales-series/{x}", SCANNER, SERIES)
+                        .header("Authorization", asOrganizer))
+                .andExpect(status().isOk());
+
+        ScannerService.TeamEditor staff = ScannerService.TeamEditor.innbucksStaff(null, "product_manager@example.com");
+        when(scannerService.assignSeries(staff, SCANNER, SERIES)).thenReturn(seriesChange(organizer));
+        String asManager = "Bearer " + staffToken("PRODUCT_MANAGER", UUID.randomUUID(), null);
+        mvc.perform(put("/event-organizer/scanners/{s}/series/{x}", SCANNER, SERIES).header("Authorization", asManager))
+                .andExpect(status().isOk());
+        verify(scannerService).assignSeries(staff, SCANNER, SERIES);
+        mvc.perform(put("/event-organizer/scanners/{s}/sales-series/{x}", SCANNER, SERIES)
+                        .header("Authorization", asManager))
+                .andExpect(status().isForbidden());
+
+        String asOfficer = "Bearer " + staffToken("PRODUCT_OFFICER", UUID.randomUUID(), null);
+        mvc.perform(put("/event-organizer/scanners/{s}/series/{x}", SCANNER, SERIES).header("Authorization", asOfficer))
+                .andExpect(status().isForbidden());
+        mvc.perform(delete("/event-organizer/scanners/{s}/series/{x}", SCANNER, SERIES).header("Authorization", asOfficer))
+                .andExpect(status().isForbidden());
+        verify(scannerService, never()).assignSalesSeries(any(), eq("product_manager@example.com"), any(), any(),
+                any(), any());
+    }
+
+    @Test
+    void aWholeSeries_refusals_renderTheirErrorCodes() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        when(scannerService.assignSeries(asOrganizer(organizer), SCANNER, SERIES))
+                .thenThrow(new ApiProblemException(HttpStatus.NOT_FOUND, ScannerService.SERIES_NOT_FOUND,
+                        "Series not found."));
+        when(scannerService.unassignSeries(asOrganizer(organizer), SCANNER, SERIES))
+                .thenThrow(new ApiProblemException(HttpStatus.CONFLICT, ScannerService.SERIES_ENDED,
+                        "This series has ended. Set up a new one."));
+        String auth = "Bearer " + staffToken("EVENT_ORGANIZER", organizer, organizer);
+
+        mvc.perform(put("/event-organizer/scanners/{s}/series/{x}", SCANNER, SERIES).header("Authorization", auth))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.data.errorCode").value("series_not_found"));
+        mvc.perform(delete("/event-organizer/scanners/{s}/series/{x}", SCANNER, SERIES).header("Authorization", auth))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.data.errorCode").value("series_ended"));
     }
 
     @Test

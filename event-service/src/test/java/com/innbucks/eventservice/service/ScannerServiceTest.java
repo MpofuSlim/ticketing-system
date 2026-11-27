@@ -172,6 +172,24 @@ class ScannerServiceTest {
     // ---------------------------------------------------------------- assign
 
     @Test
+    void aWholeSeries_withSeriesSwitchedOff_isNotFound_andNothingIsAssigned() {
+        EventScanner s = scanner(ORGANIZER, PHONE);
+        when(scanners.findByScannerIdAndOrganizerUuid(s.getScannerId(), ORGANIZER)).thenReturn(Optional.of(s));
+        UUID seriesId = UUID.randomUUID();
+        service.setSeriesPolicy(new SeriesPolicy(false, 100, java.time.Duration.ofSeconds(25)));
+
+        assertProblem(catchThrowable(() -> service.assignSeries(
+                        ScannerService.TeamEditor.organizer(ORGANIZER, "org"), s.getScannerId(), seriesId)),
+                HttpStatus.NOT_FOUND, ScannerService.SERIES_NOT_FOUND);
+        assertProblem(catchThrowable(() -> service.unassignSalesSeries(ORGANIZER, "org", s.getScannerId(),
+                        seriesId)),
+                HttpStatus.NOT_FOUND, ScannerService.SERIES_NOT_FOUND);
+        verify(assignments, never()).save(any());
+        verify(assignments, never()).saveAndFlush(any());
+        verify(sales, never()).deleteByScannerIdAndEventId(any(), any());
+    }
+
+    @Test
     void assign_anotherOrganizersEvent_isNotFound() {
         EventScanner s = scanner(ORGANIZER, PHONE);
         Event theirs = event(OTHER_ORGANIZER, NOW.plusDays(1), NOW.plusDays(1).plusHours(4));
