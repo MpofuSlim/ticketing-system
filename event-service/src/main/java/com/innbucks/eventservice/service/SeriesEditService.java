@@ -30,6 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -82,6 +83,8 @@ public class SeriesEditService {
             + "any price already changed stays as it is.";
     static final String DATE_NOT_FOUND = "Date not found";
     static final String DATE_STARTED = "This date has already started.";
+    static final String KEPT_DESCRIPTION = "description";
+    static final String KEPT_BANNER = "banner";
 
     private final EventSeriesService seriesService;
     private final EventSeriesRepository seriesRepository;
@@ -250,15 +253,21 @@ public class SeriesEditService {
         LocalTime moveTo = to;
         LocalDateTime nowUtc = nowUtc();
 
+        boolean otherFields = request.getTitle() != null || request.getVenue() != null
+                || request.getCategory() != null || request.getLocation() != null;
+
         List<Edited> edited = new ArrayList<>();
         List<DateChange> changes = inTx(() -> {
             EventSeries locked = lockedSeries(seriesId, version);
-            eventRepository.findById(locked.getTemplateEventId())
-                    .filter(template -> !template.isDeleted())
-                    .ifPresent(template -> {
-                        applyFields(template, request);
-                        eventRepository.save(template);
-                    });
+            // The description every date still showing the series' own carries.
+            // A date whose description differs was given its own and keeps it.
+            Optional<Event> template = eventRepository.findById(locked.getTemplateEventId())
+                    .filter(t -> !t.isDeleted());
+            String seriesDescription = template.map(Event::getDescription).orElse(null);
+            template.ifPresent(t -> {
+                applyFields(t, request, true);
+                eventRepository.save(t);
+            });
             List<Event> dates = move == null
                     ? eventRepository.findFutureSeriesDates(seriesId, nowUtc)
                     : eventRepository.findFutureSeriesDatesWithDeleted(seriesId, nowUtc);
@@ -274,7 +283,10 @@ public class SeriesEditService {
             List<DateChange> rows = new ArrayList<>();
             for (Event date : dates) {
                 boolean live = !date.isDeleted();
-                Outcome outcome = fields && live ? Outcome.UPDATED : null;
+                boolean ownDescription = request.getDescription() != null && template.isPresent()
+                        && !Objects.equals(date.getDescription(), seriesDescription);
+                boolean changesSomething = otherFields || (request.getDescription() != null && !ownDescription);
+                Outcome outcome = live && fields ? (changesSomething ? Outcome.UPDATED : Outcome.KEPT_OWN) : null;
                 boolean moved = false;
                 if (move != null) {
                     LocalDateTime local = marketTimeZone.toMarketLocal(date.getStartDateTime());
@@ -295,7 +307,7 @@ public class SeriesEditService {
                 }
                 String oldVenue = date.getVenue();
                 if (live && fields) {
-                    applyFields(date, request);
+                    applyFields(date, request, !ownDescription);
                 }
                 eventRepository.save(date);
                 if (outcome == null) {
@@ -307,7 +319,8 @@ public class SeriesEditService {
                             moved ? date.getStartDateTime() : null, venueChanged ? date.getVenue() : null));
                 }
                 rows.add(DateChange.builder().eventId(date.getEventId()).startDateTime(date.getStartDateTime())
-                        .outcome(outcome).build());
+                        .outcome(outcome).keptOwn(live && ownDescription ? List.of(KEPT_DESCRIPTION) : null)
+                        .build());
             }
             if (move != null) {
                 TreeSet<LocalTime> times = new TreeSet<>();
@@ -326,12 +339,12 @@ public class SeriesEditService {
         return result(organizerUuid, staff, seriesId, changes);
     }
 
-    private static void applyFields(Event event, FutureDatesRequestDTO request) {
+    private static void applyFields(Event event, FutureDatesRequestDTO request, boolean description) {
         // OWASP A03: the same sanitising as PUT /events/{id}.
         if (request.getTitle() != null) {
             event.setTitle(HtmlSanitizer.stripAll(request.getTitle()));
         }
-        if (request.getDescription() != null) {
+        if (description && request.getDescription() != null) {
             event.setDescription(HtmlSanitizer.sanitizeRichText(request.getDescription()));
         }
         if (request.getVenue() != null) {
@@ -711,6 +724,92 @@ public class SeriesEditService {
     }
 
     // ---- Helpers ------------------------------------------------------------------
+
+    /**
+     * Sets the series' banner (TIC-121): the template's, and that of every date
+     * that has not started and still shows the series' banner. A date given its
+     * own banner (through {@code POST /events/{id}/banner}) keeps it, reported
+     * as {@link Outcome#KEPT_OWN}. "Still shows the series' banner" is the
+     * date's bytes being exactly the template's before this change, compared by
+     * md5 inside Postgres; a series with no banner yet reaches every date with
+     * none. The bytes are copied from the template inside Postgres, never read
+     * into the service.
+     */
+    public SeriesChangeDTO replaceSeriesBanner(UUID organizerUuid, boolean staff, UUID seriesId,
+                                               MultipartFile banner) {
+        seriesService.requireEnabled();
+        EventSeries series = seriesService.readable(organizerUuid, staff, seriesId);
+        requireNotEnded(series);
+        EventService.ValidatedBanner validated = EventService.requiredBanner(banner);
+        return setSeriesBanner(organizerUuid, staff, series, validated);
+    }
+
+    /**
+     * Removes the series' banner from the template and from every date that has
+     * not started and still shows it; a date with its own banner keeps it.
+     * Safe to repeat: a series with no banner changes only the dates that have
+     * none either, which is no change.
+     */
+    public SeriesChangeDTO clearSeriesBanner(UUID organizerUuid, boolean staff, UUID seriesId) {
+        seriesService.requireEnabled();
+        EventSeries series = seriesService.readable(organizerUuid, staff, seriesId);
+        requireNotEnded(series);
+        return setSeriesBanner(organizerUuid, staff, series, null);
+    }
+
+    private SeriesChangeDTO setSeriesBanner(UUID organizerUuid, boolean staff, EventSeries series,
+                                            EventService.ValidatedBanner banner) {
+        UUID seriesId = series.getSeriesId();
+        Long version = series.getVersion();
+        LocalDateTime nowUtc = nowUtc();
+        String contentType = banner == null ? null : banner.contentType();
+        List<DateChange> changes = inTx(() -> {
+            EventSeries locked = lockedSeries(seriesId, version);
+            // The template row is locked first, so two banner changes queue and
+            // the second compares the dates with the first one's banner.
+            Event template = eventRepository.lockById(locked.getTemplateEventId())
+                    .filter(t -> !t.isDeleted())
+                    .orElseThrow(() -> new NotFoundException(EventSeriesService.SERIES_NOT_FOUND));
+            String seriesHash = eventRepository.findBannerHash(template.getEventId()).orElse(null);
+            String seriesType = template.getBannerContentType();
+            Set<UUID> following = new HashSet<>(
+                    eventRepository.findFutureSeriesDatesWithBanner(seriesId, nowUtc, seriesHash));
+            if (banner == null) {
+                eventRepository.clearBannerImage(template.getEventId());
+            } else {
+                eventRepository.writeBannerImage(template.getEventId(), banner.bytes());
+            }
+            // The bytes are unmapped, so stamp updatedAt: it versions bannerUrl.
+            template.setBannerContentType(contentType);
+            template.setUpdatedAt(nowUtc);
+            eventRepository.save(template);
+            List<DateChange> rows = new ArrayList<>();
+            for (Event date : eventRepository.findFutureSeriesDates(seriesId, nowUtc)) {
+                if (!following.contains(date.getEventId())
+                        || !Objects.equals(date.getBannerContentType(), seriesType)) {
+                    rows.add(DateChange.builder().eventId(date.getEventId())
+                            .startDateTime(date.getStartDateTime()).outcome(Outcome.KEPT_OWN)
+                            .keptOwn(List.of(KEPT_BANNER)).build());
+                    continue;
+                }
+                if (banner == null) {
+                    eventRepository.clearBannerImage(date.getEventId());
+                } else {
+                    eventRepository.copyBannerImage(template.getEventId(), date.getEventId());
+                }
+                date.setBannerContentType(contentType);
+                date.setUpdatedAt(nowUtc);
+                eventRepository.save(date);
+                rows.add(change(date, Outcome.UPDATED));
+            }
+            return rows;
+        });
+        publicEventCatalog.invalidateAll();
+        log.info("Series banner {} seriesId={} dates={} updated={} keptOwn={}",
+                banner == null ? "cleared" : "replaced", seriesId, changes.size(),
+                count(changes, Outcome.UPDATED), count(changes, Outcome.KEPT_OWN));
+        return result(organizerUuid, staff, seriesId, changes);
+    }
 
     private static void requireNotEnded(EventSeries series) {
         if (series.getStatus() == EventSeries.Status.ENDED) {

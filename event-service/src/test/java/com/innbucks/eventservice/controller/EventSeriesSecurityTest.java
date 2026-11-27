@@ -31,6 +31,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.web.SpringJUnitWebConfig;
@@ -56,7 +57,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -318,6 +321,44 @@ class EventSeriesSecurityTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"categoryName\":\"VIP\",\"price\":150}"))
                 .andExpect(status().isForbidden());
         verifyNoInteractions(editService);
+    }
+
+    private static final byte[] PNG = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3};
+
+    @Test
+    void theSeriesBanner_isRefusedWithoutASession_toCustomers_toTheOfficer_andToAGateSession() throws Exception {
+        MockMultipartFile file = new MockMultipartFile("eventBanner", "p.png", "image/png", PNG);
+        mvc.perform(multipart("/events/series/" + SERIES + "/banner").file(file))
+                .andExpect(status().isUnauthorized());
+        for (String role : List.of("CUSTOMER", "PRODUCT_OFFICER", "GATE_SCANNER")) {
+            mvc.perform(multipart("/events/series/" + SERIES + "/banner").file(file)
+                            .header("Authorization", bearer(role, null)))
+                    .andExpect(status().isForbidden());
+            mvc.perform(delete("/events/series/" + SERIES + "/banner").header("Authorization", bearer(role, null)))
+                    .andExpect(status().isForbidden());
+        }
+        mvc.perform(delete("/events/series/" + SERIES + "/banner")).andExpect(status().isUnauthorized());
+        verifyNoInteractions(editService);
+    }
+
+    @Test
+    void anOrganizersSeriesBanner_reachesTheServiceByPost_andItsRemovalByDelete() throws Exception {
+        UUID organizer = UUID.randomUUID();
+        when(editService.replaceSeriesBanner(eq(organizer), eq(false), eq(SERIES), any())).thenReturn(changed());
+        when(editService.clearSeriesBanner(organizer, false, SERIES)).thenReturn(changed());
+
+        mvc.perform(multipart("/events/series/" + SERIES + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "p.png", "image/png", PNG))
+                        .header("Authorization", bearer("EVENT_ORGANIZER", organizer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Series banner updated"))
+                .andExpect(jsonPath("$.data.series.seriesId").value(SERIES.toString()));
+        mvc.perform(delete("/events/series/" + SERIES + "/banner")
+                        .header("Authorization", bearer("EVENT_ORGANIZER", organizer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Series banner removed"));
+        verify(editService).replaceSeriesBanner(eq(organizer), eq(false), eq(SERIES),
+                org.mockito.ArgumentMatchers.argThat(f -> f != null && "eventBanner".equals(f.getName())));
     }
 
     @Test

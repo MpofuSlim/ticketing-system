@@ -4279,6 +4279,45 @@ touched with its `outcome`. Owner's go (2026-11-26).
   columns). Rollback is clean: the previous image ignores the columns, and a
   paused date reads as sales closed until its end is put back by hand.
 
+## A series' banner, and dates that keep their own (event-service, TIC-121)
+
+**`POST /events/series/{seriesId}/banner` (multipart, part `eventBanner`) and
+`DELETE` set or remove the series' banner on the template and on every date
+that has not started and still shows the series' banner. A date given its own
+banner, or its own description, keeps it.** Asked for by the Foundry portal
+team (2026-11-27); owner's go: "keep their own". `SeriesEditService.replaceSeriesBanner`
+/ `clearSeriesBanner`, same writers as every series edit (organizer,
+SUPER_ADMIN, PRODUCT_MANAGER), behind `EVENTS_SERIES_ENABLED`. POST, never PUT,
+for the Cloudflare reason ("Cloudflare blocks `PUT` + multipart").
+
+- **"Still shows the series' banner" = the date's bytes are exactly the
+  template's before this change**, compared by md5 inside Postgres
+  (`findBannerHash`, `findFutureSeriesDatesWithBanner`), plus the same content
+  type. A series with no banner reaches every date with none. Anything else is
+  the date's own (set with `POST /events/{id}/banner`) and is reported
+  `KEPT_OWN`, `keptOwn: ["banner"]`.
+- **The bytes never enter the service on the copy**: `copyBannerImage` copies
+  the template's into each date in one UPDATE. Each changed date's
+  `bannerContentType` and `updatedAt` are set through the entity (versions
+  `bannerUrl`, bumps `@Version`).
+- **One change at a time**: the series' `@Version` is checked, then the template
+  row is locked (`lockById`) before its old hash is read, so two banner changes
+  queue and the second compares against the first's banner.
+- **`PUT .../future-dates` keeps a date's own description the same way**: a
+  date whose description is not the template's description before the edit
+  keeps it (`keptOwn: ["description"]`); its other fields still change, and a
+  date with nothing else to change is `KEPT_OWN`. Title, venue, category and
+  location are not compared: they still reach every date.
+- **Known edges, stated:** a date being generated at the very moment of a
+  banner change can keep the old banner (it read the template before the
+  commit). A change made to the TEMPLATE directly (`POST
+  /events/{templateId}/banner`, `PUT /events/{templateId}`) moves the
+  reference, so dates made before it count as "their own" afterwards; the
+  Foundry guide steers organizers to the series endpoints.
+- Pinned by `SeriesEditServiceTest` (the rules), `EventSeriesSecurityTest`
+  (who may call it, POST and DELETE) and `SeriesEditPostgresIT` (the md5
+  comparison and the copy in Postgres). No migration.
+
 ## Reports per series (booking-service, event-service, TIC-72)
 
 **Every organizer report that takes `eventId` also takes `seriesId`: the report

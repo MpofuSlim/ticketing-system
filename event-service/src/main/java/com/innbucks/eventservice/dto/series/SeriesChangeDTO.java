@@ -53,7 +53,9 @@ public class SeriesChangeDTO {
         /** The date has no ticket type of that name. */
         NO_SUCH_TICKET_TYPE,
         /** A price tier still open on the date is at or above the new price; {@code message} says which. */
-        PRICE_REFUSED
+        PRICE_REFUSED,
+        /** Unchanged: the date has its own banner or description, so it kept it ({@code keptOwn} says which). */
+        KEPT_OWN
     }
 
     @Data
@@ -81,6 +83,12 @@ public class SeriesChangeDTO {
                 example = "3")
         @JsonInclude(JsonInclude.Include.NON_NULL)
         private Long activeBookings;
+
+        @Schema(description = "What the date kept of its own instead of taking the series' new value (banner, "
+                + "description), because it was given its own on that date. Absent when it kept nothing.",
+                example = "[\"description\"]")
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        private List<String> keptOwn;
 
         @Schema(description = "Why, when the outcome needs a reason; absent otherwise.")
         @JsonInclude(JsonInclude.Include.NON_NULL)

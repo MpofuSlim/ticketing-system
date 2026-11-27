@@ -25,6 +25,10 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -352,7 +356,9 @@ public class EventSeriesController {
                     taken by another date of the series (NOT_MOVED_TAKEN) or has already passed (NOT_MOVED_PASSED)
                     stays where it is. Each date keeps its length and its sales window's distance from the start.
                     Everyone booked on a date that MOVED, or whose venue changed, is sent the same message as for a
-                    change to one event (activeBookings says how many were booked, when that could be counted).""")
+                    change to one event (activeBookings says how many were booked, when that could be counted).
+                    A date given its own description (PUT /events/{id}) keeps it: keptOwn ["description"] says so,
+                    and a date with nothing else to change is KEPT_OWN. Its other fields still change.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Changed",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Moved",
@@ -368,7 +374,8 @@ public class EventSeriesController {
                                         {"eventId":"7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
                                           "startDateTime":"2026-12-04T19:30:00+02:00","outcome":"MOVED","activeBookings":3},
                                         {"eventId":"9e8d7c6b-5a49-4382-a716-152433425160",
-                                          "startDateTime":"2026-12-04T21:30:00+02:00","outcome":"UPDATED"}]}}"""))),
+                                          "startDateTime":"2026-12-04T21:30:00+02:00","outcome":"UPDATED",
+                                          "keptOwn":["description"]}]}}"""))),
             @ApiResponse(responseCode = "400", description = "Nothing to change, or a field is wrong",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Nothing", value = """
@@ -395,6 +402,96 @@ public class EventSeriesController {
         SeriesChangeDTO changed = editService.updateFutureDates(AuthenticatedCaller.organizerUuid(authentication),
                 AuthenticatedCaller.isPlatformStaff(authentication), seriesId, request);
         return ResponseEntity.ok(ApiResult.ok("Future dates changed", changed));
+    }
+
+    private static final String BANNER_CHANGED_200 = """
+            {"code":"200 OK","message":"Series banner updated","data":{
+              "series":{"seriesId":"5d0c6f1e-3b2a-4c8d-9e7f-1a2b3c4d5e6f",
+                "templateEventId":"3fa85f64-5717-4562-b3fc-2c963f66afa6","status":"ACTIVE",
+                "title":"Friday Comedy Night","venue":"Theatre in the Park, Harare"},
+              "dates":[
+                {"eventId":"7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f","startDateTime":"2026-12-04T19:00:00+02:00",
+                  "outcome":"UPDATED"},
+                {"eventId":"9e8d7c6b-5a49-4382-a716-152433425160","startDateTime":"2027-01-01T19:00:00+02:00",
+                  "outcome":"KEPT_OWN","keptOwn":["banner"]}]}}""";
+
+    // POST, not PUT: Cloudflare's WAF refuses PUT with a multipart body before
+    // it reaches us (CLAUDE.md, "Cloudflare blocks PUT + multipart").
+    @PostMapping(value = "/{seriesId}/banner", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize(WRITERS)
+    @Operation(summary = "Set the series' banner on every future date",
+            description = """
+                    Sets the banner on the series' template and on every date that has not started and still shows the
+                    series' banner (UPDATED). A date given its own banner with POST /events/{id}/banner keeps it
+                    (KEPT_OWN, keptOwn ["banner"]). Dates made later copy the template, so they get the new banner.
+                    Send multipart/form-data with one eventBanner part: JPG, PNG or WEBP, under 10 MB, checked by its
+                    bytes. Use POST: PUT with a multipart body is blocked in front of this server.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "What happened on each date",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Updated",
+                            value = BANNER_CHANGED_200))),
+            @ApiResponse(responseCode = "400", description = "No file, too large, or not a JPG/PNG/WEBP image",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "No file", value = """
+                                    {"code":"400 BAD_REQUEST","message":"Please choose an image to upload.","data":null}"""),
+                            @ExampleObject(name = "Too large", value = """
+                                    {"code":"400 BAD_REQUEST","message":"That image is too large. Please use one under 10 MB.","data":null}"""),
+                            @ExampleObject(name = "Wrong type", value = """
+                                    {"code":"400 BAD_REQUEST","message":"Please upload a JPG, PNG, or WEBP image.","data":null}"""),
+                            @ExampleObject(name = "Not really an image", value = """
+                                    {"code":"400 BAD_REQUEST","message":"Please upload a valid image file (JPG, PNG, or WEBP).","data":null}""")})),
+            @ApiResponse(responseCode = "403", description = "Not the organizer, a product manager or a super admin",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Forbidden",
+                            value = FORBIDDEN_403))),
+            @ApiResponse(responseCode = "404", description = "No such series, someone else's, or switched off",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Not found",
+                            value = NOT_FOUND_404))),
+            @ApiResponse(responseCode = "409", description = "Ended, or changed by someone else meanwhile",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Ended", value = ENDED_409),
+                            @ExampleObject(name = "Changed meanwhile", value = CHANGED_409)}))
+    })
+    public ResponseEntity<ApiResult<SeriesChangeDTO>> replaceBanner(
+            @Parameter(description = "Series id") @PathVariable UUID seriesId,
+            @RequestPart(value = "eventBanner", required = false) MultipartFile eventBanner,
+            Authentication authentication) {
+        SeriesChangeDTO changed = editService.replaceSeriesBanner(AuthenticatedCaller.organizerUuid(authentication),
+                AuthenticatedCaller.isPlatformStaff(authentication), seriesId, eventBanner);
+        return ResponseEntity.ok(ApiResult.ok("Series banner updated", changed));
+    }
+
+    @DeleteMapping("/{seriesId}/banner")
+    @PreAuthorize(WRITERS)
+    @Operation(summary = "Remove the series' banner from every future date",
+            description = """
+                    Removes the banner from the series' template and from every date that has not started and still
+                    shows the series' banner. A date with its own banner keeps it (KEPT_OWN). Safe to repeat.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "What happened on each date",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Removed",
+                            value = """
+                                    {"code":"200 OK","message":"Series banner removed","data":{
+                                      "series":{"seriesId":"5d0c6f1e-3b2a-4c8d-9e7f-1a2b3c4d5e6f","status":"ACTIVE"},
+                                      "dates":[
+                                        {"eventId":"7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+                                          "startDateTime":"2026-12-04T19:00:00+02:00","outcome":"UPDATED"}]}}"""))),
+            @ApiResponse(responseCode = "403", description = "Not the organizer, a product manager or a super admin",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Forbidden",
+                            value = FORBIDDEN_403))),
+            @ApiResponse(responseCode = "404", description = "No such series, someone else's, or switched off",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Not found",
+                            value = NOT_FOUND_404))),
+            @ApiResponse(responseCode = "409", description = "Ended, or changed by someone else meanwhile",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Ended", value = ENDED_409),
+                            @ExampleObject(name = "Changed meanwhile", value = CHANGED_409)}))
+    })
+    public ResponseEntity<ApiResult<SeriesChangeDTO>> clearBanner(
+            @Parameter(description = "Series id") @PathVariable UUID seriesId,
+            Authentication authentication) {
+        SeriesChangeDTO changed = editService.clearSeriesBanner(AuthenticatedCaller.organizerUuid(authentication),
+                AuthenticatedCaller.isPlatformStaff(authentication), seriesId);
+        return ResponseEntity.ok(ApiResult.ok("Series banner removed", changed));
     }
 
     @PutMapping("/{seriesId}/future-prices")
