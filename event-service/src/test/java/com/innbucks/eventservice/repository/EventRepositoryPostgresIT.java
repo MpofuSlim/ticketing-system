@@ -248,7 +248,7 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
                 .active(true).rejected(true).deleted(false).build());
 
         Page<Event> page = eventRepository
-                .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
+                .findPublicByCountry(
                         "kenya", now, PageRequest.of(0, 50));
 
         assertThat(page.getContent()).extracting(Event::getEventId)

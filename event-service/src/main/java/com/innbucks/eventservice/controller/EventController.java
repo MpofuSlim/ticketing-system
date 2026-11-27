@@ -118,6 +118,12 @@ public class EventController {
                     both `active=true` and `active=false`. Use `GET /events/active`
                     to fetch only the active ones.
 
+                    **A recurring series shows once** (TIC-72), as its next date that
+                    matches the filters, with `seriesDateCount` (its dates on sale or
+                    coming up). `GET /events/series/{seriesId}/dates` lists them all.
+                    The organizer's own list (signed in as an organizer) shows every
+                    date.
+
                     Filtering:
                     - **from/to** are interpreted as calendar dates (`yyyy-MM-dd`).
                     - Internally they map to `[from at start-of-day .. to at end-of-day]` using the server's local timezone.
@@ -501,6 +507,12 @@ public class EventController {
                     flag is `true`. Tenants flip `active` to `false` when an event ends
                     (or it is flipped by a future scheduler), so this endpoint excludes
                     those while `GET /events` still includes them.
+
+                    **A recurring series shows once** (TIC-72), as its next date that
+                    matches the filters, with `seriesDateCount` (its dates on sale or
+                    coming up). `GET /events/series/{seriesId}/dates` lists them all.
+                    The organizer's own list (signed in as an organizer) shows every
+                    date.
 
                     Filtering and sorting follow the same rules as `GET /events`, plus:
                     - **country** — exact match, case-insensitive (e.g. `Zimbabwe`).
@@ -928,6 +940,10 @@ public class EventController {
             @Parameter(description = "Country name, e.g. Zimbabwe (case-insensitive)")
             @RequestParam String country,
 
+                    **A recurring series shows once** (TIC-72), as its next date that
+                    matches the filters, with `seriesDateCount` (its dates on sale or
+                    coming up). `GET /events/series/{seriesId}/dates` lists them all.
+
             @Parameter(description = "Zero-based page index")
             @RequestParam(defaultValue = "0") @Min(0) int page,
 
@@ -949,6 +965,10 @@ public class EventController {
                     event with `H` anywhere in those fields; typing `Harare`
                     narrows to events whose title, description, or venue mentions
                     Harare. Powers the customer-facing search bar.
+
+                    **A recurring series shows once** (TIC-72), as its next date that
+                    matches the filters, with `seriesDateCount` (its dates on sale or
+                    coming up). `GET /events/series/{seriesId}/dates` lists them all.
 
                     Only returns **active**, non-deleted events (the same set
                     surfaced by `GET /events/active`). Empty result sets return

@@ -167,4 +167,11 @@ public class EventResponseDTO {
             + "Absent on a one-off event.", example = "READY")
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     private String seriesState;
+
+    @Schema(nullable = true, description = "On the public event lists only (TIC-72), for a date of a series: how "
+            + "many of the series' dates are on sale or coming up, this one included. The lists show a series "
+            + "once, as its next date that matches the list's filters; GET /events/series/{seriesId}/dates lists "
+            + "them all. Absent on a one-off event and on every other response.", example = "12")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private Long seriesDateCount;
 }

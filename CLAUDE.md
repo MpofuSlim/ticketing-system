@@ -4322,6 +4322,38 @@ like every series endpoint.
   (`GateSessionScope` closes all of `/events/series/`). No gateway change:
   `/events/**` already routes to event-service.
 
+## One card per series in the public lists (event-service, TIC-72)
+
+**The public event lists show a series once, as its first date that matches
+the list's own filters, with `seriesDateCount`.** A twice-daily tour would
+otherwise fill a list with hundreds of cards. The card is an ordinary,
+bookable event, so a client that knows nothing about series still works; the
+date picker (`GET /events/series/{seriesId}/dates`) shows the rest.
+
+- **Which lists:** `GET /events` and `GET /events/active` for anyone but an
+  organizer-only caller (staff included: they get the anonymous listing),
+  `GET /events/search` and `GET /events/by-country`, with or without a
+  category. The organizer's own lists (`/events/my`, the organizer branch of
+  `/events` and `/events/active`), `/events/inactive`, `/events/by-organizer`
+  and the review queue keep one row per date: that is how dates are managed.
+- **The rule is in SQL**, in those four queries (`findAllActiveOnly`,
+  `findAllActiveOnlyByCategory`, `searchByKeyword`, `findPublicByCountry`):
+  `NOT EXISTS (an earlier date of the same series that also matches)`, its
+  filters repeated from the outer query. **Change the outer filters and the
+  subquery together.** Paging and totals therefore count each series once. A
+  one-off event never matches `d.seriesId = e.seriesId`, so it is always kept.
+  `uq_events_series_start` means one survivor per series and serves the
+  subquery. `RepositoryQueryParseCostTest` measures the four.
+- **`seriesDateCount`** = the series' dates that are made, published, not
+  rejected, not deleted, not ended (the date picker's set), whatever the list's
+  filters. One grouped query per page (`countUpcomingPublicSeriesDates`), only
+  when the page holds a series, cached WITH the page (≤ 30 s, like the page).
+  At least 1, the card itself. `NON_NULL`: absent on one-off events and on
+  every other response.
+- Pinned by `EventServiceCachingTest` (asked once per page, cached, never for a
+  page with no series) and `EventSeriesPostgresIT` (every list, a filter moves
+  the card, a date taken down moves it and the count).
+
 ## Ticket sales open at a scheduled time, and every booking asks first (event-service V15)
 
 **An organizer can set `salesStartDateTime` on an event: the event is listed

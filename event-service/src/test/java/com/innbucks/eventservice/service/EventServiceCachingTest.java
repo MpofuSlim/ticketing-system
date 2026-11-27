@@ -100,7 +100,7 @@ class EventServiceCachingTest {
                 .thenAnswer(inv -> pageOf(inv.getArgument(6)));
         when(repo.searchByKeyword(any(), any(), any()))
                 .thenAnswer(inv -> pageOf(inv.getArgument(2)));
-        when(repo.findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
+        when(repo.findPublicByCountry(
                 any(), any(), any()))
                 .thenAnswer(inv -> pageOf(inv.getArgument(2)));
         when(repo.findByTenantUserUuid(any(), any(), any(), any(), any()))
@@ -125,6 +125,41 @@ class EventServiceCachingTest {
 
     private Page<EventResponseDTO> publicActive() {
         return service.getActiveOnlyEvents(null, null, null, null, null, 0, 10, "startDateTime");
+    }
+
+    @Test
+    void aSeriesDate_carriesItsDateCount_askedOncePerPage_andCachedWithIt() {
+        UUID seriesId = UUID.randomUUID();
+        event.setSeriesId(seriesId);
+        event.setSeriesState("READY");
+        when(repo.countUpcomingPublicSeriesDates(anyCollection(), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{seriesId, 7L}));
+
+        Page<EventResponseDTO> first = publicActive();
+        Page<EventResponseDTO> second = publicActive();
+
+        assertEquals(7L, first.getContent().getFirst().getSeriesDateCount());
+        assertEquals(7L, second.getContent().getFirst().getSeriesDateCount());
+        verify(repo, times(1)).countUpcomingPublicSeriesDates(eq(java.util.Set.of(seriesId)), any());
+    }
+
+    @Test
+    void aOneOffEvent_hasNoDateCount_andNoCountIsAsked() {
+        Page<EventResponseDTO> page = publicActive();
+        service.searchEvents("Summer", 0, 10, "startDateTime");
+        service.getEventsByCountry("Zimbabwe", 0, 10);
+
+        assertNull(page.getContent().getFirst().getSeriesDateCount());
+        verify(repo, never()).countUpcomingPublicSeriesDates(anyCollection(), any());
+    }
+
+    @Test
+    void aSeriesDateThatEndedBetweenTheTwoReads_stillCountsItself() {
+        event.setSeriesId(UUID.randomUUID());
+        event.setSeriesState("READY");
+        when(repo.countUpcomingPublicSeriesDates(anyCollection(), any())).thenReturn(List.of());
+
+        assertEquals(1L, publicActive().getContent().getFirst().getSeriesDateCount());
     }
 
     @Test
@@ -160,7 +195,7 @@ class EventServiceCachingTest {
 
         verify(repo, times(1)).searchByKeyword(eq("Harare"), any(), any());
         verify(repo, times(1))
-                .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
+                .findPublicByCountry(
                         any(), any(), any());
         // eventNo is per-response numbering, applied after the cache.
         assertEquals(1, again.getContent().get(0).getEventNo());
@@ -200,7 +235,7 @@ class EventServiceCachingTest {
         verify(repo, times(1)).searchByKeyword(any(), any(), any());
         verify(repo, times(1)).findAllActiveOnly(any(), any(), eq("Harare"), isNull(), any(), any());
         verify(repo, times(1))
-                .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
+                .findPublicByCountry(
                         eq("Harare"), any(), any());
     }
 
@@ -327,7 +362,7 @@ class EventServiceCachingTest {
         verify(repo, times(2)).findAllActiveOnly(any(), any(), any(), any(), any(), any());
         verify(repo, times(2)).searchByKeyword(any(), any(), any());
         verify(repo, times(2))
-                .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
+                .findPublicByCountry(
                         any(), any(), any());
     }
 

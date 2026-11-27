@@ -53,7 +53,8 @@ public record EventSnapshot(
         LocalDateTime salesEndDateTime,
         Integer termsVersion,
         UUID seriesId,
-        String seriesState
+        String seriesState,
+        Long seriesDateCount
 ) {
 
     /** Null in, null out (a mocked mapper may answer null). */
@@ -86,7 +87,8 @@ public record EventSnapshot(
                 dto.getSalesEndDateTime(),
                 dto.getTermsVersion(),
                 dto.getSeriesId(),
-                dto.getSeriesState());
+                dto.getSeriesState(),
+                dto.getSeriesDateCount());
     }
 
     /** A new, independent DTO carrying exactly what the mapper produced. */
@@ -118,6 +120,7 @@ public record EventSnapshot(
                 .updatedAt(updatedAt)
                 .seriesId(seriesId)
                 .seriesState(seriesState)
+                .seriesDateCount(seriesDateCount)
                 .build();
     }
 }
