@@ -6,6 +6,7 @@ import com.innbucks.eventservice.dto.scanner.PortalAccessRequestDTO;
 import com.innbucks.eventservice.dto.scanner.SalesEventTermsRequestDTO;
 import com.innbucks.eventservice.dto.scanner.ScannerResponseDTO;
 import com.innbucks.eventservice.dto.scanner.ScannerRolesRequestDTO;
+import com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO;
 import com.innbucks.eventservice.exception.ForbiddenException;
 import com.innbucks.eventservice.security.AuthenticatedCaller;
 import com.innbucks.eventservice.service.ScannerService;
@@ -194,6 +195,36 @@ public class ScannerController {
     private static final String FORBIDDEN_EXAMPLE = """
             { "code": "403 FORBIDDEN", "message": "Forbidden - you do not have the required role (EVENT_ORGANIZER or SUPER_ADMIN)", "data": null }""";
 
+    /** A scanner put on a two-date series (TIC-72), the second date clashing with another event. */
+    private static final String SERIES_ASSIGNED_EXAMPLE = """
+            { "code": "200 OK", "message": "Scanner assigned to the series", "data": {
+              "scanner": {
+                "scannerId": "4b1e2c3d-5a6f-4b7c-8d9e-0f1a2b3c4d5e",
+                "organizerUuid": "8f14e45f-ceea-467a-9b0e-1c2d3e4f5a6b",
+                "firstName": "Tendai", "lastName": "Moyo", "phoneNumber": "+263771234567",
+                "status": "ACTIVE", "canScan": true, "canSell": false,
+                "events": [ { "eventId": "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "title": "Friday Comedy Night", "venue": "Theatre in the Park, Harare", "startDateTime": "2026-12-04T19:00:00+02:00", "endDateTime": "2026-12-04T21:00:00+02:00" } ],
+                "salesEvents": [], "portalEmail": null, "portalInvitedAt": null,
+                "createdAt": "2026-10-30T14:05:12+02:00", "addedByInnBucks": false
+              },
+              "seriesId": "5d0c6f1e-3b2a-4c8d-9e7f-1a2b3c4d5e6f",
+              "futureDates": true,
+              "dates": [
+                { "eventId": "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "startDateTime": "2026-12-04T19:00:00+02:00", "endDateTime": "2026-12-04T21:00:00+02:00", "outcome": "ASSIGNED" },
+                { "eventId": "2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091", "startDateTime": "2026-12-11T19:00:00+02:00", "endDateTime": "2026-12-11T21:00:00+02:00", "outcome": "NOT_ASSIGNED_CLASH" }
+              ] } }""";
+
+    private static final String SERIES_NOT_FOUND_EXAMPLE = """
+            { "code": "404 NOT_FOUND", "message": "Series not found.", "data": { "errorCode": "series_not_found" } }""";
+
+    private static final String SERIES_ENDED_EXAMPLE = """
+            { "code": "409 CONFLICT", "message": "This series has ended. Set up a new one.", "data": { "errorCode": "series_ended" } }""";
+
+    private static final String SERIES_REACH = "It reaches the series' template, so every date the series makes "
+            + "from now on gets the same change, and every date of the series that has not ended. `dates` lists "
+            + "those dates, soonest first, with what happened to each. Series must be switched on in this "
+            + "environment, or every call is a 404.";
+
     private final ScannerService scannerService;
 
     @PostMapping
@@ -370,6 +401,79 @@ public class ScannerController {
                                                                   Authentication authentication) {
         return ResponseEntity.ok(ApiResult.ok("Scanner unassigned", scannerService.unassign(
                 editor(authentication, organizerUuid), scannerId, eventId)));
+    }
+
+    @PutMapping("/{scannerId}/series/{seriesId}")
+    @PreAuthorize(SCANNER_WRITERS)
+    @Operation(summary = "Assign a gate scanner to a whole series (TIC-72)",
+            description = SERIES_REACH + " A date where the number is already on another event at an overlapping "
+                    + "time (any organizer's, or another date of this series) is left off and listed "
+                    + "`NOT_ASSIGNED_CLASH`; every other date is assigned, so the call never fails for a clash. "
+                    + "The first assignment of an `INVITED` scanner sends one WhatsApp (SMS if WhatsApp fails) "
+                    + "naming you and the first date assigned. Idempotent: a date already assigned is "
+                    + "`ALREADY_ASSIGNED`. Only a team member with the Scan role can be assigned. " + STAFF_NOTE)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Assigned to the series",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = SERIES_ASSIGNED_EXAMPLE))),
+            @ApiResponse(responseCode = "404", description = "Not your scanner, or not your series",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Scanner", value = NOT_FOUND_EXAMPLE),
+                            @ExampleObject(name = "Series", value = SERIES_NOT_FOUND_EXAMPLE)
+                    })),
+            @ApiResponse(responseCode = "409", description = "The series has ended, or the person does not scan",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Ended", value = SERIES_ENDED_EXAMPLE),
+                            @ExampleObject(name = "Not a scanner", value = """
+                                    { "code": "409 CONFLICT", "message": "This person doesn't scan tickets for you. Give them the Scan role first.", "data": { "errorCode": "not_a_scanner" } }""")
+                    })),
+            @ApiResponse(responseCode = "403", description = "Not the organizer or SUPER_ADMIN / PRODUCT_MANAGER, "
+                    + "or staff acting on a member who sells",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Role", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "Staff, member sells", value = SALES_AGENT_ORGANIZER_ONLY_EXAMPLE)
+                    }))
+    })
+    public ResponseEntity<ApiResult<SeriesTeamChangeDTO>> assignSeries(@PathVariable UUID scannerId,
+                                                                      @PathVariable UUID seriesId,
+                                                                      @Parameter(description = STAFF_PARAM)
+                                                                      @RequestParam(required = false) UUID organizerUuid,
+                                                                      Authentication authentication) {
+        return ResponseEntity.ok(ApiResult.ok("Scanner assigned to the series", scannerService.assignSeries(
+                editor(authentication, organizerUuid), scannerId, seriesId)));
+    }
+
+    @DeleteMapping("/{scannerId}/series/{seriesId}")
+    @PreAuthorize(SCANNER_WRITERS)
+    @Operation(summary = "Take a gate scanner off a whole series (TIC-72)",
+            description = SERIES_REACH + " Each date is `REMOVED` or `NOT_ON_DATE`. Dates that have ended keep "
+                    + "them, so their scan reports still name them. Idempotent. " + STAFF_NOTE)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Taken off the series",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "200 OK", "message": "Scanner taken off the series", "data": { "scanner": { "scannerId": "4b1e2c3d-5a6f-4b7c-8d9e-0f1a2b3c4d5e", "organizerUuid": "8f14e45f-ceea-467a-9b0e-1c2d3e4f5a6b", "firstName": "Tendai", "lastName": "Moyo", "phoneNumber": "+263771234567", "status": "ACTIVE", "canScan": true, "canSell": false, "events": [], "salesEvents": [], "portalEmail": null, "portalInvitedAt": null, "createdAt": "2026-10-30T14:05:12+02:00", "addedByInnBucks": false }, "seriesId": "5d0c6f1e-3b2a-4c8d-9e7f-1a2b3c4d5e6f", "futureDates": true, "dates": [ { "eventId": "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "startDateTime": "2026-12-04T19:00:00+02:00", "endDateTime": "2026-12-04T21:00:00+02:00", "outcome": "REMOVED" }, { "eventId": "2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091", "startDateTime": "2026-12-11T19:00:00+02:00", "endDateTime": "2026-12-11T21:00:00+02:00", "outcome": "NOT_ON_DATE" } ] } }"""))),
+            @ApiResponse(responseCode = "404", description = "Not your scanner, or not your series",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Scanner", value = NOT_FOUND_EXAMPLE),
+                            @ExampleObject(name = "Series", value = SERIES_NOT_FOUND_EXAMPLE)
+                    })),
+            @ApiResponse(responseCode = "409", description = "The series has ended",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = SERIES_ENDED_EXAMPLE))),
+            @ApiResponse(responseCode = "403", description = "Not the organizer or SUPER_ADMIN / PRODUCT_MANAGER, "
+                    + "or staff acting on a member who sells",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Role", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "Staff, member sells", value = SALES_AGENT_ORGANIZER_ONLY_EXAMPLE)
+                    }))
+    })
+    public ResponseEntity<ApiResult<SeriesTeamChangeDTO>> unassignSeries(@PathVariable UUID scannerId,
+                                                                        @PathVariable UUID seriesId,
+                                                                        @Parameter(description = STAFF_PARAM)
+                                                                        @RequestParam(required = false) UUID organizerUuid,
+                                                                        Authentication authentication) {
+        return ResponseEntity.ok(ApiResult.ok("Scanner taken off the series", scannerService.unassignSeries(
+                editor(authentication, organizerUuid), scannerId, seriesId)));
     }
 
     @DeleteMapping("/{scannerId}")
@@ -569,6 +673,73 @@ public class ScannerController {
                                                                             Authentication authentication) {
         return ResponseEntity.ok(ApiResult.ok("Sales event unassigned", scannerService.unassignSalesEvent(
                 organizer(authentication), authentication.getName(), scannerId, eventId)));
+    }
+
+    @PutMapping("/{scannerId}/sales-series/{seriesId}")
+    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @Operation(summary = "Let a sales agent sell for a whole series, on one set of terms (TIC-72)",
+            description = SERIES_REACH + " The body is the same as for one event: `ticketCap` (optional, at least "
+                    + "1) applies to EACH date on its own, and `commissionPercent` (optional, default 0). A date "
+                    + "already assigned takes these terms: `TERMS_CHANGED` when they differed, `ALREADY_ASSIGNED` "
+                    + "when not. No overlap rule. The first assignment of an `INVITED` person sends one WhatsApp "
+                    + "(SMS if WhatsApp fails) naming you and the first date assigned.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Assigned to the series",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "200 OK", "message": "Sales agent assigned to the series", "data": { "scanner": { "scannerId": "4b1e2c3d-5a6f-4b7c-8d9e-0f1a2b3c4d5e", "organizerUuid": "8f14e45f-ceea-467a-9b0e-1c2d3e4f5a6b", "firstName": "Tendai", "lastName": "Moyo", "phoneNumber": "+263771234567", "status": "ACTIVE", "canScan": false, "canSell": true, "events": [], "salesEvents": [ { "eventId": "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "title": "Friday Comedy Night", "venue": "Theatre in the Park, Harare", "startDateTime": "2026-12-04T19:00:00+02:00", "endDateTime": "2026-12-04T21:00:00+02:00", "ticketCap": 50, "commissionPercent": 5.00 }, { "eventId": "2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091", "title": "Friday Comedy Night", "venue": "Theatre in the Park, Harare", "startDateTime": "2026-12-11T19:00:00+02:00", "endDateTime": "2026-12-11T21:00:00+02:00", "ticketCap": 50, "commissionPercent": 5.00 } ], "portalEmail": null, "portalInvitedAt": null, "createdAt": "2026-10-30T14:05:12+02:00", "addedByInnBucks": false }, "seriesId": "5d0c6f1e-3b2a-4c8d-9e7f-1a2b3c4d5e6f", "futureDates": true, "dates": [ { "eventId": "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "startDateTime": "2026-12-04T19:00:00+02:00", "endDateTime": "2026-12-04T21:00:00+02:00", "outcome": "TERMS_CHANGED" }, { "eventId": "2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091", "startDateTime": "2026-12-11T19:00:00+02:00", "endDateTime": "2026-12-11T21:00:00+02:00", "outcome": "ASSIGNED" } ] } }"""))),
+            @ApiResponse(responseCode = "400", description = "A cap below 1, or a commission out of range or with "
+                    + "more than 2 decimals",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "ticketCap": "Ticket cap must be at least 1" } }"""))),
+            @ApiResponse(responseCode = "403", description = "Not an EVENT_ORGANIZER",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = FORBIDDEN_EXAMPLE))),
+            @ApiResponse(responseCode = "404", description = "Not your team member, or not your series",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Team member", value = NOT_FOUND_EXAMPLE),
+                            @ExampleObject(name = "Series", value = SERIES_NOT_FOUND_EXAMPLE)
+                    })),
+            @ApiResponse(responseCode = "409", description = "Not a sales agent, or the series has ended",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Not a sales agent", value = """
+                                    { "code": "409 CONFLICT", "message": "This person doesn't sell tickets for you. Give them the Sell role first.", "data": { "errorCode": "not_a_sales_agent" } }"""),
+                            @ExampleObject(name = "Ended", value = SERIES_ENDED_EXAMPLE)
+                    }))
+    })
+    public ResponseEntity<ApiResult<SeriesTeamChangeDTO>> assignSalesSeries(
+            @PathVariable UUID scannerId,
+            @PathVariable UUID seriesId,
+            @Valid @RequestBody(required = false) SalesEventTermsRequestDTO terms,
+            Authentication authentication) {
+        return ResponseEntity.ok(ApiResult.ok("Sales agent assigned to the series", scannerService.assignSalesSeries(
+                organizer(authentication), authentication.getName(), scannerId, seriesId,
+                terms == null ? null : terms.ticketCap(), terms == null ? null : terms.commissionPercent())));
+    }
+
+    @DeleteMapping("/{scannerId}/sales-series/{seriesId}")
+    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @Operation(summary = "Stop a sales agent selling for a whole series (TIC-72)",
+            description = SERIES_REACH + " Each date is `REMOVED` or `NOT_ON_DATE`. Their next sale for those "
+                    + "dates is refused; past sales stay under their name. Idempotent.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Taken off the series",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "200 OK", "message": "Sales agent taken off the series", "data": { "scanner": { "scannerId": "4b1e2c3d-5a6f-4b7c-8d9e-0f1a2b3c4d5e", "organizerUuid": "8f14e45f-ceea-467a-9b0e-1c2d3e4f5a6b", "firstName": "Tendai", "lastName": "Moyo", "phoneNumber": "+263771234567", "status": "ACTIVE", "canScan": false, "canSell": true, "events": [], "salesEvents": [], "portalEmail": null, "portalInvitedAt": null, "createdAt": "2026-10-30T14:05:12+02:00", "addedByInnBucks": false }, "seriesId": "5d0c6f1e-3b2a-4c8d-9e7f-1a2b3c4d5e6f", "futureDates": true, "dates": [ { "eventId": "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", "startDateTime": "2026-12-04T19:00:00+02:00", "endDateTime": "2026-12-04T21:00:00+02:00", "outcome": "REMOVED" } ] } }"""))),
+            @ApiResponse(responseCode = "403", description = "Not an EVENT_ORGANIZER",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = FORBIDDEN_EXAMPLE))),
+            @ApiResponse(responseCode = "404", description = "Not your team member, or not your series",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Team member", value = NOT_FOUND_EXAMPLE),
+                            @ExampleObject(name = "Series", value = SERIES_NOT_FOUND_EXAMPLE)
+                    })),
+            @ApiResponse(responseCode = "409", description = "The series has ended",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = SERIES_ENDED_EXAMPLE)))
+    })
+    public ResponseEntity<ApiResult<SeriesTeamChangeDTO>> unassignSalesSeries(@PathVariable UUID scannerId,
+                                                                             @PathVariable UUID seriesId,
+                                                                             Authentication authentication) {
+        return ResponseEntity.ok(ApiResult.ok("Sales agent taken off the series", scannerService.unassignSalesSeries(
+                organizer(authentication), authentication.getName(), scannerId, seriesId)));
     }
 
     @PutMapping("/{scannerId}/portal-access")
