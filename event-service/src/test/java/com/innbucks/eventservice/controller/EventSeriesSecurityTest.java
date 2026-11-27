@@ -85,6 +85,7 @@ class EventSeriesSecurityTest {
     @EnableWebMvc
     @EnableWebSecurity
     @Import({SecurityConfig.class, EventSeriesController.class, SeriesDatesController.class,
+            SeriesInternalController.class,
             GlobalExceptionHandler.class})
     static class Ctx {
         @Bean JwtUtil jwtUtil() { return new JwtUtil(); }
@@ -148,6 +149,33 @@ class EventSeriesSecurityTest {
             {"title":"Friday Comedy Night","venue":"Theatre in the Park","category":"COMEDY",
              "location":{"latitude":-17.82,"longitude":31.05},"totalCapacity":120,
              "daysOfWeek":["FRIDAY"],"startTimes":["19:00"],"durationMinutes":120,"startDate":"2026-12-04"}""";
+
+    @Test
+    void theReportLookup_isTheInternalTokens_withNoSession() throws Exception {
+        UUID owner = UUID.randomUUID();
+        UUID date = UUID.randomUUID();
+        when(seriesService.dateIds(SERIES)).thenReturn(
+                new com.innbucks.eventservice.dto.series.SeriesDateIdsDTO(SERIES, true, owner, List.of(date)));
+
+        mvc.perform(get("/events/internal/series-dates").param("seriesId", SERIES.toString())
+                        .header("X-Internal-Token", "test-internal-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Series dates resolved"))
+                .andExpect(jsonPath("$.data.found").value(true))
+                .andExpect(jsonPath("$.data.tenantUserUuid").value(owner.toString()))
+                .andExpect(jsonPath("$.data.eventIds[0]").value(date.toString()));
+
+        mvc.perform(get("/events/internal/series-dates").param("seriesId", SERIES.toString()))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/events/internal/series-dates").param("seriesId", SERIES.toString())
+                        .header("X-Internal-Token", "wrong"))
+                .andExpect(status().isUnauthorized());
+        // A signed-in organizer's bearer is not the internal token.
+        mvc.perform(get("/events/internal/series-dates").param("seriesId", SERIES.toString())
+                        .header("Authorization", bearer("EVENT_ORGANIZER", owner)))
+                .andExpect(status().isUnauthorized());
+        verify(seriesService, Mockito.times(1)).dateIds(SERIES);
+    }
 
     @Test
     void theReads_needASession_despiteThePublicEventsPermit() throws Exception {

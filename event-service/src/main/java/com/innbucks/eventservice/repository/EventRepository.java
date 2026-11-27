@@ -498,6 +498,19 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     // ---- Series (V24, TIC-70) -------------------------------------------------
 
     /**
+     * Every date a series has made, deleted ones included, never the template
+     * (TIC-72 reports: a date's bookings stay its series' after the date is
+     * skipped or removed). A date a schedule change detached has left the
+     * series (series_id cleared), so it is not listed.
+     */
+    @Query("""
+        SELECT e.id FROM Event e
+        WHERE e.seriesId = :seriesId
+        AND e.seriesState <> 'TEMPLATE'
+    """)
+    List<UUID> findSeriesDateIds(@Param("seriesId") UUID seriesId);
+
+    /**
      * The starts a series has made dates for from {@code from} on, deleted
      * dates included, so the generator never makes a start twice (the unique
      * index uq_events_series_start is the backstop).

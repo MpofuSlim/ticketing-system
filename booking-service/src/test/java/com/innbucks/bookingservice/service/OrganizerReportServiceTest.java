@@ -25,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -115,6 +116,67 @@ class OrganizerReportServiceTest {
         assertThat(s.eventId()).isEqualTo(EVENT_A);
     }
 
+    @Test
+    void aSeriesReport_keepsOnlyTheSeriesDates_andAsksForEveryEventOfTheOwner() {
+        OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
+        LocalDateTime t = LocalDate.of(2026, 12, 5).atTime(12, 0);
+        UUID otherEvent = UUID.randomUUID();
+        // The repository is asked for every event (null): the series' dates are kept in Java.
+        when(repo.findConfirmedWithItems(eq(ORG), isNull(), any(), any())).thenReturn(List.of(
+                confirmed(EVENT_A, "100.00", "100.00", null, t, item(CAT_VIP, "VIP", "100.00")),
+                confirmed(EVENT_B, "50.00", "50.00", null, t, item(CAT_GA, "General", "50.00")),
+                confirmed(otherEvent, "900.00", "900.00", null, t, item(CAT_GA, "General", "900.00"))));
+        when(repo.findReversed(eq(ORG), isNull(), any(), any())).thenReturn(List.of(
+                reversed(EVENT_B, "20.00", t), reversed(otherEvent, "300.00", t)));
+        UUID seriesId = UUID.randomUUID();
+        ReportEvents series = ReportEvents.series(seriesId, java.util.Set.of(EVENT_A, EVENT_B));
+
+        RevenueSummaryDTO s = service(repo).revenueSummary(ORG, series,
+                LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 31));
+        assertThat(s.confirmedBookings()).isEqualTo(2);
+        assertThat(s.netRevenue()).isEqualByComparingTo("150.00");
+        assertThat(s.refundedAmount()).isEqualByComparingTo("20.00");
+        assertThat(s.eventId()).isNull();
+
+        assertThat(service(repo).revenueByEvent(ORG, series, LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 31)))
+                .extracting(EventRevenueDTO::eventId).containsExactlyInAnyOrder(EVENT_A, EVENT_B);
+        assertThat(service(repo).confirmedBookingsCsv(ORG, series, LocalDate.of(2026, 12, 1),
+                LocalDate.of(2026, 12, 31))).doesNotContain(otherEvent.toString());
+        assertThat(service(repo).resolvedMeta(ORG, series, LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 31))
+                .seriesId()).isEqualTo(seriesId);
+    }
+
+    @Test
+    void aSeriesByCategory_addsUpEachTicketTypeByName_acrossDatesWithTheirOwnIds() {
+        OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
+        LocalDateTime t = LocalDate.of(2026, 12, 5).atTime(12, 0);
+        // Each date copied the template's types by name, so each has its own VIP and tier ids.
+        BookingItem vipA = item(UUID.randomUUID(), "VIP", "80.00");
+        vipA.setPriceTierId(UUID.randomUUID());
+        vipA.setPriceTierName("Early bird");
+        BookingItem vipB = item(UUID.randomUUID(), "VIP", "80.00");
+        vipB.setPriceTierId(UUID.randomUUID());
+        vipB.setPriceTierName("Early bird");
+        BookingItem vipFull = item(UUID.randomUUID(), "VIP", "120.00");
+        when(repo.findConfirmedWithItems(eq(ORG), isNull(), any(), any())).thenReturn(List.of(
+                confirmed(EVENT_A, "80.00", "80.00", null, t, vipA),
+                confirmed(EVENT_B, "200.00", "200.00", null, t, vipB, vipFull)));
+
+        List<CategoryRevenueDTO> rows = service(repo).revenueByCategory(ORG,
+                ReportEvents.series(UUID.randomUUID(), java.util.Set.of(EVENT_A, EVENT_B)),
+                LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 31));
+
+        assertThat(rows).hasSize(1);
+        CategoryRevenueDTO vip = rows.get(0);
+        assertThat(vip.categoryId()).isNull();
+        assertThat(vip.categoryName()).isEqualTo("VIP");
+        assertThat(vip.ticketsSold()).isEqualTo(3);
+        assertThat(vip.revenue()).isEqualByComparingTo("280.00");
+        assertThat(vip.priceTiers()).extracting(tier -> tier.priceTierId() + "|" + tier.name() + "|"
+                        + tier.ticketsSold() + "|" + tier.revenue().toPlainString())
+                .containsExactly("null|Early bird|2|160.00", "null|Full price|1|120.00");
+    }
+
     private Booking paidBy(String rail, String total, LocalDateTime createdAt, BookingItem... items) {
         Booking b = confirmed(EVENT_A, total, total, null, createdAt, items);
         b.setPaymentRail(rail);
@@ -160,7 +222,7 @@ class OrganizerReportServiceTest {
         when(repo.findConfirmedWithItems(eq(ORG), any(), any(), any())).thenReturn(List.of());
         when(repo.findReversed(eq(ORG), any(), any(), any())).thenReturn(List.of());
 
-        RevenueSummaryDTO s = service(repo).revenueSummary(ORG, null, null, null);
+        RevenueSummaryDTO s = service(repo).revenueSummary(ORG, (UUID) null, null, null);
 
         assertThat(s.confirmedBookings()).isZero();
         assertThat(s.netRevenue()).isEqualByComparingTo("0.00");
@@ -261,9 +323,9 @@ class OrganizerReportServiceTest {
     @Test
     void revenueByCategory_requiresEventId() {
         OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
-        assertThatThrownBy(() -> service(repo).revenueByCategory(ORG, null, null, null))
+        assertThatThrownBy(() -> service(repo).revenueByCategory(ORG, (UUID) null, null, null))
                 .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("eventId is required");
+                .hasMessageContaining("eventId or seriesId is required");
     }
 
     @Test
@@ -278,7 +340,7 @@ class OrganizerReportServiceTest {
                         item(CAT_VIP, "VIP", "100.00"), item(CAT_VIP, "VIP", "100.00")),
                 confirmed(EVENT_A, "100.00", "100.00", null, d6, item(CAT_GA, "General", "100.00"))));
 
-        List<SalesBucketDTO> series = service(repo).salesTimeSeries(ORG, null,
+        List<SalesBucketDTO> series = service(repo).salesTimeSeries(ORG, (UUID) null,
                 LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31), BucketSize.DAY);
 
         assertThat(series).hasSize(2); // May 4 and May 6; May 5 omitted (no sales)
@@ -299,7 +361,7 @@ class OrganizerReportServiceTest {
                 confirmed(EVENT_A, "100.00", "100.00", null, wed, item(CAT_GA, "General", "100.00")),
                 confirmed(EVENT_A, "100.00", "100.00", null, fri, item(CAT_GA, "General", "100.00"))));
 
-        List<SalesBucketDTO> series = service(repo).salesTimeSeries(ORG, null,
+        List<SalesBucketDTO> series = service(repo).salesTimeSeries(ORG, (UUID) null,
                 LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31), BucketSize.WEEK);
 
         assertThat(series).hasSize(1);
@@ -494,7 +556,7 @@ class OrganizerReportServiceTest {
     @Test
     void resolveRange_rejectsFromAfterTo() {
         OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
-        assertThatThrownBy(() -> service(repo).revenueSummary(ORG, null,
+        assertThatThrownBy(() -> service(repo).revenueSummary(ORG, (UUID) null,
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 5, 1)))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("must not be after");
@@ -506,7 +568,7 @@ class OrganizerReportServiceTest {
         when(repo.findConfirmedWithItems(eq(ORG), any(), any(), any())).thenReturn(List.of());
         when(repo.findReversed(eq(ORG), any(), any(), any())).thenReturn(List.of());
 
-        service(repo).revenueSummary(ORG, null, null, null);
+        service(repo).revenueSummary(ORG, (UUID) null, null, null);
 
         ArgumentCaptor<LocalDateTime> start = ArgumentCaptor.forClass(LocalDateTime.class);
         ArgumentCaptor<LocalDateTime> end = ArgumentCaptor.forClass(LocalDateTime.class);
@@ -528,7 +590,7 @@ class OrganizerReportServiceTest {
         // last 30 days, and the meta has to say so. Echoing the request back
         // would print "null to null" on a report that plainly covers a period.
         var meta = service(mock(OrganizerReportRepository.class))
-                .resolvedMeta(ORG, null, null, null);
+                .resolvedMeta(ORG, (UUID) null, null, null);
 
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
         assertThat(meta.to()).isEqualTo(today);
@@ -553,7 +615,7 @@ class OrganizerReportServiceTest {
         // organizer. platformWide states that explicitly rather than leaving a
         // client to infer it from the null, which reads equally like "unknown".
         var meta = service(mock(OrganizerReportRepository.class))
-                .resolvedMeta(null, null, null, null);
+                .resolvedMeta(null, (UUID) null, null, null);
 
         assertThat(meta.organizerUuid()).isNull();
         assertThat(meta.platformWide()).isTrue();
@@ -562,7 +624,7 @@ class OrganizerReportServiceTest {
     @Test
     void resolvedMeta_isNotPlatformWideForAnOrganizer() {
         var meta = service(mock(OrganizerReportRepository.class))
-                .resolvedMeta(ORG, null, null, null);
+                .resolvedMeta(ORG, (UUID) null, null, null);
 
         assertThat(meta.organizerUuid()).isEqualTo(ORG);
         assertThat(meta.platformWide()).isFalse();
@@ -573,7 +635,7 @@ class OrganizerReportServiceTest {
         // Shares resolveRange with the queries, so a bad range fails the same
         // way whether or not the caller reads the meta.
         assertThatThrownBy(() -> service(mock(OrganizerReportRepository.class))
-                .resolvedMeta(ORG, null, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 5, 31)))
+                .resolvedMeta(ORG, (UUID) null, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 5, 31)))
                 .isInstanceOf(BadRequestException.class);
     }
 }
