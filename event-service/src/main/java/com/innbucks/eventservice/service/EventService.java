@@ -517,10 +517,8 @@ public class EventService {
         Map<UUID, Long> counts = new java.util.HashMap<>();
         List<Object[]> rows = eventRepository.countUpcomingPublicSeriesDates(seriesIds,
                 LocalDateTime.now(ZoneOffset.UTC));
-        if (rows != null) {
-            for (Object[] row : rows) {
-                counts.put((UUID) row[0], ((Number) row[1]).longValue());
-            }
+        for (Object[] row : rows) {
+            counts.put((UUID) row[0], ((Number) row[1]).longValue());
         }
         return counts;
     }

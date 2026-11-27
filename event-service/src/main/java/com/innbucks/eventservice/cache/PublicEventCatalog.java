@@ -174,7 +174,7 @@ public class PublicEventCatalog {
             List<EventSnapshot> snapshots = new ArrayList<>(page.getNumberOfElements());
             for (Event event : page.getContent()) {
                 EventResponseDTO dto = mapper.toDTO(event);
-                if (dto != null && event != null && event.getSeriesId() != null) {
+                if (event.getSeriesId() != null) {
                     // The date itself is listed, so the count is at least one
                     // even if it ended between the two reads.
                     dto.setSeriesDateCount(Math.max(1L, counts.getOrDefault(event.getSeriesId(), 1L)));
