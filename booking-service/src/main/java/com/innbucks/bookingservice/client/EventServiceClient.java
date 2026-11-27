@@ -6,6 +6,7 @@ import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.EventSalesWindowDTO;
 import com.innbucks.bookingservice.dto.ScannerAccessDTO;
 import com.innbucks.bookingservice.dto.SellerAccessDTO;
+import com.innbucks.bookingservice.dto.SeriesDateIdsDTO;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -68,6 +69,16 @@ public interface EventServiceClient {
     ApiResult<SellerAccessDTO> sellerAccess(
             @RequestParam("accountUserUuid") UUID accountUserUuid,
             @RequestParam("eventId") UUID eventId,
+            @RequestHeader("X-Internal-Token") String internalToken
+    );
+
+    // A series' dates and owner (TIC-72), asked live before a report filtered
+    // to a series. event-service always answers 200 (an unknown series is
+    // found=false), so the fallback's null data only ever means "could not
+    // ask", which the report refuses with a retryable 503.
+    @GetMapping("/events/internal/series-dates")
+    ApiResult<SeriesDateIdsDTO> seriesDates(
+            @RequestParam("seriesId") UUID seriesId,
             @RequestHeader("X-Internal-Token") String internalToken
     );
 

@@ -211,6 +211,28 @@ class EventSeriesPostgresIT extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void theReportLookup_listsEveryDate_deletedOnesIncluded_neverTheTemplate() {
+        EventSeriesResponseDTO series = publishedSeries(3);
+        generator.run();
+        List<Event> dates = datesOf(series.getSeriesId());
+        Event first = dates.stream().min(java.util.Comparator.comparing(Event::getStartDateTime)).orElseThrow();
+        eventService.deleteEvent(organizer, "ROLE_EVENT_ORGANIZER", first.getEventId());
+
+        var answer = seriesService.dateIds(series.getSeriesId());
+
+        assertThat(answer.found()).isTrue();
+        assertThat(answer.tenantUserUuid()).isEqualTo(organizer);
+        assertThat(answer.eventIds()).containsExactlyInAnyOrderElementsOf(
+                dates.stream().map(Event::getEventId).toList());
+        assertThat(answer.eventIds()).contains(first.getEventId()).doesNotContain(series.getTemplateEventId());
+
+        var unknown = seriesService.dateIds(UUID.randomUUID());
+        assertThat(unknown.found()).isFalse();
+        assertThat(unknown.tenantUserUuid()).isNull();
+        assertThat(unknown.eventIds()).isEmpty();
+    }
+
+    @Test
     void aDateWhoseLayoutFails_staysHidden_untilARunFinishesIt() {
         EventSeriesResponseDTO series = seriesService.create(organizer, "ZW", everyDay(2));
         eventService.activateEvent(organizer, "ROLE_EVENT_ORGANIZER", series.getTemplateEventId());

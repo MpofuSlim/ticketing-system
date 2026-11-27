@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.dto.report;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.LocalDate;
@@ -43,9 +44,19 @@ public record ReportMetaDTO(
         @Schema(description = "True when the report spans every organizer — platform staff "
                 + "only. Explicit rather than inferred from a null organizerUuid, so a "
                 + "client never has to guess what the null meant.", example = "false")
-        boolean platformWide
+        boolean platformWide,
+
+        @Schema(description = "Series the report is filtered to (TIC-72): every date of it. Absent "
+                + "when the report is not filtered to a series.", nullable = true,
+                example = "5d0c6f1e-3b2a-4c8d-9e7f-1a2b3c4d5e6f")
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        UUID seriesId
 ) {
     public static ReportMetaDTO of(LocalDate from, LocalDate to, UUID eventId, UUID organizerUuid) {
-        return new ReportMetaDTO(from, to, eventId, organizerUuid, organizerUuid == null);
+        return of(from, to, eventId, organizerUuid, null);
+    }
+
+    public static ReportMetaDTO of(LocalDate from, LocalDate to, UUID eventId, UUID organizerUuid, UUID seriesId) {
+        return new ReportMetaDTO(from, to, eventId, organizerUuid, organizerUuid == null, seriesId);
     }
 }
