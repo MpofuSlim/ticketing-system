@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
@@ -279,6 +280,86 @@ class SeriesEditPostgresIT extends PostgresIntegrationTestBase {
         generator.run();
         assertThat(liveDatesOf(series.getSeriesId())).as("the schedule followed the move: no 10:00 date is made again")
                 .allSatisfy(d -> assertThat(d.getStartDateTime().getMinute()).isEqualTo(30));
+    }
+
+    private static final byte[] PNG_A = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 'A'};
+    private static final byte[] PNG_B = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 'B'};
+    private static final byte[] JPEG_OWN = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 'O', 'W', 'N'};
+
+    private byte[] bannerOf(UUID eventId) {
+        return jdbc.queryForObject("SELECT banner_image FROM events WHERE event_id = ?", byte[].class, eventId);
+    }
+
+    private List<Event> futureDatesOf(UUID seriesId) {
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        return liveDatesOf(seriesId).stream().filter(d -> d.getStartDateTime().isAfter(now)).toList();
+    }
+
+    @Test
+    void aSeriesBanner_reachesTheDatesStillShowingIt_comparedInPostgres_andADateWithItsOwnKeepsIt() {
+        EventSeriesResponseDTO series = publishedDailySeries(4);
+        generator.run();
+        List<Event> future = futureDatesOf(series.getSeriesId());
+        assertThat(future).hasSizeGreaterThanOrEqualTo(3);
+        Event own = future.get(1);
+        eventService.replaceEventBanner(organizer, "ROLE_EVENT_ORGANIZER", own.getEventId(),
+                new MockMultipartFile("eventBanner", "own.jpg", "image/jpeg", JPEG_OWN));
+
+        SeriesChangeDTO first = editService.replaceSeriesBanner(organizer, false, series.getSeriesId(),
+                new MockMultipartFile("eventBanner", "a.png", "image/png", PNG_A));
+
+        assertThat(bannerOf(series.getTemplateEventId())).isEqualTo(PNG_A);
+        for (Event date : future) {
+            Outcome outcome = first.getDates().stream().filter(c -> c.getEventId().equals(date.getEventId()))
+                    .findFirst().orElseThrow().getOutcome();
+            if (date.getEventId().equals(own.getEventId())) {
+                assertThat(outcome).isEqualTo(Outcome.KEPT_OWN);
+                assertThat(bannerOf(date.getEventId())).isEqualTo(JPEG_OWN);
+            } else {
+                assertThat(outcome).as("a date with no banner followed a series with none").isEqualTo(Outcome.UPDATED);
+                assertThat(bannerOf(date.getEventId())).isEqualTo(PNG_A);
+                assertThat(eventRepository.findById(date.getEventId()).orElseThrow().getBannerContentType())
+                        .isEqualTo("image/png");
+            }
+        }
+
+        editService.replaceSeriesBanner(organizer, false, series.getSeriesId(),
+                new MockMultipartFile("eventBanner", "b.png", "image/png", PNG_B));
+        assertThat(bannerOf(future.get(0).getEventId())).as("followed the series again").isEqualTo(PNG_B);
+        assertThat(bannerOf(own.getEventId())).isEqualTo(JPEG_OWN);
+
+        editService.clearSeriesBanner(organizer, false, series.getSeriesId());
+        assertThat(bannerOf(series.getTemplateEventId())).isNull();
+        assertThat(bannerOf(future.get(0).getEventId())).isNull();
+        assertThat(eventRepository.findById(future.get(0).getEventId()).orElseThrow().getBannerContentType()).isNull();
+        assertThat(bannerOf(own.getEventId())).isEqualTo(JPEG_OWN);
+    }
+
+    @Test
+    void aDescriptionForEveryDate_leavesADateWithItsOwn() {
+        EventSeriesResponseDTO series = publishedDailySeries(4);
+        generator.run();
+        List<Event> future = futureDatesOf(series.getSeriesId());
+        assertThat(future).hasSizeGreaterThanOrEqualTo(2);
+        Event own = eventRepository.findById(future.get(1).getEventId()).orElseThrow();
+        own.setDescription("New Year special.");
+        eventRepository.save(own);
+
+        FutureDatesRequestDTO request = new FutureDatesRequestDTO();
+        request.setDescription("Every day at ten.");
+        SeriesChangeDTO result = editService.updateFutureDates(organizer, false, series.getSeriesId(), request);
+
+        assertThat(eventRepository.findById(series.getTemplateEventId()).orElseThrow().getDescription())
+                .isEqualTo("Every day at ten.");
+        assertThat(eventRepository.findById(future.get(0).getEventId()).orElseThrow().getDescription())
+                .isEqualTo("Every day at ten.");
+        assertThat(eventRepository.findById(own.getEventId()).orElseThrow().getDescription())
+                .isEqualTo("New Year special.");
+        assertThat(result.getDates()).filteredOn(c -> c.getEventId().equals(own.getEventId()))
+                .singleElement().satisfies(c -> {
+                    assertThat(c.getOutcome()).isEqualTo(Outcome.KEPT_OWN);
+                    assertThat(c.getKeptOwn()).containsExactly("description");
+                });
     }
 
     @Test

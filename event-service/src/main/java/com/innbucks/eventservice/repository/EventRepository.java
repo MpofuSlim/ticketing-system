@@ -465,6 +465,48 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Query(value = "UPDATE events SET banner_image = NULL WHERE event_id = :eventId", nativeQuery = true)
     int clearBannerImage(@Param("eventId") UUID eventId);
 
+    // ---- A series' banner (TIC-121) ---------------------------------------------
+
+    /**
+     * The md5 of an event's banner bytes, empty when it has none. Postgres
+     * hashes the bytes, so a 10 MB banner never crosses the wire to compare.
+     */
+    @Query(value = "SELECT md5(banner_image) FROM events WHERE event_id = :eventId", nativeQuery = true)
+    Optional<String> findBannerHash(@Param("eventId") UUID eventId);
+
+    /**
+     * The series' dates that have not started (made or being made, not
+     * deleted) whose banner is exactly the given one: a null hash finds the
+     * dates with no banner. These are the dates still showing the series'
+     * banner; any other date was given its own. Same dates as
+     * {@link #findFutureSeriesDates}, narrowed by the hash.
+     */
+    @Query(value = """
+        SELECT event_id FROM events
+        WHERE series_id = :seriesId
+        AND series_state IN ('GENERATING', 'READY')
+        AND deleted = false
+        AND start_date_time > :now
+        AND md5(banner_image) IS NOT DISTINCT FROM CAST(:hash AS text)
+    """, nativeQuery = true)
+    List<UUID> findFutureSeriesDatesWithBanner(@Param("seriesId") UUID seriesId,
+                                              @Param("now") LocalDateTime now,
+                                              @Param("hash") String hash);
+
+    /**
+     * Copies one event's banner bytes onto another inside Postgres, so the
+     * bytes are never read into the service. Like {@link #writeBannerImage} it
+     * touches neither version nor updated_at: the caller changes the target's
+     * mapped bannerContentType and updatedAt through the entity.
+     */
+    @Transactional
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+        UPDATE events SET banner_image = (SELECT s.banner_image FROM events s WHERE s.event_id = :sourceId)
+        WHERE event_id = :targetId
+    """, nativeQuery = true)
+    int copyBannerImage(@Param("sourceId") UUID sourceId, @Param("targetId") UUID targetId);
+
     /**
      * The staff review queue (V17): events awaiting a decision, oldest
      * submission first. Same predicate as {@code idx_events_awaiting_review}.

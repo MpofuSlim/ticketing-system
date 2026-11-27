@@ -25,6 +25,7 @@ import com.innbucks.eventservice.repository.EventSalesWindowChangeRepository;
 import com.innbucks.eventservice.repository.EventSeriesRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.data.domain.Page;
 
 import java.math.BigDecimal;
@@ -348,6 +349,156 @@ class SeriesEditServiceTest {
                 eq("Reps Theatre, Harare"));
         verify(notices).notifyEventChange(eq(second.getEventId()), anyString(), anyString(), isNull(),
                 eq("Reps Theatre, Harare"));
+    }
+
+    // ---- Keeping a date's own description and banner (TIC-121) ---------------
+
+    @Test
+    void aDescriptionChange_skipsADateGivenItsOwn_andSaysSo() {
+        store.get(TEMPLATE).setDescription("<p>Stand-up every Friday.</p>");
+        Event follows = date(utc(4, 17, 0));
+        follows.setDescription("<p>Stand-up every Friday.</p>");
+        Event own = date(utc(11, 17, 0));
+        own.setDescription("<p>New Year special: two extra acts.</p>");
+
+        FutureDatesRequestDTO request = new FutureDatesRequestDTO();
+        request.setDescription("<p>Stand-up and music every Friday.</p>");
+        SeriesChangeDTO result = service.updateFutureDates(ORGANIZER, false, SERIES, request);
+
+        assertThat(store.get(TEMPLATE).getDescription()).isEqualTo("<p>Stand-up and music every Friday.</p>");
+        assertThat(follows.getDescription()).isEqualTo("<p>Stand-up and music every Friday.</p>");
+        assertThat(own.getDescription()).isEqualTo("<p>New Year special: two extra acts.</p>");
+        assertThat(row(result, follows).getOutcome()).isEqualTo(Outcome.UPDATED);
+        assertThat(row(result, follows).getKeptOwn()).isNull();
+        assertThat(row(result, own).getOutcome()).isEqualTo(Outcome.KEPT_OWN);
+        assertThat(row(result, own).getKeptOwn()).containsExactly("description");
+    }
+
+    @Test
+    void aDateWithItsOwnDescription_stillTakesTheOtherFields() {
+        store.get(TEMPLATE).setDescription("Stand-up every Friday.");
+        Event own = date(utc(4, 17, 0));
+        own.setDescription("New Year special.");
+
+        FutureDatesRequestDTO request = new FutureDatesRequestDTO();
+        request.setDescription("Stand-up and music.");
+        request.setTitle("Friday Comedy: Live");
+        SeriesChangeDTO result = service.updateFutureDates(ORGANIZER, false, SERIES, request);
+
+        assertThat(own.getTitle()).isEqualTo("Friday Comedy: Live");
+        assertThat(own.getDescription()).isEqualTo("New Year special.");
+        assertThat(row(result, own).getOutcome()).isEqualTo(Outcome.UPDATED);
+        assertThat(row(result, own).getKeptOwn()).containsExactly("description");
+    }
+
+    @Test
+    void aDateWithNoDescription_followsASeriesWithNone() {
+        Event follows = date(utc(4, 17, 0));
+
+        FutureDatesRequestDTO request = new FutureDatesRequestDTO();
+        request.setDescription("Stand-up every Friday.");
+        SeriesChangeDTO result = service.updateFutureDates(ORGANIZER, false, SERIES, request);
+
+        assertThat(follows.getDescription()).isEqualTo("Stand-up every Friday.");
+        assertThat(row(result, follows).getOutcome()).isEqualTo(Outcome.UPDATED);
+    }
+
+    private static final byte[] PNG = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3};
+
+    private static MockMultipartFile png() {
+        return new MockMultipartFile("eventBanner", "poster.png", "image/png", PNG);
+    }
+
+    @Test
+    void aSeriesBanner_reachesTheTemplateAndTheDatesStillShowingTheOldOne_andADateWithItsOwnKeepsIt() {
+        store.get(TEMPLATE).setBannerContentType("image/jpeg");
+        Event follows = date(utc(4, 17, 0));
+        follows.setBannerContentType("image/jpeg");
+        Event own = date(utc(11, 17, 0));
+        own.setBannerContentType("image/jpeg");
+        Event ownType = date(utc(18, 17, 0));
+        ownType.setBannerContentType("image/webp");
+        when(events.findBannerHash(TEMPLATE)).thenReturn(Optional.of("old-hash"));
+        when(events.findFutureSeriesDatesWithBanner(eq(SERIES), any(), eq("old-hash")))
+                .thenReturn(List.of(follows.getEventId(), ownType.getEventId()));
+
+        SeriesChangeDTO result = service.replaceSeriesBanner(ORGANIZER, false, SERIES, png());
+
+        verify(events).writeBannerImage(TEMPLATE, PNG);
+        verify(events).copyBannerImage(TEMPLATE, follows.getEventId());
+        verify(events, never()).copyBannerImage(TEMPLATE, own.getEventId());
+        verify(events, never()).copyBannerImage(TEMPLATE, ownType.getEventId());
+        assertThat(store.get(TEMPLATE).getBannerContentType()).isEqualTo("image/png");
+        assertThat(store.get(TEMPLATE).getUpdatedAt()).as("versions bannerUrl").isEqualTo(NOW_UTC);
+        assertThat(follows.getBannerContentType()).isEqualTo("image/png");
+        assertThat(follows.getUpdatedAt()).isEqualTo(NOW_UTC);
+        assertThat(own.getBannerContentType()).isEqualTo("image/jpeg");
+        assertThat(row(result, follows).getOutcome()).isEqualTo(Outcome.UPDATED);
+        assertThat(row(result, own).getOutcome()).isEqualTo(Outcome.KEPT_OWN);
+        assertThat(row(result, own).getKeptOwn()).containsExactly("banner");
+        assertThat(row(result, ownType).getOutcome()).as("same bytes, another type: its own")
+                .isEqualTo(Outcome.KEPT_OWN);
+    }
+
+    @Test
+    void aFirstSeriesBanner_reachesTheDatesWithNone() {
+        Event none = date(utc(4, 17, 0));
+        when(events.findBannerHash(TEMPLATE)).thenReturn(Optional.empty());
+        when(events.findFutureSeriesDatesWithBanner(eq(SERIES), any(), isNull()))
+                .thenReturn(List.of(none.getEventId()));
+
+        SeriesChangeDTO result = service.replaceSeriesBanner(ORGANIZER, false, SERIES, png());
+
+        verify(events).copyBannerImage(TEMPLATE, none.getEventId());
+        assertThat(none.getBannerContentType()).isEqualTo("image/png");
+        assertThat(row(result, none).getOutcome()).isEqualTo(Outcome.UPDATED);
+    }
+
+    @Test
+    void removingTheSeriesBanner_clearsTheTemplateAndTheDatesShowingIt_only() {
+        store.get(TEMPLATE).setBannerContentType("image/png");
+        Event follows = date(utc(4, 17, 0));
+        follows.setBannerContentType("image/png");
+        Event own = date(utc(11, 17, 0));
+        own.setBannerContentType("image/jpeg");
+        when(events.findBannerHash(TEMPLATE)).thenReturn(Optional.of("series-hash"));
+        when(events.findFutureSeriesDatesWithBanner(eq(SERIES), any(), eq("series-hash")))
+                .thenReturn(List.of(follows.getEventId()));
+
+        SeriesChangeDTO result = service.clearSeriesBanner(ORGANIZER, false, SERIES);
+
+        verify(events).clearBannerImage(TEMPLATE);
+        verify(events).clearBannerImage(follows.getEventId());
+        verify(events, never()).clearBannerImage(own.getEventId());
+        assertThat(store.get(TEMPLATE).getBannerContentType()).isNull();
+        assertThat(follows.getBannerContentType()).isNull();
+        assertThat(own.getBannerContentType()).isEqualTo("image/jpeg");
+        assertThat(row(result, own).getOutcome()).isEqualTo(Outcome.KEPT_OWN);
+    }
+
+    @Test
+    void aSeriesBannerWithNoFile_orNotAnImage_isRefusedBeforeAnythingIsWritten() {
+        assertThatThrownBy(() -> service.replaceSeriesBanner(ORGANIZER, false, SERIES, null))
+                .isInstanceOf(BadRequestException.class).hasMessage("Please choose an image to upload.");
+        MockMultipartFile script = new MockMultipartFile("eventBanner", "x.png", "image/png",
+                "<script>".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThatThrownBy(() -> service.replaceSeriesBanner(ORGANIZER, false, SERIES, script))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessage("Please upload a valid image file (JPG, PNG, or WEBP).");
+        verify(events, never()).lockById(any());
+        verify(events, never()).writeBannerImage(any(), any());
+    }
+
+    @Test
+    void anEndedSeries_orSomeoneElses_cantChangeItsBanner() {
+        series.setStatus(EventSeries.Status.ENDED);
+        assertThatThrownBy(() -> service.clearSeriesBanner(ORGANIZER, false, SERIES))
+                .isInstanceOf(ConflictException.class);
+        series.setStatus(EventSeries.Status.ACTIVE);
+        assertThatThrownBy(() -> service.replaceSeriesBanner(UUID.randomUUID(), false, SERIES, png()))
+                .isInstanceOf(NotFoundException.class);
+        verify(events, never()).writeBannerImage(any(), any());
+        verify(events, never()).clearBannerImage(any());
     }
 
     @Test

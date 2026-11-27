@@ -41,6 +41,7 @@ import java.util.UUID;
 @Slf4j
 public class EventService {
 
+    static final String NO_BANNER = "Please choose an image to upload.";
     private static final long MAX_BANNER_BYTES = 10L * 1024 * 1024; // 10 MB
     // GIF is deliberately NOT accepted: banners are static marketing images and
     // animated GIFs are rejected as a product decision — don't re-add it here
@@ -815,7 +816,7 @@ public class EventService {
     public EventResponseDTO replaceEventBanner(UUID tenantUserUuid, String role, UUID eventId, MultipartFile banner) {
         log.info("Replacing event banner eventId={} tenantUserUuid={} role={}", eventId, tenantUserUuid, role);
         if (banner == null || banner.isEmpty()) {
-            throw new BadRequestException("Please choose an image to upload.");
+            throw new BadRequestException(NO_BANNER);
         }
         Event event = requireOwnedEvent(tenantUserUuid, role, eventId, "update");
         ValidatedBanner validated = validatedBanner(banner);
@@ -975,7 +976,19 @@ public class EventService {
     }
 
     /** An upload that passed {@link #validatedBanner}: its bytes and its lower-cased content type. */
-    private record ValidatedBanner(byte[] bytes, String contentType) {}
+    record ValidatedBanner(byte[] bytes, String contentType) {}
+
+    /**
+     * A banner upload that must carry a file: refused when none was sent, then
+     * checked like every banner. Shared with the series banner
+     * ({@code SeriesEditService.replaceSeriesBanner}), so both say the same.
+     */
+    static ValidatedBanner requiredBanner(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new BadRequestException(NO_BANNER);
+        }
+        return validatedBanner(file);
+    }
 
     /**
      * Validates an uploaded banner and returns it, or null when no file was sent
