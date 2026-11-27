@@ -9,12 +9,14 @@ import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.EventSalesAssignment;
 import com.innbucks.eventservice.entity.EventScanner;
 import com.innbucks.eventservice.entity.EventScannerAssignment;
+import com.innbucks.eventservice.entity.EventSeries;
 import com.innbucks.eventservice.exception.ApiProblemException;
 import com.innbucks.eventservice.exception.FieldErrorsException;
 import com.innbucks.eventservice.repository.EventRepository;
 import com.innbucks.eventservice.repository.EventSalesAssignmentRepository;
 import com.innbucks.eventservice.repository.EventScannerAssignmentRepository;
 import com.innbucks.eventservice.repository.EventScannerRepository;
+import com.innbucks.eventservice.repository.EventSeriesRepository;
 import com.innbucks.eventservice.util.HtmlSanitizer;
 import com.innbucks.eventservice.util.MsisdnValidator;
 import lombok.RequiredArgsConstructor;
@@ -110,6 +112,8 @@ public class ScannerService {
     public static final String ORGANIZER_REQUIRED = "organizer_required";
     public static final String ORGANIZER_NOT_FOUND = "organizer_not_found";
     public static final String SALES_AGENT_ORGANIZER_ONLY = "sales_agent_organizer_only";
+    public static final String SERIES_NOT_FOUND = "series_not_found";
+    public static final String SERIES_ENDED = "series_ended";
     public static final String SALES_AGENT_ORGANIZER_ONLY_MESSAGE =
             "Only the organizer can manage a sales agent. InnBucks staff can manage gate scanners only.";
 
@@ -205,6 +209,23 @@ public class ScannerService {
     public void setTransactionManager(PlatformTransactionManager transactionManager) {
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
+
+    /** Series (V24, TIC-72); absent in hand-built tests, where every series action is a 404. */
+    private EventSeriesRepository seriesRepository;
+    private SeriesPolicy seriesPolicy;
+
+    @Autowired(required = false)
+    public void setSeriesRepository(EventSeriesRepository seriesRepository) {
+        this.seriesRepository = seriesRepository;
+    }
+
+    @Autowired(required = false)
+    public void setSeriesPolicy(SeriesPolicy seriesPolicy) {
+        this.seriesPolicy = seriesPolicy;
+    }
+
+    /** What a series write phase hands back: the answer, and the invite message to send once it commits. */
+    private record SeriesWritten(SeriesTeamChangeDTO change, InviteNotice invite) {}
 
     /** What a write phase hands back: the answer, and the invite message to send once it commits. */
     private record Written(ScannerResponseDTO response, InviteNotice invite) {}
@@ -509,6 +530,228 @@ public class ScannerService {
             log.info("Sales event unassigned scannerId={} eventId={} by={}", scannerId, eventId, actor);
         }
         return get(organizerUuid, scannerId);
+    }
+
+    // ------------------------------------------------------------ whole series (TIC-72)
+
+    /**
+     * Puts a gate scanner on a whole series: its template (so every date the
+     * series makes later gets them, the generator checking each one) and every
+     * date that has not ended. A date where the number is already on another
+     * event at an overlapping time, any organizer's or another date of this
+     * series, is left off and reported {@code NOT_ASSIGNED_CLASH}: the rest are
+     * still assigned, as the generator does. One invite message at most, naming
+     * the first date assigned (else the series). Idempotent.
+     */
+    public SeriesTeamChangeDTO assignSeries(TeamEditor editor, UUID scannerId, UUID seriesId) {
+        SeriesWritten written = write(() -> {
+            EventScanner scanner = target(editor, scannerId);
+            if (!scanner.isCanScan()) {
+                throw new ApiProblemException(HttpStatus.CONFLICT, NOT_A_SCANNER, NOT_A_SCANNER_MESSAGE);
+            }
+            UUID organizerUuid = scanner.getOrganizerUuid();
+            LocalDateTime now = now();
+            EventSeries series = ownedLiveSeries(organizerUuid, seriesId);
+            Event template = seriesTemplate(series);
+            // Every row of the number, first: the clash rule spans organizers.
+            scannerRepository.lockAllByPhoneNumber(scanner.getPhoneNumber());
+            boolean templateAdded = addScan(scannerId, template.getEventId(), editor.actor());
+            List<SeriesTeamChangeDTO.DateOutcome> outcomes = new ArrayList<>();
+            Event firstAssigned = null;
+            for (Event date : eventRepository.findUnendedSeriesDates(seriesId, now)) {
+                SeriesTeamChangeDTO.Outcome outcome;
+                if (assignmentRepository.existsByScannerIdAndEventId(scannerId, date.getEventId())) {
+                    outcome = SeriesTeamChangeDTO.Outcome.ALREADY_ASSIGNED;
+                } else if (assignmentRepository.countClashes(scanner.getPhoneNumber(), scannerId, date.getEventId(),
+                        date.getStartDateTime(), date.getEndDateTime(), now) > 0) {
+                    outcome = SeriesTeamChangeDTO.Outcome.NOT_ASSIGNED_CLASH;
+                } else {
+                    addScan(scannerId, date.getEventId(), editor.actor());
+                    outcome = SeriesTeamChangeDTO.Outcome.ASSIGNED;
+                    if (firstAssigned == null) {
+                        firstAssigned = date;
+                    }
+                }
+                outcomes.add(dateOutcome(date, outcome));
+            }
+            log.info("Scanner assigned to series scannerId={} seriesId={} templateAdded={} assigned={} clashes={} by={}",
+                    scannerId, seriesId, templateAdded, count(outcomes, SeriesTeamChangeDTO.Outcome.ASSIGNED),
+                    count(outcomes, SeriesTeamChangeDTO.Outcome.NOT_ASSIGNED_CLASH), editor.actor());
+            Event named = firstAssigned != null ? firstAssigned : templateAdded ? template : null;
+            InviteNotice invite = named == null ? null : claimInvite(scanner, named, now);
+            return new SeriesWritten(new SeriesTeamChangeDTO(get(organizerUuid, scannerId), seriesId, true,
+                    outcomes), invite);
+        });
+        afterCommit(new Written(written.change().scanner(), written.invite()));
+        return written.change();
+    }
+
+    /**
+     * Takes a gate scanner off a whole series: its template (so dates made later
+     * no longer get them) and every date that has not ended. Past dates keep
+     * them, so their scan reports still name them. Idempotent.
+     */
+    public SeriesTeamChangeDTO unassignSeries(TeamEditor editor, UUID scannerId, UUID seriesId) {
+        return write(() -> {
+            EventScanner scanner = target(editor, scannerId);
+            UUID organizerUuid = scanner.getOrganizerUuid();
+            EventSeries series = ownedLiveSeries(organizerUuid, seriesId);
+            assignmentRepository.deleteByScannerIdAndEventId(scannerId, series.getTemplateEventId());
+            List<SeriesTeamChangeDTO.DateOutcome> outcomes = new ArrayList<>();
+            for (Event date : eventRepository.findUnendedSeriesDates(seriesId, now())) {
+                boolean removed = assignmentRepository.deleteByScannerIdAndEventId(scannerId, date.getEventId()) > 0;
+                outcomes.add(dateOutcome(date, removed ? SeriesTeamChangeDTO.Outcome.REMOVED
+                        : SeriesTeamChangeDTO.Outcome.NOT_ON_DATE));
+            }
+            log.info("Scanner taken off series scannerId={} seriesId={} removed={} byStaff={} by={}", scannerId,
+                    seriesId, count(outcomes, SeriesTeamChangeDTO.Outcome.REMOVED), editor.staff(), editor.actor());
+            return new SeriesTeamChangeDTO(get(organizerUuid, scannerId), seriesId, true, outcomes);
+        });
+    }
+
+    /**
+     * Lets a sales agent sell for a whole series on one set of terms: its
+     * template (dates made later copy them) and every date that has not ended.
+     * A date already assigned takes the series' terms ({@code TERMS_CHANGED}
+     * when they differed). Selling has no overlap rule. The organizer's alone,
+     * like every sales assignment.
+     */
+    public SeriesTeamChangeDTO assignSalesSeries(UUID organizerUuid, String actor, UUID scannerId, UUID seriesId,
+                                                 Integer ticketCap, BigDecimal commissionPercent) {
+        BigDecimal commission = requireValidTerms(ticketCap, commissionPercent);
+        SeriesWritten written = write(() -> {
+            EventScanner scanner = scannerRepository.lockByScannerIdAndOrganizerUuid(scannerId, organizerUuid)
+                    .orElseThrow(this::scannerNotFound);
+            if (!scanner.isCanSell()) {
+                throw notASalesAgent();
+            }
+            LocalDateTime now = now();
+            EventSeries series = ownedLiveSeries(organizerUuid, seriesId);
+            Event template = seriesTemplate(series);
+            boolean templateAdded = upsertSale(scannerId, template.getEventId(), ticketCap, commission, actor)
+                    == SeriesTeamChangeDTO.Outcome.ASSIGNED;
+            List<SeriesTeamChangeDTO.DateOutcome> outcomes = new ArrayList<>();
+            Event firstAssigned = null;
+            for (Event date : eventRepository.findUnendedSeriesDates(seriesId, now)) {
+                SeriesTeamChangeDTO.Outcome outcome = upsertSale(scannerId, date.getEventId(), ticketCap,
+                        commission, actor);
+                if (outcome == SeriesTeamChangeDTO.Outcome.ASSIGNED && firstAssigned == null) {
+                    firstAssigned = date;
+                }
+                outcomes.add(dateOutcome(date, outcome));
+            }
+            log.info("Sales agent assigned to series scannerId={} seriesId={} ticketCap={} commission={} "
+                            + "templateAdded={} assigned={} by={}", scannerId, seriesId, ticketCap, commission,
+                    templateAdded, count(outcomes, SeriesTeamChangeDTO.Outcome.ASSIGNED), actor);
+            Event named = firstAssigned != null ? firstAssigned : templateAdded ? template : null;
+            InviteNotice invite = named == null ? null : claimInvite(scanner, named, now);
+            return new SeriesWritten(new SeriesTeamChangeDTO(get(organizerUuid, scannerId), seriesId, true,
+                    outcomes), invite);
+        });
+        afterCommit(new Written(written.change().scanner(), written.invite()));
+        return written.change();
+    }
+
+    /**
+     * Stops a sales agent selling for a whole series: its template and every
+     * date that has not ended. Past sales stay under their name. Idempotent.
+     */
+    public SeriesTeamChangeDTO unassignSalesSeries(UUID organizerUuid, String actor, UUID scannerId,
+                                                   UUID seriesId) {
+        return write(() -> {
+            owned(organizerUuid, scannerId);
+            EventSeries series = ownedLiveSeries(organizerUuid, seriesId);
+            salesAssignmentRepository.deleteByScannerIdAndEventId(scannerId, series.getTemplateEventId());
+            List<SeriesTeamChangeDTO.DateOutcome> outcomes = new ArrayList<>();
+            for (Event date : eventRepository.findUnendedSeriesDates(seriesId, now())) {
+                boolean removed = salesAssignmentRepository.deleteByScannerIdAndEventId(scannerId,
+                        date.getEventId()) > 0;
+                outcomes.add(dateOutcome(date, removed ? SeriesTeamChangeDTO.Outcome.REMOVED
+                        : SeriesTeamChangeDTO.Outcome.NOT_ON_DATE));
+            }
+            log.info("Sales agent taken off series scannerId={} seriesId={} removed={} by={}", scannerId, seriesId,
+                    count(outcomes, SeriesTeamChangeDTO.Outcome.REMOVED), actor);
+            return new SeriesTeamChangeDTO(get(organizerUuid, scannerId), seriesId, true, outcomes);
+        });
+    }
+
+    /** Adds the scan assignment if it is not there; true when it was added. Flushed, so the next clash check sees it. */
+    private boolean addScan(UUID scannerId, UUID eventId, String actor) {
+        if (assignmentRepository.existsByScannerIdAndEventId(scannerId, eventId)) {
+            return false;
+        }
+        assignmentRepository.saveAndFlush(EventScannerAssignment.builder()
+                .assignmentId(UUID.randomUUID())
+                .scannerId(scannerId)
+                .eventId(eventId)
+                .assignedBy(actor)
+                .build());
+        return true;
+    }
+
+    /** Creates the sales assignment, or sets its terms. */
+    private SeriesTeamChangeDTO.Outcome upsertSale(UUID scannerId, UUID eventId, Integer ticketCap,
+                                                   BigDecimal commission, String actor) {
+        Optional<EventSalesAssignment> existing = salesAssignmentRepository.findByScannerIdAndEventId(scannerId,
+                eventId);
+        if (existing.isEmpty()) {
+            salesAssignmentRepository.save(EventSalesAssignment.builder()
+                    .assignmentId(UUID.randomUUID())
+                    .scannerId(scannerId)
+                    .eventId(eventId)
+                    .ticketCap(ticketCap)
+                    .commissionPercent(commission)
+                    .assignedBy(actor)
+                    .build());
+            return SeriesTeamChangeDTO.Outcome.ASSIGNED;
+        }
+        EventSalesAssignment terms = existing.get();
+        if (Objects.equals(terms.getTicketCap(), ticketCap) && terms.getCommissionPercent() != null
+                && terms.getCommissionPercent().compareTo(commission) == 0) {
+            return SeriesTeamChangeDTO.Outcome.ALREADY_ASSIGNED;
+        }
+        terms.setTicketCap(ticketCap);
+        terms.setCommissionPercent(commission);
+        salesAssignmentRepository.save(terms);
+        return SeriesTeamChangeDTO.Outcome.TERMS_CHANGED;
+    }
+
+    /**
+     * The organizer's series, not ended: 404 when it is someone else's or
+     * unknown (or series are off in this cell), 409 when it has ended.
+     */
+    private EventSeries ownedLiveSeries(UUID organizerUuid, UUID seriesId) {
+        if (seriesRepository == null || seriesPolicy == null || !seriesPolicy.enabled()) {
+            throw seriesNotFound();
+        }
+        EventSeries series = seriesRepository.findById(seriesId)
+                .filter(s -> organizerUuid.equals(s.getTenantUserUuid()))
+                .orElseThrow(ScannerService::seriesNotFound);
+        if (series.getStatus() == EventSeries.Status.ENDED) {
+            throw new ApiProblemException(HttpStatus.CONFLICT, SERIES_ENDED, EventSeriesService.SERIES_ENDED);
+        }
+        return series;
+    }
+
+    /** The series' template, which a live series always has. */
+    private Event seriesTemplate(EventSeries series) {
+        return eventRepository.findById(series.getTemplateEventId())
+                .filter(e -> !e.isDeleted())
+                .orElseThrow(() -> new ApiProblemException(HttpStatus.CONFLICT, SERIES_ENDED,
+                        EventSeriesService.SERIES_ENDED));
+    }
+
+    private static ApiProblemException seriesNotFound() {
+        return new ApiProblemException(HttpStatus.NOT_FOUND, SERIES_NOT_FOUND, "Series not found.");
+    }
+
+    private static SeriesTeamChangeDTO.DateOutcome dateOutcome(Event date, SeriesTeamChangeDTO.Outcome outcome) {
+        return new SeriesTeamChangeDTO.DateOutcome(date.getEventId(), date.getStartDateTime(),
+                date.getEndDateTime(), outcome);
+    }
+
+    private static long count(List<SeriesTeamChangeDTO.DateOutcome> outcomes, SeriesTeamChangeDTO.Outcome outcome) {
+        return outcomes.stream().filter(o -> o.outcome() == outcome).count();
     }
 
     /**

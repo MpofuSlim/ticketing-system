@@ -57,6 +57,8 @@ class EventSeriesPostgresIT extends PostgresIntegrationTestBase {
     @MockitoBean SeatLayoutGateway seatLayoutGateway;
     @MockitoBean OrganizerNotificationGateway organizerNotices;
     @MockitoBean StaffNotificationGateway staffNotices;
+    @MockitoBean com.innbucks.eventservice.client.ScannerInviteGateway scannerInvites;
+    @MockitoBean com.innbucks.eventservice.client.OrganizerGateway organizerGateway;
 
     @Autowired EventSeriesService seriesService;
     @Autowired SeriesDateGenerator generator;
@@ -66,6 +68,8 @@ class EventSeriesPostgresIT extends PostgresIntegrationTestBase {
     @Autowired EventSeriesRepository seriesRepository;
     @Autowired EventScannerRepository scannerRepository;
     @Autowired EventScannerAssignmentRepository assignmentRepository;
+    @Autowired com.innbucks.eventservice.repository.EventSalesAssignmentRepository salesAssignmentRepository;
+    @Autowired ScannerService scannerService;
     @Autowired JdbcTemplate jdbc;
 
     private final UUID organizer = UUID.randomUUID();
@@ -326,6 +330,120 @@ class EventSeriesPostgresIT extends PostgresIntegrationTestBase {
 
     private static String card(Event date, long count) {
         return date.getEventId() + "/" + count;
+    }
+
+    @Test
+    void aScannerPutOnAWholeSeries_isOnItsTemplateAndEveryDate_exceptOneThatClashes() {
+        EventSeriesResponseDTO series = publishedSeries(3);
+        EventSeriesResponseDTO other = publishedSeries(3);
+        generator.run();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        List<Event> dates = eventRepository.findUnendedSeriesDates(series.getSeriesId(), now);
+        List<Event> otherDates = eventRepository.findUnendedSeriesDates(other.getSeriesId(), now);
+        assertThat(dates).hasSizeGreaterThanOrEqualTo(2);
+        EventScanner scanner = scannerRepository.saveAndFlush(EventScanner.builder()
+                .scannerId(UUID.randomUUID()).organizerUuid(organizer).phoneNumber("+263771234567")
+                .firstName("Tendai").lastName("Moyo").build());
+        // The same start every day: the other series' first date overlaps this one's first date.
+        assignmentRepository.saveAndFlush(EventScannerAssignment.builder().assignmentId(UUID.randomUUID())
+                .scannerId(scanner.getScannerId()).eventId(otherDates.getFirst().getEventId()).build());
+        ScannerService.TeamEditor editor = ScannerService.TeamEditor.organizer(organizer, "organizer@example.com");
+
+        com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO change =
+                scannerService.assignSeries(editor, scanner.getScannerId(), series.getSeriesId());
+
+        assertThat(change.dates()).extracting(d -> d.eventId())
+                .containsExactlyElementsOf(dates.stream().map(Event::getEventId).toList());
+        assertThat(change.dates().getFirst().outcome())
+                .isEqualTo(com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO.Outcome.NOT_ASSIGNED_CLASH);
+        assertThat(change.dates().subList(1, dates.size())).extracting(d -> d.outcome())
+                .containsOnly(com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO.Outcome.ASSIGNED);
+        assertThat(assignmentRepository.existsByScannerIdAndEventId(scanner.getScannerId(),
+                series.getTemplateEventId())).as("dates made later get them").isTrue();
+        assertThat(assignmentRepository.existsByScannerIdAndEventId(scanner.getScannerId(),
+                dates.getFirst().getEventId())).isFalse();
+
+        com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO again =
+                scannerService.assignSeries(editor, scanner.getScannerId(), series.getSeriesId());
+        assertThat(again.dates().subList(1, dates.size())).extracting(d -> d.outcome())
+                .containsOnly(com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO.Outcome.ALREADY_ASSIGNED);
+
+        com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO removed =
+                scannerService.unassignSeries(editor, scanner.getScannerId(), series.getSeriesId());
+        assertThat(removed.dates().getFirst().outcome())
+                .isEqualTo(com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO.Outcome.NOT_ON_DATE);
+        assertThat(removed.dates().subList(1, dates.size())).extracting(d -> d.outcome())
+                .containsOnly(com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO.Outcome.REMOVED);
+        assertThat(assignmentRepository.existsByScannerIdAndEventId(scanner.getScannerId(),
+                series.getTemplateEventId())).isFalse();
+        assertThat(assignmentRepository.existsByScannerIdAndEventId(scanner.getScannerId(),
+                otherDates.getFirst().getEventId())).as("another series is untouched").isTrue();
+    }
+
+    @Test
+    void aSalesAgentPutOnAWholeSeries_getsOneSetOfTermsOnTheTemplateAndEveryDate() {
+        EventSeriesResponseDTO series = publishedSeries(2);
+        generator.run();
+        List<Event> dates = eventRepository.findUnendedSeriesDates(series.getSeriesId(),
+                LocalDateTime.now(ZoneOffset.UTC));
+        assertThat(dates).isNotEmpty();
+        EventScanner agent = scannerRepository.saveAndFlush(EventScanner.builder()
+                .scannerId(UUID.randomUUID()).organizerUuid(organizer).phoneNumber("+263772345678")
+                .firstName("Rudo").lastName("Chari").canScan(false).canSell(true).build());
+        salesAssignmentRepository.saveAndFlush(com.innbucks.eventservice.entity.EventSalesAssignment.builder()
+                .assignmentId(UUID.randomUUID()).scannerId(agent.getScannerId())
+                .eventId(dates.getFirst().getEventId()).ticketCap(10).build());
+
+        com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO change = scannerService.assignSalesSeries(
+                organizer, "organizer@example.com", agent.getScannerId(), series.getSeriesId(), 50,
+                new java.math.BigDecimal("5"));
+
+        assertThat(change.dates().getFirst().outcome())
+                .isEqualTo(com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO.Outcome.TERMS_CHANGED);
+        assertThat(change.dates().subList(1, change.dates().size())).extracting(d -> d.outcome())
+                .containsOnly(com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO.Outcome.ASSIGNED);
+        for (UUID eventId : java.util.stream.Stream.concat(java.util.stream.Stream.of(series.getTemplateEventId()),
+                dates.stream().map(Event::getEventId)).toList()) {
+            com.innbucks.eventservice.entity.EventSalesAssignment terms = salesAssignmentRepository
+                    .findByScannerIdAndEventId(agent.getScannerId(), eventId).orElseThrow();
+            assertThat(terms.getTicketCap()).isEqualTo(50);
+            assertThat(terms.getCommissionPercent()).isEqualByComparingTo("5");
+        }
+
+        com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO removed = scannerService.unassignSalesSeries(
+                organizer, "organizer@example.com", agent.getScannerId(), series.getSeriesId());
+        assertThat(removed.dates()).extracting(d -> d.outcome())
+                .containsOnly(com.innbucks.eventservice.dto.scanner.SeriesTeamChangeDTO.Outcome.REMOVED);
+        assertThat(salesAssignmentRepository.findByScannerIdAndEventId(agent.getScannerId(),
+                series.getTemplateEventId())).isEmpty();
+    }
+
+    @Test
+    void aSeriesTeamChange_isRefused_forAnotherOrganizersSeries_andAnEndedOne() {
+        EventSeriesResponseDTO series = publishedSeries(2);
+        UUID someoneElse = UUID.randomUUID();
+        EventScanner theirs = scannerRepository.saveAndFlush(EventScanner.builder()
+                .scannerId(UUID.randomUUID()).organizerUuid(someoneElse).phoneNumber("+263773456789")
+                .firstName("Farai").lastName("Dube").build());
+        try {
+            assertThatThrownBy(() -> scannerService.assignSeries(
+                    ScannerService.TeamEditor.organizer(someoneElse, "other@example.com"),
+                    theirs.getScannerId(), series.getSeriesId()))
+                    .isInstanceOf(com.innbucks.eventservice.exception.ApiProblemException.class)
+                    .hasMessage("Series not found.");
+
+            EventScanner mine = scannerRepository.saveAndFlush(EventScanner.builder()
+                    .scannerId(UUID.randomUUID()).organizerUuid(organizer).phoneNumber("+263774567890")
+                    .firstName("Tatenda").lastName("Ncube").build());
+            jdbc.update("UPDATE event_series SET status = 'ENDED' WHERE series_id = ?", series.getSeriesId());
+            assertThatThrownBy(() -> scannerService.assignSeries(
+                    ScannerService.TeamEditor.organizer(organizer, "organizer@example.com"),
+                    mine.getScannerId(), series.getSeriesId()))
+                    .isInstanceOf(com.innbucks.eventservice.exception.ApiProblemException.class)
+                    .hasMessage(EventSeriesService.SERIES_ENDED);
+        } finally {
+            jdbc.update("DELETE FROM event_scanners WHERE organizer_uuid = ?", someoneElse);
+        }
     }
 
     @Test
